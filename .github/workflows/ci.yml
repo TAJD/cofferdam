@@ -11,6 +11,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # Force any JS action still declared `using: node20` onto Node 24 ahead of
+  # the 2026-06-02 default flip / 2026-09-16 Node 20 removal.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   test:

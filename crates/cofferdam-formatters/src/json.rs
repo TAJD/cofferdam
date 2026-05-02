@@ -142,3 +142,49 @@ fn severity_str(sev: Severity) -> &'static str {
 fn normalize_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::{Priority, Severity, Span};
+    use std::path::PathBuf;
+
+    fn make_issue(file: PathBuf, check_id: &str) -> Issue {
+        Issue {
+            file,
+            span: Span {
+                line: 1,
+                column: 5,
+                start_byte: 0,
+                end_byte: 10,
+            },
+            message: "test message".into(),
+            check_id: check_id.into(),
+            severity: Severity::Warning,
+            priority: Priority(10),
+        }
+    }
+
+    #[test]
+    fn json_formatter_normalizes_windows_paths() {
+        let issue = make_issue(PathBuf::from(r"C:\Users\demo\src\foo.ts"), "Warning.Test");
+        let output = JsonFormatter::render(&[issue]);
+        assert!(output.contains("C:/Users/demo/src/foo.ts"));
+        assert!(!output.contains(r"\Users"));
+    }
+
+    #[test]
+    fn json_formatter_preserves_forward_slash_paths() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = JsonFormatter::render(&[issue]);
+        assert!(output.contains("src/foo.ts"));
+    }
+
+    #[test]
+    fn json_formatter_empty_findings() {
+        let output = JsonFormatter::render(&[]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(parsed["findings"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["summary"]["total"], 0);
+    }
+}

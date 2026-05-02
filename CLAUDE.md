@@ -181,13 +181,28 @@ When dispatching for parallel check work:
 
 ## Validated reference points
 
-Real-repo benchmarks captured during development; useful for sanity-checking that a change hasn't regressed:
+Real-repo benchmarks captured during development; useful for sanity-checking that a change hasn't regressed. Numbers update as new checks land — the point is "did this PR cause an unexpected swing?", not "is this number forever correct".
 
-| Repo | Files | Findings (today) | Time |
+| Repo | Files | Findings | Release time |
 |---|---|---|---|
-| `C:/Users/tajdi/bestefforttools` | 325 | 348 | 0.18s |
-| `C:/Users/tajdi/gistreact` | 31 | 267 | < 1s |
-| `C:/Users/tajdi/rovikore-landing-page` | 4 | 366 | < 1s |
-| Combined (all three) | 360 | ~981 | < 2s |
+| `C:/Users/tajdi/bestefforttools` | 325 | 396 | 269 ms |
+| `C:/Users/tajdi/gistreact` | 31 | 110 | 205 ms |
 
-Zero parse errors across all three under oxc 0.128 / cofferdam main.
+`C:/Users/tajdi/rovikore-landing-page` was on the list earlier but no longer contains TS files at that path — dropped.
+
+Per-check breakdown on bestefforttools (cd-3ax validation, captured 2026-05-02 after cd-0ps, cd-4cr, cd-vlq, cd-qf3, cd-qnu landed):
+
+| Check | Hits |
+|---|---|
+| `Readability.MaxLineLength` (limit 120) | dominant baseline |
+| `Readability.MaxFunctionLength` (limit 50) | dominant baseline |
+| `Warning.TripleEquals` | a handful, all real `==` / `!=` |
+| `Design.MaxParameters` (limit 5) | low |
+| `Design.DuplicateExportName` | 8 |
+| `Refactor.CyclomaticComplexity` (limit 10) | 20 |
+| `Refactor.CognitiveComplexity` (limit 15) | 9 (subset of cyclomatic) |
+| `Refactor.DuplicateBlock` (≥6 stmts, ≥80 chars) | 11 |
+
+Spot-checked: zero false positives in the top-10 of each new cross-file/complexity check — duplicate exports are real barrel collisions, duplicate blocks are real test-setup copy-paste, complexity hits are real deeply-nested reducers / handlers. Limits tuned by gut-feel from the spot-check; revisit if a refactor cluster makes the noise:signal ratio drop.
+
+Zero parse errors across both repos under oxc 0.128 / cofferdam main.

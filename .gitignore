@@ -37,6 +37,11 @@ build/
 .cofferdam-cache/
 cofferdam-baseline.json.bak
 
+# Locally-installed npm package binary (postinstall download)
+packages/cofferdam/bin/cofferdam
+packages/cofferdam/bin/cofferdam.exe
+packages/cofferdam/bin/cofferdam-v*
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

@@ -1,0 +1,45 @@
+{
+  "name": "cofferdam",
+  "version": "0.1.0",
+  "description": "TypeScript code-quality analyzer — Rust core + JS plugin layer, inspired by Elixir's Credo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TAJD/cofferdam.git",
+    "directory": "packages/cofferdam"
+  },
+  "homepage": "https://github.com/TAJD/cofferdam#readme",
+  "bugs": "https://github.com/TAJD/cofferdam/issues",
+  "keywords": [
+    "typescript",
+    "linter",
+    "static-analysis",
+    "code-quality",
+    "credo",
+    "oxc"
+  ],
+  "bin": {
+    "cofferdam": "bin/cofferdam.js"
+  },
+  "files": [
+    "bin/cofferdam.js",
+    "scripts/postinstall.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

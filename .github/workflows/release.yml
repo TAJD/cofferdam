@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # required for npm provenance
 
 env:
   CARGO_TERM_COLOR: always
@@ -147,3 +148,35 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  publish-npm:
+    name: publish to npm
+    needs: publish
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync npm package version with tag
+        working-directory: packages/cofferdam
+        run: |
+          # Strip leading 'v' from the tag to get the semver string
+          version="${GITHUB_REF_NAME#v}"
+          # Use npm to set the version (no git tag — we're already on the tag commit)
+          npm version "$version" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm with provenance
+        working-directory: packages/cofferdam
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # --provenance attests the package was built from this commit on a
+          # GitHub Actions runner. Requires id-token:write on this workflow
+          # (set at the top of the file). Visible on npmjs.com under the
+          # package's "Provenance" badge.
+          npm publish --provenance --access public

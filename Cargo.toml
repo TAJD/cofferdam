@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cofferdam-core",
+    "crates/cofferdam-engine",
+    "crates/cofferdam-checks",
+    "crates/cofferdam-formatters",
+    "crates/cofferdam-cli",
+    "crates/cofferdam-lsp",
+    "crates/cofferdam-napi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/cofferdam/cofferdam"
+authors = ["cofferdam contributors"]
+rust-version = "1.78"
+
+[workspace.dependencies]
+cofferdam-core = { path = "crates/cofferdam-core", version = "0.1.0" }
+cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.1.0" }
+cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.1.0" }
+cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.1.0" }
+
+# Third-party (kept narrow at phase 0; expanded as phases land)
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+oxc_allocator = "0.128"
+oxc_ast = "0.128"
+oxc_ast_visit = "0.128"
+oxc_diagnostics = "0.128"
+oxc_parser = "0.128"
+oxc_span = "0.128"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

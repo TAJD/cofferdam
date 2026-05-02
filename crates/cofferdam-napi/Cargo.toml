@@ -1,0 +1,13 @@
+[package]
+name = "cofferdam-napi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "napi-rs FFI surface — Node.js bindings for engine + plugin host (phase 4)."
+
+[dependencies]
+cofferdam-core = { workspace = true }
+cofferdam-engine = { workspace = true }

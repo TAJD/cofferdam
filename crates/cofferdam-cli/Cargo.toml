@@ -1,0 +1,20 @@
+[package]
+name = "cofferdam-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Cofferdam command-line binary."
+
+[[bin]]
+name = "cofferdam"
+path = "src/main.rs"
+
+[dependencies]
+cofferdam-core = { workspace = true }
+cofferdam-engine = { workspace = true }
+cofferdam-checks = { workspace = true }
+cofferdam-formatters = { workspace = true }
+clap = { workspace = true }

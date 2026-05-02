@@ -1,0 +1,149 @@
+# Release workflow — multi-platform binaries on tag push.
+#
+# Triggered by:
+#   - pushing a `v*` tag (the canonical release path)
+#   - manual workflow_dispatch (for testing the matrix without cutting a release)
+#
+# Cross-compilation strategy:
+#   - Native builds where possible (linux-x64-gnu on ubuntu, mac targets on
+#     their respective hosts, windows-x64 on windows)
+#   - cargo-zigbuild for the cross targets (linux-arm64-gnu, linux-musl x64+arm64).
+#     Simpler than `cross` (no docker required on the runner) and battle-tested.
+#
+# Out of scope (pre-phase-4):
+#   - npm publish — handled by the napi-rs path once cofferdam-napi is wired up
+#   - crates.io publish — separate workflow when the trait surface stabilizes
+#   - Apple notarization / Windows code signing — adds complexity; skipped for v0.1.0
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux — native gnu, plus zigbuild for the others
+          - target: x86_64-unknown-linux-gnu
+            host: ubuntu-latest
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            host: ubuntu-latest
+            cross: true
+          - target: x86_64-unknown-linux-musl
+            host: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            host: ubuntu-latest
+            cross: true
+          # macOS
+          - target: x86_64-apple-darwin
+            host: macos-13
+            cross: false
+          - target: aarch64-apple-darwin
+            host: macos-14
+            cross: false
+          # Windows
+          - target: x86_64-pc-windows-msvc
+            host: windows-latest
+            cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install zig + cargo-zigbuild
+        if: matrix.cross
+        uses: korandoru/setup-zig@v1
+        with:
+          zig-version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.cross
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --bin cofferdam --target ${{ matrix.target }}
+
+      - name: Build (zigbuild)
+        if: matrix.cross
+        run: cargo zigbuild --release --bin cofferdam --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="cofferdam-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/cofferdam dist/cofferdam
+          cp README.md LICENSE dist/
+          tar -C dist -czf "$name.tar.gz" cofferdam README.md LICENSE
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "cofferdam-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/cofferdam.exe" "dist/cofferdam.exe"
+          Copy-Item README.md, LICENSE dist/
+          Compress-Archive -Path dist/cofferdam.exe, dist/README.md, dist/LICENSE -DestinationPath "$name.zip"
+          (Get-FileHash -Algorithm SHA256 "$name.zip").Hash | Out-File -Encoding ascii "$name.zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cofferdam-${{ matrix.target }}
+          path: |
+            cofferdam-*.tar.gz
+            cofferdam-*.tar.gz.sha256
+            cofferdam-*.zip
+            cofferdam-*.zip.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish to GitHub Releases
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

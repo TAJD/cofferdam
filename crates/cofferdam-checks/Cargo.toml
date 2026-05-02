@@ -1,0 +1,16 @@
+[package]
+name = "cofferdam-checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Built-in checks shipped with cofferdam (Consistency, Design, Readability, Refactor, Warning)."
+
+[dependencies]
+cofferdam-core = { workspace = true }
+oxc_ast = { workspace = true }
+oxc_ast_visit = { workspace = true }
+oxc_span = { workspace = true }
+oxc_syntax = "0.128"

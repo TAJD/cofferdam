@@ -1,0 +1,43 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node
+node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+*.log
+npm-debug.log*
+.npm
+.eslintcache
+.parcel-cache
+dist/
+build/
+.next/
+
+# napi-rs prebuilds (handled via release artifacts)
+*.node
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local cargo config (per-machine toolchain overrides etc.)
+/.cargo/config.toml
+
+# Cofferdam
+.cofferdam-cache/
+cofferdam-baseline.json.bak
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

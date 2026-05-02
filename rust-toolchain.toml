@@ -1,0 +1,13 @@
+# Portable toolchain pin. `channel = "stable"` resolves to the host triple,
+# so this works on Linux, macOS, and Windows CI runners without edits.
+#
+# Local Windows note: if your machine has gcc but no MSVC C++ workload,
+# the host pick (msvc) will fail to link. Drop this into a (gitignored)
+# `.cargo/config.toml` to use the GNU toolchain locally:
+#
+#   [env]
+#   RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
+[toolchain]
+channel = "stable"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

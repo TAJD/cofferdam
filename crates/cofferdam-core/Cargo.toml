@@ -1,0 +1,18 @@
+[package]
+name = "cofferdam-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Core types, traits, and AST surface for the cofferdam code-quality analyzer."
+
+[dependencies]
+oxc_allocator = { workspace = true }
+oxc_ast = { workspace = true }
+oxc_diagnostics = { workspace = true }
+oxc_parser = { workspace = true }
+oxc_span = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

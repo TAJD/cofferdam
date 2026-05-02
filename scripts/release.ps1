@@ -1,6 +1,6 @@
 # Manual release helper (PowerShell). Builds a Windows binary locally and
 # uploads it to a GitHub release. Useful for cutting a release without
-# waiting on the full CI matrix — typically v0.1.x patch cuts.
+# waiting on the full CI matrix - typically v0.1.x patch cuts.
 #
 # Usage:
 #   pwsh scripts/release.ps1 -Tag v0.1.0
@@ -31,7 +31,7 @@ if ($cargoVersion -ne $expectedVersion) {
 
 git diff --quiet
 if ($LASTEXITCODE -ne 0) {
-    throw "Working tree is dirty — commit or stash before releasing."
+    throw "Working tree is dirty - commit or stash before releasing."
 }
 
 $target = 'x86_64-pc-windows-gnu'

@@ -15,4 +15,5 @@ oxc_diagnostics = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+cofferdam-checks = { workspace = true }
 tempfile = "3"

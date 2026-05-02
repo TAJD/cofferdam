@@ -184,6 +184,7 @@ dependencies = [
  "oxc_span",
  "oxc_syntax",
  "serde",
+ "tempfile",
  "thiserror 1.0.69",
 ]
 
@@ -191,6 +192,7 @@ dependencies = [
 name = "cofferdam-engine"
 version = "0.1.4"
 dependencies = [
+ "cofferdam-checks",
  "cofferdam-core",
  "ignore",
  "oxc_diagnostics",

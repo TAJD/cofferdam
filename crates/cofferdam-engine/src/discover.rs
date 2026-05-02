@@ -13,9 +13,10 @@ use ignore::WalkBuilder;
 
 /// File extensions cofferdam analyzes by default.
 ///
-/// `.d.ts` files are intentionally included — they're real source for the
-/// type-aware tier (phase 5). Checks that don't apply (e.g. unused locals)
-/// will skip declaration files via their own logic.
+/// `.d.ts` matches the `ts` extension, but declaration files are skipped
+/// by default in `DiscoveryOptions::skip_declaration_files`. Set that to
+/// `false` to walk them — useful once the type-aware tier (phase 5) wants
+/// to read ambient declarations directly.
 pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts"];
 
 #[derive(Debug, Clone)]

@@ -7,6 +7,7 @@
 pub mod baseline;
 pub mod config;
 pub mod discover;
+pub mod since;
 pub mod suppress;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};

@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use cofferdam_checks::all_builtins;
 use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
 use cofferdam_engine::config::{self as cfg};
+use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
 use cofferdam_formatters::{JsonFormatter, TextFormatter};
 
@@ -84,6 +85,12 @@ enum Cmd {
         /// without a `cofferdam.toml` present.
         #[arg(long)]
         no_config: bool,
+        /// PR mode — only check files changed in `<git-ref>...HEAD`.
+        /// Resolves the repo root via `git rev-parse --show-toplevel`
+        /// and intersects discovery with the diff list. Skipped files
+        /// are silently dropped from the run.
+        #[arg(long, value_name = "GIT-REF")]
+        since: Option<String>,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -144,6 +151,7 @@ fn main() -> ExitCode {
             fail_on_new,
             config,
             no_config,
+            since,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -155,6 +163,7 @@ fn main() -> ExitCode {
             fail_on_new,
             config_path: config,
             no_config,
+            since,
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {
@@ -180,6 +189,7 @@ struct CheckArgs {
     fail_on_new: bool,
     config_path: Option<PathBuf>,
     no_config: bool,
+    since: Option<String>,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -194,6 +204,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         fail_on_new,
         config_path,
         no_config,
+        since: since_ref,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -229,6 +240,30 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
+
+    // PR mode (`--since <ref>`): intersect discovery with `git diff
+    // --name-only --diff-filter=AMR <ref>...HEAD`. Empty intersection
+    // exits 0 — no changed TS files means nothing to fail on.
+    let files = match since_ref.as_deref() {
+        Some(git_ref) => match filter_files_since(&files, git_ref) {
+            Ok(filtered) => {
+                if filtered.is_empty() {
+                    if format == OutputFormat::Json {
+                        println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#);
+                    } else {
+                        eprintln!("no TypeScript files changed since {git_ref}");
+                    }
+                    return ExitCode::SUCCESS;
+                }
+                filtered
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        },
+        None => files,
+    };
 
     let baseline_loaded = match resolved_baseline.as_deref().map(load_baseline_with_warning) {
         Some(Ok(b)) => Some(b),
@@ -483,6 +518,16 @@ fn project_root_for_baseline(baseline_path: Option<&Path>) -> Option<PathBuf> {
     } else {
         Some(root)
     }
+}
+
+/// Filter `files` to those changed in `<git_ref>...HEAD`. Resolves the
+/// repo root via `git rev-parse --show-toplevel` from CWD; the discovery
+/// list is intersected with the diff list using canonicalised paths.
+fn filter_files_since(files: &[PathBuf], git_ref: &str) -> Result<Vec<PathBuf>, since::SinceError> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = since::repo_root(&cwd)?;
+    let changed = since::changed_files_since(&root, git_ref)?;
+    Ok(since::intersect(files, &changed))
 }
 
 fn load_baseline_with_warning(path: &Path) -> Result<Baseline, ()> {

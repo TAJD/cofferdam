@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ast::AstView;
 use crate::issue::Issue;
 use crate::source::SourceFile;
 
@@ -81,6 +82,15 @@ impl<'a> CheckContext<'a> {
     pub fn with_parsed(mut self, parsed: &'a crate::parser::ParsedView<'a>) -> Self {
         self.parsed = Some(parsed);
         self
+    }
+
+    /// Plugin-facing AST surface. `None` when the file failed to parse
+    /// (engine emitted `Warning.ParseError` for those). Built-in checks
+    /// may continue to use `ctx.parsed` directly with `oxc_ast_visit`;
+    /// this method is the layered, stable surface used by plugins.
+    pub fn ast(&self) -> Option<AstView<'a>> {
+        self.parsed
+            .map(|p| AstView::new(p.program, &self.file.text))
     }
 }
 

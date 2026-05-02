@@ -286,3 +286,110 @@ fn engine_handles_empty_file() {
     // Empty file should not cause parse errors (valid empty file)
     assert!(!issues.iter().any(|i| i.check_id == "Warning.ParseError"));
 }
+
+// ============================================================
+// DuplicateBlock token mode (cd-jdq)
+// ============================================================
+
+#[test]
+fn duplicate_block_token_mode_catches_cross_statement_duplicates() {
+    // Two files share a 50+ token run that doesn't align cleanly with
+    // statement boundaries — built so AST mode (statement windows) is
+    // unlikely to fire while token mode (sliding token window) does.
+    //
+    // The duplicated content is a long chained method-call expression
+    // whose halves land in different statements between the two files,
+    // plus enough surrounding shape to clear the 50-token / 80-char
+    // floors.
+    let body_a = "
+        export function fa(input: string) {
+          const items = input.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+          return items.reduce((acc, n) => acc + n, 0);
+        }
+    ";
+    let body_b = "
+        export function fb(payload: string) {
+          const list = payload.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+          const total = list.reduce((acc, n) => acc + n, 0);
+          return total;
+        }
+    ";
+
+    let temp_dir = TempDir::new().expect("temp dir");
+    let path_a = temp_dir.path().join("a.ts");
+    let path_b = temp_dir.path().join("b.ts");
+    std::fs::write(&path_a, body_a).expect("write a");
+    std::fs::write(&path_b, body_b).expect("write b");
+
+    use cofferdam_checks::refactor::DuplicateBlock;
+    let engine = Engine::new(vec![Box::new(DuplicateBlock::with_tokens(50))]);
+    let issues = engine
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
+
+    let dup_findings: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Refactor.DuplicateBlock")
+        .collect();
+    assert!(
+        !dup_findings.is_empty(),
+        "expected at least one DuplicateBlock finding, got {} total issues: {:?}",
+        issues.len(),
+        issues.iter().map(|i| &i.check_id).collect::<Vec<_>>()
+    );
+
+    // The finding must reference both files (one as primary, the other
+    // in `related`).
+    let referenced_files: std::collections::HashSet<PathBuf> = dup_findings
+        .iter()
+        .flat_map(|i| {
+            std::iter::once(i.file.clone()).chain(i.related.iter().map(|r| r.file.clone()))
+        })
+        .collect();
+    assert!(
+        referenced_files.contains(&path_a) && referenced_files.contains(&path_b),
+        "expected the DuplicateBlock finding to span both files, got {:?}",
+        referenced_files
+    );
+}
+
+#[test]
+fn duplicate_block_default_does_not_emit_token_findings() {
+    // Same fixtures as above, but with the default (AST-only)
+    // DuplicateBlock. No statement-aligned 6+ run exists, so AST mode
+    // should produce nothing — proves token mode is genuinely opt-in.
+    let body_a = "
+        export function fa(input: string) {
+          const items = input.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+          return items.reduce((acc, n) => acc + n, 0);
+        }
+    ";
+    let body_b = "
+        export function fb(payload: string) {
+          const list = payload.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+          const total = list.reduce((acc, n) => acc + n, 0);
+          return total;
+        }
+    ";
+
+    let temp_dir = TempDir::new().expect("temp dir");
+    let path_a = temp_dir.path().join("a.ts");
+    let path_b = temp_dir.path().join("b.ts");
+    std::fs::write(&path_a, body_a).expect("write a");
+    std::fs::write(&path_b, body_b).expect("write b");
+
+    use cofferdam_checks::refactor::DuplicateBlock;
+    let engine = Engine::new(vec![Box::new(DuplicateBlock::default())]);
+    let issues = engine
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
+
+    assert!(
+        issues
+            .iter()
+            .all(|i| i.check_id != "Refactor.DuplicateBlock"),
+        "AST-only DuplicateBlock should not flag the cross-statement \
+         duplicate; token mode must be opt-in. Got: {:?}",
+        issues
+    );
+}

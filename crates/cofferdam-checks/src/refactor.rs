@@ -442,21 +442,46 @@ const DUPLICATE_BLOCK_MIN_STATEMENTS: usize = 6;
 /// trivial runs of `import` / `export` / `const X;`.
 const DUPLICATE_BLOCK_MIN_CHARS: usize = 80;
 
-/// One canonicalised window of consecutive statements, recorded during
-/// `Check::run`. Read back in `finalize` to find duplicates.
+/// One canonicalised window, recorded during `Check::run`. Read back
+/// in `finalize` to find duplicates. `kind` distinguishes AST-mode hits
+/// (statement-aligned, default) from token-mode hits (sliding token
+/// windows that may cross statement boundaries) so finalize can prefer
+/// the former when they overlap.
 #[derive(Clone)]
 struct Fingerprint {
     hash: u64,
+    kind: FingerprintKind,
     file: PathBuf,
     span: Span,
+}
+
+/// Order matters: AST first so finalize's overlap-dedupe pass claims
+/// statement-aligned territory before token-mode fragments compete.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FingerprintKind {
+    Ast,
+    Token,
 }
 
 static DUPLICATE_BLOCKS: CorpusKey<Vec<Fingerprint>> =
     CorpusKey::new("Refactor.DuplicateBlock.fingerprints");
 
+/// Sliding window size for token mode. Defaults to ~50 tokens —
+/// roughly 3-5 lines of typical TS once operators and punctuation
+/// are counted as separate tokens.
+const DUPLICATE_BLOCK_MIN_TOKENS: usize = 50;
+
 pub struct DuplicateBlock {
     min_statements: usize,
     min_chars: usize,
+    /// Token-mode min window size. Only used when `include_tokens`.
+    min_tokens: usize,
+    /// Opt-in: also emit findings from a sliding token-window pass.
+    /// Off by default — duplicates the work of AST mode for most
+    /// hits, only paying off where copy-paste spans non-statement
+    /// boundaries (a multi-line conditional broken across statements
+    /// differently in two places, JSX runs, etc.).
+    include_tokens: bool,
 }
 
 impl Default for DuplicateBlock {
@@ -464,6 +489,22 @@ impl Default for DuplicateBlock {
         Self {
             min_statements: DUPLICATE_BLOCK_MIN_STATEMENTS,
             min_chars: DUPLICATE_BLOCK_MIN_CHARS,
+            min_tokens: DUPLICATE_BLOCK_MIN_TOKENS,
+            include_tokens: false,
+        }
+    }
+}
+
+impl DuplicateBlock {
+    /// Construct with token-mode enabled and the given window size.
+    /// AST mode stays on at default thresholds. The two modes share
+    /// one corpus slot; finalize dedupes overlapping spans, preferring
+    /// AST hits.
+    pub fn with_tokens(min_tokens: usize) -> Self {
+        Self {
+            include_tokens: true,
+            min_tokens,
+            ..Self::default()
         }
     }
 }
@@ -495,6 +536,15 @@ impl Check for DuplicateBlock {
         };
         visitor.visit_program(parsed.program);
 
+        if self.include_tokens {
+            collect_token_fingerprints(
+                file,
+                self.min_tokens,
+                self.min_chars,
+                &mut visitor.collected,
+            );
+        }
+
         ctx.corpus.with_slot(&DUPLICATE_BLOCKS, |slot| {
             slot.append(&mut visitor.collected);
         });
@@ -524,9 +574,12 @@ impl Check for DuplicateBlock {
                 fps
             })
             .collect();
+        // AST candidates run first so they claim territory before token
+        // candidates compete. Inside a kind, sort by primary's location.
         candidates.sort_by(|a, b| {
-            a[0].file
-                .cmp(&b[0].file)
+            a[0].kind
+                .cmp(&b[0].kind)
+                .then_with(|| a[0].file.cmp(&b[0].file))
                 .then_with(|| a[0].span.start_byte.cmp(&b[0].span.start_byte))
         });
 
@@ -572,13 +625,21 @@ impl Check for DuplicateBlock {
                     span: fp.span,
                 })
                 .collect();
-            issues.push(Issue {
-                check_id: DUP_META.id.to_string(),
-                message: format!(
+            let message = match primary.kind {
+                FingerprintKind::Ast => format!(
                     "duplicate {}-statement block, also at {} other location(s)",
                     self.min_statements,
                     related.len()
                 ),
+                FingerprintKind::Token => format!(
+                    "duplicate {}-token window (cross-statement), also at {} other location(s)",
+                    self.min_tokens,
+                    related.len()
+                ),
+            };
+            issues.push(Issue {
+                check_id: DUP_META.id.to_string(),
+                message,
                 file: primary.file.clone(),
                 span: primary.span,
                 priority: Priority(DUP_META.base_priority),
@@ -619,6 +680,7 @@ impl<'a> DupCollector<'a> {
             let span = span_from_bytes(&self.file.text, start as u32, end as u32);
             self.collected.push(Fingerprint {
                 hash,
+                kind: FingerprintKind::Ast,
                 file: self.file.path.clone(),
                 span,
             });
@@ -809,4 +871,210 @@ fn hash_str(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
+}
+
+// ─── Token mode (cd-jdq) ───────────────────────────────────────────────────
+
+/// One canonicalised token plus its byte span in the original source.
+/// Token mode slides a window over a Vec of these.
+#[derive(Clone)]
+struct TokenInfo {
+    canon: String,
+    start: u32,
+    end: u32,
+}
+
+/// Tokenise the file's source into canonicalised tokens with spans.
+///
+/// Emits one token per:
+/// - Identifier run (canonicalised to `$_N` per-file local index, or
+///   kept verbatim if it's a JS/TS keyword).
+/// - String literal (single/double/backtick, captured whole including
+///   the quotes — escape handling is approximate for v1).
+/// - Numeric literal (digits / `.` / `_`).
+/// - Single non-identifier byte (operators, punctuation). `===` becomes
+///   three single-character tokens; this means a `min_tokens` of 50
+///   covers fewer source lines than you might expect.
+///
+/// Whitespace and comments are dropped entirely. ASCII identifier scan
+/// only at v1 (cd-s2k tracks Unicode XID support).
+fn tokenise(text: &str) -> Vec<TokenInfo> {
+    let mut tokens = Vec::new();
+    let mut locals: HashMap<String, u32> = HashMap::new();
+    let mut next: u32 = 0;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if is_ident_start(b) {
+            let start = i;
+            while i < bytes.len() && is_ident_continue(bytes[i]) {
+                i += 1;
+            }
+            let word = &text[start..i];
+            let canon = if is_keyword(word) {
+                word.to_string()
+            } else {
+                let idx = match locals.get(word) {
+                    Some(&v) => v,
+                    None => {
+                        let v = next;
+                        next += 1;
+                        locals.insert(word.to_string(), v);
+                        v
+                    }
+                };
+                format!("$_{}", idx)
+            };
+            tokens.push(TokenInfo {
+                canon,
+                start: start as u32,
+                end: i as u32,
+            });
+        } else if b.is_ascii_whitespace() {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+        } else if b == b'"' || b == b'\'' || b == b'`' {
+            let quote = b;
+            let start = i;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                // Skip escape sequences naively. Template literal `${}`
+                // interpolation isn't recognised at v1 — they round-trip
+                // as part of the string token, which is fine for
+                // duplicate hashing.
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            i = (i + 1).min(bytes.len());
+            tokens.push(TokenInfo {
+                canon: text[start..i].to_string(),
+                start: start as u32,
+                end: i as u32,
+            });
+        } else if b.is_ascii_digit() {
+            let start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_digit() || bytes[i] == b'.' || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+            tokens.push(TokenInfo {
+                canon: text[start..i].to_string(),
+                start: start as u32,
+                end: i as u32,
+            });
+        } else {
+            tokens.push(TokenInfo {
+                canon: (b as char).to_string(),
+                start: i as u32,
+                end: (i + 1) as u32,
+            });
+            i += 1;
+        }
+    }
+    tokens
+}
+
+fn hash_token_window(window: &[TokenInfo]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let mut h = DefaultHasher::new();
+    for t in window {
+        h.write(t.canon.as_bytes());
+        // Separator so adjacent tokens can't collide with a longer one
+        // (e.g. `[` `]` should not hash like `[]`).
+        h.write_u8(0x01);
+    }
+    h.finish()
+}
+
+fn collect_token_fingerprints(
+    file: &SourceFile,
+    min_tokens: usize,
+    min_chars: usize,
+    out: &mut Vec<Fingerprint>,
+) {
+    let tokens = tokenise(&file.text);
+    if tokens.len() < min_tokens {
+        return;
+    }
+    for i in 0..=tokens.len() - min_tokens {
+        let window = &tokens[i..i + min_tokens];
+        let start = window[0].start;
+        let end = window[window.len() - 1].end;
+        if start >= end || ((end - start) as usize) < min_chars {
+            continue;
+        }
+        let hash = hash_token_window(window);
+        let span = span_from_bytes(&file.text, start, end);
+        out.push(Fingerprint {
+            hash,
+            kind: FingerprintKind::Token,
+            file: file.path.clone(),
+            span,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenise_canonicalises_identifiers() {
+        let toks = tokenise("const foo = bar + foo;");
+        // const $_0 = $_1 + $_0 ;
+        let canons: Vec<&str> = toks.iter().map(|t| t.canon.as_str()).collect();
+        assert_eq!(canons, vec!["const", "$_0", "=", "$_1", "+", "$_0", ";"]);
+    }
+
+    #[test]
+    fn tokenise_keeps_keywords_and_literals() {
+        let toks = tokenise(r#"if (x === 5) return "hi";"#);
+        let canons: Vec<&str> = toks.iter().map(|t| t.canon.as_str()).collect();
+        assert_eq!(
+            canons,
+            vec!["if", "(", "$_0", "=", "=", "=", "5", ")", "return", "\"hi\"", ";"]
+        );
+    }
+
+    #[test]
+    fn tokenise_strips_comments_and_whitespace() {
+        let toks = tokenise("// leading\nconst x = 1; /* block */ const y = 2;");
+        let canons: Vec<&str> = toks.iter().map(|t| t.canon.as_str()).collect();
+        assert_eq!(
+            canons,
+            vec!["const", "$_0", "=", "1", ";", "const", "$_1", "=", "2", ";"]
+        );
+    }
+
+    #[test]
+    fn rename_equivalent_windows_hash_equal() {
+        let a = tokenise("const total = price + tax; return total;");
+        let b = tokenise("const sum = amount + fee; return sum;");
+        // Both canonicalise to: const $_0 = $_1 + $_2 ; return $_0 ;
+        assert_eq!(hash_token_window(&a), hash_token_window(&b));
+    }
+
+    #[test]
+    fn distinct_structure_hashes_differ() {
+        let a = tokenise("const x = 1; const y = 2;");
+        let b = tokenise("const x = 1; let y = 2;"); // const vs let
+        assert_ne!(hash_token_window(&a), hash_token_window(&b));
+    }
 }

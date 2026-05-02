@@ -14,3 +14,7 @@ oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }
 oxc_span = { workspace = true }
 oxc_syntax = "0.128"
+# unicode-ident already lives in the dep tree via oxc transitively;
+# pull it in directly so DuplicateBlock's tokeniser can recognise
+# Unicode identifiers (TS allows `λ`, `α`, Han characters, etc.).
+unicode-ident = "1"

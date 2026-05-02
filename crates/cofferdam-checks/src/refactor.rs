@@ -791,12 +791,18 @@ fn is_keyword(word: &str) -> bool {
     JS_KEYWORDS.binary_search(&word).is_ok()
 }
 
-fn is_ident_start(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+/// Identifier-start predicate. JS/TS adds `_` and `$` on top of
+/// Unicode XID_Start, so we test those explicitly.
+fn is_ident_start(c: char) -> bool {
+    c == '_' || c == '$' || unicode_ident::is_xid_start(c)
 }
 
-fn is_ident_continue(b: u8) -> bool {
-    is_ident_start(b) || b.is_ascii_digit()
+/// Identifier-continue predicate. JS/TS adds `_` and `$` on top of
+/// Unicode XID_Continue. ZWNJ/ZWJ are technically allowed by the JS
+/// spec but we don't support them — matching parity with oxc's lexer
+/// which also treats them as joiner-only edge cases.
+fn is_ident_continue(c: char) -> bool {
+    c == '_' || c == '$' || unicode_ident::is_xid_continue(c)
 }
 
 /// Canonicalise a source-text slice for duplicate hashing.
@@ -817,16 +823,25 @@ fn canonicalise(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut locals: HashMap<String, u32> = HashMap::new();
     let mut next: u32 = 0;
-    let bytes = text.as_bytes();
+    // char_indices into a Vec so we can do constant-time lookahead for
+    // the `//` and `/*` comment forms. Files are small enough that the
+    // extra allocation is not material.
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if is_ident_start(b) {
-            let start = i;
-            while i < bytes.len() && is_ident_continue(bytes[i]) {
+    while i < chars.len() {
+        let c = chars[i].1;
+        if is_ident_start(c) {
+            let start_byte = chars[i].0;
+            i += 1;
+            while i < chars.len() && is_ident_continue(chars[i].1) {
                 i += 1;
             }
-            let word = &text[start..i];
+            let end_byte = if i < chars.len() {
+                chars[i].0
+            } else {
+                text.len()
+            };
+            let word = &text[start_byte..end_byte];
             if is_keyword(word) {
                 out.push_str(word);
             } else {
@@ -842,23 +857,23 @@ fn canonicalise(text: &str) -> String {
                 use std::fmt::Write;
                 let _ = write!(out, "$_{}", idx);
             }
-        } else if b.is_ascii_whitespace() {
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        } else if c.is_ascii_whitespace() {
+            while i < chars.len() && chars[i].1.is_ascii_whitespace() {
                 i += 1;
             }
             out.push(' ');
-        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            while i < bytes.len() && bytes[i] != b'\n' {
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1].1 == '/' {
+            while i < chars.len() && chars[i].1 != '\n' {
                 i += 1;
             }
-        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1].1 == '*' {
             i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+            while i + 1 < chars.len() && !(chars[i].1 == '*' && chars[i + 1].1 == '/') {
                 i += 1;
             }
-            i = (i + 2).min(bytes.len());
+            i = (i + 2).min(chars.len());
         } else {
-            out.push(b as char);
+            out.push(c);
             i += 1;
         }
     }
@@ -902,16 +917,26 @@ fn tokenise(text: &str) -> Vec<TokenInfo> {
     let mut tokens = Vec::new();
     let mut locals: HashMap<String, u32> = HashMap::new();
     let mut next: u32 = 0;
-    let bytes = text.as_bytes();
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    // Helper: byte offset of `chars[idx]`, or end of text if past the end.
+    let byte_at = |chars: &[(usize, char)], idx: usize, text: &str| -> usize {
+        if idx < chars.len() {
+            chars[idx].0
+        } else {
+            text.len()
+        }
+    };
     let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if is_ident_start(b) {
-            let start = i;
-            while i < bytes.len() && is_ident_continue(bytes[i]) {
+    while i < chars.len() {
+        let c = chars[i].1;
+        if is_ident_start(c) {
+            let start_byte = chars[i].0;
+            i += 1;
+            while i < chars.len() && is_ident_continue(chars[i].1) {
                 i += 1;
             }
-            let word = &text[start..i];
+            let end_byte = byte_at(&chars, i, text);
+            let word = &text[start_byte..end_byte];
             let canon = if is_keyword(word) {
                 word.to_string()
             } else {
@@ -928,61 +953,68 @@ fn tokenise(text: &str) -> Vec<TokenInfo> {
             };
             tokens.push(TokenInfo {
                 canon,
-                start: start as u32,
-                end: i as u32,
+                start: start_byte as u32,
+                end: end_byte as u32,
             });
-        } else if b.is_ascii_whitespace() {
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        } else if c.is_ascii_whitespace() {
+            while i < chars.len() && chars[i].1.is_ascii_whitespace() {
                 i += 1;
             }
-        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            while i < bytes.len() && bytes[i] != b'\n' {
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1].1 == '/' {
+            while i < chars.len() && chars[i].1 != '\n' {
                 i += 1;
             }
-        } else if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1].1 == '*' {
             i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+            while i + 1 < chars.len() && !(chars[i].1 == '*' && chars[i + 1].1 == '/') {
                 i += 1;
             }
-            i = (i + 2).min(bytes.len());
-        } else if b == b'"' || b == b'\'' || b == b'`' {
-            let quote = b;
-            let start = i;
+            i = (i + 2).min(chars.len());
+        } else if c == '"' || c == '\'' || c == '`' {
+            let quote = c;
+            let start_byte = chars[i].0;
             i += 1;
-            while i < bytes.len() && bytes[i] != quote {
-                // Skip escape sequences naively. Template literal `${}`
-                // interpolation isn't recognised at v1 — they round-trip
-                // as part of the string token, which is fine for
-                // duplicate hashing.
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            while i < chars.len() && chars[i].1 != quote {
+                if chars[i].1 == '\\' && i + 1 < chars.len() {
                     i += 2;
                 } else {
                     i += 1;
                 }
             }
-            i = (i + 1).min(bytes.len());
+            // Consume the closing quote if present.
+            if i < chars.len() {
+                i += 1;
+            }
+            let end_byte = byte_at(&chars, i, text);
             tokens.push(TokenInfo {
-                canon: text[start..i].to_string(),
-                start: start as u32,
-                end: i as u32,
+                canon: text[start_byte..end_byte].to_string(),
+                start: start_byte as u32,
+                end: end_byte as u32,
             });
-        } else if b.is_ascii_digit() {
-            let start = i;
-            while i < bytes.len()
-                && (bytes[i].is_ascii_digit() || bytes[i] == b'.' || bytes[i] == b'_')
+        } else if c.is_ascii_digit() {
+            let start_byte = chars[i].0;
+            while i < chars.len()
+                && (chars[i].1.is_ascii_digit() || chars[i].1 == '.' || chars[i].1 == '_')
             {
                 i += 1;
             }
+            let end_byte = byte_at(&chars, i, text);
             tokens.push(TokenInfo {
-                canon: text[start..i].to_string(),
-                start: start as u32,
-                end: i as u32,
+                canon: text[start_byte..end_byte].to_string(),
+                start: start_byte as u32,
+                end: end_byte as u32,
             });
         } else {
+            let start_byte = chars[i].0;
+            let end_byte = if i + 1 < chars.len() {
+                chars[i + 1].0
+            } else {
+                text.len()
+            };
             tokens.push(TokenInfo {
-                canon: (b as char).to_string(),
-                start: i as u32,
-                end: (i + 1) as u32,
+                canon: c.to_string(),
+                start: start_byte as u32,
+                end: end_byte as u32,
             });
             i += 1;
         }
@@ -1076,5 +1108,30 @@ mod tests {
         let a = tokenise("const x = 1; const y = 2;");
         let b = tokenise("const x = 1; let y = 2;"); // const vs let
         assert_ne!(hash_token_window(&a), hash_token_window(&b));
+    }
+
+    #[test]
+    fn tokenise_handles_unicode_identifiers() {
+        // Greek letters + Han characters as identifier names. The
+        // pre-cd-s2k ASCII-only scanner would treat each non-ASCII byte
+        // as a single-byte operator token; with unicode-ident, they
+        // form proper identifier tokens that get canonicalised.
+        let toks = tokenise("const λ = 1; const 計算 = λ + 1;");
+        let canons: Vec<&str> = toks.iter().map(|t| t.canon.as_str()).collect();
+        assert_eq!(
+            canons,
+            vec!["const", "$_0", "=", "1", ";", "const", "$_1", "=", "$_0", "+", "1", ";"]
+        );
+        // Byte spans land on char boundaries, never mid-codepoint.
+        for t in &toks {
+            assert!(t.end as usize <= "const λ = 1; const 計算 = λ + 1;".len());
+        }
+    }
+
+    #[test]
+    fn rename_equivalent_unicode_and_ascii_match() {
+        let ascii = tokenise("function add(x, y) { return x + y; }");
+        let greek = tokenise("function add(α, β) { return α + β; }");
+        assert_eq!(hash_token_window(&ascii), hash_token_window(&greek));
     }
 }

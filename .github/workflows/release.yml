@@ -162,14 +162,18 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           # No registry-url + no auth token: this job authenticates to npm via
           # OIDC (Trusted Publisher configured at npmjs.com/package/cofferdam/access).
           # `id-token: write` permission at the workflow level is what makes
           # it work.
 
-      - name: Use latest npm (OIDC publishing requires npm 11.5.1+)
-        run: npm install -g npm@latest
+      - name: Pin npm to 11.x (OIDC publishing requires npm 11.5.1+)
+        # Node 24 already ships with npm 11.x. We still re-install to a pinned
+        # major to guarantee >= 11.5.1, but avoid `npm@latest` — the self-upgrade
+        # path corrupts the global install partway through (MODULE_NOT_FOUND
+        # 'promise-retry'). Pinning to `npm@11` is the documented workaround.
+        run: npm install -g npm@11
 
       - name: Sync npm package version with tag
         working-directory: packages/cofferdam

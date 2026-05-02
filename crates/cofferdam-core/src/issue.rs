@@ -1,20 +1,20 @@
 //! Issue, priority, severity, and span types.
 //!
-//! Two axes, deliberately separate (design decision #2 over Credo):
+//! Two axes, deliberately separate:
 //! - **Priority** is *computed* — a derived score that sorts the report so
 //!   the most actionable items surface first. Users do not configure it.
 //! - **Severity** is *configured* — the lever that decides what fails CI.
 //!   Users tune it per-check or per-category in `cofferdam.toml`.
 //!
-//! Conflating these in Credo meant you couldn't say "this is high-priority
-//! to fix but shouldn't break the build yet" — a frequent ask on legacy
-//! codebases. Splitting them is what makes Baselines (decision #1) viable.
+//! Splitting them lets users say "this is high-priority to fix but
+//! shouldn't break the build yet" — a frequent ask on legacy codebases,
+//! and what makes Baselines (decision #1) viable.
 
 use serde::{Deserialize, Serialize};
 
 /// Computed priority. Sort order in reports.
 ///
-/// Rough scale (Credo-inspired):
+/// Rough scale:
 /// - `>= 10`  : Higher
 /// - `0..10`  : Normal
 /// - `-10..0` : Low

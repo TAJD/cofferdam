@@ -2,11 +2,13 @@
 
 > A watertight compartment for your codebase. Isolate bad code, measure it against rules, ship a priority-sorted verdict.
 
-`cofferdam` is a code-quality analyzer for TypeScript, inspired by Elixir's [Credo](https://github.com/rrrene/credo). The name comes from naval architecture: a cofferdam is a sealed compartment that lets crews work safely below the waterline. The metaphor maps to the tool: keep questionable code isolated, measure it, and surface a prioritised list of what to fix first.
+`cofferdam` is a code-quality analyzer for TypeScript. The name comes from naval architecture: a cofferdam is a sealed compartment that lets crews work safely below the waterline. The metaphor maps to the tool: keep questionable code isolated, measure it, and surface a prioritised list of what to fix first.
+
+The category model and several design choices are inspired by **[Credo](https://github.com/rrrene/credo)**, the Elixir static analyzer by [@rrrene](https://github.com/rrrene). If you've used Credo, the category names and report shape will feel familiar.
 
 ## Why another linter
 
-Cofferdam exists to bring the things Credo got right to the TypeScript world, then improve on them:
+Cofferdam exists to bring those ideas to TypeScript and then improve on them:
 
 1. **Baselines.** Adopt on a legacy codebase without drowning in noise — default mode shows only *new* findings.
 2. **Priority and severity are separate axes.** Priority is computed; severity is configured. Sort the report by what to fix first; gate CI on what must not regress.
@@ -25,7 +27,7 @@ Two-tier:
 - **Tier 1 (Rust):** engine, AST via [oxc](https://github.com/oxc-project/oxc), project graph via `oxc_resolver`, parallel runner via rayon, baseline diffing, priority computation, formatters, CLI, LSP server via `tower-lsp`.
 - **Tier 2 (TS):** type-aware checks via `ts-morph`, plus user plugins loaded into Node `worker_threads` through napi-rs.
 
-The Credo five categories — **Consistency**, **Design**, **Readability**, **Refactor**, **Warning** — are preserved.
+Findings are bucketed into five categories — **Consistency**, **Design**, **Readability**, **Refactor**, **Warning** — and priority-sorted within each.
 
 ## Install
 
@@ -72,7 +74,7 @@ cofferdam check                               # walk current dir
 cofferdam hello                               # banner
 ```
 
-Built-in checks live across all five Credo categories:
+Built-in checks live across all five categories:
 
 | ID                              | Category    | What it flags                                      |
 | ------------------------------- | ----------- | -------------------------------------------------- |

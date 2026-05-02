@@ -2,7 +2,7 @@
 //!
 //! Phase 0 ships exactly one real check (`Readability.MaxLineLength`) plus
 //! one stub per remaining category to validate that the engine groups and
-//! sorts across all five Credo categories. Real implementations land
+//! sorts across all five categories. Real implementations land
 //! progressively as oxc and the project graph wire up.
 
 pub mod consistency;

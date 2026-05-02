@@ -1,9 +1,9 @@
 //! Check trait + metadata.
 //!
-//! Five categories, preserved verbatim from Credo because the taxonomy is
-//! load-bearing: it's how users mentally bucket findings, and downstream
-//! formatters group reports by category. Configurable taxonomy (decision #8)
-//! lets projects *add* categories — never remove these five.
+//! Five categories — the taxonomy is load-bearing: it's how users mentally
+//! bucket findings, and downstream formatters group reports by category.
+//! Configurable taxonomy (decision #8) lets projects *add* categories —
+//! never remove these five.
 
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +48,7 @@ pub struct CheckMeta {
     /// without a deprecation window.
     pub id: &'static str,
     pub category: Category,
-    /// Floor for the priority computation. Range -20..=20, Credo-aligned.
+    /// Floor for the priority computation. Range -20..=20.
     pub base_priority: i8,
     pub explanation: &'static str,
     /// Type-aware checks (decision #4) — engine routes these to the

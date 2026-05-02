@@ -1,6 +1,5 @@
-//! Human text formatter. Groups by Credo category, then prints
-//! priority-sorted findings within each. Mirrors `mix credo`'s output
-//! shape so people coming from Elixir feel oriented.
+//! Human text formatter. Groups findings by category, then prints them
+//! priority-sorted within each.
 
 use std::fmt::Write;
 

@@ -150,7 +150,7 @@ Keep the `.bad` files until you've confirmed the rebuild — they're your only f
 - **Never `git config`** to change the user's identity or hooks. The author info is already configured.
 - **Never `--no-verify`** on commits or pushes. Hooks exist for a reason; if they fail, fix the underlying issue.
 - **Never amend a previously-pushed commit.** Add a new commit instead.
-- **Don't auto-close beads** even after a clean build. The user verifies and closes; agents only mark `in_progress`.
+- **You may close beads** once you've finished the work and the full verification block passes (build, test, clippy, fmt, fixture run). Use `br close <id>` and include a short reason for non-trivial work. Do NOT close without verification, and do NOT close work that's still uncommitted — close after the commit so the issue lifecycle and git history align.
 - **Don't commit** when running as a subagent — leave staging + commit to the controller.
 - **Validate against real repos.** Test fixtures in `examples/` are necessary but not sufficient. Run against `C:/Users/tajdi/bestefforttools` (325 TS files), `C:/Users/tajdi/gistreact` (31), `C:/Users/tajdi/rovikore-landing-page` (4) — all known to parse cleanly with the current oxc setup.
 - **Do not add a check whose `meta().id` collides with an existing one.** Grep `crates/cofferdam-checks` for the proposed ID first.

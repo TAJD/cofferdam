@@ -33,6 +33,11 @@ build/
 # Local cargo config (per-machine toolchain overrides etc.)
 /.cargo/config.toml
 
+# Local secrets — never commit
+.env
+.env.*
+!.env.example
+
 # Cofferdam
 .cofferdam-cache/
 cofferdam-baseline.json.bak

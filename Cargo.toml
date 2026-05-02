@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/cofferdam/cofferdam"
@@ -19,10 +19,10 @@ authors = ["cofferdam contributors"]
 rust-version = "1.78"
 
 [workspace.dependencies]
-cofferdam-core = { path = "crates/cofferdam-core", version = "0.1.0" }
-cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.1.0" }
-cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.1.0" }
-cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.1.0" }
+cofferdam-core = { path = "crates/cofferdam-core", version = "0.1.1" }
+cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.1.1" }
+cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.1.1" }
+cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.1.1" }
 
 # Third-party (kept narrow at phase 0; expanded as phases land)
 clap = { version = "4", features = ["derive"] }

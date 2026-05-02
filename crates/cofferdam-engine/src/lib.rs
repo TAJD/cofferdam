@@ -6,6 +6,7 @@
 
 pub mod baseline;
 pub mod discover;
+pub mod suppress;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
@@ -113,6 +114,21 @@ impl Engine {
         for check in &self.checks {
             issues.extend(check.finalize(&mut finalize_ctx));
         }
+
+        // Post-collection filter (cd-5t7): suppress findings based on inline directives.
+        // Build a suppression map for each file and filter issues.
+        let suppressions_by_file: HashMap<PathBuf, suppress::Suppressions> = texts
+            .iter()
+            .map(|(path, text)| (path.clone(), suppress::Suppressions::parse(text)))
+            .collect();
+
+        issues.retain(|issue| {
+            if let Some(sup) = suppressions_by_file.get(&issue.file) {
+                !sup.is_suppressed(issue.span.line, &issue.check_id)
+            } else {
+                true
+            }
+        });
 
         issues.sort_by(|a, b| {
             b.priority

@@ -64,6 +64,7 @@ impl Check for MaxLineLength {
                     },
                     priority: Priority(self.meta.base_priority),
                     severity: Severity::Warning,
+                    related: Vec::new(),
                 });
             }
             // +1 for the trailing '\n' consumed by `split`. Off-by-one on the
@@ -150,6 +151,7 @@ impl<'a> MFLCollector<'a> {
                 span,
                 priority: Priority(MFL_META.base_priority),
                 severity: Severity::Warning,
+                related: Vec::new(),
             });
         }
     }

@@ -59,6 +59,12 @@ pub struct Span {
 /// One emitted finding.
 ///
 /// `check_id` matches `CheckMeta.id` so reports can group + filter.
+///
+/// `related` carries additional spans for findings that span multiple
+/// locations (e.g. duplicate-block detection emits one issue per
+/// duplicate set, with the canonical location in `span` and the other
+/// occurrences in `related`). Empty for the common single-location case;
+/// formatters omit it when empty.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub check_id: String,
@@ -67,4 +73,15 @@ pub struct Issue {
     pub span: Span,
     pub priority: Priority,
     pub severity: Severity,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<RelatedSpan>,
+}
+
+/// A span in another file related to the primary `Issue.span`. Carries
+/// the file path (cross-file checks need it) and the same line/column
+/// info `Span` does.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RelatedSpan {
+    pub file: std::path::PathBuf,
+    pub span: Span,
 }

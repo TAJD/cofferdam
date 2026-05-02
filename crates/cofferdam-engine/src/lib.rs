@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    Allocator, Check, CheckContext, CheckOptions, Issue, Priority, Severity, SourceFile, Span,
+    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, Issue, Priority,
+    Severity, SourceFile, Span,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +53,11 @@ impl Engine {
     /// the diagnostics are exposed via `ParsedView.diagnostics`.
     pub fn analyze<P: AsRef<Path>>(&self, paths: &[P]) -> Result<Vec<Issue>, EngineError> {
         let mut issues = Vec::new();
+        // One corpus per analysis run: shared by every per-file CheckContext
+        // and the post-pass FinalizeContext below. Cross-file checks (DRY,
+        // export-graph rules) collect into it during run() and read it back
+        // in finalize(). Per-check checks ignore it.
+        let corpus = CorpusIndex::new();
 
         for path in paths {
             let path = path.as_ref();
@@ -80,13 +86,15 @@ impl Engine {
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
                 let mut ctx = CheckContext::new(&file)
                     .with_parsed(&parsed)
-                    .with_options(opts);
+                    .with_options(opts)
+                    .with_corpus(&corpus);
                 issues.extend(check.run(&file, &mut ctx));
             }
         }
 
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
         for check in &self.checks {
-            issues.extend(check.finalize());
+            issues.extend(check.finalize(&mut finalize_ctx));
         }
 
         issues.sort_by(|a, b| {
@@ -126,5 +134,6 @@ fn parse_error_issue(file: &SourceFile, diagnostics: &[oxc_diagnostics::OxcDiagn
         },
         priority: Priority(20),
         severity: Severity::Error,
+        related: Vec::new(),
     }
 }

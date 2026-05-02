@@ -76,6 +76,7 @@ impl<'a> Visit<'a> for Collector<'a> {
                 span,
                 priority: Priority(META.base_priority),
                 severity: Severity::Warning,
+                related: Vec::new(),
             });
         }
         // Walk into children — `==` can appear inside other binary ops

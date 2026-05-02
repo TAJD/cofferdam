@@ -37,6 +37,21 @@ impl TextFormatter {
                     issue.message,
                     issue.check_id,
                 );
+                if !issue.related.is_empty() {
+                    let locations: Vec<String> = issue
+                        .related
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "{}:{}:{}",
+                                normalize_path(&r.file),
+                                r.span.line,
+                                r.span.column
+                            )
+                        })
+                        .collect();
+                    let _ = writeln!(out, "        also at: {}", locations.join(", "));
+                }
             }
         }
 
@@ -84,6 +99,7 @@ mod tests {
             check_id: check_id.into(),
             severity: Severity::Warning,
             priority: Priority(10),
+            related: Vec::new(),
         }
     }
 

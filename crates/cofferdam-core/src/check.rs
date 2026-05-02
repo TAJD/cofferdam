@@ -5,12 +5,23 @@
 //! Configurable taxonomy (decision #8) lets projects *add* categories —
 //! never remove these five.
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ast::AstView;
+use crate::corpus::CorpusIndex;
 use crate::issue::Issue;
 use crate::options::{CheckOptions, OptionSpec, EMPTY_OPTIONS};
 use crate::source::SourceFile;
+
+/// Process-wide empty corpus, used as a default when callers (mostly tests)
+/// don't supply one. Lazily initialised because `CorpusIndex` is not const-
+/// constructible (`HashMap::new` is not const).
+fn empty_corpus() -> &'static CorpusIndex {
+    static EMPTY: OnceLock<CorpusIndex> = OnceLock::new();
+    EMPTY.get_or_init(CorpusIndex::default)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,6 +92,11 @@ pub struct CheckContext<'a> {
     /// schema at engine startup. Defaults to a process-wide empty bag
     /// — useful for tests and for checks that declare no options.
     pub options: &'a CheckOptions,
+    /// Run-scoped shared store for cross-file checks. Same instance
+    /// passed into every per-file `CheckContext` and reused by
+    /// `FinalizeContext`. Defaults to a process-wide empty corpus so
+    /// per-file unit tests don't have to plumb one through.
+    pub corpus: &'a CorpusIndex,
 }
 
 impl<'a> CheckContext<'a> {
@@ -89,6 +105,7 @@ impl<'a> CheckContext<'a> {
             file,
             parsed: None,
             options: &EMPTY_OPTIONS,
+            corpus: empty_corpus(),
         }
     }
 
@@ -102,6 +119,11 @@ impl<'a> CheckContext<'a> {
         self
     }
 
+    pub fn with_corpus(mut self, corpus: &'a CorpusIndex) -> Self {
+        self.corpus = corpus;
+        self
+    }
+
     /// Plugin-facing AST surface. `None` when the file failed to parse
     /// (engine emitted `Warning.ParseError` for those). Built-in checks
     /// may continue to use `ctx.parsed` directly with `oxc_ast_visit`;
@@ -112,15 +134,32 @@ impl<'a> CheckContext<'a> {
     }
 }
 
+/// Context passed to `Check::finalize`. Carries the same `CorpusIndex`
+/// that ran-phase `CheckContext` shared, so cross-file checks can
+/// aggregate the state they collected per file. Deliberately distinct
+/// from `CheckContext` because `finalize` has no current file or parsed
+/// AST.
+pub struct FinalizeContext<'a> {
+    pub corpus: &'a CorpusIndex,
+}
+
+impl<'a> FinalizeContext<'a> {
+    pub fn new(corpus: &'a CorpusIndex) -> Self {
+        Self { corpus }
+    }
+}
+
 /// The check contract.
 ///
 /// `run` is called once per file. `finalize` runs after all files have
 /// been processed — that's where project-graph checks (decision #5) emit
-/// their findings, e.g. orphaned exports or context-boundary violations.
+/// their findings, e.g. orphaned exports, context-boundary violations,
+/// or duplicate-block detection. `finalize` receives the shared
+/// `CorpusIndex` it filled during `run` via `FinalizeContext`.
 pub trait Check: Send + Sync {
     fn meta(&self) -> &'static CheckMeta;
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue>;
-    fn finalize(&self) -> Vec<Issue> {
+    fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         Vec::new()
     }
 }

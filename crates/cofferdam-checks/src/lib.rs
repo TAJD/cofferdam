@@ -22,6 +22,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(readability::MaxFunctionLength::new(50)),
         Box::new(consistency::QuoteStyleStub),
         Box::new(design::MaxParameters::new(5)),
+        Box::new(design::DuplicateExportName),
         Box::new(refactor::CognitiveComplexityStub),
         Box::new(warning::TripleEquals),
     ]

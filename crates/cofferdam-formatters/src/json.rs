@@ -15,7 +15,7 @@
 //! `--robot` is the marketed flag; `--format json` is the underlying
 //! switch. Future formats (toon, sarif) plug in here.
 
-use cofferdam_core::{Category, Issue, Severity};
+use cofferdam_core::{Category, Issue, RelatedSpan, Severity};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -43,6 +43,19 @@ pub struct RobotFinding<'a> {
     pub start_byte: u32,
     pub end_byte: u32,
     pub message: &'a str,
+    /// Other locations participating in the same finding (e.g. duplicate
+    /// blocks). Omitted entirely when the finding is single-location.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<RelatedFinding>,
+}
+
+#[derive(Serialize)]
+pub struct RelatedFinding {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+    pub start_byte: u32,
+    pub end_byte: u32,
 }
 
 #[derive(Serialize)]
@@ -81,6 +94,7 @@ impl JsonFormatter {
                 start_byte: i.span.start_byte,
                 end_byte: i.span.end_byte,
                 message: i.message.as_str(),
+                related: i.related.iter().map(map_related).collect(),
             })
             .collect();
 
@@ -143,6 +157,16 @@ fn normalize_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn map_related(r: &RelatedSpan) -> RelatedFinding {
+    RelatedFinding {
+        file: normalize_path(&r.file),
+        line: r.span.line,
+        column: r.span.column,
+        start_byte: r.span.start_byte,
+        end_byte: r.span.end_byte,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +186,7 @@ mod tests {
             check_id: check_id.into(),
             severity: Severity::Warning,
             priority: Priority(10),
+            related: Vec::new(),
         }
     }
 

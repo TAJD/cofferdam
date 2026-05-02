@@ -89,6 +89,13 @@ impl<'a> AstView<'a> {
         let mut adapter = WalkAdapter { inner: visitor };
         adapter.visit_program(self.program);
     }
+
+    /// Iterate every line in the source with classification flags
+    /// drawn from the parsed comment list and an AST walk over string
+    /// + template literals. See [`crate::LineView`] for flag semantics.
+    pub fn lines(&self) -> crate::lines::Lines<'a> {
+        crate::lines::Lines::build(self.text, self.program)
+    }
 }
 
 /// Outcome of an [`AstVisitor`] visit. Controls per-node descent.

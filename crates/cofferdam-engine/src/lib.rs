@@ -4,10 +4,13 @@
 //! emit Warning.ParseError on fatal parse failures. Still single-threaded;
 //! rayon comes in a follow-up once the AST seam is stable.
 
+pub mod baseline;
 pub mod discover;
 
+pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
@@ -52,7 +55,20 @@ impl Engine {
     /// Non-fatal parse errors still produce a usable AST; checks run and
     /// the diagnostics are exposed via `ParsedView.diagnostics`.
     pub fn analyze<P: AsRef<Path>>(&self, paths: &[P]) -> Result<Vec<Issue>, EngineError> {
+        let (issues, _texts) = self.analyze_with_text(paths)?;
+        Ok(issues)
+    }
+
+    /// Same as `analyze` but also returns the per-file text cache, keyed
+    /// by canonical input path. Required for any post-pass that needs to
+    /// inspect the offending source — baseline signature computation is
+    /// the first such consumer.
+    pub fn analyze_with_text<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+    ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
         let mut issues = Vec::new();
+        let mut texts: HashMap<PathBuf, String> = HashMap::with_capacity(paths.len());
         // One corpus per analysis run: shared by every per-file CheckContext
         // and the post-pass FinalizeContext below. Cross-file checks (DRY,
         // export-graph rules) collect into it during run() and read it back
@@ -65,7 +81,8 @@ impl Engine {
                 path: path.to_path_buf(),
                 source,
             })?;
-            let file = SourceFile::new(path.to_path_buf(), text);
+            let file = SourceFile::new(path.to_path_buf(), text.clone());
+            texts.insert(path.to_path_buf(), text);
 
             // Per-file allocator. Lives until the file's checks finish,
             // then drops with the AST it owns. Bumpalo allocation makes
@@ -105,7 +122,33 @@ impl Engine {
                 .then_with(|| a.span.line.cmp(&b.span.line))
         });
 
-        Ok(issues)
+        Ok((issues, texts))
+    }
+
+    /// Run analysis and emit each issue paired with its baseline
+    /// signature (SHA-256 of the trimmed offending span text). Used by
+    /// `cofferdam baseline write` and `cofferdam check --baseline`.
+    ///
+    /// For finalize-time issues whose `file` we never read in the per-
+    /// file loop (cross-file checks pointing into already-dropped texts,
+    /// or unusual paths), the signature is computed against an empty
+    /// snippet — a stable but coarse fallback. In practice every issue's
+    /// `file` is one we just analyzed, so the cache hits.
+    pub fn analyze_with_signatures<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+    ) -> Result<Vec<(Issue, String)>, EngineError> {
+        let (issues, texts) = self.analyze_with_text(paths)?;
+        let empty = String::new();
+        let out = issues
+            .into_iter()
+            .map(|issue| {
+                let text = texts.get(&issue.file).unwrap_or(&empty);
+                let sig = baseline::signature_for_span(text, &issue.span);
+                (issue, sig)
+            })
+            .collect();
+        Ok(out)
     }
 }
 

@@ -47,6 +47,12 @@ pub struct RobotFinding<'a> {
     /// blocks). Omitted entirely when the finding is single-location.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedFinding>,
+    /// True when this finding matched an entry in the active baseline
+    /// (so it should not fail CI under `--fail-on-new`). Omitted when no
+    /// baseline is active so the schema for the no-baseline case stays
+    /// byte-identical to pre-baseline cofferdam.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baselined: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +71,14 @@ pub struct RobotSummary {
     /// Stable keys: `consistency`, `design`, `readability`, `refactor`,
     /// `warning`.
     pub by_category: std::collections::BTreeMap<&'static str, usize>,
+    /// Count of findings not matching the active baseline. Omitted when
+    /// no baseline is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new: Option<usize>,
+    /// Count of findings matching the active baseline. Omitted when no
+    /// baseline is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baselined: Option<usize>,
 }
 
 pub struct JsonFormatter;
@@ -95,6 +109,7 @@ impl JsonFormatter {
                 end_byte: i.span.end_byte,
                 message: i.message.as_str(),
                 related: i.related.iter().map(map_related).collect(),
+                baselined: None,
             })
             .collect();
 
@@ -108,6 +123,68 @@ impl JsonFormatter {
             summary: RobotSummary {
                 total: findings.len(),
                 by_category,
+                new: None,
+                baselined: None,
+            },
+            findings,
+        };
+
+        if pretty {
+            serde_json::to_string_pretty(&report).expect("RobotReport serializes infallibly")
+        } else {
+            serde_json::to_string(&report).expect("RobotReport serializes infallibly")
+        }
+    }
+
+    /// Render with per-finding baseline tags. `tagged` is parallel to the
+    /// engine's output: each `(Issue, bool)` pair carries `true` when the
+    /// finding matched the active baseline. Adds `baselined` per finding
+    /// and `new` / `baselined` totals on the summary.
+    pub fn render_with_baseline(tagged: &[(Issue, bool)]) -> String {
+        Self::render_with_baseline_inner(tagged, false)
+    }
+
+    /// Pretty-printed variant of `render_with_baseline`.
+    pub fn render_with_baseline_pretty(tagged: &[(Issue, bool)]) -> String {
+        Self::render_with_baseline_inner(tagged, true)
+    }
+
+    fn render_with_baseline_inner(tagged: &[(Issue, bool)], pretty: bool) -> String {
+        let findings: Vec<RobotFinding<'_>> = tagged
+            .iter()
+            .map(|(i, baselined)| RobotFinding {
+                id: i.check_id.as_str(),
+                category: category_str(category_of(&i.check_id)),
+                priority: i.priority.0,
+                severity: severity_str(i.severity),
+                file: normalize_path(&i.file),
+                line: i.span.line,
+                column: i.span.column,
+                start_byte: i.span.start_byte,
+                end_byte: i.span.end_byte,
+                message: i.message.as_str(),
+                related: i.related.iter().map(map_related).collect(),
+                baselined: Some(*baselined),
+            })
+            .collect();
+
+        let mut by_category: std::collections::BTreeMap<&'static str, usize> =
+            std::collections::BTreeMap::new();
+        for f in &findings {
+            *by_category.entry(f.category).or_insert(0) += 1;
+        }
+        let baselined_count = findings
+            .iter()
+            .filter(|f| f.baselined == Some(true))
+            .count();
+        let new_count = findings.len() - baselined_count;
+
+        let report = RobotReport {
+            summary: RobotSummary {
+                total: findings.len(),
+                by_category,
+                new: Some(new_count),
+                baselined: Some(baselined_count),
             },
             findings,
         };

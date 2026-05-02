@@ -9,33 +9,60 @@ pub struct TextFormatter;
 
 impl TextFormatter {
     pub fn render(issues: &[Issue]) -> String {
+        Self::render_inner(issues.iter().map(|i| (i, false)), issues.len(), None)
+    }
+
+    /// Render with per-finding baseline tags. `tagged` is parallel to
+    /// the engine's output: each `(Issue, bool)` pair carries `true`
+    /// when the finding matched the active baseline.
+    pub fn render_with_baseline(tagged: &[(Issue, bool)]) -> String {
+        let baselined = tagged.iter().filter(|(_, b)| *b).count();
+        Self::render_inner(
+            tagged.iter().map(|(i, b)| (i, *b)),
+            tagged.len(),
+            Some(BaselineCounts {
+                baselined,
+                new: tagged.len() - baselined,
+            }),
+        )
+    }
+
+    fn render_inner<'a, I>(items: I, total: usize, counts: Option<BaselineCounts>) -> String
+    where
+        I: IntoIterator<Item = (&'a Issue, bool)>,
+    {
         let mut out = String::new();
 
-        if issues.is_empty() {
+        let collected: Vec<(&Issue, bool)> = items.into_iter().collect();
+
+        if collected.is_empty() {
             out.push_str("✓ no findings\n");
             return out;
         }
 
         for category in Category::ALL {
-            let bucket: Vec<&Issue> = issues
+            let bucket: Vec<(&Issue, bool)> = collected
                 .iter()
-                .filter(|i| category_of(&i.check_id) == Some(category))
+                .filter(|(i, _)| category_of(&i.check_id) == Some(category))
+                .copied()
                 .collect();
             if bucket.is_empty() {
                 continue;
             }
 
             let _ = writeln!(out, "\n── {:?} ───────────────", category);
-            for issue in bucket {
+            for (issue, baselined) in bucket {
+                let tag = if baselined { " [baselined]" } else { "" };
                 let _ = writeln!(
                     out,
-                    "  [{:>3}] {}:{}:{}  {}  ({})",
+                    "  [{:>3}] {}:{}:{}  {}  ({}){}",
                     issue.priority.0,
                     normalize_path(&issue.file),
                     issue.span.line,
                     issue.span.column,
                     issue.message,
                     issue.check_id,
+                    tag,
                 );
                 if !issue.related.is_empty() {
                     let locations: Vec<String> = issue
@@ -55,9 +82,26 @@ impl TextFormatter {
             }
         }
 
-        let _ = writeln!(out, "\n{} finding(s)", issues.len());
+        match counts {
+            Some(c) => {
+                let _ = writeln!(
+                    out,
+                    "\n{} finding(s) ({} new, {} baselined)",
+                    total, c.new, c.baselined
+                );
+            }
+            None => {
+                let _ = writeln!(out, "\n{} finding(s)", total);
+            }
+        }
         out
     }
+}
+
+#[derive(Copy, Clone)]
+struct BaselineCounts {
+    baselined: usize,
+    new: usize,
 }
 
 /// Parse the leading category from a dotted check ID. Cheap, allocation-free.

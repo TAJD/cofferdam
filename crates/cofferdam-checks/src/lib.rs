@@ -23,7 +23,8 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(consistency::QuoteStyleStub),
         Box::new(design::MaxParameters::new(5)),
         Box::new(design::DuplicateExportName),
-        Box::new(refactor::CognitiveComplexityStub),
+        Box::new(refactor::CyclomaticComplexity::new(10)),
+        Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(warning::TripleEquals),
     ]
 }

@@ -108,6 +108,39 @@ br update <id> --status closed
 
 After issue updates run `br sync --flush-only` so `.beads/issues.jsonl` reflects the change before the next git operation. The DB (`.beads/beads.db*`) is gitignored; the JSONL is the canonical exported form.
 
+### When `br` "stops working"
+
+Symptoms vary (hangs, missing issues, wrong `br ready` output, stale dependencies). Diagnose first, then escalate:
+
+```bash
+br doctor                       # ALWAYS run this first — names the actual failure
+```
+
+Common findings and fixes, in escalation order (cheapest first):
+
+1. **`blocked_issues_cache is marked stale`** — cache out of sync. Affects `br ready` / `br blocked` accuracy. Fix: re-run any operation that mutates the graph (`br update <id>` no-op, or `br dep list <id>`); cache rebuilds lazily.
+
+2. **`sqlite.integrity_check: database disk image is malformed`** — structural corruption, usually after an unclean shutdown or a write that raced a lock. Don't ignore — symptoms get weirder over time.
+
+3. **`.beads/beads.db-wal` is large (> a few MB)** — a long-running reader is preventing the WAL from checkpointing back into the main DB, OR a previous process died holding a lock. Force a checkpoint by running any `br` command in `--no-daemon` mode and confirming the WAL shrinks.
+
+4. **Write probe fails / lock files won't release** — check `.beads/.write.lock` and `.beads/.sync.lock` for stale locks from a dead process. Safe to remove if no `br` / `bd` process is running.
+
+If diagnosis points at corruption (#2) and lighter fixes haven't worked, **rebuild the DB from `issues.jsonl`** — that file is the canonical export, gitignored DB is rebuildable:
+
+```bash
+mv .beads/beads.db .beads/beads.db.bad
+mv .beads/beads.db-wal .beads/beads.db-wal.bad     # if present
+br sync                                            # imports issues.jsonl into a fresh db
+br doctor                                          # verify clean
+# ...if br doctor is now happy:
+rm .beads/beads.db.bad .beads/beads.db-wal.bad
+```
+
+Keep the `.bad` files until you've confirmed the rebuild — they're your only fallback if the JSONL turns out to be incomplete.
+
+**Do NOT** switch to `bd` to "work around" a `br` failure on this box — `bd` requires CGO + embedded Dolt that won't build on the Windows-no-MSVC environment, and mixing the two binaries against the same `.beads/` directory has caused corruption before.
+
 ## Output formats (when adding a new one)
 
 `cofferdam-formatters/src/<name>.rs` + register in `lib.rs`. CLI flag in `cofferdam-cli/src/main.rs`'s `OutputFormat` enum + `Cmd::Check` block. JSON schema is the contract — additive changes only.

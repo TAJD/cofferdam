@@ -146,7 +146,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cofferdam-checks"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cofferdam-core",
  "oxc_ast",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "cofferdam-checks",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cofferdam-core",
  "ignore",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-formatters"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cofferdam-core",
  "serde",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-lsp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-napi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cofferdam-core",
  "cofferdam-engine",

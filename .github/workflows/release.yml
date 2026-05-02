@@ -52,10 +52,13 @@ jobs:
           - target: aarch64-unknown-linux-musl
             host: ubuntu-latest
             cross: true
-          # macOS
+          # macOS — both targets built on the macos-14 (Apple Silicon) runner
+          # via cargo-zigbuild. macos-13 (Intel) runners are scarce on GitHub's
+          # free tier and cause hours-long queue waits. zigbuild handles the
+          # x86_64 cross-compile cleanly.
           - target: x86_64-apple-darwin
-            host: macos-13
-            cross: false
+            host: macos-14
+            cross: true
           - target: aarch64-apple-darwin
             host: macos-14
             cross: false

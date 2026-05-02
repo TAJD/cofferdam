@@ -8,6 +8,7 @@ pub mod ast;
 pub mod check;
 pub mod issue;
 pub mod lines;
+pub mod options;
 pub mod parser;
 pub mod source;
 pub mod span_util;
@@ -16,6 +17,10 @@ pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{Category, Check, CheckContext, CheckMeta};
 pub use issue::{Issue, Priority, Severity, Span};
 pub use lines::{LineView, Lines};
+pub use options::{
+    validate_options, CheckOptions, OptionDefault, OptionKind, OptionSpec, OptionValue,
+    OptionsError, RawOptionValue, EMPTY_OPTIONS,
+};
 pub use parser::{parse_into, source_type_for, ParsedView};
 pub use source::SourceFile;
 pub use span_util::span_from_bytes;

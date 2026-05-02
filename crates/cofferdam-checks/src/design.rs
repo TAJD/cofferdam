@@ -26,6 +26,7 @@ const META: CheckMeta = CheckMeta {
     explanation: "Functions with too many parameters are hard to call correctly. Pass an options object instead.",
     requires_types: false,
     consistency: false,
+    options: &[],
 };
 
 impl MaxParameters {

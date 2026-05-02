@@ -13,6 +13,7 @@ const META: CheckMeta = CheckMeta {
     explanation: "Mixed quote styles within a project hurt scanability.",
     requires_types: false,
     consistency: true,
+    options: &[],
 };
 
 impl Check for QuoteStyleStub {

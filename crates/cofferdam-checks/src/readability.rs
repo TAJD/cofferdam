@@ -26,6 +26,7 @@ const MLL_META: CheckMeta = CheckMeta {
     explanation: "Lines longer than the configured limit are harder to scan and review.",
     requires_types: false,
     consistency: false,
+    options: &[],
 };
 
 impl MaxLineLength {
@@ -95,6 +96,7 @@ const MFL_META: CheckMeta = CheckMeta {
         "Functions longer than the configured limit are hard to follow. Break them into smaller helpers.",
     requires_types: false,
     consistency: false,
+    options: &[],
 };
 
 impl MaxFunctionLength {

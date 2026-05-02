@@ -11,7 +11,9 @@ pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
 use std::path::{Path, PathBuf};
 
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
-use cofferdam_core::{Allocator, Check, CheckContext, Issue, Priority, Severity, SourceFile, Span};
+use cofferdam_core::{
+    Allocator, Check, CheckContext, CheckOptions, Issue, Priority, Severity, SourceFile, Span,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -25,11 +27,19 @@ pub enum EngineError {
 
 pub struct Engine {
     checks: Vec<Box<dyn Check>>,
+    /// Resolved options per check, parallel to `checks`. Built once
+    /// from each check's schema defaults; cd-4ms will overlay user
+    /// overrides from cofferdam.toml here before checks ever run.
+    options: Vec<CheckOptions>,
 }
 
 impl Engine {
     pub fn new(checks: Vec<Box<dyn Check>>) -> Self {
-        Self { checks }
+        let options = checks
+            .iter()
+            .map(|c| CheckOptions::defaults_from(c.meta().options))
+            .collect();
+        Self { checks, options }
     }
 
     /// Run all configured checks against every file in `paths`.
@@ -67,8 +77,10 @@ impl Engine {
                 diagnostics: &parsed_return.errors,
             };
 
-            for check in &self.checks {
-                let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                let mut ctx = CheckContext::new(&file)
+                    .with_parsed(&parsed)
+                    .with_options(opts);
                 issues.extend(check.run(&file, &mut ctx));
             }
         }

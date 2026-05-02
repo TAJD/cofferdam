@@ -12,6 +12,7 @@ const META: CheckMeta = CheckMeta {
     explanation: "Functions whose nesting + branching exceed the limit are hard to maintain.",
     requires_types: false,
     consistency: false,
+    options: &[],
 };
 
 impl Check for CognitiveComplexityStub {

@@ -24,6 +24,7 @@ const META: CheckMeta = CheckMeta {
     explanation: "`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.",
     requires_types: false,
     consistency: false,
+    options: &[],
 };
 
 impl Check for TripleEquals {

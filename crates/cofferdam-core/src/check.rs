@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::AstView;
 use crate::issue::Issue;
+use crate::options::{CheckOptions, OptionSpec, EMPTY_OPTIONS};
 use crate::source::SourceFile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -59,6 +60,10 @@ pub struct CheckMeta {
     /// per-file evidence in pass 1, then asks the check to flag
     /// deviations in pass 2.
     pub consistency: bool,
+    /// Per-check options schema. Engine validates user config against
+    /// this and lends the resolved values to `CheckContext::options`
+    /// for every file. `&[]` means the check takes no options.
+    pub options: &'static [OptionSpec],
 }
 
 /// Mutable per-file scratch passed to `Check::run`. Carries the
@@ -72,15 +77,28 @@ pub struct CheckMeta {
 pub struct CheckContext<'a> {
     pub file: &'a SourceFile,
     pub parsed: Option<&'a crate::parser::ParsedView<'a>>,
+    /// Resolved options for the running check, validated against its
+    /// schema at engine startup. Defaults to a process-wide empty bag
+    /// — useful for tests and for checks that declare no options.
+    pub options: &'a CheckOptions,
 }
 
 impl<'a> CheckContext<'a> {
     pub fn new(file: &'a SourceFile) -> Self {
-        Self { file, parsed: None }
+        Self {
+            file,
+            parsed: None,
+            options: &EMPTY_OPTIONS,
+        }
     }
 
     pub fn with_parsed(mut self, parsed: &'a crate::parser::ParsedView<'a>) -> Self {
         self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_options(mut self, options: &'a CheckOptions) -> Self {
+        self.options = options;
         self
     }
 

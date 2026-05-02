@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/TAJD/cofferdam.git",
+    "url": "git+https://github.com/TAJD/cofferdam.git",
     "directory": "packages/cofferdam"
   },
   "homepage": "https://github.com/TAJD/cofferdam#readme",

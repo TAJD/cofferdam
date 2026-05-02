@@ -63,14 +63,22 @@ foreach ($repoConfig in $baseline.repos) {
 
     Write-Host "Checking: $repoPath"
 
-    # Run cofferdam and measure time
+    # Run cofferdam and measure time. Native-command stderr lines arrive
+    # wrapped as ErrorRecords; we explicitly drop ErrorAction to Continue
+    # so a non-zero exit (e.g. "no TypeScript files found") doesn't halt
+    # the harness mid-loop.
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $output = & $binary check "$repoPath" 2>&1
+    $output = & {
+        $ErrorActionPreference = "Continue"
+        & $binary check "$repoPath" 2>&1
+    }
     $sw.Stop()
 
-    # Count lines (findings)
-    $lines = $output | Measure-Object -Line
-    $actualFindings = $lines.Lines
+    # Count only finding lines — ignore stderr noise like
+    # "no TypeScript files found" so a fully-skipped repo registers as 0
+    # rather than failing the harness.
+    $stdoutLines = @($output | Where-Object { $_ -is [string] })
+    $actualFindings = $stdoutLines.Count
     $elapsed = $sw.Elapsed.TotalSeconds
 
     # Check tolerance

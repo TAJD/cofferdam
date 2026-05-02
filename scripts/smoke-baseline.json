@@ -2,17 +2,17 @@
     "repos":  [
                   {
                       "path":  "C:/Users/tajdi/bestefforttools",
-                      "findings":  352,
+                      "findings":  356,
                       "tolerance":  5
                   },
                   {
                       "path":  "C:/Users/tajdi/gistreact",
-                      "findings":  314,
+                      "findings":  98,
                       "tolerance":  5
                   },
                   {
                       "path":  "C:/Users/tajdi/rovikore-landing-page",
-                      "findings":  370,
+                      "findings":  0,
                       "tolerance":  5
                   }
               ]

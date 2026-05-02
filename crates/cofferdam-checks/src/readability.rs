@@ -2,7 +2,8 @@
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, Issue, OptionDefault, OptionKind, OptionSpec,
+    Priority, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
 use oxc_ast_visit::Visit;
@@ -19,6 +20,13 @@ pub struct MaxLineLength {
     meta: &'static CheckMeta,
 }
 
+const MLL_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "limit",
+    kind: OptionKind::Int,
+    default: OptionDefault::Int(120),
+    doc: "maximum line length in bytes",
+}];
+
 const MLL_META: CheckMeta = CheckMeta {
     id: "Readability.MaxLineLength",
     category: Category::Readability,
@@ -26,7 +34,7 @@ const MLL_META: CheckMeta = CheckMeta {
     explanation: "Lines longer than the configured limit are harder to scan and review.",
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: MLL_OPTIONS,
 };
 
 impl MaxLineLength {
@@ -43,24 +51,26 @@ impl Check for MaxLineLength {
         self.meta
     }
 
-    fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let limit = ctx
+            .options
+            .get_int("limit")
+            .map(|v| v as u32)
+            .unwrap_or(self.limit);
         let mut out = Vec::new();
         let mut byte_offset: u32 = 0;
         for (line_no, line) in file.lines() {
             let len = line.len() as u32;
-            if len > self.limit {
+            if len > limit {
                 out.push(Issue {
                     check_id: self.meta.id.to_string(),
-                    message: format!(
-                        "line is {} characters, exceeds limit of {}",
-                        len, self.limit
-                    ),
+                    message: format!("line is {} characters, exceeds limit of {}", len, limit),
                     file: file.path.clone(),
                     span: Span {
                         start_byte: byte_offset,
                         end_byte: byte_offset + len,
                         line: line_no,
-                        column: self.limit + 1,
+                        column: limit + 1,
                     },
                     priority: Priority(self.meta.base_priority),
                     severity: Severity::Warning,
@@ -89,6 +99,13 @@ pub struct MaxFunctionLength {
     meta: &'static CheckMeta,
 }
 
+const MFL_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "limit",
+    kind: OptionKind::Int,
+    default: OptionDefault::Int(50),
+    doc: "maximum function body length in lines",
+}];
+
 const MFL_META: CheckMeta = CheckMeta {
     id: "Readability.MaxFunctionLength",
     category: Category::Readability,
@@ -97,7 +114,7 @@ const MFL_META: CheckMeta = CheckMeta {
         "Functions longer than the configured limit are hard to follow. Break them into smaller helpers.",
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: MFL_OPTIONS,
 };
 
 impl MaxFunctionLength {
@@ -118,9 +135,14 @@ impl Check for MaxFunctionLength {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
+        let limit = ctx
+            .options
+            .get_int("limit")
+            .map(|v| v as u32)
+            .unwrap_or(self.limit);
         let mut visitor = MFLCollector {
             file,
-            limit: self.limit,
+            limit,
             issues: Vec::new(),
         };
         visitor.visit_program(parsed.program);

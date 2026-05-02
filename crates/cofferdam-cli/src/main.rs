@@ -7,7 +7,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use cofferdam_checks::all_builtins;
 use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
-use cofferdam_engine::{discover, DiscoveryOptions, Engine};
+use cofferdam_engine::config::{self as cfg};
+use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
 use cofferdam_formatters::{JsonFormatter, TextFormatter};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -74,6 +75,15 @@ enum Cmd {
         /// baseline.
         #[arg(long)]
         fail_on_new: bool,
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the current directory until one is found or a `.git`
+        /// directory is reached. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely. Equivalent to running
+        /// without a `cofferdam.toml` present.
+        #[arg(long)]
+        no_config: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -103,6 +113,14 @@ enum BaselineAction {
         /// `.cofferdam/baseline.json` in the current directory.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the current directory until one is found or a `.git`
+        /// directory is reached. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
     },
 }
 
@@ -124,6 +142,8 @@ fn main() -> ExitCode {
             baseline,
             no_baseline,
             fail_on_new,
+            config,
+            no_config,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -133,6 +153,8 @@ fn main() -> ExitCode {
             baseline_path: baseline,
             no_baseline,
             fail_on_new,
+            config_path: config,
+            no_config,
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {
@@ -140,7 +162,9 @@ fn main() -> ExitCode {
                 hidden,
                 no_ignore,
                 output,
-            } => run_baseline_write(paths, hidden, no_ignore, output),
+                config,
+                no_config,
+            } => run_baseline_write(paths, hidden, no_ignore, output, config, no_config),
         },
     }
 }
@@ -154,6 +178,8 @@ struct CheckArgs {
     baseline_path: Option<PathBuf>,
     no_baseline: bool,
     fail_on_new: bool,
+    config_path: Option<PathBuf>,
+    no_config: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -166,6 +192,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
         baseline_path,
         no_baseline,
         fail_on_new,
+        config_path,
+        no_config,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -213,7 +241,37 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // CI scripts ("yes, we *intend* to gate on new").
     let fail_mode_new_only = baseline_active || fail_on_new;
 
-    let engine = Engine::new(all_builtins());
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+
+    let registered: Vec<&str> = all_builtins().iter().map(|c| c.meta().id).collect();
+    if let Some(cfg) = project_config.as_ref() {
+        let unknown = cfg::unknown_check_ids(cfg, &registered);
+        if !unknown.is_empty() {
+            eprintln!(
+                "warning: cofferdam.toml references unknown check id(s): {}",
+                unknown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    let engine = match (project_config.as_ref(), resolved_config_path.as_deref()) {
+        (Some(cfg), Some(path)) => match Engine::with_config(all_builtins(), cfg, path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        },
+        _ => Engine::new(all_builtins()),
+    };
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
 
     if baseline_active {
@@ -296,6 +354,8 @@ fn run_baseline_write(
     hidden: bool,
     no_ignore: bool,
     output: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+    no_config: bool,
 ) -> ExitCode {
     let roots: Vec<PathBuf> = if paths.is_empty() {
         vec![PathBuf::from(".")]
@@ -303,6 +363,12 @@ fn run_baseline_write(
         paths
     };
     let target = output.unwrap_or_else(|| PathBuf::from(baseline::DEFAULT_PATH));
+
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
 
     let opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
@@ -329,7 +395,31 @@ fn run_baseline_write(
         return ExitCode::SUCCESS;
     }
 
-    let engine = Engine::new(all_builtins());
+    let registered: Vec<&str> = all_builtins().iter().map(|c| c.meta().id).collect();
+    if let Some(cfg) = project_config.as_ref() {
+        let unknown = cfg::unknown_check_ids(cfg, &registered);
+        if !unknown.is_empty() {
+            eprintln!(
+                "warning: cofferdam.toml references unknown check id(s): {}",
+                unknown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    let engine = match (project_config.as_ref(), resolved_config_path.as_deref()) {
+        (Some(cfg), Some(path)) => match Engine::with_config(all_builtins(), cfg, path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        },
+        _ => Engine::new(all_builtins()),
+    };
     let signed = match engine.analyze_with_signatures(&files) {
         Ok(s) => s,
         Err(e) => {
@@ -401,6 +491,44 @@ fn load_baseline_with_warning(path: &Path) -> Result<Baseline, ()> {
         Err(e) => {
             eprintln!("warning: ignoring baseline ({e})");
             Err(())
+        }
+    }
+}
+
+/// Resolve which `cofferdam.toml` to load (if any) and parse it. Returns
+/// `(config, path)` — both `None` when discovery is skipped or no file
+/// is found. Hard-errors (return `Err(())`) only when the user passed
+/// `--config <path>` to a missing or invalid file. Discovered configs
+/// that fail to parse downgrade to a warning so a broken file doesn't
+/// take down `cofferdam check` for users who weren't asking for config
+/// in the first place.
+fn resolve_and_load_config(
+    explicit: Option<&Path>,
+    no_config: bool,
+) -> Result<(Option<ProjectConfig>, Option<PathBuf>), ()> {
+    if no_config {
+        return Ok((None, None));
+    }
+    let path = match explicit {
+        Some(p) => Some(p.to_path_buf()),
+        None => std::env::current_dir().ok().and_then(|d| cfg::discover(&d)),
+    };
+    let path = match path {
+        Some(p) => p,
+        None => return Ok((None, None)),
+    };
+    match cfg::load(&path) {
+        Ok(c) => Ok((Some(c), Some(path))),
+        Err(e) => {
+            if explicit.is_some() {
+                // The user pointed at this path explicitly — fail loudly
+                // rather than silently ignore.
+                eprintln!("error: {e}");
+                Err(())
+            } else {
+                eprintln!("warning: ignoring config ({e})");
+                Ok((None, None))
+            }
         }
     }
 }

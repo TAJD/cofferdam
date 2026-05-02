@@ -5,10 +5,12 @@
 //! rayon comes in a follow-up once the AST seam is stable.
 
 pub mod baseline;
+pub mod config;
 pub mod discover;
 pub mod suppress;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
+pub use config::{ConfigError, ProjectConfig};
 pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
 
 use std::collections::HashMap;
@@ -45,6 +47,30 @@ impl Engine {
             .map(|c| CheckOptions::defaults_from(c.meta().options))
             .collect();
         Self { checks, options }
+    }
+
+    /// Build an engine with per-check option overrides sourced from a
+    /// `ProjectConfig` (typically loaded from `cofferdam.toml`). Unknown
+    /// check IDs in the config are not treated as errors here — the CLI
+    /// surfaces them via `config::unknown_check_ids` so typos are
+    /// visible without breaking the build.
+    #[allow(clippy::result_large_err)] // matches config::options_for
+    pub fn with_config(
+        checks: Vec<Box<dyn Check>>,
+        config: &ProjectConfig,
+        config_path: &Path,
+    ) -> Result<Self, ConfigError> {
+        let mut options = Vec::with_capacity(checks.len());
+        for check in &checks {
+            let meta = check.meta();
+            options.push(config::options_for(
+                config,
+                config_path,
+                meta.id,
+                meta.options,
+            )?);
+        }
+        Ok(Self { checks, options })
     }
 
     /// Run all configured checks against every file in `paths`.

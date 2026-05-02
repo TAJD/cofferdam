@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Priority,
-    RelatedSpan, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
+    OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, Declaration, ExportNamedDeclaration, Function, VariableDeclaration,
@@ -24,6 +24,13 @@ pub struct MaxParameters {
     meta: &'static CheckMeta,
 }
 
+const MP_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "limit",
+    kind: OptionKind::Int,
+    default: OptionDefault::Int(5),
+    doc: "maximum number of parameters per function signature",
+}];
+
 const META: CheckMeta = CheckMeta {
     id: "Design.MaxParameters",
     category: Category::Design,
@@ -31,7 +38,7 @@ const META: CheckMeta = CheckMeta {
     explanation: "Functions with too many parameters are hard to call correctly. Pass an options object instead.",
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: MP_OPTIONS,
 };
 
 impl MaxParameters {
@@ -49,9 +56,14 @@ impl Check for MaxParameters {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
+        let limit = ctx
+            .options
+            .get_int("limit")
+            .map(|v| v as u32)
+            .unwrap_or(self.limit);
         let mut visitor = Collector {
             file,
-            limit: self.limit,
+            limit,
             issues: Vec::new(),
         };
         visitor.visit_program(parsed.program);

@@ -46,6 +46,8 @@ Almost every new check is one file in `cofferdam-checks/src/<category>.rs`, one 
 | Text-line scan | `readability.rs::MaxLineLength` | Iterate `file.lines()`, no AST |
 | AST visitor (single node) | `warning.rs::TripleEquals` | `oxc_ast_visit::Visit`, match nodes |
 | AST visitor (function-shape) | `design.rs::MaxParameters` | Walk `Function` + `ArrowFunctionExpression` |
+| Per-function score stack | `refactor.rs::CyclomaticComplexity` | Push on function entry, walk + tally, pop, emit if over limit |
+| Cross-file (corpus API) | `design.rs::DuplicateExportName` | Per-file `run` writes into `ctx.corpus`; `finalize` reads back and emits one `Issue` per match with `related: Vec<RelatedSpan>` |
 
 ### Required scaffolding for any AST check
 
@@ -156,6 +158,26 @@ Keep the `.bad` files until you've confirmed the rebuild — they're your only f
 - **Do not add a check whose `meta().id` collides with an existing one.** Grep `crates/cofferdam-checks` for the proposed ID first.
 - **`println!`/`dbg!` in checks is forbidden.** Findings go through `Issue` only — anything else corrupts robot-mode JSON.
 
+### Cross-file checks (corpus API)
+
+Project-graph checks (DRY, duplicate exports, future boundary / orphan-export rules) collect during per-file `run` and emit during `finalize`. Pattern:
+
+```rust
+static MY_SLOT: CorpusKey<Vec<Fingerprint>> = CorpusKey::new("Category.MyCheck.fingerprints");
+
+impl Check for MyCheck {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        ctx.corpus.with_slot(&MY_SLOT, |slot| slot.push(/* per-file data */));
+        Vec::new()  // emit nothing per-file
+    }
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        ctx.corpus.with_slot(&MY_SLOT, |slot| /* group + emit */ vec![])
+    }
+}
+```
+
+Two checks share storage by referencing the same `CorpusKey<T>` constant (same name + same `T`); distinct keys (or a different `T`) get distinct slots. Findings spanning multiple locations use `Issue.related: Vec<RelatedSpan>` — formatters omit it when empty. The single-`Mutex<HashMap>` corpus serialises slot access; cd-6ad swaps in per-slot locks once per-file parallelism lands.
+
 ## Parallel agent dispatch (when running multiple agents)
 
 Cofferdam's structure is parallel-friendly because most checks are one self-contained file. Safe to fan out:
@@ -179,18 +201,20 @@ When dispatching for parallel check work:
 4. End with: "Do NOT commit. Do NOT close beads. Run the verification block; paste the last 20 lines."
 5. Controller pulls each branch, verifies independently, merges (resolves only `lib.rs` registration conflicts), closes the bead.
 
+**Windows caveat:** the Agent tool's `isolation: "worktree"` has been observed to silently fall back to the main working tree on this host — agent edits show up directly in `git status` of the controller, with no per-agent branch to pull. When that happens, agents touching the same lines will overwrite each other with no merge step. Mitigations: only fan out when each agent's edits target disjoint methods/files (different `Check` structs, different `visit_X` methods on the same struct); have each agent run the full verification block before reporting back so the resulting tree is at least internally consistent; controller spot-checks `git status` after dispatch instead of trusting the worktree-list output.
+
 ## Validated reference points
 
 Real-repo benchmarks captured during development; useful for sanity-checking that a change hasn't regressed. Numbers update as new checks land — the point is "did this PR cause an unexpected swing?", not "is this number forever correct".
 
 | Repo | Files | Findings | Release time |
 |---|---|---|---|
-| `C:/Users/tajdi/bestefforttools` | 325 | 396 | 269 ms |
+| `C:/Users/tajdi/bestefforttools` | 325 | 398 | 269 ms |
 | `C:/Users/tajdi/gistreact` | 31 | 110 | 205 ms |
 
 `C:/Users/tajdi/rovikore-landing-page` was on the list earlier but no longer contains TS files at that path — dropped.
 
-Per-check breakdown on bestefforttools (cd-3ax validation, captured 2026-05-02 after cd-0ps, cd-4cr, cd-vlq, cd-qf3, cd-qnu landed):
+Per-check breakdown on bestefforttools (captured 2026-05-02 after the full Refactor/Design check chain landed: cd-0ps, cd-qf3, cd-4cr, cd-vlq, cd-qnu, cd-jdq, cd-s2k, cd-39c, cd-u30, cd-2pu, cd-mti):
 
 | Check | Hits |
 |---|---|
@@ -201,7 +225,7 @@ Per-check breakdown on bestefforttools (cd-3ax validation, captured 2026-05-02 a
 | `Design.DuplicateExportName` | 8 |
 | `Refactor.CyclomaticComplexity` (limit 10) | 20 |
 | `Refactor.CognitiveComplexity` (limit 15) | 9 (subset of cyclomatic) |
-| `Refactor.DuplicateBlock` (≥6 stmts, ≥80 chars) | 11 |
+| `Refactor.DuplicateBlock` (≥6 stmts, ≥80 chars, AST-canonical) | 13 |
 
 Spot-checked: zero false positives in the top-10 of each new cross-file/complexity check — duplicate exports are real barrel collisions, duplicate blocks are real test-setup copy-paste, complexity hits are real deeply-nested reducers / handlers. Limits tuned by gut-feel from the spot-check; revisit if a refactor cluster makes the noise:signal ratio drop.
 

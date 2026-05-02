@@ -163,7 +163,13 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          # No registry-url + no auth token: this job authenticates to npm via
+          # OIDC (Trusted Publisher configured at npmjs.com/package/cofferdam/access).
+          # `id-token: write` permission at the workflow level is what makes
+          # it work.
+
+      - name: Use latest npm (OIDC publishing requires npm 11.5.1+)
+        run: npm install -g npm@latest
 
       - name: Sync npm package version with tag
         working-directory: packages/cofferdam
@@ -173,13 +179,13 @@ jobs:
           # Use npm to set the version (no git tag — we're already on the tag commit)
           npm version "$version" --no-git-tag-version --allow-same-version
 
-      - name: Publish to npm with provenance
+      - name: Publish to npm via Trusted Publisher (OIDC)
         working-directory: packages/cofferdam
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # --provenance attests the package was built from this commit on a
-          # GitHub Actions runner. Requires id-token:write on this workflow
-          # (set at the top of the file). Visible on npmjs.com under the
-          # package's "Provenance" badge.
+          # No NODE_AUTH_TOKEN: npm CLI 11.5.1+ on a GitHub Actions runner
+          # auto-exchanges the OIDC token (via id-token:write permission)
+          # for a short-lived publish credential, provided the package has
+          # a Trusted Publisher configured pointing at this exact workflow
+          # filename and repo. --provenance is automatic with OIDC but we
+          # pass it explicitly for clarity.
           npm publish --provenance --access public

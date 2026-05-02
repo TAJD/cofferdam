@@ -13,3 +13,6 @@ cofferdam-core = { workspace = true }
 ignore = { workspace = true }
 oxc_diagnostics = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

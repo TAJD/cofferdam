@@ -26,6 +26,8 @@ pub struct DiscoveryOptions {
     pub respect_ignore: bool,
     /// Walk hidden files/directories (those starting with `.`).
     pub include_hidden: bool,
+    /// Skip TypeScript declaration files (`.d.ts`, `.d.cts`, `.d.mts`).
+    pub skip_declaration_files: bool,
 }
 
 impl Default for DiscoveryOptions {
@@ -34,6 +36,7 @@ impl Default for DiscoveryOptions {
             extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
             respect_ignore: true,
             include_hidden: false,
+            skip_declaration_files: true,
         }
     }
 }
@@ -76,7 +79,19 @@ pub fn discover<P: AsRef<Path>>(
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    out.push(entry.into_path());
+                    let path = entry.into_path();
+                    // Skip declaration files if requested
+                    if opts.skip_declaration_files {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.ends_with(".d.ts")
+                                || name.ends_with(".d.cts")
+                                || name.ends_with(".d.mts")
+                            {
+                                continue;
+                            }
+                        }
+                    }
+                    out.push(path);
                 }
             }
             // Per-entry errors (perm denied, broken symlink) are non-fatal.

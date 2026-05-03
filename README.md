@@ -76,6 +76,8 @@ cofferdam hello                               # banner
 
 Built-in checks live across all five categories. Full catalog with bad/good examples, options, and suppression directives: **[`docs/checks.md`](docs/checks.md)**. From the CLI: `cofferdam explain <CHECK_ID>` (or `--robot` for JSON).
 
+Drop-in CI workflows (GitHub Actions, GitLab, CircleCI, Drone, pre-commit hooks): **[`docs/ci-recipes.md`](docs/ci-recipes.md)**. Output formats reference (text / JSON / compact pipe-delimited): **[`docs/output-formats.md`](docs/output-formats.md)**.
+
 | ID                              | Category    | What it flags                                      |
 | ------------------------------- | ----------- | -------------------------------------------------- |
 | `Readability.MaxLineLength`     | Readability | Lines over 120 characters                          |

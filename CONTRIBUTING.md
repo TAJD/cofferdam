@@ -69,3 +69,7 @@ Real-world impact, relevant style guides (e.g. TypeScript ESLint rule names for 
 ## For maintainers and automated agents
 
 The recipe for writing a check — scaffolding, AST visitor patterns, required imports, registration, fixtures, and verification steps — is documented in [`CLAUDE.md`](CLAUDE.md). That file is the authoritative implementation guide.
+
+## Releasing
+
+All user-facing changes are tracked under the `## [Unreleased]` section of `CHANGELOG.md` as they land on `main`. To cut a release, move the accumulated `[Unreleased]` entries into a new versioned section (`## [x.y.z] - YYYY-MM-DD`), leave `## [Unreleased]` empty, and push the `vx.y.z` tag. The release workflow asserts that `[Unreleased]` is empty and that a matching versioned section exists before publishing to npm — the publish step will fail if either condition is not met. Entries are hand-curated in user-facing language; do not use conventional-commits tooling to auto-generate them.

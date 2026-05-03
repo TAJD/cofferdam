@@ -189,6 +189,23 @@ jobs:
           # Use npm to set the version (no git tag — we're already on the tag commit)
           npm version "$version" --no-git-tag-version --allow-same-version
 
+      - name: Verify CHANGELOG.md for this release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Assert [Unreleased] section is empty (no non-blank lines before the next ## [)
+          unreleased_body=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md)
+          if echo "$unreleased_body" | grep -qP '\S'; then
+            echo "ERROR: ## [Unreleased] section is not empty. Move entries to ## [$version] before releasing."
+            exit 1
+          fi
+          # Assert that a versioned section exists for this tag
+          if ! grep -qP "^## \[$version\]" CHANGELOG.md; then
+            echo "ERROR: No ## [$version] section found in CHANGELOG.md. Add a release section before publishing."
+            exit 1
+          fi
+          echo "CHANGELOG.md OK for $version"
+
       - name: Publish to npm via Trusted Publisher (OIDC)
         working-directory: packages/cofferdam
         run: |

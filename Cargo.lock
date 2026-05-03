@@ -180,6 +180,7 @@ dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
  "cofferdam-formatters",
+ "serde",
  "serde_json",
  "tempfile",
  "toml",

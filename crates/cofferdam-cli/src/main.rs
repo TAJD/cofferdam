@@ -1,5 +1,6 @@
 //! Cofferdam CLI entry point.
 
+mod explain;
 mod init;
 
 use std::collections::HashSet;
@@ -142,6 +143,23 @@ enum Cmd {
         #[command(subcommand)]
         action: BaselineAction,
     },
+    /// Print the metadata and prose explanation for one built-in check.
+    /// Use this when a finding's check ID isn't self-explanatory and you
+    /// want the rationale, default severity, configurable options, and
+    /// any relevant flags without leaving the terminal.
+    Explain {
+        /// Dotted check ID, e.g. `Warning.TripleEquals`. If unknown,
+        /// the CLI prints the closest matches (substring on the ID) or
+        /// the full list when nothing matches.
+        #[arg(value_name = "CHECK_ID")]
+        check_id: String,
+        /// Machine-readable JSON. Schema mirrors `CheckMeta` fields.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore
     /// entries so a new project has a working `cofferdam check` after
     /// one command. Refuses to overwrite an existing cofferdam.toml
@@ -236,6 +254,15 @@ fn main() -> ExitCode {
             fail_on: fail_on.into(),
             max_issues,
             quiet,
+        }),
+        Cmd::Explain {
+            check_id,
+            robot,
+            pretty,
+        } => explain::run(explain::ExplainArgs {
+            check_id,
+            robot,
+            pretty,
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {

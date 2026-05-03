@@ -18,6 +18,7 @@ cofferdam-engine = { workspace = true }
 cofferdam-checks = { workspace = true }
 cofferdam-formatters = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

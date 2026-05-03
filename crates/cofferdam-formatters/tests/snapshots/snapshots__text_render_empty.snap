@@ -1,0 +1,5 @@
+---
+source: crates/cofferdam-formatters/tests/snapshots.rs
+expression: "TextFormatter::render(&[])"
+---
+✓ no findings

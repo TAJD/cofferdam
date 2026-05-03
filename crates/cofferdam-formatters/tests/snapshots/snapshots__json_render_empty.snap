@@ -1,0 +1,5 @@
+---
+source: crates/cofferdam-formatters/tests/snapshots.rs
+expression: "JsonFormatter::render(&[])"
+---
+{"findings":[],"summary":{"total":0,"by_category":{}}}

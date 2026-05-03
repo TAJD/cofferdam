@@ -71,6 +71,14 @@ pub struct CheckMeta {
     /// need to set it themselves.
     pub default_severity: Severity,
     pub explanation: &'static str,
+    /// Long-form catalog body — extracted to a companion markdown file
+    /// at `crates/cofferdam-checks/docs/<id>.md` and pulled in via
+    /// `include_str!` so the file's existence is enforced at compile
+    /// time. Used by `cofferdam explain --full`, the gen-docs catalog
+    /// (Phase 2), and the published VitePress site. Includes the
+    /// frontmatter prologue verbatim — gen-docs splits it; in-terminal
+    /// renderers strip it.
+    pub body: &'static str,
     /// Type-aware checks (decision #4) — engine routes these to the
     /// ts-morph worker pool instead of the Rust pipeline.
     pub requires_types: bool,

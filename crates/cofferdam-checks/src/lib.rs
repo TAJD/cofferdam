@@ -35,3 +35,36 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(warning::NoEval),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::fs;
+
+    /// Every file in `docs/` must correspond to a registered builtin's id.
+    /// `include_str!` already enforces the reverse direction (each builtin's
+    /// `META.body` references an existing file at compile time).
+    #[test]
+    fn no_orphan_companion_files() {
+        let registered: HashSet<String> = all_builtins()
+            .iter()
+            .map(|c| format!("{}.md", c.meta().id))
+            .collect();
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        let on_disk: HashSet<String> = fs::read_dir(&dir)
+            .expect("failed to read docs/ directory")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".md"))
+            .collect();
+
+        let orphans: Vec<&String> = on_disk.difference(&registered).collect();
+        assert!(
+            orphans.is_empty(),
+            "orphan companion files in crates/cofferdam-checks/docs/ (no matching check in all_builtins()): {:?}",
+            orphans
+        );
+    }
+}

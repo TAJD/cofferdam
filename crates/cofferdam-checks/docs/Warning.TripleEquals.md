@@ -1,0 +1,33 @@
+---
+id: Warning.TripleEquals
+category: Warning
+base_priority: 15
+default_severity: High
+options: []
+---
+
+`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. Walks every `BinaryExpression` and flags the equality operators.
+
+```ts
+// flagged
+if (a == b) return true;
+if (a != b) return false;
+```
+
+```ts
+// fix
+if (a === b) return true;
+if (a !== b) return false;
+```
+
+```ts
+// not relevant — relational operators don't coerce in the same way
+if (a < b) return true;
+if (a >= b) return false;
+```
+
+```toml
+# The default (high) gates CI — explicit override only useful to demote.
+[checks."Warning.TripleEquals"]
+severity = "medium"
+```

@@ -38,6 +38,7 @@ const META: CheckMeta = CheckMeta {
     base_priority: -5,
     default_severity: Severity::Info,
     explanation: "Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.",
+    body: include_str!("../docs/Consistency.QuoteStyle.md"),
     requires_types: false,
     consistency: true,
     options: &[],

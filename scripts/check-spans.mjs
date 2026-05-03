@@ -1,16 +1,23 @@
 #!/usr/bin/env node
 // scripts/check-spans.mjs — span round-trip helper for plugin-fixture CI.
 //
-// For each issue in cofferdam's --format json output, slice the source file
-// by [byte_start, byte_end) and assert the slice equals an expected trigger
-// (literal string or /regex/). Exits 0 on success, 1 on any mismatch.
+// For each finding in cofferdam's --format json output, slice the source
+// file by [start_byte, end_byte) and assert the slice equals an expected
+// trigger (literal string or /regex/). Exits 0 on success, 1 on any
+// mismatch.
 //
 // Usage:
-//   node scripts/check-spans.mjs <issues.json> <source.ts> <trigger>
+//   node scripts/check-spans.mjs <findings.json> <source.ts> <trigger>
 //
 // <trigger> forms:
 //   - Literal:  Rovikore               (slice must equal exactly)
 //   - Regex:    /^https?:\/\//         (slice must match)
+//
+// Schema: matches cofferdam-formatters/src/json.rs::RobotReport.
+// Document shape:
+//   { "findings": [ { "id", "file", "line", "column",
+//                     "start_byte", "end_byte", "message", ... } ],
+//     "summary": { ... } }
 //
 // Filed as cd-n14, child of cd-7e4. Reused by every plugin-fixture CI step.
 
@@ -24,13 +31,13 @@ function usage() {
 }
 
 if (argv.length !== 5) usage();
-const [, , issuesPath, sourcePath, triggerArg] = argv;
+const [, , findingsPath, sourcePath, triggerArg] = argv;
 
-let issuesDoc;
+let doc;
 try {
-  issuesDoc = JSON.parse(readFileSync(issuesPath, "utf8"));
+  doc = JSON.parse(readFileSync(findingsPath, "utf8"));
 } catch (e) {
-  console.error(`check-spans: could not read/parse ${issuesPath}: ${e.message}`);
+  console.error(`check-spans: could not read/parse ${findingsPath}: ${e.message}`);
   exit(1);
 }
 
@@ -42,9 +49,17 @@ try {
   exit(1);
 }
 
-const issues = Array.isArray(issuesDoc) ? issuesDoc : issuesDoc.issues ?? [];
-if (!Array.isArray(issues)) {
-  console.error("check-spans: expected array `issues` or top-level array");
+// Accept the canonical RobotReport shape (`{ findings: [...] }`) and a few
+// permissive fallbacks so the helper survives schema drift / legacy callers
+// without a flag day:
+//   - { findings: [...] }   ← cofferdam formatter (canonical)
+//   - { issues:   [...] }   ← older drafts; tolerated
+//   - [ ... ]               ← bare array (test fixtures)
+const findings = Array.isArray(doc)
+  ? doc
+  : doc.findings ?? doc.issues ?? [];
+if (!Array.isArray(findings)) {
+  console.error("check-spans: expected `findings` array, `issues` array, or top-level array");
   exit(1);
 }
 
@@ -62,34 +77,41 @@ if (triggerArg.startsWith("/") && triggerArg.lastIndexOf("/") > 0) {
 }
 
 let failures = 0;
+let checked = 0;
 
-for (const [i, issue] of issues.entries()) {
-  // Filter by file when an issue references a different source — keep the
+for (const [i, finding] of findings.entries()) {
+  // Filter by file when a finding references a different source — keep the
   // tool reusable for multi-file fixtures later.
-  if (issue.file && !sourcePath.endsWith(issue.file.replace(/^\.?\//, ""))) {
-    continue;
+  if (finding.file) {
+    const wantNorm = sourcePath.replace(/\\/g, "/");
+    const haveNorm = finding.file.replace(/\\/g, "/").replace(/^\.?\//, "");
+    if (!wantNorm.endsWith(haveNorm)) continue;
   }
 
-  const span = issue.span ?? issue;
-  const { byte_start, byte_end } = span;
-  if (typeof byte_start !== "number" || typeof byte_end !== "number") {
-    console.error(`#${i}: missing byte_start/byte_end on span`, span);
+  // Cofferdam canonical fields; legacy `byte_start`/`byte_end` and nested
+  // `span: { ... }` accepted for forward-compat with older test fixtures.
+  const span = finding.span ?? finding;
+  const startByte = span.start_byte ?? span.byte_start;
+  const endByte = span.end_byte ?? span.byte_end;
+  if (typeof startByte !== "number" || typeof endByte !== "number") {
+    console.error(`#${i}: missing start_byte/end_byte on finding`, span);
     failures++;
     continue;
   }
-  if (byte_start < 0 || byte_end > source.length || byte_start >= byte_end) {
+  if (startByte < 0 || endByte > source.length || startByte >= endByte) {
     console.error(
-      `#${i}: byte range [${byte_start}, ${byte_end}) out of bounds for source of length ${source.length}`,
+      `#${i}: byte range [${startByte}, ${endByte}) out of bounds for source of length ${source.length}`,
     );
     failures++;
     continue;
   }
 
-  const slice = source.slice(byte_start, byte_end).toString("utf8");
+  checked++;
+  const slice = source.slice(startByte, endByte).toString("utf8");
   const ok = triggerKind === "regex" ? trigger.test(slice) : slice === trigger;
   if (!ok) {
     console.error(
-      `#${i}: span [${byte_start}, ${byte_end}) sliced to ${JSON.stringify(slice)}, ` +
+      `#${i}: span [${startByte}, ${endByte}) sliced to ${JSON.stringify(slice)}, ` +
         `expected ${triggerKind === "regex" ? trigger : JSON.stringify(trigger)}`,
     );
     failures++;
@@ -97,8 +119,8 @@ for (const [i, issue] of issues.entries()) {
 }
 
 if (failures > 0) {
-  console.error(`check-spans: ${failures} of ${issues.length} issue spans failed round-trip`);
+  console.error(`check-spans: ${failures} of ${checked} checked spans failed round-trip`);
   exit(1);
 }
 
-console.log(`check-spans: ${issues.length} issue spans round-tripped OK`);
+console.log(`check-spans: ${checked} finding span(s) round-tripped OK`);

@@ -36,23 +36,36 @@ function run(args) {
   }
 }
 
-test("passes when literal trigger round-trips", () => {
+test("passes when literal trigger round-trips (canonical RobotReport shape)", () => {
   withTmp((dir) => {
     const src = "const x = 'Rovikore';\n"; // 'Rovikore' is bytes 11..19
     const sourcePath = join(dir, "fixture.ts");
     writeFileSync(sourcePath, src);
 
-    const issues = {
-      issues: [
-        { check_id: "BrandCasing", span: { byte_start: 11, byte_end: 19 } },
+    // Canonical cofferdam JSON formatter shape: { findings: [...], summary: {...} }
+    // with start_byte / end_byte at top level of each finding.
+    const doc = {
+      findings: [
+        {
+          id: "BrandCasing",
+          category: "warning",
+          severity: "warning",
+          file: "fixture.ts",
+          line: 1,
+          column: 12,
+          start_byte: 11,
+          end_byte: 19,
+          message: 'Brand name must be "ROVIKORE", not "Rovikore".',
+        },
       ],
+      summary: { total: 1, by_category: { warning: 1 } },
     };
-    const issuesPath = join(dir, "issues.json");
-    writeFileSync(issuesPath, JSON.stringify(issues));
+    const docPath = join(dir, "findings.json");
+    writeFileSync(docPath, JSON.stringify(doc));
 
-    const r = run([issuesPath, sourcePath, "Rovikore"]);
+    const r = run([docPath, sourcePath, "Rovikore"]);
     assert.equal(r.code, 0, `stderr: ${r.stderr}`);
-    assert.match(r.stdout, /1 issue spans round-tripped OK/);
+    assert.match(r.stdout, /1 finding span\(s\) round-tripped OK/);
   });
 });
 
@@ -61,13 +74,13 @@ test("fails when slice does not match literal trigger", () => {
     const sourcePath = join(dir, "fixture.ts");
     writeFileSync(sourcePath, "const x = 'rovikore';\n"); // lowercase
 
-    const issuesPath = join(dir, "issues.json");
+    const docPath = join(dir, "findings.json");
     writeFileSync(
-      issuesPath,
-      JSON.stringify({ issues: [{ span: { byte_start: 11, byte_end: 19 } }] }),
+      docPath,
+      JSON.stringify({ findings: [{ start_byte: 11, end_byte: 19 }] }),
     );
 
-    const r = run([issuesPath, sourcePath, "Rovikore"]);
+    const r = run([docPath, sourcePath, "Rovikore"]);
     assert.equal(r.code, 1);
     assert.match(r.stderr, /expected "Rovikore"/);
   });
@@ -79,13 +92,13 @@ test("regex trigger matches", () => {
     // "fetch('https://example.com');" — 'https://example.com' is bytes 7..26
     writeFileSync(sourcePath, "fetch('https://example.com');\n");
 
-    const issuesPath = join(dir, "issues.json");
+    const docPath = join(dir, "findings.json");
     writeFileSync(
-      issuesPath,
-      JSON.stringify({ issues: [{ span: { byte_start: 7, byte_end: 26 } }] }),
+      docPath,
+      JSON.stringify({ findings: [{ start_byte: 7, end_byte: 26 }] }),
     );
 
-    const r = run([issuesPath, sourcePath, "/^https:\\/\\//"]);
+    const r = run([docPath, sourcePath, "/^https:\\/\\//"]);
     assert.equal(r.code, 0, `stderr: ${r.stderr}`);
   });
 });
@@ -95,13 +108,13 @@ test("rejects out-of-bounds byte ranges", () => {
     const sourcePath = join(dir, "fixture.ts");
     writeFileSync(sourcePath, "short\n");
 
-    const issuesPath = join(dir, "issues.json");
+    const docPath = join(dir, "findings.json");
     writeFileSync(
-      issuesPath,
-      JSON.stringify({ issues: [{ span: { byte_start: 0, byte_end: 999 } }] }),
+      docPath,
+      JSON.stringify({ findings: [{ start_byte: 0, end_byte: 999 }] }),
     );
 
-    const r = run([issuesPath, sourcePath, "short"]);
+    const r = run([docPath, sourcePath, "short"]);
     assert.equal(r.code, 1);
     assert.match(r.stderr, /out of bounds/);
   });
@@ -113,13 +126,31 @@ test("accepts top-level array form", () => {
     // "abc Rovikore xyz" — 'Rovikore' is bytes 4..12
     writeFileSync(sourcePath, "abc Rovikore xyz\n");
 
-    const issuesPath = join(dir, "issues.json");
+    const docPath = join(dir, "findings.json");
     writeFileSync(
-      issuesPath,
-      JSON.stringify([{ span: { byte_start: 4, byte_end: 12 } }]),
+      docPath,
+      JSON.stringify([{ start_byte: 4, end_byte: 12 }]),
     );
 
-    const r = run([issuesPath, sourcePath, "Rovikore"]);
+    const r = run([docPath, sourcePath, "Rovikore"]);
+    assert.equal(r.code, 0, `stderr: ${r.stderr}`);
+  });
+});
+
+test("legacy issues+byte_start fallback still works", () => {
+  // Older drafts of the helper expected `issues` + `byte_start/byte_end`.
+  // We tolerate that for forward-compat with any in-flight CI fixtures.
+  withTmp((dir) => {
+    const sourcePath = join(dir, "fixture.ts");
+    writeFileSync(sourcePath, "abc Rovikore xyz\n");
+
+    const docPath = join(dir, "findings.json");
+    writeFileSync(
+      docPath,
+      JSON.stringify({ issues: [{ span: { byte_start: 4, byte_end: 12 } }] }),
+    );
+
+    const r = run([docPath, sourcePath, "Rovikore"]);
     assert.equal(r.code, 0, `stderr: ${r.stderr}`);
   });
 });

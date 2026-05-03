@@ -259,39 +259,54 @@ Expected: 2 issues (lines marked `FLAG #1` and `FLAG #2`), nothing else.
 ### Golden file format
 
 `expected.json` is the JSON output of `cofferdam check fixture.ts --format
-json`, with two normalisations applied so the file is stable across machines
-and across cofferdam versions:
+json --pretty`, with the path field normalised to repo-relative POSIX form.
 
-- `tool_version` field stripped (or pinned to `"<test>"`).
-- File paths normalised to repo-relative POSIX form.
-
-Schema is the existing JSON formatter contract (see `cofferdam-formatters/src/json.rs`).
-The committed file looks like:
+Schema is the existing JSON formatter contract — see
+`cofferdam-formatters/src/json.rs::RobotReport`. The committed file looks
+like:
 
 ```json
 {
-  "issues": [
+  "findings": [
     {
-      "check_id": "BrandCasing",
-      "category": "Warning",
+      "id": "BrandCasing",
+      "category": "warning",
+      "priority": 15,
       "severity": "warning",
-      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\".",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "span": { "start_line": 8, "start_col": 23, "end_line": 8, "end_col": 31, "byte_start": 197, "byte_end": 205 }
+      "line": 11,
+      "column": 13,
+      "start_byte": 0,
+      "end_byte": 0,
+      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
     },
     {
-      "check_id": "BrandCasing",
-      "category": "Warning",
+      "id": "BrandCasing",
+      "category": "warning",
+      "priority": 15,
       "severity": "warning",
-      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\".",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "span": { "start_line": 12, "start_col": 24, "end_line": 12, "end_col": 32, "byte_start": 280, "byte_end": 288 }
+      "line": 14,
+      "column": 25,
+      "start_byte": 0,
+      "end_byte": 0,
+      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
     }
-  ]
+  ],
+  "summary": {
+    "total": 2,
+    "by_category": { "warning": 2 }
+  }
 }
 ```
 
-(Real numbers populated when the fixture is committed and the loader runs.)
+`start_byte` / `end_byte` are zero-filled until the loader runs and the real
+offsets are recorded. Line/column numbers come from `fixture.ts` directly:
+the FLAG #1 string-literal `Rovikore` is on line 11 of the fixture
+(`return "Welcome to Rovikore!";`), and FLAG #2 (template literal) is on
+line 14 (`export const HEADER = ` + backticks). Regenerate everything by
+running `cofferdam check examples-plugins/brand-casing/fixture.ts --format
+json --pretty | jq .` once the SDK lands.
 
 ### Round-trip check
 
@@ -313,16 +328,16 @@ to the existing `cofferdam-check.yml`):
   run: |
     cargo run --release -p cofferdam-cli -- check \
       examples-plugins/brand-casing/fixture.ts \
-      --format json > actual.json
-
-- name: Normalise actual.json
-  run: jq 'del(.tool_version)' actual.json > actual.norm.json
+      --format json --pretty > actual.json
 
 - name: Diff against golden
-  run: diff -u examples-plugins/brand-casing/expected.json actual.norm.json
+  # The formatter already forward-slashes paths and emits stable field
+  # ordering (serde + BTreeMap), so a plain diff is enough. If host quirks
+  # show up later, normalise both sides through `jq -S .` first.
+  run: diff -u examples-plugins/brand-casing/expected.json actual.json
 
 - name: Round-trip span check
-  run: node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts
+  run: node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
 
 - name: Negative fixture must fail to compile
   run: |

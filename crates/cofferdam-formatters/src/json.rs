@@ -79,6 +79,23 @@ pub struct RobotSummary {
     /// baseline is active.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baselined: Option<usize>,
+    /// Total findings produced before `--max-issues` truncation. Omitted
+    /// when no truncation occurred so byte-for-byte JSON output is
+    /// identical to pre-cd-y7e cofferdam in the common case. When
+    /// present, it is always strictly greater than `total` (which
+    /// reflects the rendered `findings` array length).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated_from: Option<usize>,
+}
+
+/// Options for the JSON formatter. `pretty` is in here so callers don't
+/// have to pick between `_pretty` and `_with_opts` method variants.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct JsonRenderOpts {
+    pub pretty: bool,
+    /// Original total before `--max-issues` truncation, when truncation
+    /// happened. `None` when the rendered findings are the complete set.
+    pub truncated_from: Option<usize>,
 }
 
 pub struct JsonFormatter;
@@ -86,15 +103,25 @@ pub struct JsonFormatter;
 impl JsonFormatter {
     /// Render findings as compact JSON (one line, no whitespace).
     pub fn render(issues: &[Issue]) -> String {
-        Self::render_inner(issues, false)
+        Self::render_with_opts(issues, JsonRenderOpts::default())
     }
 
     /// Render findings as pretty-printed JSON. Use for human inspection.
     pub fn render_pretty(issues: &[Issue]) -> String {
-        Self::render_inner(issues, true)
+        Self::render_with_opts(
+            issues,
+            JsonRenderOpts {
+                pretty: true,
+                truncated_from: None,
+            },
+        )
     }
 
-    fn render_inner(issues: &[Issue], pretty: bool) -> String {
+    pub fn render_with_opts(issues: &[Issue], opts: JsonRenderOpts) -> String {
+        Self::render_inner(issues, opts)
+    }
+
+    fn render_inner(issues: &[Issue], opts: JsonRenderOpts) -> String {
         let findings: Vec<RobotFinding<'_>> = issues
             .iter()
             .map(|i| RobotFinding {
@@ -125,11 +152,12 @@ impl JsonFormatter {
                 by_category,
                 new: None,
                 baselined: None,
+                truncated_from: opts.truncated_from,
             },
             findings,
         };
 
-        if pretty {
+        if opts.pretty {
             serde_json::to_string_pretty(&report).expect("RobotReport serializes infallibly")
         } else {
             serde_json::to_string(&report).expect("RobotReport serializes infallibly")
@@ -141,15 +169,28 @@ impl JsonFormatter {
     /// finding matched the active baseline. Adds `baselined` per finding
     /// and `new` / `baselined` totals on the summary.
     pub fn render_with_baseline(tagged: &[(Issue, bool)]) -> String {
-        Self::render_with_baseline_inner(tagged, false)
+        Self::render_with_baseline_with_opts(tagged, JsonRenderOpts::default())
     }
 
     /// Pretty-printed variant of `render_with_baseline`.
     pub fn render_with_baseline_pretty(tagged: &[(Issue, bool)]) -> String {
-        Self::render_with_baseline_inner(tagged, true)
+        Self::render_with_baseline_with_opts(
+            tagged,
+            JsonRenderOpts {
+                pretty: true,
+                truncated_from: None,
+            },
+        )
     }
 
-    fn render_with_baseline_inner(tagged: &[(Issue, bool)], pretty: bool) -> String {
+    pub fn render_with_baseline_with_opts(
+        tagged: &[(Issue, bool)],
+        opts: JsonRenderOpts,
+    ) -> String {
+        Self::render_with_baseline_inner(tagged, opts)
+    }
+
+    fn render_with_baseline_inner(tagged: &[(Issue, bool)], opts: JsonRenderOpts) -> String {
         let findings: Vec<RobotFinding<'_>> = tagged
             .iter()
             .map(|(i, baselined)| RobotFinding {
@@ -185,11 +226,12 @@ impl JsonFormatter {
                 by_category,
                 new: Some(new_count),
                 baselined: Some(baselined_count),
+                truncated_from: opts.truncated_from,
             },
             findings,
         };
 
-        if pretty {
+        if opts.pretty {
             serde_json::to_string_pretty(&report).expect("RobotReport serializes infallibly")
         } else {
             serde_json::to_string(&report).expect("RobotReport serializes infallibly")
@@ -284,5 +326,44 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
         assert_eq!(parsed["findings"].as_array().unwrap().len(), 0);
         assert_eq!(parsed["summary"]["total"], 0);
+    }
+
+    #[test]
+    fn json_formatter_omits_truncated_from_when_not_truncated() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = JsonFormatter::render(&[issue]);
+        assert!(
+            !output.contains("truncated_from"),
+            "schema must stay byte-identical when no truncation, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn json_formatter_includes_truncated_from_when_capped() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = JsonFormatter::render_with_opts(
+            &[issue],
+            JsonRenderOpts {
+                pretty: false,
+                truncated_from: Some(42),
+            },
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(parsed["summary"]["truncated_from"], 42);
+        assert_eq!(parsed["summary"]["total"], 1);
+    }
+
+    #[test]
+    fn json_formatter_baseline_includes_truncated_from() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = JsonFormatter::render_with_baseline_with_opts(
+            &[(issue, false)],
+            JsonRenderOpts {
+                pretty: false,
+                truncated_from: Some(99),
+            },
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(parsed["summary"]["truncated_from"], 99);
     }
 }

@@ -1,21 +1,45 @@
 //! Human text formatter. Groups findings by category, then prints them
 //! priority-sorted within each.
+//!
+//! Color: this formatter intentionally emits no ANSI escape codes today.
+//! That makes the output trivially honor `NO_COLOR` (the env var has no
+//! effect because there is nothing to suppress) and keeps the output
+//! grep-friendly. If color is added later, gate it on
+//! `std::env::var_os("NO_COLOR").is_none()` per <https://no-color.org>.
 
 use std::fmt::Write;
 
 use cofferdam_core::{Category, Issue};
 
+/// Options for the text formatter. Defaults match the historical
+/// behavior — full output with the trailing summary line.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TextRenderOpts {
+    /// When true, suppress the trailing `N finding(s)` summary line.
+    /// Findings themselves still print. Pairs with the CLI `--quiet`
+    /// flag.
+    pub quiet: bool,
+}
+
 pub struct TextFormatter;
 
 impl TextFormatter {
     pub fn render(issues: &[Issue]) -> String {
-        Self::render_inner(issues.iter().map(|i| (i, false)), issues.len(), None)
+        Self::render_with_opts(issues, TextRenderOpts::default())
+    }
+
+    pub fn render_with_opts(issues: &[Issue], opts: TextRenderOpts) -> String {
+        Self::render_inner(issues.iter().map(|i| (i, false)), issues.len(), None, opts)
     }
 
     /// Render with per-finding baseline tags. `tagged` is parallel to
     /// the engine's output: each `(Issue, bool)` pair carries `true`
     /// when the finding matched the active baseline.
     pub fn render_with_baseline(tagged: &[(Issue, bool)]) -> String {
+        Self::render_with_baseline_opts(tagged, TextRenderOpts::default())
+    }
+
+    pub fn render_with_baseline_opts(tagged: &[(Issue, bool)], opts: TextRenderOpts) -> String {
         let baselined = tagged.iter().filter(|(_, b)| *b).count();
         Self::render_inner(
             tagged.iter().map(|(i, b)| (i, *b)),
@@ -24,10 +48,16 @@ impl TextFormatter {
                 baselined,
                 new: tagged.len() - baselined,
             }),
+            opts,
         )
     }
 
-    fn render_inner<'a, I>(items: I, total: usize, counts: Option<BaselineCounts>) -> String
+    fn render_inner<'a, I>(
+        items: I,
+        total: usize,
+        counts: Option<BaselineCounts>,
+        opts: TextRenderOpts,
+    ) -> String
     where
         I: IntoIterator<Item = (&'a Issue, bool)>,
     {
@@ -36,7 +66,9 @@ impl TextFormatter {
         let collected: Vec<(&Issue, bool)> = items.into_iter().collect();
 
         if collected.is_empty() {
-            out.push_str("✓ no findings\n");
+            if !opts.quiet {
+                out.push_str("✓ no findings\n");
+            }
             return out;
         }
 
@@ -83,16 +115,18 @@ impl TextFormatter {
             }
         }
 
-        match counts {
-            Some(c) => {
-                let _ = writeln!(
-                    out,
-                    "\n{} finding(s) ({} new, {} baselined)",
-                    total, c.new, c.baselined
-                );
-            }
-            None => {
-                let _ = writeln!(out, "\n{} finding(s)", total);
+        if !opts.quiet {
+            match counts {
+                Some(c) => {
+                    let _ = writeln!(
+                        out,
+                        "\n{} finding(s) ({} new, {} baselined)",
+                        total, c.new, c.baselined
+                    );
+                }
+                None => {
+                    let _ = writeln!(out, "\n{} finding(s)", total);
+                }
             }
         }
         out
@@ -167,5 +201,39 @@ mod tests {
     fn text_formatter_empty_findings() {
         let output = TextFormatter::render(&[]);
         assert!(output.contains("✓ no findings"));
+    }
+
+    #[test]
+    fn text_formatter_quiet_suppresses_trailing_summary() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = TextFormatter::render_with_opts(&[issue], TextRenderOpts { quiet: true });
+        assert!(output.contains("Warning.Test"), "findings still print");
+        assert!(
+            !output.contains("finding(s)"),
+            "trailing summary should be suppressed under --quiet, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn text_formatter_quiet_suppresses_no_findings_line() {
+        let output = TextFormatter::render_with_opts(&[], TextRenderOpts { quiet: true });
+        assert!(
+            !output.contains("no findings"),
+            "empty-result message should be suppressed under --quiet, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn text_formatter_quiet_baseline_suppresses_trailing_summary() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = TextFormatter::render_with_baseline_opts(
+            &[(issue, false)],
+            TextRenderOpts { quiet: true },
+        );
+        assert!(output.contains("Warning.Test"));
+        assert!(
+            !output.contains("finding(s)"),
+            "trailing summary should be suppressed, got:\n{output}"
+        );
     }
 }

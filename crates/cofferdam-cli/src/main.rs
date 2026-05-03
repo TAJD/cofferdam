@@ -13,7 +13,7 @@ use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
-use cofferdam_formatters::{JsonFormatter, TextFormatter};
+use cofferdam_formatters::{JsonFormatter, JsonRenderOpts, TextFormatter, TextRenderOpts};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
@@ -121,6 +121,19 @@ enum Cmd {
         /// trigger the gate.
         #[arg(long, value_enum, value_name = "LEVEL", default_value_t = FailOnLevel::Medium)]
         fail_on: FailOnLevel,
+        /// Cap rendered findings at the top N by sort priority. The CI
+        /// gate (`--fail-on`) still considers the full unbounded set, so
+        /// truncating output never hides a failure. Pairs with `--quiet`
+        /// for compact CI output. `0` disables the cap (default).
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        max_issues: usize,
+        /// Suppress informational output: the trailing `N finding(s)`
+        /// summary line, "no TypeScript files found" hints, and the
+        /// "(showing N of M)" truncation note. Findings, warnings, and
+        /// errors still print. Has no effect on JSON output (which is
+        /// already terse).
+        #[arg(long)]
+        quiet: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -206,6 +219,8 @@ fn main() -> ExitCode {
             no_config,
             since,
             fail_on,
+            max_issues,
+            quiet,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -219,6 +234,8 @@ fn main() -> ExitCode {
             no_config,
             since,
             fail_on: fail_on.into(),
+            max_issues,
+            quiet,
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {
@@ -264,6 +281,8 @@ struct CheckArgs {
     no_config: bool,
     since: Option<String>,
     fail_on: Severity,
+    max_issues: usize,
+    quiet: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -280,6 +299,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
         no_config,
         since: since_ref,
         fail_on,
+        max_issues,
+        quiet,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -310,7 +331,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     if files.is_empty() {
         if format == OutputFormat::Json {
             println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#);
-        } else {
+        } else if !quiet {
             eprintln!("no TypeScript files found under: {:?}", roots);
         }
         return ExitCode::SUCCESS;
@@ -325,7 +346,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 if filtered.is_empty() {
                     if format == OutputFormat::Json {
                         println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#);
-                    } else {
+                    } else if !quiet {
                         eprintln!("no TypeScript files changed since {git_ref}");
                     }
                     return ExitCode::SUCCESS;
@@ -397,7 +418,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
             .as_ref()
             .map(Baseline::lookup_set)
             .unwrap_or_default();
-        let tagged: Vec<(cofferdam_core::Issue, bool)> = signed
+        let mut tagged: Vec<(cofferdam_core::Issue, bool)> = signed
             .into_iter()
             .map(|(issue, sig)| {
                 let probe = BaselineEntry {
@@ -410,24 +431,41 @@ fn run_check(args: CheckArgs) -> ExitCode {
             })
             .collect();
 
-        match format {
-            OutputFormat::Text => print!("{}", TextFormatter::render_with_baseline(&tagged)),
-            OutputFormat::Json => {
-                let s = if pretty {
-                    JsonFormatter::render_with_baseline_pretty(&tagged)
-                } else {
-                    JsonFormatter::render_with_baseline(&tagged)
-                };
-                println!("{}", s);
-            }
-        }
         // CI gate: only NEW (un-baselined) findings at or above
-        // `--fail-on` trigger exit 1. Baselined findings never gate
-        // regardless of severity.
+        // `--fail-on` trigger exit 1. Computed from the full set BEFORE
+        // truncation so `--max-issues` cannot hide a failure.
         let triggering = tagged
             .iter()
             .filter(|(issue, baselined)| !*baselined && issue.severity >= fail_on)
             .count();
+
+        let truncated_from = apply_max_issues_tagged(&mut tagged, max_issues);
+        if !quiet && format == OutputFormat::Text {
+            if let Some(orig) = truncated_from {
+                eprintln!("(showing {} of {} findings)", tagged.len(), orig);
+            }
+        }
+
+        match format {
+            OutputFormat::Text => {
+                let opts = TextRenderOpts { quiet };
+                print!(
+                    "{}",
+                    TextFormatter::render_with_baseline_opts(&tagged, opts)
+                );
+            }
+            OutputFormat::Json => {
+                let opts = JsonRenderOpts {
+                    pretty,
+                    truncated_from,
+                };
+                println!(
+                    "{}",
+                    JsonFormatter::render_with_baseline_with_opts(&tagged, opts)
+                );
+            }
+        }
+
         if triggering == 0 {
             ExitCode::SUCCESS
         } else {
@@ -435,21 +473,32 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     } else {
         match engine.analyze(&files) {
-            Ok(issues) => {
-                match format {
-                    OutputFormat::Text => print!("{}", TextFormatter::render(&issues)),
-                    OutputFormat::Json => {
-                        let s = if pretty {
-                            JsonFormatter::render_pretty(&issues)
-                        } else {
-                            JsonFormatter::render(&issues)
-                        };
-                        println!("{}", s);
+            Ok(mut issues) => {
+                // CI gate: any finding at or above `--fail-on` triggers
+                // exit 1. Computed from the full set BEFORE truncation
+                // so `--max-issues` cannot hide a failure.
+                let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+
+                let truncated_from = apply_max_issues(&mut issues, max_issues);
+                if !quiet && format == OutputFormat::Text {
+                    if let Some(orig) = truncated_from {
+                        eprintln!("(showing {} of {} findings)", issues.len(), orig);
                     }
                 }
-                // CI gate: any finding at or above `--fail-on` triggers
-                // exit 1. With no baseline, every finding counts as new.
-                let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+
+                match format {
+                    OutputFormat::Text => {
+                        let opts = TextRenderOpts { quiet };
+                        print!("{}", TextFormatter::render_with_opts(&issues, opts));
+                    }
+                    OutputFormat::Json => {
+                        let opts = JsonRenderOpts {
+                            pretty,
+                            truncated_from,
+                        };
+                        println!("{}", JsonFormatter::render_with_opts(&issues, opts));
+                    }
+                }
                 if triggering == 0 {
                     ExitCode::SUCCESS
                 } else {
@@ -462,6 +511,31 @@ fn run_check(args: CheckArgs) -> ExitCode {
             }
         }
     }
+}
+
+/// Truncate `issues` to the first `max` entries (engine output is
+/// already sorted by priority then check_id, so "first N" == "top N by
+/// priority"). Returns `Some(original_len)` when truncation happened,
+/// `None` otherwise. `max == 0` disables the cap.
+fn apply_max_issues(issues: &mut Vec<cofferdam_core::Issue>, max: usize) -> Option<usize> {
+    if max == 0 || issues.len() <= max {
+        return None;
+    }
+    let original = issues.len();
+    issues.truncate(max);
+    Some(original)
+}
+
+fn apply_max_issues_tagged(
+    tagged: &mut Vec<(cofferdam_core::Issue, bool)>,
+    max: usize,
+) -> Option<usize> {
+    if max == 0 || tagged.len() <= max {
+        return None;
+    }
+    let original = tagged.len();
+    tagged.truncate(max);
+    Some(original)
 }
 
 fn run_baseline_write(

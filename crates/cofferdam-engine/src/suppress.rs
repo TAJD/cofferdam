@@ -184,6 +184,44 @@ fn parse_enable_block_end(line: &str) -> Option<Vec<String>> {
     }
 }
 
+/// Extract all named check IDs referenced by suppression directives in `text`.
+///
+/// Returns a list of `(check_id, 1-based_line_number)` pairs. Only directives
+/// that name at least one check ID are included — blanket suppressions
+/// (e.g. `// cofferdam-disable-next-line` with no ID) are skipped because
+/// they suppress *all* checks and don't reference any ID to validate.
+///
+/// Used by `cofferdam doctor` to validate that directive IDs match registered
+/// checks without re-implementing the full suppression-parse logic.
+pub fn mentioned_check_ids(text: &str) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        let line_num = (idx + 1) as u32;
+        let trimmed = line.trim();
+
+        // `// cofferdam-disable-next-line Check.Id`
+        if let Some(ids) = parse_disable_next_line(trimmed) {
+            for id in ids {
+                if !id.is_empty() {
+                    out.push((id, line_num));
+                }
+            }
+        }
+
+        // `/* cofferdam-disable Check.Id */`
+        if trimmed.starts_with("/*") {
+            if let Some(ids) = parse_disable_block_start(trimmed) {
+                for id in ids {
+                    if !id.is_empty() {
+                        out.push((id, line_num));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Parse a comma-separated list of check IDs from the remainder of a directive.
 /// Returns empty vec if no IDs found, otherwise returns the parsed IDs.
 fn parse_check_ids(remainder: &str) -> Vec<String> {

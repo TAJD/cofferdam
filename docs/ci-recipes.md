@@ -11,6 +11,7 @@ Drop-in workflows for the major CI systems. Each recipe runs `cofferdam check`, 
 | Baseline-tracked rollout on a legacy repo | [§3 Baseline pattern](#3-baseline-pattern-only-fail-on-new-findings) |
 | AI-agent-friendly output for review bots | [§4 Robot mode](#4-robot-mode-for-ai-review-bots) |
 | Faster builds via caching | [§5 Caching](#5-caching) |
+| Findings on the PR + Security tab via SARIF | [§6 SARIF upload](#6-sarif-upload-to-github-code-scanning) |
 
 Each recipe is shown for GitHub Actions first because it's the most common; GitLab / CircleCI / Drone equivalents are at the bottom.
 
@@ -25,7 +26,7 @@ A short cheat sheet for the flags that matter in CI. Full reference: [`docs/outp
 | `--no-baseline` | Disable baseline detection entirely for this run. |
 | `--since=<git-ref>` | PR-only mode — only check files changed in `<git-ref>...HEAD`. |
 | `--robot` | Default to a machine-readable format. Pairs with `--format=compact` for AI shovelling. |
-| `--format=<text\|json\|compact>` | Output format. `text` for humans, `json` for tools, `compact` for AI agents. |
+| `--format=<text\|json\|compact\|sarif>` | Output format. `text` for humans, `json` for tools, `compact` for AI agents, `sarif` for GitHub Code Scanning + other static-analysis consumers. |
 | `--max-issues=<N>` | Cap rendered findings (gate still uses the full set). |
 | `--quiet` | Suppress info lines (decorative output, not findings). |
 
@@ -149,6 +150,53 @@ For full-fidelity JSON (with baseline tags, related spans, truncation metadata):
 
 If your project already has a `package.json` and `package-lock.json` with cofferdam as a `devDependency`, the standard `npm ci` cache key handles cofferdam's binary too — no extra config needed.
 
+### 6. SARIF upload to GitHub Code Scanning
+
+Emit SARIF 2.1.0 and let GitHub render findings on the PR diff and in the **Security → Code scanning** tab. No bespoke parsing — `github/codeql-action/upload-sarif` consumes the format directly.
+
+```yaml
+# .github/workflows/cofferdam-sarif.yml
+name: cofferdam (SARIF)
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write   # required for upload-sarif
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run cofferdam (SARIF)
+        run: npx --yes cofferdam check --format=sarif > cofferdam.sarif
+        continue-on-error: true        # don't block the upload on a non-zero exit
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: cofferdam.sarif
+          category: cofferdam          # distinguishes from CodeQL or other SARIF uploads
+```
+
+After the workflow runs once on `main`, findings show up:
+
+- **Pull-request files view** — annotated inline next to the offending lines.
+- **Security tab → Code scanning alerts** — full list with state (open / fixed / dismissed) tracked across runs via cofferdam's `partialFingerprints`.
+
+Notes:
+
+- `permissions.security-events: write` is mandatory; without it the upload step 403s.
+- `continue-on-error: true` on the cofferdam step lets the SARIF upload happen even when `--fail-on=<level>` would otherwise exit 1. The findings still drive whatever PR-required-status checks you wire into the Security policies.
+- `category: cofferdam` lets you run cofferdam alongside CodeQL or other SARIF emitters without findings overwriting each other.
+- For private repos, GitHub Code Scanning requires GitHub Advanced Security; public repos get it for free.
+
+If you want the gate exit code to also fail the workflow (in addition to driving alerts), drop `continue-on-error: true` and accept that the SARIF upload step won't run on red builds — or add a separate `cofferdam check` step (no `--format=sarif`) before the SARIF emitter and let the upload step run with `if: always()`.
+
 ## GitLab CI
 
 ```yaml
@@ -262,7 +310,7 @@ Before shipping a CI integration, walk through:
 1. **Severity threshold.** Default `--fail-on=medium`. Demote to `low` when you want CI to gate on the Refactor / Readability rules; promote to `high` if you only want the security-tier (`Warning.NoEval`, `Warning.TripleEquals`) to break the build.
 2. **Baseline.** Capture once on a legacy adoption (`cofferdam init --baseline`), then refresh after each cleanup run (`cofferdam baseline write`).
 3. **PR-only vs. full-repo.** PR-only (`--since`) for fast feedback on contributors; full-repo on the default branch to catch regressions on shared code paths.
-4. **Output format.** `text` for human terminal logs, `json` for tooling integrations (PR-comment bots, dashboards), `compact` when the consumer is an LLM that pays per token.
+4. **Output format.** `text` for human terminal logs, `json` for tooling integrations (PR-comment bots, dashboards), `compact` when the consumer is an LLM that pays per token, `sarif` for GitHub Code Scanning + other static-analysis consumers.
 5. **Caching.** `actions/setup-node@v4 with: cache: npm` (or equivalent) handles the postinstall binary download for free.
 
 ## Pre-flight checks
@@ -278,5 +326,4 @@ Before wiring up a new CI pipeline, run [`cofferdam doctor --robot`](doctor.md) 
 
 ## What's not yet here
 
-- **SARIF output** for GitHub Code Scanning / GitLab Vulnerability Reports — tracked under cd-snv. Recipe will land in this file once SARIF support ships.
 - **Self-hosted runner notes** — cofferdam's npm postinstall downloads a Rust binary; air-gapped runners need either a local mirror or a `cargo install` from source. Detailed recipe is a follow-up bead.

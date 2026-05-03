@@ -1,14 +1,15 @@
 # Output formats
 
-`cofferdam check` ships three rendering modes. Pick by `--format=<text|json|compact>`.
+`cofferdam check` ships four rendering modes. Pick by `--format=<text|json|compact|sarif>`.
 
 **`--robot` flag:** defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins. `--robot` does nothing else — it does not set `--quiet`, does not suppress ANSI (there is none), and does not change exit-code behavior. Its only effect is the format default. The idiomatic AI-agent invocation is `--robot --format=compact`, which combines the intent signal with the most token-economical output.
 
-| Format    | Audience                            | Schema                | Byte-economy* |
-|-----------|-------------------------------------|-----------------------|---------------|
-| `text`    | Humans, terminal output (default)   | Free-form, decorative | 1.00× (baseline) |
-| `json`    | CI pipelines, full-fidelity tooling | Stable, documented    | 1.68× of text |
-| `compact` | AI agents, prompt context-shovelling | Stable, line-oriented | 0.94× of text, 0.56× of JSON |
+| Format    | Audience                                | Schema                | Byte-economy* |
+|-----------|-----------------------------------------|-----------------------|---------------|
+| `text`    | Humans, terminal output (default)       | Free-form, decorative | 1.00× (baseline) |
+| `json`    | CI pipelines, full-fidelity tooling     | Stable, documented    | 1.68× of text |
+| `compact` | AI agents, prompt context-shovelling    | Stable, line-oriented | 0.94× of text, 0.56× of JSON |
+| `sarif`   | GitHub Code Scanning, Azure DevOps, GitLab, SonarQube, VS Code Sarif Viewer | OASIS SARIF 2.1.0 (fixed) | larger than `json` (rules table + envelope overhead) |
 
 \* Measured on a 509-finding run against `bestefforttools`. Numbers will shift as checks land or messages change; the relative ordering is what matters.
 
@@ -156,21 +157,72 @@ Measured against the same 509-finding run on `bestefforttools`:
 
 Compact's win over JSON (≈44% bytes saved) is structural: no field-name repetition, no quoting noise, no empty `summary` object. The win over text is small because cofferdam's text formatter is already information-dense — one line per finding with no decorative padding. **The real value of compact mode is parsing simplicity for agents**, not raw byte savings: `splitn(8, '|')` beats running a JSON parser when you're pushing context into an LLM call.
 
+## `sarif` format
+
+[SARIF (Static Analysis Results Interchange Format)](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) is the OASIS-standard JSON schema for static-analysis tool output and the format GitHub Code Scanning ingests natively. `--format=sarif` emits a SARIF 2.1.0 document suitable for direct upload via [`github/codeql-action/upload-sarif`](https://github.com/github/codeql-action) — see the [CI recipe](ci-recipes.md#6-sarif-upload-to-github-code-scanning). The same document is consumed by Azure DevOps, GitLab Vulnerability Reports, SonarQube, and the VS Code Sarif Viewer.
+
+Pretty-print with `--pretty` (defaults to compact, single-line JSON).
+
+```bash
+cofferdam check --format sarif --pretty src/
+```
+
+Mapping from cofferdam concepts to SARIF:
+
+| cofferdam               | SARIF                                                              |
+|-------------------------|--------------------------------------------------------------------|
+| `Issue.check_id`        | `runs[].results[].ruleId`                                          |
+| `Issue.message`         | `runs[].results[].message.text`                                    |
+| `Issue.file`            | `runs[].results[].locations[].physicalLocation.artifactLocation.uri` (forward-slashed) |
+| `Issue.span.line`       | `runs[].results[].locations[].physicalLocation.region.startLine`   |
+| `Issue.span.column`     | `runs[].results[].locations[].physicalLocation.region.startColumn` |
+| `Issue.span.start_byte` | `runs[].results[].locations[].physicalLocation.region.byteOffset`  |
+| `Issue.span.end_byte` − `start_byte` | `runs[].results[].locations[].physicalLocation.region.byteLength` |
+| `Issue.related[]`       | `runs[].results[].relatedLocations[]`                              |
+| `CheckMeta.id`          | `runs[].tool.driver.rules[].id` (one entry per unique check id seen) |
+| `CheckMeta.explanation` | `runs[].tool.driver.rules[].shortDescription.text` and `.fullDescription.text` |
+| `CheckMeta.category`    | `runs[].tool.driver.rules[].properties.category` (also surfaced as a tag) |
+| `CheckMeta.base_priority` | `runs[].tool.driver.rules[].properties.priority`                 |
+
+### Severity → SARIF level
+
+SARIF has a coarser scale than cofferdam (`note | warning | error | none`). The fixed mapping is:
+
+| cofferdam `severity` | SARIF `level` |
+|----------------------|---------------|
+| `info`               | `note`        |
+| `low`                | `note`        |
+| `medium`             | `warning`     |
+| `high`               | `error`       |
+| `critical`           | `error`       |
+
+The `level` is emitted both per-rule (`defaultConfiguration.level`) and per-result (`level`) so consumers that respect either field render correctly.
+
+### Fingerprints (cross-run finding identity)
+
+Every result carries a `partialFingerprints["cofferdam/v1"]` entry — a stable hex digest of `(check_id, file, line, message)`. GitHub Code Scanning (and other consumers) use this to keep the same finding pinned to the same alert across runs even when surrounding line numbers shift. The `cofferdam/v1` namespace versions the algorithm; if the inputs ever change, the version bumps so existing alerts don't all re-trigger.
+
+### Limitations
+
+SARIF mode v1 does not carry:
+
+- **Baseline tags.** SARIF has no native field for "this finding was already present at baseline write time." GitHub Code Scanning and most other UIs track new vs. acknowledged via their own dismissal model on top of `partialFingerprints` — that's the SARIF-native answer. Use `--format=json` when you need the per-finding `baselined` flag in the output.
+- **Truncation note.** `--max-issues` truncates the rendered results without a separate `truncated_from` field. Use `--format=json` when truncation accounting matters.
+
+The CI gate (`--fail-on`) is unaffected — it always considers the full pre-truncation set.
+
 ## Picking a format
 
 - **Local terminal use** → `text` (default). Skip everything else.
 - **CI / tooling integrations / programmatic consumers** → `json`. Full schema, baseline-aware, related spans, truncation metadata.
 - **AI-agent prompt shovelling** → `compact` when token economy is the priority and you don't need baseline tags or related spans; `json` when you do.
+- **GitHub Code Scanning, GitLab Vulnerability Reports, Azure DevOps, SonarQube, VS Code Sarif Viewer** → `sarif`. Standard schema, no per-platform glue code.
 
 `--robot --format=compact` is the canonical AI-agent invocation.
 
 ## Future formats
 
-These formats are planned for phase 6 and are **not yet implemented**. Passing `--format=sarif` or `--format=github-annotations` today will produce an error.
-
-### `sarif` (planned)
-
-SARIF (Static Analysis Results Interchange Format) is the [OASIS standard](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) for static-analysis tool output and the format GitHub Code Scanning ingests natively. When implemented, `--format=sarif` will emit a SARIF 2.1.0 document: each cofferdam finding maps to a SARIF `result`, check IDs map to SARIF `rules`, and file locations use SARIF `physicalLocation` with artifact URIs. The output will be suitable for direct upload to the GitHub Code Scanning API (`github/codeql-action/upload-sarif`) with no post-processing. Schema will follow SARIF 2.1.0 exactly.
+These formats are planned and **not yet implemented**. Passing `--format=github-annotations` today will produce an error.
 
 ### `github-annotations` (planned)
 

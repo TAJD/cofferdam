@@ -13,7 +13,8 @@
 //!    message, check id). No second lookup against `CheckMeta`.
 //!
 //! `--robot` is the marketed flag; `--format json` is the underlying
-//! switch. Future formats (toon, sarif) plug in here.
+//! switch. Sibling formatters (`compact`, `sarif`) live next door and
+//! share the same `Issue` input.
 
 use cofferdam_core::{Category, Issue, RelatedSpan, Severity};
 use serde::Serialize;

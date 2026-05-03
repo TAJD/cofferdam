@@ -18,7 +18,8 @@ use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
 use cofferdam_formatters::{
-    CompactFormatter, JsonFormatter, JsonRenderOpts, TextFormatter, TextRenderOpts,
+    CompactFormatter, JsonFormatter, JsonRenderOpts, SarifFormatter, SarifRenderOpts,
+    TextFormatter, TextRenderOpts,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -31,6 +32,11 @@ enum OutputFormat {
     /// by one record per finding. Most token-economical — use when
     /// shovelling findings into an AI prompt.
     Compact,
+    /// SARIF 2.1.0 — OASIS-standard JSON for static-analysis tools.
+    /// Upload directly to GitHub Code Scanning via
+    /// `github/codeql-action/upload-sarif`, or feed Azure DevOps,
+    /// GitLab, SonarQube, the VS Code Sarif Viewer, etc.
+    Sarif,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -438,6 +444,12 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#)
             }
             OutputFormat::Compact => print!("{}", CompactFormatter::render(&[])),
+            OutputFormat::Sarif => {
+                println!(
+                    "{}",
+                    SarifFormatter::render_with_opts(&[], &[], SarifRenderOpts { pretty })
+                );
+            }
             OutputFormat::Text if !quiet => {
                 eprintln!("no TypeScript files found under: {:?}", roots);
             }
@@ -460,6 +472,16 @@ fn run_check(args: CheckArgs) -> ExitCode {
                             )
                         }
                         OutputFormat::Compact => print!("{}", CompactFormatter::render(&[])),
+                        OutputFormat::Sarif => {
+                            println!(
+                                "{}",
+                                SarifFormatter::render_with_opts(
+                                    &[],
+                                    &[],
+                                    SarifRenderOpts { pretty }
+                                )
+                            );
+                        }
                         OutputFormat::Text if !quiet => {
                             eprintln!("no TypeScript files changed since {git_ref}");
                         }
@@ -588,6 +610,26 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     tagged.iter().map(|(i, _)| i.clone()).collect();
                 print!("{}", CompactFormatter::render(&issues_only));
             }
+            OutputFormat::Sarif => {
+                // SARIF v1 doesn't carry baseline tags either; the SARIF
+                // spec has no native field for "this finding was already
+                // present at baseline write time". GitHub Code Scanning
+                // tracks new vs. acknowledged via its own UI on top of
+                // `partialFingerprints`. Use --format=json when you need
+                // the per-finding `baselined` flag in the output.
+                let issues_only: Vec<cofferdam_core::Issue> =
+                    tagged.iter().map(|(i, _)| i.clone()).collect();
+                let metas: Vec<cofferdam_core::CheckMeta> =
+                    all_builtins().iter().map(|c| *c.meta()).collect();
+                println!(
+                    "{}",
+                    SarifFormatter::render_with_opts(
+                        &issues_only,
+                        &metas,
+                        SarifRenderOpts { pretty }
+                    )
+                );
+            }
         }
 
         if triggering == 0 {
@@ -624,6 +666,18 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     }
                     OutputFormat::Compact => {
                         print!("{}", CompactFormatter::render(&issues));
+                    }
+                    OutputFormat::Sarif => {
+                        let metas: Vec<cofferdam_core::CheckMeta> =
+                            all_builtins().iter().map(|c| *c.meta()).collect();
+                        println!(
+                            "{}",
+                            SarifFormatter::render_with_opts(
+                                &issues,
+                                &metas,
+                                SarifRenderOpts { pretty }
+                            )
+                        );
                     }
                 }
                 if triggering == 0 {

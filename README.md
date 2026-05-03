@@ -2,6 +2,8 @@
 
 > A watertight compartment for your codebase. Isolate bad code, measure it against rules, ship a priority-sorted verdict.
 
+Maintainers / contributors: see [MAINTAINERS.md](MAINTAINERS.md).
+
 `cofferdam` is a code-quality analyzer for TypeScript. The name comes from naval architecture: a cofferdam is a sealed compartment that lets crews work safely below the waterline. The metaphor maps to the tool: keep questionable code isolated, measure it, and surface a prioritised list of what to fix first.
 
 The category model and several design choices are inspired by **[Credo](https://github.com/rrrene/credo)**, the Elixir static analyzer by [@rrrene](https://github.com/rrrene). If you've used Credo, the category names and report shape will feel familiar.
@@ -31,89 +33,129 @@ Findings are bucketed into five categories — **Consistency**, **Design**, **Re
 
 ## Install
 
-### From source (any platform with Rust)
-
-```bash
-cargo install --git https://github.com/TAJD/cofferdam --locked cofferdam-cli
+```sh
+npm install --save-dev cofferdam
+# or
+pnpm add -D cofferdam
+# or
+yarn add --dev cofferdam
 ```
 
-This puts `cofferdam` in `~/.cargo/bin`. Requires Rust 1.78+.
+The `postinstall` script downloads the matching prebuilt binary for your platform (Linux x64/arm64 glibc and musl, macOS x64/arm64, Windows x64). Node 16+ required. For air-gapped environments or custom binary paths, see [MAINTAINERS.md](MAINTAINERS.md#binary-overrides).
 
-### From a release binary (when published)
+## Usage
 
-Each tagged release publishes prebuilt binaries under [GitHub Releases](https://github.com/TAJD/cofferdam/releases). Download the archive for your platform, extract, and put `cofferdam` on your `$PATH`.
+### Basic commands
 
-| Platform                      | Archive                                                |
-| ----------------------------- | ------------------------------------------------------ |
-| Linux x64 (glibc)             | `cofferdam-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`     |
-| Linux arm64 (glibc)           | `cofferdam-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz`    |
-| Linux x64 (musl, alpine etc.) | `cofferdam-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`    |
-| Linux arm64 (musl)            | `cofferdam-vX.Y.Z-aarch64-unknown-linux-musl.tar.gz`   |
-| macOS x64                     | `cofferdam-vX.Y.Z-x86_64-apple-darwin.tar.gz`          |
-| macOS arm64                   | `cofferdam-vX.Y.Z-aarch64-apple-darwin.tar.gz`         |
-| Windows x64                   | `cofferdam-vX.Y.Z-x86_64-pc-windows-msvc.zip`          |
-
-### Cutting a manual release (maintainers)
-
-```pwsh
-# Bump version in Cargo.toml first, commit, then:
-pwsh scripts/release.ps1 -Tag v0.1.0
+```sh
+cofferdam check src/           # human-readable report
+cofferdam check src/ --robot   # machine-readable JSON for AI agents / tooling
+cofferdam check                # walk current directory
+cofferdam explain Warning.TripleEquals        # prose explanation for a check
+cofferdam explain Warning.TripleEquals --robot  # same, as JSON
+cofferdam init --baseline      # scaffold cofferdam.toml + capture current state as baseline
+cofferdam baseline write       # refresh baseline after fixing findings
 ```
 
-The PowerShell helper builds a Windows binary, tags, pushes, and creates a GitHub Release with the artifact attached. Full multi-platform builds happen automatically when the tag arrives at the `release.yml` workflow on GitHub.
+### Key flags
+
+| Flag | Purpose |
+|---|---|
+| `--robot` | Default to machine-readable output. Pairs with `--format=compact` for AI agents. |
+| `--format=<text\|json\|compact>` | Output format. `text` for humans, `json` for tools, `compact` for AI agents. |
+| `--pretty` | Pretty-print JSON output (only with `--format=json` / `--robot`). |
+| `--baseline=<path>` | Active baseline file. Auto-detected at `.cofferdam/baseline.json` when present. |
+| `--no-baseline` | Disable baseline detection entirely for this run. |
+| `--fail-on=<level>` | Severity threshold for exit-1 gate. `info` / `low` / `medium` / `high` / `critical`. Default `medium`. |
+| `--fail-on-new` | Only fail on findings absent from the baseline. Implicit when a baseline is active. |
+| `--since=<git-ref>` | PR-only mode — only check files changed in `<git-ref>...HEAD`. |
+| `--max-issues=<N>` | Cap rendered findings (gate still uses the full set). |
+| `--quiet` | Suppress informational output; findings, warnings, and errors still print. |
+
+### Top three CI / agent flows
+
+**1. Fail the build on new findings (GitHub Actions)**
+
+```yaml
+# .github/workflows/cofferdam.yml
+name: cofferdam
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npx --yes cofferdam check
+```
+
+`npx --yes cofferdam check` walks the current directory and exits 1 on any finding at `medium` severity or higher. No config required.
+
+**2. PR-only mode — check only changed files**
+
+```yaml
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # cofferdam needs full history to diff against the base
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npx --yes cofferdam check --since=origin/${{ github.base_ref }}
+        if: github.event_name == 'pull_request'
+      - run: npx --yes cofferdam check
+        if: github.event_name == 'push'
+```
+
+**3. AI-agent / robot mode**
+
+```sh
+npx cofferdam check --robot --format=compact
+```
+
+Compact format is pipe-delimited (`splitn(8, '|')`-friendly) and ~44% smaller than JSON. Ideal for shovelling findings into an LLM prompt. For full-fidelity JSON (with baseline tags and related spans):
+
+```sh
+npx cofferdam check --robot --format=json
+```
+
+Full CI recipes for GitHub Actions, GitLab, CircleCI, Drone, and pre-commit hooks: **[`docs/ci-recipes.md`](docs/ci-recipes.md)**.
+
+## Checks
+
+Built-in checks live across all five categories. Full catalog with bad/good examples, options, and suppression directives: **[`docs/checks.md`](docs/checks.md)**.
+
+| ID                                    | Category    | Severity | What it flags                                               |
+|---------------------------------------|-------------|----------|-------------------------------------------------------------|
+| `Warning.TripleEquals`                | Warning     | high     | `==` / `!=` instead of `===` / `!==`                       |
+| `Warning.NoEval`                      | Warning     | high     | `eval(...)` and `new Function(...)`                         |
+| `Warning.NoDebugger`                  | Warning     | medium   | `debugger` statements                                       |
+| `Warning.NoConsoleLog`                | Warning     | low      | `console.*` calls                                           |
+| `Warning.ParseError`                  | Warning     | critical | Files that could not be parsed                              |
+| `Refactor.DuplicateBlock`             | Refactor    | medium   | Runs of repeated statements across files (copy-paste)       |
+| `Refactor.CyclomaticComplexity`       | Refactor    | medium   | Functions with cyclomatic complexity > 10                   |
+| `Refactor.CognitiveComplexity`        | Refactor    | medium   | Functions with cognitive complexity > 15                    |
+| `Refactor.PreferOptionalChain`        | Refactor    | low      | `a && a.b` rewritable as `a?.b`                             |
+| `Refactor.PreferNullishCoalescing`    | Refactor    | low      | `x \|\| default` rewritable as `x ?? default`              |
+| `Design.DuplicateExportName`          | Design      | medium   | Same name exported from multiple files                      |
+| `Design.MaxParameters`                | Design      | medium   | Functions with > 5 parameters                               |
+| `Readability.MaxFunctionLength`       | Readability | low      | Function bodies over 50 lines                               |
+| `Readability.MaxLineLength`           | Readability | low      | Lines over 120 characters                                   |
+
+`Consistency.QuoteStyle` is registered as a stub today; the real implementation lands with two-pass mode.
+
+Output formats reference (text / JSON / compact pipe-delimited): **[`docs/output-formats.md`](docs/output-formats.md)**.
 
 ## Status
 
-**Phase 1, in progress.** What works today:
+**Phase 1, in progress.** The Rust engine, all five categories of built-in checks, the CLI, JSON/compact output formats, baseline diffing, and PR-only mode (`--since`) all work today.
 
-```bash
-cofferdam check src/                          # human-readable report
-cofferdam check src/ --robot                  # machine-readable JSON for AI agents
-cofferdam check src/ --robot --pretty         # same, indented
-cofferdam check                               # walk current dir
-cofferdam hello                               # banner
-```
-
-Built-in checks live across all five categories. Full catalog with bad/good examples, options, and suppression directives: **[`docs/checks.md`](docs/checks.md)**. From the CLI: `cofferdam explain <CHECK_ID>` (or `--robot` for JSON).
-
-Drop-in CI workflows (GitHub Actions, GitLab, CircleCI, Drone, pre-commit hooks): **[`docs/ci-recipes.md`](docs/ci-recipes.md)**. Output formats reference (text / JSON / compact pipe-delimited): **[`docs/output-formats.md`](docs/output-formats.md)**.
-
-| ID                              | Category    | What it flags                                      |
-| ------------------------------- | ----------- | -------------------------------------------------- |
-| `Readability.MaxLineLength`     | Readability | Lines over 120 characters                          |
-| `Readability.MaxFunctionLength` | Readability | Function bodies over 50 lines                      |
-| `Design.MaxParameters`          | Design      | Functions with > 5 parameters                      |
-| `Warning.TripleEquals`          | Warning     | Use of `==` / `!=` instead of `===` / `!==`        |
-| `Warning.ParseError`            | Warning     | Files oxc couldn't parse                           |
-
-The above is a partial list — see the catalog for the full set (14 user-visible IDs at time of writing, including the Refactor complexity / duplication checks and the Warning pack of `NoConsoleLog`/`NoDebugger`/`NoEval`). `Consistency.QuoteStyle` is registered as a stub today; the real implementation lands with two-pass mode (cd-d1y).
-
-See `Cargo.toml` for the workspace layout.
-
-### Local toolchain notes
-
-`rust-toolchain.toml` pins the channel to `stable` (host-portable). On a Windows host without the MSVC C++ workload, override the host triple before running cargo:
-
-```pwsh
-# PowerShell
-$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
-```
-
-```bash
-# bash / zsh
-export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu
-```
-
-Linux and macOS pick up their native host triple and need no override.
-
-## Phased build
-
-1. Rust engine + `Issue` + priority + report formatter + 5 built-in checks across all 5 categories
-2. Two-pass consistency mode with `Consistency.QuoteStyle` as the canary
-3. Baseline + severity-axis + `--since` ← biggest adoption-unlock
-4. napi-rs FFI + JS plugin host, ship `@cofferdam/check-sdk` and `@cofferdam/recommended`
-5. `@cofferdam/types-aware` package with `ts-morph` checks
-6. LSP server + SARIF + GitHub Code Scanning
+What's coming: two-pass consistency mode, the `--since`-based baseline adoption workflow, napi-rs FFI and JS plugin host (`@cofferdam/check-sdk`), type-aware checks via `ts-morph`, and LSP server with SARIF output. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.
 
 ## Licence
 

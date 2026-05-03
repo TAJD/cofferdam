@@ -46,10 +46,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Mirror the user-facing platforms in release.yml. macos-13 is the
-        # x86_64 Intel runner; macos-15 is Apple Silicon. Both are kept so
-        # we exercise the postinstall's arch detection on each.
-        os: [ubuntu-latest, macos-13, macos-15, windows-latest]
+        # Mirror the user-facing platforms in release.yml. macos-15 is Apple
+        # Silicon; we skip the macos-13 (Intel/x64) runner because GitHub's
+        # free-tier queue for it is hours long and the postinstall's arch
+        # detection is exercised by the existing post-publish `npm-smoke` job
+        # in release.yml against a real release tarball.
+        os: [ubuntu-latest, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v6
 

@@ -74,7 +74,7 @@ cofferdam check                               # walk current dir
 cofferdam hello                               # banner
 ```
 
-Built-in checks live across all five categories:
+Built-in checks live across all five categories. Full catalog with bad/good examples, options, and suppression directives: **[`docs/checks.md`](docs/checks.md)**. From the CLI: `cofferdam explain <CHECK_ID>` (or `--robot` for JSON).
 
 | ID                              | Category    | What it flags                                      |
 | ------------------------------- | ----------- | -------------------------------------------------- |
@@ -84,7 +84,7 @@ Built-in checks live across all five categories:
 | `Warning.TripleEquals`          | Warning     | Use of `==` / `!=` instead of `===` / `!==`        |
 | `Warning.ParseError`            | Warning     | Files oxc couldn't parse                           |
 
-Plus stubs for `Consistency.QuoteStyle` and `Refactor.CognitiveComplexity` — landing as real checks in upcoming releases.
+The above is a partial list — see the catalog for the full set (14 user-visible IDs at time of writing, including the Refactor complexity / duplication checks and the Warning pack of `NoConsoleLog`/`NoDebugger`/`NoEval`). `Consistency.QuoteStyle` is registered as a stub today; the real implementation lands with two-pass mode (cd-d1y).
 
 See `Cargo.toml` for the workspace layout.
 

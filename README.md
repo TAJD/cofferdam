@@ -153,6 +153,17 @@ Output formats reference (text / JSON / compact pipe-delimited): **[`docs/output
 
 Suppression directives (inline `// cofferdam-ignore` syntax, ESLint-style aliases, reason field): **[`docs/suppression.md`](docs/suppression.md)**.
 
+### Ignoring files
+
+cofferdam reads `.cofferdamignore` at the repo root using gitignore syntax (including negation with `!`). Use it to exclude vendored or generated code from analysis without changing your `.gitignore`:
+
+    node_modules/
+    dist/
+    *.gen.ts
+    !src/special.gen.ts   # un-ignore a single generated file
+
+See [`docs/ignore.md`](docs/ignore.md) for full syntax and precedence rules.
+
 ## Status
 
 **Phase 1, in progress.** The Rust engine, all five categories of built-in checks, the CLI, JSON/compact output formats, baseline diffing, and PR-only mode (`--since`) all work today.

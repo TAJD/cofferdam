@@ -12,3 +12,6 @@ description = "Output formatters — text, JSON, SARIF, GitHub annotations."
 cofferdam-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

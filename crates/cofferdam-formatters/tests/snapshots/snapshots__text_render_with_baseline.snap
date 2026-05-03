@@ -1,0 +1,22 @@
+---
+source: crates/cofferdam-formatters/tests/snapshots.rs
+expression: "TextFormatter::render_with_baseline(&tagged)"
+---
+
+── Consistency ───────────────
+  [ -5] [     low] src/app.ts:12:5  use single quotes to match the dominant style in this project  (Consistency.QuoteStyle) [baselined]
+
+── Design ───────────────
+  [  5] [  medium] src/components/index.ts:3:1  export `Button` appears in multiple barrel files  (Design.DuplicateExportName)
+        also at: src/ui/index.ts:7:1, src/shared/index.ts:2:1
+
+── Readability ───────────────
+  [ -3] [    info] src/utils/format.ts:88:121  line is 145 characters, exceeds limit of 120  (Readability.MaxLineLength)
+
+── Refactor ───────────────
+  [ 15] [    high] src/orders/processor.ts:22:1  function `processOrder` has cyclomatic complexity 14, exceeds limit of 10  (Refactor.CyclomaticComplexity)
+
+── Warning ───────────────
+  [ 15] [critical] src/auth/validate.ts:47:18  use `===` instead of `==` to avoid type coercion  (Warning.TripleEquals) [baselined]
+
+5 finding(s) (3 new, 2 baselined)

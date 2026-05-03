@@ -1,0 +1,5 @@
+---
+source: crates/cofferdam-formatters/tests/snapshots.rs
+expression: "CompactFormatter::render(&[])"
+---
+priority|severity|category|id|file|line|column|message

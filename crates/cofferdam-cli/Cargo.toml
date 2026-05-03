@@ -22,6 +22,7 @@ cofferdam-engine = { workspace = true }
 cofferdam-checks = { workspace = true }
 cofferdam-formatters = { workspace = true }
 clap = { workspace = true }
+clap-markdown = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 

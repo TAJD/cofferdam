@@ -2,6 +2,7 @@
 
 mod doctor;
 mod explain;
+mod gen_docs;
 mod init;
 
 use std::collections::HashMap;
@@ -229,6 +230,23 @@ enum Cmd {
         #[arg(long)]
         no_ignore: bool,
     },
+    /// Regenerate the docs catalog from CheckMeta. Writes per-check
+    /// markdown files, a schema-stable JSON index, an llms.txt root
+    /// index, and the CLI reference page (from clap-markdown). Use
+    /// `--check` to fail when the committed files are out of date —
+    /// same shape as `cargo fmt --check`.
+    GenDocs {
+        /// Output directory. The catalog lands at
+        /// `<out>/checks.json`, `<out>/checks/<id>.md`,
+        /// `<out>/checks/index.md`, `<out>/llms.txt`,
+        /// `<out>/reference/cli.md`.
+        #[arg(long, value_name = "DIR", default_value = "docs")]
+        out: PathBuf,
+        /// Don't write — only fail (exit 1) if the existing files
+        /// would change. The CI gate uses this.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -350,6 +368,7 @@ fn main() -> ExitCode {
             hidden,
             no_ignore,
         } => run_fix(paths, hidden, no_ignore),
+        Cmd::GenDocs { out, check } => gen_docs::run(out, check),
     }
 }
 

@@ -1,0 +1,28 @@
+name: action-smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    name: smoke test cofferdam-check action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/cofferdam-check
+        id: cofferdam
+        continue-on-error: true
+        with:
+          paths: examples/
+          fail-on: high
+
+      - name: Assert annotations were emitted
+        shell: bash
+        run: |
+          # If the action ran, findings.json should exist and be non-empty.
+          # examples/ contains intentionally bad code so we expect findings.
+          test -s "${{ github.workspace }}/findings.json"
+          jq -e '.findings | length > 0' "${{ github.workspace }}/findings.json"
+          echo "Annotation check passed: findings.json exists and contains findings."

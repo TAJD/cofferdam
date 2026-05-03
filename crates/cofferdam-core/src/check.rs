@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::AstView;
 use crate::corpus::CorpusIndex;
+use crate::edit::TextEdit;
 use crate::issue::{Issue, Severity};
 use crate::options::{CheckOptions, OptionSpec, EMPTY_OPTIONS};
 use crate::source::SourceFile;
@@ -162,10 +163,25 @@ impl<'a> FinalizeContext<'a> {
 /// their findings, e.g. orphaned exports, context-boundary violations,
 /// or duplicate-block detection. `finalize` receives the shared
 /// `CorpusIndex` it filled during `run` via `FinalizeContext`.
+///
+/// `autofix` is called by the fix engine for each issue emitted by this
+/// check. Returning `Some(TextEdit)` opts the check into mechanical
+/// autofix; returning `None` (the default) opts out. The fix engine skips
+/// issues whose check returns `None` and processes the rest in reverse
+/// byte-offset order to avoid span-shift bugs.
 pub trait Check: Send + Sync {
     fn meta(&self) -> &'static CheckMeta;
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue>;
     fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         Vec::new()
+    }
+    /// Return the `TextEdit` that would fix `issue`, or `None` if this
+    /// check does not support mechanical autofix for the given finding.
+    ///
+    /// The `source` parameter carries the raw text of the file that
+    /// produced `issue`, allowing the implementation to inspect the
+    /// bytes at `issue.span` without re-reading from disk.
+    fn autofix(&self, _issue: &Issue, _source: &SourceFile) -> Option<TextEdit> {
+        None
     }
 }

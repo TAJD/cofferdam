@@ -12,6 +12,10 @@ description = "Cofferdam command-line binary."
 name = "cofferdam"
 path = "src/main.rs"
 
+[[test]]
+name = "fix"
+path = "tests/fix.rs"
+
 [dependencies]
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }

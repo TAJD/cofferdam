@@ -1,5 +1,7 @@
 # Built-in check catalog
 
+Need to suppress a finding? See [suppression.md](suppression.md).
+
 Reference for every check shipped in the `cofferdam` binary. Each entry lists the dotted ID, default priority and severity, what it flags and why, a bad/good example, configurable options, and the suppression directive shape.
 
 To inspect the same metadata from the CLI:

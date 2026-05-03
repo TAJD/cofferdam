@@ -151,6 +151,8 @@ Built-in checks live across all five categories. Full catalog with bad/good exam
 
 Output formats reference (text / JSON / compact pipe-delimited): **[`docs/output-formats.md`](docs/output-formats.md)**.
 
+Suppression directives (inline `// cofferdam-ignore` syntax, ESLint-style aliases, reason field): **[`docs/suppression.md`](docs/suppression.md)**.
+
 ## Status
 
 **Phase 1, in progress.** The Rust engine, all five categories of built-in checks, the CLI, JSON/compact output formats, baseline diffing, and PR-only mode (`--since`) all work today.

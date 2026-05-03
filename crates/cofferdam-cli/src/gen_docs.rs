@@ -2,12 +2,18 @@
 //!
 //! Writes (or, with `--check`, asserts no-diff against) six artifact types:
 //!
-//! - `<out>/checks.json`                 — schema-stable JSON index
-//! - `<out>/checks/<id>.md`              — per-check markdown (one per builtin)
-//! - `<out>/checks/index.md`             — category-grouped landing page
-//! - `<out>/llms.txt`                    — llmstxt.org root index
-//! - `<out>/reference/cli.md`            — CLI reference from clap-markdown
+//! - `<out>/public/checks.json`           — schema-stable JSON index (static asset)
+//! - `<out>/checks/<id>.md`               — per-check markdown (one per builtin)
+//! - `<out>/checks/index.md`              — category-grouped landing page
+//! - `<out>/public/llms.txt`              — llmstxt.org root index (static asset)
+//! - `<out>/reference/cli.md`             — CLI reference from clap-markdown
 //! - `<out>/.vitepress/sidebar-checks.ts` — VitePress sidebar list, imported by config.ts
+//!
+//! `checks.json` and `llms.txt` go under `<out>/public/` because VitePress
+//! only copies files from its `public/` directory to the deployed `dist/`
+//! root. Files at the `srcDir` root that aren't `.md` are silently
+//! ignored. Net effect: deployed URLs are still
+//! `https://<site>/checks.json` and `https://<site>/llms.txt`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -66,9 +72,10 @@ struct Artifact {
 fn build_all(metas: &[&'static CheckMeta], base: &Path) -> Vec<Artifact> {
     let mut artifacts = Vec::new();
 
-    // checks.json
+    // public/checks.json — VitePress copies docs/public/* to dist root,
+    // so this serves at /<site>/checks.json after deploy.
     artifacts.push(Artifact {
-        path: base.join("checks.json"),
+        path: base.join("public").join("checks.json"),
         content: build_checks_json(metas),
     });
 
@@ -86,9 +93,9 @@ fn build_all(metas: &[&'static CheckMeta], base: &Path) -> Vec<Artifact> {
         content: build_index_md(metas),
     });
 
-    // llms.txt
+    // public/llms.txt — see public/checks.json comment above.
     artifacts.push(Artifact {
-        path: base.join("llms.txt"),
+        path: base.join("public").join("llms.txt"),
         content: build_llms_txt(),
     });
 

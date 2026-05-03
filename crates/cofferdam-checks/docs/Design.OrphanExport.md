@@ -1,0 +1,69 @@
+---
+id: Design.OrphanExport
+category: Design
+default_severity: Medium
+base_priority: 5
+---
+
+# Design.OrphanExport
+
+Flags exports that no other file in the project imports — the most common
+form of dead code left behind by refactors.
+
+## Why
+
+Single-file linters (like `tsc`'s `noUnusedLocals`) miss this case: an
+export marked `export` is "used" from the file's perspective even if no
+consumer ever imports it. The waste is only visible when you look at the
+project as a whole.
+
+## What gets flagged
+
+* `export function foo() {}` / `export class Foo {}` / `export const x = ...`
+  whose name appears in zero `import { ... }` statements anywhere in the
+  project.
+* `export default ...` whose file is never the target of an
+  `import x from './that/file'`.
+* Local re-exports (`export { x }`) when neither `x` nor the file is
+  reachable from any import or namespace touch.
+
+## What's not flagged
+
+* Re-export forwarding nodes (`export { x } from './y'`,
+  `export * from './y'`) — they're routing, not endpoints. Whether the
+  underlying definition is consumed is what matters, and that's evaluated
+  on its own row.
+* Anything in test or mock files, by default. Configurable via
+  `test_file_patterns`.
+* Type-only exports (`export type X`, `export interface I`,
+  `export type { X } from './m'`), unless `include_type_only = true`.
+  Type-only consumption is harder to attribute reliably without full
+  type-aware analysis; opt in if your project's types matter as much as
+  its values.
+* Files reached via `import * as ns from './m'` — namespace imports are
+  treated as touching every named export of the target file. If you want
+  finer-grained tracking, switch the consumer to named imports.
+
+## Configuration
+
+```toml
+[checks."Design.OrphanExport"]
+include_type_only = false  # set true to flag unused type-only exports
+test_file_patterns = [".test.", ".spec.", "_test.", "_spec.", "/__tests__/", "/__mocks__/"]
+```
+
+## Limitations
+
+* Only static `import` and `export` declarations are tracked. `require()`,
+  `module.exports = ...`, and dynamic `import('...')` calls are ignored —
+  flagged exports that are reached only through dynamic loading will be
+  false positives.
+* No `package.json` `main`/`module`/`exports` allowlist yet — public-API
+  entry points appear orphan if no in-project file imports them. Run with
+  the project's published surface in mind for now; an allowlist is a
+  planned follow-up.
+* Re-export chain attribution stops at the immediate re-exporter; if your
+  intermediate barrel re-exports `x` and only the barrel is consumed, the
+  underlying `x` will (correctly) be considered touched. If the barrel
+  itself is also unused, you'll see two findings rather than one — pick a
+  side and fix that file.

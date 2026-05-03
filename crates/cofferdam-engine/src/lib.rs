@@ -7,6 +7,7 @@
 pub mod baseline;
 pub mod config;
 pub mod discover;
+pub mod graph;
 pub mod since;
 pub mod suppress;
 
@@ -133,6 +134,7 @@ impl Engine {
         // export-graph rules) collect into it during run() and read it back
         // in finalize(). Per-check checks ignore it.
         let corpus = CorpusIndex::new();
+        let graph_builder = graph::GraphBuilder::new();
 
         for path in paths {
             let path = path.as_ref();
@@ -158,6 +160,14 @@ impl Engine {
                 program: &parsed_return.program,
                 diagnostics: &parsed_return.errors,
             };
+
+            // Pass-1 graph extraction: imports/exports for every parsed
+            // file, into the well-known IMPORTS/EXPORTS corpus slots.
+            // Graph-aware checks (orphan, cycle, layer, dead) read these
+            // in their `finalize`. Doing this BEFORE checks run means a
+            // future check could even consume the graph from inside its
+            // own per-file `run`.
+            graph_builder.collect(&file, &parsed, &corpus);
 
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
                 let mut ctx = CheckContext::new(&file)

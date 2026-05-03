@@ -16,7 +16,7 @@ Each recipe is shown for GitHub Actions first because it's the most common; GitL
 
 ## Universal flags
 
-A short cheat sheet for the flags that matter in CI. Full reference: [`docs/output-formats.md`](output-formats.md), [`docs/checks.md`](checks.md), or `cofferdam check --help`.
+A short cheat sheet for the flags that matter in CI. Full reference: [`docs/output-formats.md`](output-formats.md), [`docs/checks/`](checks/), or `cofferdam check --help`.
 
 | Flag | Purpose |
 |---|---|

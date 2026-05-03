@@ -128,7 +128,7 @@ Full CI recipes for GitHub Actions, GitLab, CircleCI, Drone, and pre-commit hook
 
 ## Checks
 
-Built-in checks live across all five categories. Full catalog with bad/good examples, options, and suppression directives: **[`docs/checks.md`](docs/checks.md)**.
+Built-in checks live across all five categories. Full catalog with bad/good examples, options, and suppression directives: **<https://tajd.github.io/cofferdam/checks/>** (or browse the source files at [`docs/checks/`](docs/checks/)).
 
 | ID                                    | Category    | Severity | What it flags                                               |
 |---------------------------------------|-------------|----------|-------------------------------------------------------------|

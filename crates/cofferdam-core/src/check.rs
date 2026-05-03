@@ -158,11 +158,13 @@ impl<'a> FinalizeContext<'a> {
 
 /// The check contract.
 ///
-/// `run` is called once per file. `finalize` runs after all files have
-/// been processed — that's where project-graph checks (decision #5) emit
-/// their findings, e.g. orphaned exports, context-boundary violations,
-/// or duplicate-block detection. `finalize` receives the shared
-/// `CorpusIndex` it filled during `run` via `FinalizeContext`.
+/// `run` is called once per file. `pass2` is called once per file AFTER
+/// all checks' `run` has completed for every file — this is the two-pass
+/// consistency mode. `finalize` runs after all files have been processed
+/// (including pass 2) — that's where project-graph checks (decision #5)
+/// emit their findings, e.g. orphaned exports, context-boundary
+/// violations, or duplicate-block detection. `finalize` receives the
+/// shared `CorpusIndex` it filled during `run` via `FinalizeContext`.
 ///
 /// `autofix` is called by the fix engine for each issue emitted by this
 /// check. Returning `Some(TextEdit)` opts the check into mechanical
@@ -172,6 +174,16 @@ impl<'a> FinalizeContext<'a> {
 pub trait Check: Send + Sync {
     fn meta(&self) -> &'static CheckMeta;
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue>;
+    /// Per-file second pass. Runs AFTER all checks' first-pass `run`
+    /// completes for every file. Use when a check needs to see all files
+    /// before emitting findings (e.g. "the dominant quote style in this
+    /// file is X, flag deviations"). Reads evidence collected in pass 1
+    /// via `ctx.corpus`. Returns findings the same way `run` does.
+    ///
+    /// Only called for checks whose `meta().consistency == true`.
+    fn pass2(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
     fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         Vec::new()
     }

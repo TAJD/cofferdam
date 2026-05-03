@@ -393,3 +393,42 @@ fn duplicate_block_default_does_not_emit_token_findings() {
         issues
     );
 }
+
+// ============================================================
+// Two-pass consistency checks
+// ============================================================
+
+/// Integration test: full engine run on a mixed-quote file produces exactly
+/// 2 `Consistency.QuoteStyle` findings (the two [FLAG] strings in the fixture).
+#[test]
+fn quote_style_fixture_produces_expected_count() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join("quote_style.ts");
+
+    // Skip if fixture is somehow missing (shouldn't happen in CI).
+    if !fixture.exists() {
+        eprintln!("SKIP: quote_style.ts fixture not found at {:?}", fixture);
+        return;
+    }
+
+    use cofferdam_checks::consistency::QuoteStyle;
+    let engine = Engine::new(vec![Box::new(QuoteStyle)]);
+    let issues = engine.analyze(&[&fixture]).expect("analyze should succeed");
+
+    let qs_issues: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Consistency.QuoteStyle")
+        .collect();
+
+    assert_eq!(
+        qs_issues.len(),
+        2,
+        "expected 2 QuoteStyle findings on quote_style.ts; got {:?}",
+        qs_issues
+    );
+}

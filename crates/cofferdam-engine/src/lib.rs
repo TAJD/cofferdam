@@ -168,6 +168,45 @@ impl Engine {
             }
         }
 
+        // Pass 2: iterate every file again for consistency checks.
+        // Only checks with `meta().consistency == true` are called.
+        // This runs AFTER all files' pass-1 `run()` is complete so that
+        // corpus slots are fully populated (e.g. per-file quote stats).
+        let consistency_checks: Vec<(usize, &dyn Check)> = self
+            .checks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.meta().consistency)
+            .map(|(i, c)| (i, c.as_ref()))
+            .collect();
+
+        if !consistency_checks.is_empty() {
+            for path in paths {
+                let path = path.as_ref();
+                let text = match texts.get(path) {
+                    Some(t) => t,
+                    None => continue, // file failed to parse in pass 1 — skip
+                };
+                let file = SourceFile::new(path.to_path_buf(), text.clone());
+                let allocator = Allocator::default();
+                let parsed_return = parse_into(&allocator, &file);
+                if parse_fatal(&parsed_return) {
+                    continue;
+                }
+                let parsed = ParsedView {
+                    program: &parsed_return.program,
+                    diagnostics: &parsed_return.errors,
+                };
+                for (idx, check) in &consistency_checks {
+                    let mut ctx = CheckContext::new(&file)
+                        .with_parsed(&parsed)
+                        .with_options(&self.options[*idx])
+                        .with_corpus(&corpus);
+                    issues.extend(check.pass2(&file, &mut ctx));
+                }
+            }
+        }
+
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         for check in &self.checks {
             issues.extend(check.finalize(&mut finalize_ctx));

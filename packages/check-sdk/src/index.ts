@@ -14,6 +14,17 @@ export { Severity } from "./severity.js";
 export { Walk } from "./ast.js";
 export { defineCheck } from "./define-check.js";
 
+// Loader runtime (cd-81a.7). Plugin authors import only the surfaces
+// above; cofferdam's own JS wrapper is the consumer of these.
+export { runPlugin, buildSourceFile } from "./plugin-host.js";
+export { loadPlugins, runPlugins } from "./loader.js";
+export type {
+  PluginReport,
+  PluginRunInput,
+  NativeLineView,
+} from "./plugin-host.js";
+export type { LoadedPlugin, RunPluginsOptions } from "./loader.js";
+
 export type { Check, DefineCheckInput } from "./define-check.js";
 export type { CheckContext, Fix, ReportArgs, SourceFile } from "./check-context.js";
 export type { LineView } from "./line-view.js";

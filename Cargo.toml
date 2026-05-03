@@ -7,8 +7,23 @@ members = [
     "crates/cofferdam-formatters",
     "crates/cofferdam-cli",
     "crates/cofferdam-lsp",
-    "crates/cofferdam-napi",
 ]
+
+# `cofferdam-napi` is intentionally NOT a workspace member. It builds a
+# Node.js native addon (.node file) and links against `libnode.dll`,
+# which lives in the Node.js source distribution — NOT a default install.
+# Including it would break `cargo build --workspace` for contributors
+# without the Node dev environment set up.
+#
+# To build it, use the @napi-rs/cli flow from `packages/check-sdk/` (or
+# its sibling runtime package), or run `cargo build --manifest-path
+# crates/cofferdam-napi/Cargo.toml` after setting up `libnode.dll` via
+# `node-gyp` or by pointing `NAPI_NODE_DEV_DIR` at a Node source tree.
+#
+# The crate keeps a `[workspace]` exclude marker by living outside the
+# `members` list — it's a standalone Cargo project that depends on the
+# rest of the workspace via path dependencies.
+exclude = ["crates/cofferdam-napi"]
 
 [workspace.package]
 version = "0.1.4"

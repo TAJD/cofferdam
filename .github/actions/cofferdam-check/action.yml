@@ -18,8 +18,8 @@ inputs:
     description: cofferdam release tag to use, e.g. "v0.2.0". "latest" resolves to the current latest release.
     default: "latest"
   config:
-    description: Path to a cofferdam.toml config file. Leave empty to use auto-discovery.
-    default: "cofferdam.toml"
+    description: Path to a cofferdam.toml config file. Leave empty (default) to use auto-discovery — cofferdam walks up from the working directory until it finds a cofferdam.toml or hits a `.git` directory. Set this only to point at a config in a non-standard location.
+    default: ""
 
 runs:
   using: composite

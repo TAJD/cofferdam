@@ -389,8 +389,7 @@ fn build_sidebar_checks_ts(metas: &[&'static CheckMeta]) -> String {
     for cat in Category::ALL {
         let cat_name = category_pascal(cat);
         // `metas` is globally sorted by id, so per-category order is also sorted.
-        let in_cat: Vec<&&'static CheckMeta> =
-            metas.iter().filter(|m| m.category == cat).collect();
+        let in_cat: Vec<&&'static CheckMeta> = metas.iter().filter(|m| m.category == cat).collect();
         if in_cat.is_empty() {
             continue;
         }

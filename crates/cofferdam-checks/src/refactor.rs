@@ -1299,6 +1299,242 @@ fn collect_token_fingerprints(
     }
 }
 
+// ─── Refactor.PreferOptionalChain ──────────────────────────────────────────
+//
+// Modern TS idiom: `a && a.b && a.b.c` → `a?.b?.c`. The fully precise rule
+// needs type info (knowing whether `a` can be `0`/`""` and whether falling
+// through on those values matters); we ship the high-confidence syntactic
+// shape now and broaden in the type-aware tier (cd-moj's phase-5 follow-up).
+//
+// What we flag: `lhs && rhs` where `rhs` is a member access (or call on a
+// member access) whose *object* span renders to the same source text as the
+// `lhs` span. That catches:
+//   - `a && a.b`            (left = identifier, right = static member)
+//   - `a.b && a.b.c`        (extends the chain by one step)
+//   - `a && a[0]`           (computed member)
+//   - `a && a.b()`          (call on member access)
+//   - `a && a.b && a.b.c`   (parses left-associative; both sub-`&&`s flag)
+//
+// What we *don't* flag:
+//   - `a && b.c`            (different prefixes — clearly not a chain)
+//   - `a && (a as any).b`   (parens / casts mean LHS text doesn't match)
+//   - `a() && a().b`        (LHS is a call — repeating side-effects matters,
+//                            so `?.` isn't a safe rewrite without types)
+//
+// Source-text comparison (rather than AST equivalence) is deliberate: it
+// keeps false positives near zero and avoids reimplementing identifier
+// resolution. A check that requires the *same exact bytes* on both sides
+// of `&&` won't be confused by whitespace tweaks or comments.
+
+pub struct PreferOptionalChain;
+
+const PREFER_OPTIONAL_CHAIN_META: CheckMeta = CheckMeta {
+    id: "Refactor.PreferOptionalChain",
+    category: Category::Refactor,
+    base_priority: 5,
+    default_severity: Severity::Low,
+    explanation: "`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.",
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+impl Check for PreferOptionalChain {
+    fn meta(&self) -> &'static CheckMeta {
+        &PREFER_OPTIONAL_CHAIN_META
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+        let mut visitor = OptionalChainVisitor {
+            file,
+            issues: Vec::new(),
+        };
+        visitor.visit_program(parsed.program);
+        visitor.issues
+    }
+}
+
+struct OptionalChainVisitor<'a> {
+    file: &'a SourceFile,
+    issues: Vec<Issue>,
+}
+
+impl<'a> OptionalChainVisitor<'a> {
+    fn slice(&self, start: u32, end: u32) -> Option<&str> {
+        self.file.text.get(start as usize..end as usize)
+    }
+}
+
+/// True when the LHS of an `&&` chain can be safely repeated (i.e.
+/// rewriting `lhs && lhs.foo` to `lhs?.foo` doesn't change semantics).
+/// Identifiers and pure member chains (no calls anywhere) qualify;
+/// anything containing a `CallExpression` or `NewExpression` does not —
+/// repeating it would either double-invoke a side-effecting function or
+/// halve it after rewrite.
+fn is_safe_chain_lhs(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::Identifier(_) | Expression::ThisExpression(_) => true,
+        Expression::StaticMemberExpression(m) => is_safe_chain_lhs(&m.object),
+        Expression::ComputedMemberExpression(m) => {
+            is_safe_chain_lhs(&m.object) && is_safe_chain_lhs(&m.expression)
+        }
+        // Inner `&&` chains (left-associative) — recurse on both sides.
+        Expression::LogicalExpression(inner) if matches!(inner.operator, LogicalOperator::And) => {
+            is_safe_chain_lhs(&inner.left) && is_safe_chain_lhs(&inner.right)
+        }
+        _ => false,
+    }
+}
+
+impl<'a> Visit<'a> for OptionalChainVisitor<'a> {
+    fn visit_logical_expression(&mut self, node: &LogicalExpression<'a>) {
+        if matches!(node.operator, LogicalOperator::And) && is_safe_chain_lhs(&node.left) {
+            let lhs_span = node.left.span();
+            // Find the "object" of the RHS — the part `?.` would chain off.
+            let rhs_object_span = match &node.right {
+                Expression::StaticMemberExpression(m) => Some(m.object.span()),
+                Expression::ComputedMemberExpression(m) => Some(m.object.span()),
+                Expression::CallExpression(c) => match &c.callee {
+                    Expression::StaticMemberExpression(m) => Some(m.object.span()),
+                    Expression::ComputedMemberExpression(m) => Some(m.object.span()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(rhs_obj_span) = rhs_object_span {
+                let lhs_text = self.slice(lhs_span.start, lhs_span.end);
+                let rhs_text = self.slice(rhs_obj_span.start, rhs_obj_span.end);
+                if let (Some(l), Some(r)) = (lhs_text, rhs_text) {
+                    if l == r {
+                        let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+                        self.issues.push(Issue {
+                            check_id: PREFER_OPTIONAL_CHAIN_META.id.to_string(),
+                            message: format!(
+                                "prefer optional chain `?.` over repeated `&&` on `{l}`"
+                            ),
+                            file: self.file.path.clone(),
+                            span,
+                            priority: Priority(PREFER_OPTIONAL_CHAIN_META.base_priority),
+                            severity: Severity::Medium,
+                            related: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+        oxc_ast_visit::walk::walk_logical_expression(self, node);
+    }
+}
+
+// ─── Refactor.PreferNullishCoalescing ──────────────────────────────────────
+//
+// Modern TS idiom: `x ?? default` instead of `x || default` when the
+// intent is "fall through on null/undefined only". The precise rule needs
+// type info — `x || 0` is genuinely correct when `x` can be a meaningful
+// `0`. We ship the narrow high-confidence shape now: `member-access ||
+// literal-default`, and broaden in the type-aware tier.
+//
+// What we flag: `lhs || rhs` where lhs is a member access (`obj.prop` or
+// `obj[key]`) AND rhs is a default-shaped expression — string/number/bool
+// literal, `null`, the bare identifier `undefined`, an array literal, or
+// an object literal.
+//
+// What we *don't* flag:
+//   - `x || y`               (both sides bare identifiers — could be alt branch)
+//   - `getValue() || 0`      (function call — return type ambiguous)
+//   - `(a + b) || 0`         (arithmetic — explicit falsy-fallthrough intent)
+//   - `obj.prop || other()`  (RHS is a call — not a "default" shape)
+//   - `obj.prop || flag`     (RHS is a bare identifier — likely alt branch)
+
+pub struct PreferNullishCoalescing;
+
+const PREFER_NULLISH_META: CheckMeta = CheckMeta {
+    id: "Refactor.PreferNullishCoalescing",
+    category: Category::Refactor,
+    base_priority: 3,
+    default_severity: Severity::Low,
+    explanation: "`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`.",
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+impl Check for PreferNullishCoalescing {
+    fn meta(&self) -> &'static CheckMeta {
+        &PREFER_NULLISH_META
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+        let mut visitor = NullishVisitor {
+            file,
+            issues: Vec::new(),
+        };
+        visitor.visit_program(parsed.program);
+        visitor.issues
+    }
+}
+
+struct NullishVisitor<'a> {
+    file: &'a SourceFile,
+    issues: Vec<Issue>,
+}
+
+/// Is this expression a "default-shaped" literal? Used as the RHS gate in
+/// `PreferNullishCoalescing`. Conservative — we'd rather miss a true
+/// positive than flag a falsy-fallthrough that the user wrote on purpose.
+fn is_default_literal(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::ArrayExpression(_)
+        | Expression::ObjectExpression(_) => true,
+        // `undefined` is parsed as an IdentifierReference, not a keyword.
+        Expression::Identifier(ident) => ident.name.as_str() == "undefined",
+        _ => false,
+    }
+}
+
+/// Is this expression a member access we'd want `??` to chain off? We
+/// flag only on member-access LHS because bare identifiers (`flag ||
+/// other`) are too often genuine alternative-branch logic to flag without
+/// types. Function-call LHS (`get() || 0`) is also out of scope for the
+/// same reason — return type ambiguity.
+fn is_member_access(expr: &Expression<'_>) -> bool {
+    matches!(
+        expr,
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+    )
+}
+
+impl<'a> Visit<'a> for NullishVisitor<'a> {
+    fn visit_logical_expression(&mut self, node: &LogicalExpression<'a>) {
+        if matches!(node.operator, LogicalOperator::Or)
+            && is_member_access(&node.left)
+            && is_default_literal(&node.right)
+        {
+            let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+            self.issues.push(Issue {
+                check_id: PREFER_NULLISH_META.id.to_string(),
+                message: "prefer nullish coalescing `??` for default values (`||` falls through on `0`/`\"\"`/`false`)".to_string(),
+                file: self.file.path.clone(),
+                span,
+                priority: Priority(PREFER_NULLISH_META.base_priority),
+                severity: Severity::Medium,
+                related: Vec::new(),
+            });
+        }
+        oxc_ast_visit::walk::walk_logical_expression(self, node);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

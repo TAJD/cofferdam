@@ -26,6 +26,8 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::CyclomaticComplexity::new(10)),
         Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(refactor::DuplicateBlock::default()),
+        Box::new(refactor::PreferOptionalChain),
+        Box::new(refactor::PreferNullishCoalescing),
         Box::new(warning::TripleEquals),
         Box::new(warning::NoConsoleLog),
         Box::new(warning::NoDebugger),

@@ -27,5 +27,8 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(refactor::DuplicateBlock::default()),
         Box::new(warning::TripleEquals),
+        Box::new(warning::NoConsoleLog),
+        Box::new(warning::NoDebugger),
+        Box::new(warning::NoEval),
     ]
 }

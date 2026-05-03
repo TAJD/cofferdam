@@ -8,7 +8,7 @@
     "url": "git+https://github.com/TAJD/cofferdam.git",
     "directory": "packages/cofferdam"
   },
-  "homepage": "https://github.com/TAJD/cofferdam#readme",
+  "homepage": "https://tajd.github.io/cofferdam",
   "bugs": "https://github.com/TAJD/cofferdam/issues",
   "keywords": [
     "typescript",

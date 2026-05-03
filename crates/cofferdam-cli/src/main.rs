@@ -1,5 +1,7 @@
 //! Cofferdam CLI entry point.
 
+mod init;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -127,6 +129,29 @@ enum Cmd {
         #[command(subcommand)]
         action: BaselineAction,
     },
+    /// Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore
+    /// entries so a new project has a working `cofferdam check` after
+    /// one command. Refuses to overwrite an existing cofferdam.toml
+    /// without `--force`.
+    Init {
+        /// Project root to initialise. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Overwrite an existing cofferdam.toml.
+        #[arg(long)]
+        force: bool,
+        /// Capture the current set of findings as the baseline. Skip
+        /// the interactive prompt.
+        #[arg(long, conflicts_with = "no_baseline")]
+        baseline: bool,
+        /// Do not capture a baseline. Skip the interactive prompt.
+        #[arg(long)]
+        no_baseline: bool,
+        /// Machine-readable JSON summary instead of human output. No
+        /// prompts; defaults to capturing a baseline.
+        #[arg(long)]
+        robot: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -205,6 +230,24 @@ fn main() -> ExitCode {
                 no_config,
             } => run_baseline_write(paths, hidden, no_ignore, output, config, no_config),
         },
+        Cmd::Init {
+            path,
+            force,
+            baseline,
+            no_baseline,
+            robot,
+        } => init::run(init::InitArgs {
+            path,
+            force,
+            baseline_choice: if baseline {
+                init::BaselineChoice::Yes
+            } else if no_baseline {
+                init::BaselineChoice::No
+            } else {
+                init::BaselineChoice::Auto
+            },
+            robot,
+        }),
     }
 }
 

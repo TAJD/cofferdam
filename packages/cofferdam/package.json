@@ -31,7 +31,8 @@
     "postinstall": "node scripts/postinstall.js"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=16",
+    "npm": ">=7"
   },
   "os": [
     "linux",

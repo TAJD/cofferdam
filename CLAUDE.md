@@ -13,7 +13,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`rust-toolchain.toml` pins `channel = "stable"` (host-portable for CI). On a Windows box without the MSVC C++ workload (notably Tom's primary dev box), local builds need:
+`rust-toolchain.toml` pins `channel = "stable"` (host-portable for CI). On a Windows box without the MSVC C++ workload, local builds need:
 
 ```bash
 export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu   # bash
@@ -94,54 +94,50 @@ impl Check for X {
   cargo run -p cofferdam-cli -- check examples/<your-fixture>.ts
   ```
 
-## Issue tracking — beads (br)
+## Issue tracking — beads (bd)
 
-`.beads/` at repo root. Prefix `cd-`. Use `br` (the Rust port), NOT `bd` — embedded Dolt needs CGO that's not available on the Windows-no-MSVC box.
-
-```bash
-br ready                         # next unblocked work
-br show <id>                     # full issue body + deps
-br update <id> --status in_progress
-br create "Title" --type feature --priority 2 --labels phase-1 -d "..."
-br dep add <issue> <depends-on>
-br sync --flush-only             # writes JSONL after status changes
-br update <id> --status closed
-```
-
-After issue updates run `br sync --flush-only` so `.beads/issues.jsonl` reflects the change before the next git operation. The DB (`.beads/beads.db*`) is gitignored; the JSONL is the canonical exported form.
-
-### When `br` "stops working"
-
-Symptoms vary (hangs, missing issues, wrong `br ready` output, stale dependencies). Diagnose first, then escalate:
+`.beads/` at repo root. Prefix `cd-`. Use `bd` (the Go reference implementation, v1.0.3+). The `.beads/issues.jsonl` file is the canonical export and is committed; the working DB under `.beads/embeddeddolt/` is gitignored.
 
 ```bash
-br doctor                       # ALWAYS run this first — names the actual failure
+bd ready                         # next unblocked work
+bd show <id>                     # full issue body + deps
+bd update <id> --status in_progress
+bd create "Title" --type feature --priority 2 --labels phase-1 -d "..."
+bd dep add <issue> <depends-on>
+bd close <id>                    # mark complete
+bd export                        # write .beads/issues.jsonl
 ```
 
-Common findings and fixes, in escalation order (cheapest first):
+bd auto-syncs the JSONL on most write operations (the `--sandbox` flag disables this). If a manual flush is needed before a git operation, run `bd export`. One-time setup on a fresh checkout: `git config beads.role maintainer` (suppresses the role-not-configured warning).
 
-1. **`blocked_issues_cache is marked stale`** — cache out of sync. Affects `br ready` / `br blocked` accuracy. Fix: re-run any operation that mutates the graph (`br update <id>` no-op, or `br dep list <id>`); cache rebuilds lazily.
+### When `bd` "stops working"
 
-2. **`sqlite.integrity_check: database disk image is malformed`** — structural corruption, usually after an unclean shutdown or a write that raced a lock. Don't ignore — symptoms get weirder over time.
-
-3. **`.beads/beads.db-wal` is large (> a few MB)** — a long-running reader is preventing the WAL from checkpointing back into the main DB, OR a previous process died holding a lock. Force a checkpoint by running any `br` command in `--no-daemon` mode and confirming the WAL shrinks.
-
-4. **Write probe fails / lock files won't release** — check `.beads/.write.lock` and `.beads/.sync.lock` for stale locks from a dead process. Safe to remove if no `br` / `bd` process is running.
-
-If diagnosis points at corruption (#2) and lighter fixes haven't worked, **rebuild the DB from `issues.jsonl`** — that file is the canonical export, gitignored DB is rebuildable:
+`bd doctor` is **not yet supported in embedded mode** (current bd 1.0.3 limitation). Use these for diagnostics instead:
 
 ```bash
-mv .beads/beads.db .beads/beads.db.bad
-mv .beads/beads.db-wal .beads/beads.db-wal.bad     # if present
-br sync                                            # imports issues.jsonl into a fresh db
-br doctor                                          # verify clean
-# ...if br doctor is now happy:
-rm .beads/beads.db.bad .beads/beads.db-wal.bad
+bd ping                          # confirm DB connectivity (round-trips in ~20ms)
+bd info                          # show issue count + database path
 ```
 
-Keep the `.bad` files until you've confirmed the rebuild — they're your only fallback if the JSONL turns out to be incomplete.
+Common failure modes, cheapest fixes first:
 
-**Do NOT** switch to `bd` to "work around" a `br` failure on this box — `bd` requires CGO + embedded Dolt that won't build on the Windows-no-MSVC environment, and mixing the two binaries against the same `.beads/` directory has caused corruption before.
+1. **`Error: import failed: database not initialized: issue_prefix config is missing`** — fresh DB without bootstrapping. Run any `bd info` or `bd list` command and bd will auto-import from `.beads/issues.jsonl` if present, initializing `issue_prefix` from the JSONL header. The explicit `bd import` requires `bd init --prefix <prefix>` first; auto-import does not.
+
+2. **Stale `.beads/dolt-server.*` files** (`.lock`, `.pid`, `.port`, `.log`) — leftovers from a previous server-mode invocation. Embedded mode doesn't use them. Safe to delete when no bd process is running.
+
+3. **`.beads/embeddeddolt/` corruption** — rare, usually from a killed mid-write process. Recovery rebuilds from the JSONL:
+
+   ```bash
+   mv .beads/embeddeddolt .beads/embeddeddolt.bad
+   bd info                                         # creates fresh DB, auto-imports from .beads/issues.jsonl
+   bd info | grep "Issue Count"                    # must match JSONL line count: wc -l .beads/issues.jsonl
+   # ...if counts match:
+   rm -rf .beads/embeddeddolt.bad
+   ```
+
+   Keep the `.bad` directory until you've confirmed the rebuild — JSONL is the recovery-of-last-resort source, but if the JSONL itself is stale you'll need the prior DB.
+
+4. **JSONL drift from the DB** — happens if a script edited `.beads/issues.jsonl` directly without going through bd. Fix: `bd export --force` to overwrite JSONL from DB, or `bd import` to overwrite DB from JSONL. Check direction first with `git diff .beads/issues.jsonl`.
 
 ## Output formats (when adding a new one)
 
@@ -152,7 +148,7 @@ Keep the `.bad` files until you've confirmed the rebuild — they're your only f
 - **Never `git config`** to change the user's identity or hooks. The author info is already configured.
 - **Never `--no-verify`** on commits or pushes. Hooks exist for a reason; if they fail, fix the underlying issue.
 - **Never amend a previously-pushed commit.** Add a new commit instead.
-- **You may close beads** once you've finished the work and the full verification block passes (build, test, clippy, fmt, fixture run). Use `br close <id>` and include a short reason for non-trivial work. Do NOT close without verification, and do NOT close work that's still uncommitted — close after the commit so the issue lifecycle and git history align.
+- **You may close beads** once you've finished the work and the full verification block passes (build, test, clippy, fmt, fixture run). Use `bd close <id>` and include a short reason for non-trivial work. Do NOT close without verification, and do NOT close work that's still uncommitted — close after the commit so the issue lifecycle and git history align.
 - **Don't commit** when running as a subagent — leave staging + commit to the controller.
 - **Validate against real repos.** Test fixtures in `examples/` are necessary but not sufficient. Run against `C:/Users/tajdi/bestefforttools` (325 TS files), `C:/Users/tajdi/gistreact` (31), `C:/Users/tajdi/rovikore-landing-page` (4) — all known to parse cleanly with the current oxc setup.
 - **Do not add a check whose `meta().id` collides with an existing one.** Grep `crates/cofferdam-checks` for the proposed ID first.
@@ -195,7 +191,7 @@ NOT safe to parallelize — sequential single-agent only:
 - The `OutputFormat` enum + `Cmd::Check` glue in `cofferdam-cli/src/main.rs` (multiple agents will conflict on the same lines)
 
 When dispatching for parallel check work:
-1. One git worktree per agent (`br worktree create check-<name>`).
+1. One git worktree per agent (`bd worktree create check-<name>`).
 2. Inline the recipe above in the prompt — don't say "see CLAUDE.md", subagents don't auto-load it. Or do, but include the gotchas section verbatim.
 3. Tell the agent the exact file path + the existing check it should model on.
 4. End with: "Do NOT commit. Do NOT close beads. Run the verification block; paste the last 20 lines."

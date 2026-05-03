@@ -1,8 +1,17 @@
-# Database
+# SQLite database (legacy br backend; kept until cleanup)
 *.db
 *.db-journal
 *.db-shm
 *.db-wal
+
+# bd Dolt embedded backend (per-machine working DB)
+embeddeddolt/
+dolt/
+backup/
+dolt-server.pid
+dolt-server.port
+dolt-server.log
+.bd-dolt-ok
 
 # Lock files
 *.lock
@@ -11,12 +20,17 @@
 last-touched
 *.tmp
 
-# Local history backups
+# Legacy br state (remove once br cleanup complete)
 .br_history/
+.local_version
+config.yaml
+metadata.json
 
-# Sync state (local-only, per-machine)
+# Sync / export state (local-only, per-machine)
 .sync.lock
 sync_base.jsonl
+export-state.json
+interactions.jsonl
 
 # Merge artifacts (temporary files from 3-way merge)
 beads.base.jsonl

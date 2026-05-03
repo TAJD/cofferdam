@@ -1,10 +1,10 @@
 //! `cofferdam explain <check_id>` — surface a check's metadata and
 //! prose explanation in the terminal.
 //!
-//! Today this prints from `CheckMeta` directly. Once the generated
-//! catalog under `docs/checks/<category>.md` lands (cd-b3k), this can
-//! upgrade to rendering the markdown section verbatim and the
-//! `CheckMeta::explanation` becomes a fallback for catalog gaps.
+//! With `--full`, also prints the companion markdown body from
+//! `CheckMeta::body` (extracted from `crates/cofferdam-checks/docs/`).
+//! The frontmatter block (`---…---`) is stripped before terminal output.
+//! In `--robot` mode the body is included as a `body` JSON field.
 
 use std::fmt::Write as _;
 use std::process::ExitCode;
@@ -17,6 +17,7 @@ pub struct ExplainArgs {
     pub check_id: String,
     pub robot: bool,
     pub pretty: bool,
+    pub full: bool,
 }
 
 pub fn run(args: ExplainArgs) -> ExitCode {
@@ -24,6 +25,7 @@ pub fn run(args: ExplainArgs) -> ExitCode {
         check_id,
         robot,
         pretty,
+        full,
     } = args;
 
     // `Vec<&'static CheckMeta>`: cheap, the metas are static.
@@ -34,7 +36,7 @@ pub fn run(args: ExplainArgs) -> ExitCode {
     };
 
     if robot {
-        let report = build_report(meta);
+        let report = build_report(meta, full);
         let s = if pretty {
             serde_json::to_string_pretty(&report)
         } else {
@@ -44,6 +46,10 @@ pub fn run(args: ExplainArgs) -> ExitCode {
         println!("{}", s);
     } else {
         print!("{}", render_text(meta));
+        if full {
+            println!("\n---\n");
+            print!("{}", strip_frontmatter(meta.body));
+        }
     }
     ExitCode::SUCCESS
 }
@@ -120,6 +126,8 @@ struct ExplainReport<'a> {
     consistency: bool,
     options: Vec<ExplainOption<'a>>,
     explanation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -140,7 +148,7 @@ enum ExplainDefault<'a> {
     IntList(&'a [i64]),
 }
 
-fn build_report(meta: &'static CheckMeta) -> ExplainReport<'static> {
+fn build_report(meta: &'static CheckMeta, full: bool) -> ExplainReport<'static> {
     ExplainReport {
         id: meta.id,
         category: category_str(meta.category),
@@ -150,6 +158,36 @@ fn build_report(meta: &'static CheckMeta) -> ExplainReport<'static> {
         consistency: meta.consistency,
         options: meta.options.iter().map(map_option).collect(),
         explanation: meta.explanation,
+        body: if full {
+            Some(strip_frontmatter(meta.body).to_string())
+        } else {
+            None
+        },
+    }
+}
+
+/// Strip the YAML frontmatter block from a companion markdown body.
+///
+/// The body starts with `---\n…\n---\n`. We locate the second `---` line
+/// and return everything after the newline that follows it. If no
+/// frontmatter is found the body is returned unchanged.
+fn strip_frontmatter(body: &str) -> &str {
+    // Find the opening `---`
+    if !body.starts_with("---") {
+        return body;
+    }
+    // Skip past the first `---\n`
+    let after_open = match body.find('\n') {
+        Some(pos) => &body[pos + 1..],
+        None => return body,
+    };
+    // Find the closing `---`
+    if let Some(close_pos) = after_open.find("\n---") {
+        // Advance past `\n---` and the trailing newline if present
+        let rest = &after_open[close_pos + 4..]; // 4 = len("\n---")
+        rest.strip_prefix('\n').unwrap_or(rest)
+    } else {
+        body
     }
 }
 
@@ -248,6 +286,7 @@ mod tests {
         base_priority: 15,
         default_severity: Severity::High,
         explanation: "test prose",
+        body: "",
         requires_types: false,
         consistency: false,
         options: &[],
@@ -259,6 +298,7 @@ mod tests {
         base_priority: -5,
         default_severity: Severity::Low,
         explanation: "Lines longer than the configured limit are harder to scan and review.",
+        body: "",
         requires_types: false,
         consistency: false,
         options: &[OptionSpec {
@@ -287,7 +327,7 @@ mod tests {
 
     #[test]
     fn build_report_round_trips_metadata() {
-        let report = build_report(&WITH_OPTS_META);
+        let report = build_report(&WITH_OPTS_META, false);
         let s = serde_json::to_string(&report).expect("valid JSON");
         let parsed: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
         assert_eq!(parsed["id"], "Readability.MaxLineLength");

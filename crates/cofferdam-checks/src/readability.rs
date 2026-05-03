@@ -33,6 +33,7 @@ const MLL_META: CheckMeta = CheckMeta {
     base_priority: -5,
     default_severity: Severity::Low,
     explanation: "Lines longer than the configured limit are harder to scan and review.",
+    body: include_str!("../docs/Readability.MaxLineLength.md"),
     requires_types: false,
     consistency: false,
     options: MLL_OPTIONS,
@@ -114,6 +115,7 @@ const MFL_META: CheckMeta = CheckMeta {
     default_severity: Severity::Low,
     explanation:
         "Functions longer than the configured limit are hard to follow. Break them into smaller helpers.",
+    body: include_str!("../docs/Readability.MaxFunctionLength.md"),
     requires_types: false,
     consistency: false,
     options: MFL_OPTIONS,

@@ -157,7 +157,9 @@ enum Cmd {
     /// Print the metadata and prose explanation for one built-in check.
     /// Use this when a finding's check ID isn't self-explanatory and you
     /// want the rationale, default severity, configurable options, and
-    /// any relevant flags without leaving the terminal.
+    /// any relevant flags without leaving the terminal. Add `--full` to
+    /// also render the companion markdown body (motivation, examples,
+    /// config snippets) sourced from the check catalog.
     Explain {
         /// Dotted check ID, e.g. `Warning.TripleEquals`. If unknown,
         /// the CLI prints the closest matches (substring on the ID) or
@@ -170,6 +172,11 @@ enum Cmd {
         /// Pretty-print JSON output. No effect without `--robot`.
         #[arg(long)]
         pretty: bool,
+        /// Print the full companion markdown body after the metadata
+        /// summary. In `--robot` mode, includes a `body` field in the
+        /// JSON output. Frontmatter is stripped before display.
+        #[arg(long)]
+        full: bool,
     },
     /// Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore
     /// entries so a new project has a working `cofferdam check` after
@@ -302,10 +309,12 @@ fn main() -> ExitCode {
             check_id,
             robot,
             pretty,
+            full,
         } => explain::run(explain::ExplainArgs {
             check_id,
             robot,
             pretty,
+            full,
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {

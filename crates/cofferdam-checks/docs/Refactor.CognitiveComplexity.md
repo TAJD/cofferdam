@@ -1,0 +1,35 @@
+---
+id: Refactor.CognitiveComplexity
+category: Refactor
+base_priority: 10
+default_severity: Medium
+options: []
+---
+
+Sonar-style cognitive complexity per function — branching breaks plus a nesting penalty. Deeply nested code costs more than a long flat switch. Tracks `if`/`else if`, loops, ternaries, `switch`, `catch`, sequences of `&&`/`||`/`??`, and recursion-by-name. Default limit is `15`.
+
+```ts
+// flagged: nested branches stack a nesting penalty
+function classify(record: Record) {
+  if (record.kind === "user") {
+    if (record.active) {
+      for (const role of record.roles) {
+        if (role.permissions.includes("admin")) {
+          return "active-admin";
+        }
+      }
+    }
+  }
+  return "other";
+}
+```
+
+```ts
+// fix: flatten via early returns and helpers
+function classify(record: Record) {
+  if (record.kind !== "user" || !record.active) return "other";
+  return hasAdmin(record.roles) ? "active-admin" : "other";
+}
+```
+
+The hardcoded limit will move into `options` once the threshold becomes contentious in practice (no current bead).

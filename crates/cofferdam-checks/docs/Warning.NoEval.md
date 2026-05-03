@@ -1,0 +1,21 @@
+---
+id: Warning.NoEval
+category: Warning
+base_priority: 18
+default_severity: High
+options: []
+---
+
+`eval(...)` and `new Function(...)` execute arbitrary strings as code — both are universally banned in security-conscious codebases. The check has no opt-in for a reason. If you have a vetted, isolated use, suppress per-line with an inline directive. Aliased calls (`const f = eval; f("...")`) are out of scope — the AST-only pass matches bare identifiers only.
+
+```ts
+// flagged
+return eval(userInput);                       // direct eval
+return new Function("a", "b", body);          // eval-equivalent
+```
+
+```ts
+// fix: parse what you actually need, don't execute strings
+return JSON.parse(userInput);                 // for JSON
+return template(parameters);                  // for templating, use a real engine
+```

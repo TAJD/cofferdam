@@ -31,6 +31,7 @@ const MLL_META: CheckMeta = CheckMeta {
     id: "Readability.MaxLineLength",
     category: Category::Readability,
     base_priority: -5,
+    default_severity: Severity::Low,
     explanation: "Lines longer than the configured limit are harder to scan and review.",
     requires_types: false,
     consistency: false,
@@ -73,7 +74,7 @@ impl Check for MaxLineLength {
                         column: limit + 1,
                     },
                     priority: Priority(self.meta.base_priority),
-                    severity: Severity::Warning,
+                    severity: Severity::Medium,
                     related: Vec::new(),
                 });
             }
@@ -110,6 +111,7 @@ const MFL_META: CheckMeta = CheckMeta {
     id: "Readability.MaxFunctionLength",
     category: Category::Readability,
     base_priority: -5,
+    default_severity: Severity::Low,
     explanation:
         "Functions longer than the configured limit are hard to follow. Break them into smaller helpers.",
     requires_types: false,
@@ -172,7 +174,7 @@ impl<'a> MFLCollector<'a> {
                 file: self.file.path.clone(),
                 span,
                 priority: Priority(MFL_META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related: Vec::new(),
             });
         }

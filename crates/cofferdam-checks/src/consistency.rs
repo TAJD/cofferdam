@@ -2,7 +2,7 @@
 //! the canary; this stub exists so the engine has a Consistency entry to
 //! group during phase 0.
 
-use cofferdam_core::{Category, Check, CheckContext, CheckMeta, Issue, SourceFile};
+use cofferdam_core::{Category, Check, CheckContext, CheckMeta, Issue, Severity, SourceFile};
 
 pub struct QuoteStyleStub;
 
@@ -10,6 +10,7 @@ const META: CheckMeta = CheckMeta {
     id: "Consistency.QuoteStyle",
     category: Category::Consistency,
     base_priority: 0,
+    default_severity: Severity::Low,
     explanation: "Mixed quote styles within a project hurt scanability.",
     requires_types: false,
     consistency: true,

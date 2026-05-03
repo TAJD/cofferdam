@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use cofferdam_checks::all_builtins;
+use cofferdam_core::Severity;
 use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
@@ -18,6 +19,27 @@ enum OutputFormat {
     Text,
     /// Machine-readable JSON. Stable schema, no ANSI, no decorative output.
     Json,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum FailOnLevel {
+    Info,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<FailOnLevel> for Severity {
+    fn from(level: FailOnLevel) -> Self {
+        match level {
+            FailOnLevel::Info => Severity::Info,
+            FailOnLevel::Low => Severity::Low,
+            FailOnLevel::Medium => Severity::Medium,
+            FailOnLevel::High => Severity::High,
+            FailOnLevel::Critical => Severity::Critical,
+        }
+    }
 }
 
 const BANNER: &str = "\
@@ -91,6 +113,12 @@ enum Cmd {
         /// are silently dropped from the run.
         #[arg(long, value_name = "GIT-REF")]
         since: Option<String>,
+        /// Severity threshold for the exit-1 gate. Findings below this
+        /// level still print; the process only exits 1 if at least one
+        /// finding is at this level or above. Baselined findings never
+        /// trigger the gate.
+        #[arg(long, value_enum, value_name = "LEVEL", default_value_t = FailOnLevel::Medium)]
+        fail_on: FailOnLevel,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -152,6 +180,7 @@ fn main() -> ExitCode {
             config,
             no_config,
             since,
+            fail_on,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -164,6 +193,7 @@ fn main() -> ExitCode {
             config_path: config,
             no_config,
             since,
+            fail_on: fail_on.into(),
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {
@@ -190,6 +220,7 @@ struct CheckArgs {
     config_path: Option<PathBuf>,
     no_config: bool,
     since: Option<String>,
+    fail_on: Severity,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -205,6 +236,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         config_path,
         no_config,
         since: since_ref,
+        fail_on,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -271,10 +303,11 @@ fn run_check(args: CheckArgs) -> ExitCode {
         None => None,
     };
     let baseline_active = baseline_loaded.is_some();
-    // `--fail-on-new` is implicit whenever a baseline is active. Without
-    // a baseline it has no effect; we keep the flag for explicitness in
-    // CI scripts ("yes, we *intend* to gate on new").
-    let fail_mode_new_only = baseline_active || fail_on_new;
+    // `--fail-on-new` is documentation today — gating is governed by
+    // (severity >= fail_on) AND (baselined == false). Baselined findings
+    // never trigger the gate regardless of severity, so the new-only
+    // semantic is implicit. Keep the flag for explicitness in CI scripts.
+    let _ = fail_on_new;
 
     let (project_config, resolved_config_path) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
@@ -345,8 +378,14 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 println!("{}", s);
             }
         }
-        let new_count = tagged.iter().filter(|(_, b)| !*b).count();
-        if new_count == 0 {
+        // CI gate: only NEW (un-baselined) findings at or above
+        // `--fail-on` trigger exit 1. Baselined findings never gate
+        // regardless of severity.
+        let triggering = tagged
+            .iter()
+            .filter(|(issue, baselined)| !*baselined && issue.severity >= fail_on)
+            .count();
+        if triggering == 0 {
             ExitCode::SUCCESS
         } else {
             ExitCode::from(1)
@@ -365,13 +404,11 @@ fn run_check(args: CheckArgs) -> ExitCode {
                         println!("{}", s);
                     }
                 }
-                if issues.is_empty() {
+                // CI gate: any finding at or above `--fail-on` triggers
+                // exit 1. With no baseline, every finding counts as new.
+                let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+                if triggering == 0 {
                     ExitCode::SUCCESS
-                } else if fail_mode_new_only {
-                    // No baseline but `--fail-on-new` was passed: with
-                    // nothing to compare against, every finding is new,
-                    // so behaviour matches the no-baseline default.
-                    ExitCode::from(1)
                 } else {
                     ExitCode::from(1)
                 }

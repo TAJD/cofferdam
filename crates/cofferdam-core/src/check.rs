@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::AstView;
 use crate::corpus::CorpusIndex;
-use crate::issue::Issue;
+use crate::issue::{Issue, Severity};
 use crate::options::{CheckOptions, OptionSpec, EMPTY_OPTIONS};
 use crate::source::SourceFile;
 
@@ -63,6 +63,12 @@ pub struct CheckMeta {
     pub category: Category,
     /// Floor for the priority computation. Range -20..=20.
     pub base_priority: i8,
+    /// Default severity for findings emitted by this check. Users
+    /// override per-check via `[checks."X.Y"] severity = "..."` in
+    /// `cofferdam.toml`. The engine assigns this (or the override) to
+    /// every emitted `Issue.severity` in a post-pass — checks don't
+    /// need to set it themselves.
+    pub default_severity: Severity,
     pub explanation: &'static str,
     /// Type-aware checks (decision #4) — engine routes these to the
     /// ts-morph worker pool instead of the Rust pipeline.

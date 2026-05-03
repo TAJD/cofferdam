@@ -35,6 +35,7 @@ const META: CheckMeta = CheckMeta {
     id: "Design.MaxParameters",
     category: Category::Design,
     base_priority: 5,
+    default_severity: Severity::Medium,
     explanation: "Functions with too many parameters are hard to call correctly. Pass an options object instead.",
     requires_types: false,
     consistency: false,
@@ -90,7 +91,7 @@ impl<'a> Collector<'a> {
                 file: self.file.path.clone(),
                 span,
                 priority: Priority(META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related: Vec::new(),
             });
         }
@@ -153,6 +154,7 @@ const DEN_META: CheckMeta = CheckMeta {
     id: "Design.DuplicateExportName",
     category: Category::Design,
     base_priority: 6,
+    default_severity: Severity::Medium,
     explanation: "The same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got.",
     requires_types: false,
     consistency: false,
@@ -219,7 +221,7 @@ impl Check for DuplicateExportName {
                 file: primary.file,
                 span: primary.span,
                 priority: Priority(DEN_META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related,
             });
         }

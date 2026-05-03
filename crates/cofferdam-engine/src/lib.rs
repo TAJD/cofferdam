@@ -17,6 +17,8 @@ pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeMap;
+
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, Issue, Priority,
@@ -36,9 +38,15 @@ pub enum EngineError {
 pub struct Engine {
     checks: Vec<Box<dyn Check>>,
     /// Resolved options per check, parallel to `checks`. Built once
-    /// from each check's schema defaults; cd-4ms will overlay user
-    /// overrides from cofferdam.toml here before checks ever run.
+    /// from each check's schema defaults, with `cofferdam.toml`
+    /// overrides applied via `with_config`.
     options: Vec<CheckOptions>,
+    /// Resolved severity per check_id. Built from each check's
+    /// `meta.default_severity`, with `cofferdam.toml`
+    /// `[checks."X.Y"] severity = "..."` overrides applied. The
+    /// post-pass in `analyze_with_text` stamps each emitted issue with
+    /// the value from this map — checks don't set severity themselves.
+    severities: BTreeMap<String, Severity>,
 }
 
 impl Engine {
@@ -47,14 +55,26 @@ impl Engine {
             .iter()
             .map(|c| CheckOptions::defaults_from(c.meta().options))
             .collect();
-        Self { checks, options }
+        let severities = checks
+            .iter()
+            .map(|c| {
+                let meta = c.meta();
+                (meta.id.to_string(), meta.default_severity)
+            })
+            .collect();
+        Self {
+            checks,
+            options,
+            severities,
+        }
     }
 
-    /// Build an engine with per-check option overrides sourced from a
-    /// `ProjectConfig` (typically loaded from `cofferdam.toml`). Unknown
-    /// check IDs in the config are not treated as errors here — the CLI
-    /// surfaces them via `config::unknown_check_ids` so typos are
-    /// visible without breaking the build.
+    /// Build an engine with per-check option overrides AND severity
+    /// overrides sourced from a `ProjectConfig` (typically loaded from
+    /// `cofferdam.toml`). Unknown check IDs in the config are not
+    /// treated as errors here — the CLI surfaces them via
+    /// `config::unknown_check_ids` so typos are visible without
+    /// breaking the build.
     #[allow(clippy::result_large_err)] // matches config::options_for
     pub fn with_config(
         checks: Vec<Box<dyn Check>>,
@@ -62,6 +82,7 @@ impl Engine {
         config_path: &Path,
     ) -> Result<Self, ConfigError> {
         let mut options = Vec::with_capacity(checks.len());
+        let mut severities = BTreeMap::new();
         for check in &checks {
             let meta = check.meta();
             options.push(config::options_for(
@@ -70,8 +91,18 @@ impl Engine {
                 meta.id,
                 meta.options,
             )?);
+            let sev = config
+                .severity_overrides
+                .get(meta.id)
+                .copied()
+                .unwrap_or(meta.default_severity);
+            severities.insert(meta.id.to_string(), sev);
         }
-        Ok(Self { checks, options })
+        Ok(Self {
+            checks,
+            options,
+            severities,
+        })
     }
 
     /// Run all configured checks against every file in `paths`.
@@ -157,6 +188,19 @@ impl Engine {
             }
         });
 
+        // Severity post-pass (cd-t1a): stamp each issue with its
+        // configured severity. Checks emit Severity::Medium as a
+        // placeholder; the engine is the single source of truth for
+        // what severity each check has. Engine-internal issues like
+        // `Warning.ParseError` aren't in the per-check map; their
+        // severity (Critical, set in `parse_error_issue`) is left
+        // untouched.
+        for issue in &mut issues {
+            if let Some(sev) = self.severities.get(&issue.check_id) {
+                issue.severity = *sev;
+            }
+        }
+
         issues.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
@@ -219,7 +263,7 @@ fn parse_error_issue(file: &SourceFile, diagnostics: &[oxc_diagnostics::OxcDiagn
             column: 1,
         },
         priority: Priority(20),
-        severity: Severity::Error,
+        severity: Severity::Critical,
         related: Vec::new(),
     }
 }

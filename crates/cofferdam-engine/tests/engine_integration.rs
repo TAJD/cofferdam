@@ -53,7 +53,7 @@ fn engine_analyze_valid_typescript_file() {
     // Valid code might still trigger some checks; just verify no crash
     assert!(issues
         .iter()
-        .all(|i| i.severity != Severity::Error || !i.check_id.contains("ParseError")));
+        .all(|i| i.severity != Severity::Critical || !i.check_id.contains("ParseError")));
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn engine_runs_checks_on_non_fatal_parse_errors() {
     // without panicking
     assert!(issues
         .iter()
-        .all(|i| i.severity != Severity::Error || !i.check_id.contains("ParseError")));
+        .all(|i| i.severity != Severity::Critical || !i.check_id.contains("ParseError")));
 }
 
 // ============================================================

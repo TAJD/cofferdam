@@ -220,11 +220,7 @@ fn category_str(cat: Option<Category>) -> &'static str {
 }
 
 fn severity_str(sev: Severity) -> &'static str {
-    match sev {
-        Severity::Info => "info",
-        Severity::Warning => "warning",
-        Severity::Error => "error",
-    }
+    sev.as_str()
 }
 
 /// Forward-slash normalize. Windows native paths use `\`, but agents and
@@ -261,7 +257,7 @@ mod tests {
             },
             message: "test message".into(),
             check_id: check_id.into(),
-            severity: Severity::Warning,
+            severity: Severity::Medium,
             priority: Priority(10),
             related: Vec::new(),
         }

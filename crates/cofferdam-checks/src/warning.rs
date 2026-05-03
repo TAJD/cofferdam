@@ -21,6 +21,7 @@ const META: CheckMeta = CheckMeta {
     id: "Warning.TripleEquals",
     category: Category::Warning,
     base_priority: 15,
+    default_severity: Severity::High,
     explanation: "`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.",
     requires_types: false,
     consistency: false,
@@ -75,7 +76,7 @@ impl<'a> Visit<'a> for Collector<'a> {
                 file: self.file.path.clone(),
                 span,
                 priority: Priority(META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related: Vec::new(),
             });
         }

@@ -52,6 +52,7 @@ const CYC_META: CheckMeta = CheckMeta {
     id: "Refactor.CyclomaticComplexity",
     category: Category::Refactor,
     base_priority: 8,
+    default_severity: Severity::Medium,
     explanation: "McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.",
     requires_types: false,
     consistency: false,
@@ -106,7 +107,7 @@ impl<'a> CycVisitor<'a> {
                 file: self.file.path.clone(),
                 span,
                 priority: Priority(CYC_META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related: Vec::new(),
             });
         }
@@ -221,6 +222,7 @@ const COG_META: CheckMeta = CheckMeta {
     id: "Refactor.CognitiveComplexity",
     category: Category::Refactor,
     base_priority: 10,
+    default_severity: Severity::Medium,
     explanation: "Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.",
     requires_types: false,
     consistency: false,
@@ -293,7 +295,7 @@ impl<'a> CogVisitor<'a> {
                 file: self.file.path.clone(),
                 span,
                 priority: Priority(COG_META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related: Vec::new(),
             });
         }
@@ -564,6 +566,7 @@ const DUP_META: CheckMeta = CheckMeta {
     id: "Refactor.DuplicateBlock",
     category: Category::Refactor,
     base_priority: 12,
+    default_severity: Severity::Medium,
     explanation: "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
     requires_types: false,
     consistency: false,
@@ -694,7 +697,7 @@ impl Check for DuplicateBlock {
                 file: primary.file.clone(),
                 span: primary.span,
                 priority: Priority(DUP_META.base_priority),
-                severity: Severity::Warning,
+                severity: Severity::Medium,
                 related,
             });
         }

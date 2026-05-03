@@ -17,7 +17,7 @@ pub mod span_util;
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{Category, Check, CheckContext, CheckMeta, FinalizeContext};
 pub use corpus::{CorpusIndex, CorpusKey};
-pub use issue::{Issue, Priority, RelatedSpan, Severity, Span};
+pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};
 pub use lines::{LineView, Lines};
 pub use options::{
     validate_options, CheckOptions, OptionDefault, OptionKind, OptionSpec, OptionValue,

@@ -32,17 +32,87 @@ impl Priority {
     pub const LOWER: Priority = Priority(-15);
 }
 
-/// Configured severity. CI gating only — never sort order.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Configured severity. Five-level axis used by `--fail-on=<level>` to
+/// gate CI. Variant order is the severity order — `Ord` derives match
+/// declaration order, so `severity >= threshold` works directly.
+///
+/// Severity is *configured* (via `cofferdam.toml` per-check overrides),
+/// distinct from `Priority` (which is *computed* and only sorts the
+/// report). Don't collapse the two — README design rule.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// Informational. Never fails CI.
     Info,
-    /// Warning. Fails CI when `--strict` is set. Default when no override applies.
+    /// Low-impact finding (style, polish). Fails CI only at `--fail-on=low`.
+    Low,
+    /// Default. Most checks fall here. Fails CI at `--fail-on=medium` (the default).
     #[default]
-    Warning,
-    /// Error. Always fails CI (non-zero exit).
-    Error,
+    Medium,
+    /// High-impact finding (likely correctness or design problem).
+    High,
+    /// Critical — almost always a real bug.
+    Critical,
+}
+
+impl Severity {
+    /// Lowercase string form, matching the serde `rename_all = "lowercase"`
+    /// representation. Useful for formatters that don't want to round-trip
+    /// through serde just to print the variant name.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Low => "low",
+            Severity::Medium => "medium",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        }
+    }
+
+    /// Parse a severity from a lowercase string. Used by the CLI's
+    /// `--fail-on=<level>` parser and by `cofferdam.toml`'s per-check
+    /// `severity = "..."` override.
+    pub fn parse(s: &str) -> Result<Self, ParseSeverityError> {
+        match s {
+            "info" => Ok(Severity::Info),
+            "low" => Ok(Severity::Low),
+            "medium" => Ok(Severity::Medium),
+            "high" => Ok(Severity::High),
+            "critical" => Ok(Severity::Critical),
+            other => Err(ParseSeverityError {
+                input: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Returned by `Severity::parse` when the input doesn't match a known
+/// level. The error carries the offending input so the caller can
+/// quote it back in a user-facing diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseSeverityError {
+    pub input: String,
+}
+
+impl std::fmt::Display for ParseSeverityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown severity `{}` (expected info | low | medium | high | critical)",
+            self.input
+        )
+    }
+}
+
+impl std::error::Error for ParseSeverityError {}
+
+impl std::str::FromStr for Severity {
+    type Err = ParseSeverityError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Severity::parse(s)
+    }
 }
 
 /// Source span, byte offsets into `SourceFile::text` plus 1-based line/col

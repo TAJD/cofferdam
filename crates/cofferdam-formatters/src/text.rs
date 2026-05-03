@@ -55,8 +55,9 @@ impl TextFormatter {
                 let tag = if baselined { " [baselined]" } else { "" };
                 let _ = writeln!(
                     out,
-                    "  [{:>3}] {}:{}:{}  {}  ({}){}",
+                    "  [{:>3}] [{:>8}] {}:{}:{}  {}  ({}){}",
                     issue.priority.0,
+                    issue.severity.as_str(),
                     normalize_path(&issue.file),
                     issue.span.line,
                     issue.span.column,
@@ -141,7 +142,7 @@ mod tests {
             },
             message: "test message".into(),
             check_id: check_id.into(),
-            severity: Severity::Warning,
+            severity: Severity::Medium,
             priority: Priority(10),
             related: Vec::new(),
         }

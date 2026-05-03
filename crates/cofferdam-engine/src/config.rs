@@ -40,26 +40,29 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cofferdam_core::{validate_options, CheckOptions, OptionsError, RawOptionValue};
+use cofferdam_core::{validate_options, CheckOptions, OptionsError, RawOptionValue, Severity};
 use serde::Deserialize;
 
 /// Filename loaders look for during walk-up discovery.
 pub const FILE_NAME: &str = "cofferdam.toml";
 
 /// Meta-keys that may appear inside `[checks."X.Y"]` blocks but aren't
-/// per-check options. They're forward-compatible placeholders for cd-t1a
-/// (severity gating). Stripped before per-check option validation; a
-/// value present here today is silently accepted but does not yet alter
-/// behaviour.
+/// per-check options. `severity` (cd-t1a) is now first-class — extracted
+/// into `ProjectConfig::severity_overrides` rather than passed through
+/// to `validate_options`. `enabled` is still a forward-compatible
+/// placeholder (no behaviour wired yet).
 const META_KEYS: &[&str] = &["severity", "enabled"];
 
-/// Parsed project config: per-check raw option bags, plus a list of any
-/// check IDs that the config referenced but the engine does not have
-/// registered (so the CLI can surface a friendly warning without
-/// failing the build over a typo).
+/// Parsed project config: per-check raw option bags + per-check
+/// severity overrides. Unknown check IDs are stored verbatim and
+/// surfaced via `unknown_check_ids` so the CLI can warn without
+/// failing the build over a typo.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectConfig {
     pub checks: BTreeMap<String, BTreeMap<String, RawOptionValue>>,
+    /// Per-check severity overrides parsed from `[checks."X.Y"] severity = "..."`.
+    /// Keyed by check_id. Engine consults this in its severity post-pass.
+    pub severity_overrides: BTreeMap<String, Severity>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +87,19 @@ pub enum ConfigError {
         check_id: String,
         key: String,
         reason: &'static str,
+    },
+    #[error("config {path}: in [checks.\"{check_id}\"], severity must be a string but got {got}")]
+    SeverityNotString {
+        path: PathBuf,
+        check_id: String,
+        got: &'static str,
+    },
+    #[error("config {path}: in [checks.\"{check_id}\"], {source}")]
+    BadSeverity {
+        path: PathBuf,
+        check_id: String,
+        #[source]
+        source: cofferdam_core::ParseSeverityError,
     },
     #[error("config {path}: option validation failed for [checks.\"{check_id}\"]: {source}")]
     Validate {
@@ -147,6 +163,7 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
     })?;
 
     let mut checks: BTreeMap<String, BTreeMap<String, RawOptionValue>> = BTreeMap::new();
+    let mut severity_overrides: BTreeMap<String, Severity> = BTreeMap::new();
     for (check_id, value) in doc.checks {
         let table = match value {
             toml::Value::Table(t) => t,
@@ -162,11 +179,31 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
 
         let mut options: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         for (key, val) in table {
-            // Meta-keys (severity, enabled) are accepted today as
-            // forward-compatible placeholders for cd-t1a but stripped
-            // before per-check option validation so they don't trigger
-            // an UnknownKey error.
+            // Meta-keys are extracted into their own slots, not passed
+            // through to per-check option validation (which would
+            // reject them as UnknownKey).
+            if key == "severity" {
+                let s = match &val {
+                    toml::Value::String(s) => s.clone(),
+                    other => {
+                        return Err(ConfigError::SeverityNotString {
+                            path: path.to_path_buf(),
+                            check_id: check_id.clone(),
+                            got: toml_kind(other),
+                        });
+                    }
+                };
+                let sev = Severity::parse(&s).map_err(|source| ConfigError::BadSeverity {
+                    path: path.to_path_buf(),
+                    check_id: check_id.clone(),
+                    source,
+                })?;
+                severity_overrides.insert(check_id.clone(), sev);
+                continue;
+            }
             if META_KEYS.contains(&key.as_str()) {
+                // `enabled` (and any future placeholders) — silently
+                // accepted, no behaviour wired today.
                 continue;
             }
             let raw = toml_to_raw(&val).ok_or_else(|| ConfigError::UnsupportedValue {
@@ -180,7 +217,22 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         checks.insert(check_id, options);
     }
 
-    Ok(ProjectConfig { checks })
+    Ok(ProjectConfig {
+        checks,
+        severity_overrides,
+    })
+}
+
+fn toml_kind(v: &toml::Value) -> &'static str {
+    match v {
+        toml::Value::String(_) => "string",
+        toml::Value::Integer(_) => "integer",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "bool",
+        toml::Value::Array(_) => "array",
+        toml::Value::Table(_) => "table",
+        toml::Value::Datetime(_) => "datetime",
+    }
 }
 
 /// Convert a `toml::Value` to a `RawOptionValue`. `None` for any TOML
@@ -268,11 +320,11 @@ limit = 120
     }
 
     #[test]
-    fn meta_keys_are_stripped() {
+    fn meta_keys_are_separated_from_options() {
         let raw = r#"
 [checks."Readability.MaxLineLength"]
 limit = 120
-severity = "warning"
+severity = "high"
 enabled = true
 "#;
         let cfg = parse(Path::new("test.toml"), raw).expect("parse");
@@ -280,10 +332,17 @@ enabled = true
             .checks
             .get("Readability.MaxLineLength")
             .expect("present");
+        // `limit` flows through to the per-check option bag; `severity`
+        // goes to `severity_overrides`; `enabled` is silently accepted
+        // (no behaviour wired today).
         assert_eq!(bag.len(), 1);
         assert!(bag.contains_key("limit"));
         assert!(!bag.contains_key("severity"));
         assert!(!bag.contains_key("enabled"));
+        assert_eq!(
+            cfg.severity_overrides.get("Readability.MaxLineLength"),
+            Some(&Severity::High)
+        );
     }
 
     #[test]
@@ -294,6 +353,26 @@ weird = 1.5
 "#;
         let err = parse(Path::new("test.toml"), raw).unwrap_err();
         assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn bad_severity_string_is_rejected() {
+        let raw = r#"
+[checks."X.Y"]
+severity = "extreme"
+"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::BadSeverity { .. }));
+    }
+
+    #[test]
+    fn non_string_severity_is_rejected() {
+        let raw = r#"
+[checks."X.Y"]
+severity = 5
+"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::SeverityNotString { .. }));
     }
 
     #[test]
@@ -308,7 +387,10 @@ weird = 1.5
         bag.insert("limit".to_string(), RawOptionValue::Int(120));
         let mut checks = BTreeMap::new();
         checks.insert("Readability.MaxLineLength".to_string(), bag);
-        let project = ProjectConfig { checks };
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+        };
 
         let opts = options_for(
             &project,
@@ -334,7 +416,10 @@ weird = 1.5
         bag.insert("limit".to_string(), RawOptionValue::String("nope".into()));
         let mut checks = BTreeMap::new();
         checks.insert("X.Y".to_string(), bag);
-        let project = ProjectConfig { checks };
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+        };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
         assert!(matches!(err, ConfigError::Validate { .. }));
@@ -345,7 +430,10 @@ weird = 1.5
         let mut checks = BTreeMap::new();
         checks.insert("Readability.MaxLineLength".to_string(), BTreeMap::new());
         checks.insert("Bogus.NotReal".to_string(), BTreeMap::new());
-        let project = ProjectConfig { checks };
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+        };
 
         let registered = ["Readability.MaxLineLength"];
         let unknown = unknown_check_ids(&project, &registered);

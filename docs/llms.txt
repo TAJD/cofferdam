@@ -1,0 +1,23 @@
+# Cofferdam
+
+> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. Five-category model: Consistency, Design, Readability, Refactor, Warning. Priority-sorted output, baseline workflow, CI-friendly.
+
+## Install
+
+`npm install --save-dev cofferdam`
+
+## Catalog
+
+- [Machine-readable index](https://tajd.github.io/cofferdam/checks.json): the canonical artifact. JSON, schema_version 1, sorted by check id. AI agents should consume this.
+- [Human-readable catalog](https://tajd.github.io/cofferdam/checks/): grouped by category, with prose, examples, and configuration.
+- [CLI reference](https://tajd.github.io/cofferdam/reference/cli): every flag of every subcommand.
+
+## Subcommands
+
+- `cofferdam check [paths...]`: run all checks. The default workflow.
+- `cofferdam baseline write|check`: snapshot accepted findings; gate CI on new ones only.
+- `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.
+- `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.
+- `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.
+- `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.
+- `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).

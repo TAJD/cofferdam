@@ -27,6 +27,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Verify auto-generated docs are up to date
+        run: cargo run -p cofferdam-cli --quiet -- gen-docs --check
 
   coverage:
     runs-on: ubuntu-latest

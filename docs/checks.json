@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "generated_by": "cofferdam gen-docs",
+  "cofferdam_version": "0.1.4",
+  "checks": [
+    {
+      "id": "Consistency.QuoteStyle",
+      "category": "Consistency",
+      "base_priority": -5,
+      "default_severity": "Info",
+      "explanation": "Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.",
+      "body": "---\nid: Consistency.QuoteStyle\ncategory: Consistency\nbase_priority: -5\ndefault_severity: Info\noptions: []\n---\n\nMixed quote styles within a project hurt scannability. The full implementation is gated on the engine's two-pass mode (cd-d1y): pass 1 learns the dominant quote style across the corpus; pass 2 flags deviations. Today this is a stub that emits no findings.\n",
+      "requires_types": false,
+      "consistency": true,
+      "options": []
+    },
+    {
+      "id": "Design.DuplicateExportName",
+      "category": "Design",
+      "base_priority": 6,
+      "default_severity": "Medium",
+      "explanation": "The same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got.",
+      "body": "---\nid: Design.DuplicateExportName\ncategory: Design\nbase_priority: 6\ndefault_severity: Medium\noptions: []\n---\n\nThe same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got. The check runs in the engine's `finalize` pass — per-file `run` collects export names into the shared corpus, then `finalize` groups by name and emits one `Issue` per duplicate set with the canonical occurrence as the primary span and the rest as `related: Vec<RelatedSpan>`.\n\n```ts\n// src/users.ts\nexport function format(u: User) { /* ... */ }   // flagged\n\n// src/posts.ts\nexport function format(p: Post) { /* ... */ }   // also flagged (related)\n```\n\n```ts\n// fix: namespace, rename, or pick one canonical home\nexport function formatUser(u: User) { /* ... */ }\nexport function formatPost(p: Post) { /* ... */ }\n```\n\n```toml\n# cofferdam.toml\n[checks.\"Design.DuplicateExportName\"]\nseverity = \"low\"   # demote to info-only if your project relies on barrel collisions\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Design.MaxParameters",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Medium",
+      "explanation": "Functions with too many parameters are hard to call correctly. Pass an options object instead.",
+      "body": "---\nid: Design.MaxParameters\ncategory: Design\nbase_priority: 5\ndefault_severity: Medium\noptions: [limit]\n---\n\nFunctions with too many parameters are hard to call correctly: callers can't remember positional order, and adding a sixth parameter breaks every call site. Pass an options object instead.\n\n```ts\n// flagged: 7 parameters\nfunction createUser(\n  id: string,\n  name: string,\n  email: string,\n  role: Role,\n  team: string,\n  createdBy: string,\n  notify: boolean,\n) { /* ... */ }\n```\n\n```ts\n// fix: collapse into an options object\ninterface CreateUserInput {\n  id: string;\n  name: string;\n  email: string;\n  role: Role;\n  team: string;\n  createdBy: string;\n  notify?: boolean;\n}\nfunction createUser(input: CreateUserInput) { /* ... */ }\n```\n\n```toml\n[checks.\"Design.MaxParameters\"]\nlimit = 6           # bump to 6 if your codebase has earned it\nseverity = \"medium\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "limit",
+          "kind": "integer",
+          "doc": "maximum number of parameters per function signature",
+          "default": 5
+        }
+      ]
+    },
+    {
+      "id": "Readability.MaxFunctionLength",
+      "category": "Readability",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "Functions longer than the configured limit are hard to follow. Break them into smaller helpers.",
+      "body": "---\nid: Readability.MaxFunctionLength\ncategory: Readability\nbase_priority: -5\ndefault_severity: Low\noptions: [limit]\n---\n\nFunctions longer than the configured limit are hard to follow. Break them into smaller helpers. The metric counts lines in the function body, not the whole declaration.\n\n```ts\n// flagged: body > 50 lines\nfunction processOrder(order: Order) {\n  // ... 80 lines of validation, pricing, side effects, and persistence\n}\n```\n\n```ts\n// fix: extract pure helpers with single responsibilities\nfunction processOrder(order: Order) {\n  const validated = validateOrder(order);\n  const priced = priceOrder(validated);\n  return persistOrder(priced);\n}\n```\n\n```toml\n[checks.\"Readability.MaxFunctionLength\"]\nlimit = 80\nseverity = \"low\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "limit",
+          "kind": "integer",
+          "doc": "maximum function body length in lines",
+          "default": 50
+        }
+      ]
+    },
+    {
+      "id": "Readability.MaxLineLength",
+      "category": "Readability",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "Lines longer than the configured limit are harder to scan and review.",
+      "body": "---\nid: Readability.MaxLineLength\ncategory: Readability\nbase_priority: -5\ndefault_severity: Low\noptions: [limit]\n---\n\nLines longer than the configured limit are harder to scan and review. The check is a pure text-line scan — no AST traversal, so it runs even when a file fails to parse.\n\n```ts\n// flagged: > 120 columns\nconst config = { name: \"very long literal\", flags: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"], description: \"...\" };\n```\n\n```ts\n// fix: break across lines\nconst config = {\n  name: \"very long literal\",\n  flags: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"],\n  description: \"...\",\n};\n```\n\n```toml\n[checks.\"Readability.MaxLineLength\"]\nlimit = 100\nseverity = \"info\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "limit",
+          "kind": "integer",
+          "doc": "maximum line length in bytes",
+          "default": 120
+        }
+      ]
+    },
+    {
+      "id": "Refactor.CognitiveComplexity",
+      "category": "Refactor",
+      "base_priority": 10,
+      "default_severity": "Medium",
+      "explanation": "Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.",
+      "body": "---\nid: Refactor.CognitiveComplexity\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\nSonar-style cognitive complexity per function — branching breaks plus a nesting penalty. Deeply nested code costs more than a long flat switch. Tracks `if`/`else if`, loops, ternaries, `switch`, `catch`, sequences of `&&`/`||`/`??`, and recursion-by-name. Default limit is `15`.\n\n```ts\n// flagged: nested branches stack a nesting penalty\nfunction classify(record: Record) {\n  if (record.kind === \"user\") {\n    if (record.active) {\n      for (const role of record.roles) {\n        if (role.permissions.includes(\"admin\")) {\n          return \"active-admin\";\n        }\n      }\n    }\n  }\n  return \"other\";\n}\n```\n\n```ts\n// fix: flatten via early returns and helpers\nfunction classify(record: Record) {\n  if (record.kind !== \"user\" || !record.active) return \"other\";\n  return hasAdmin(record.roles) ? \"active-admin\" : \"other\";\n}\n```\n\nThe hardcoded limit will move into `options` once the threshold becomes contentious in practice (no current bead).\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Refactor.CyclomaticComplexity",
+      "category": "Refactor",
+      "base_priority": 8,
+      "default_severity": "Medium",
+      "explanation": "McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.",
+      "body": "---\nid: Refactor.CyclomaticComplexity\ncategory: Refactor\nbase_priority: 8\ndefault_severity: Medium\noptions: []\n---\n\nMcCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`.\n\nCyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures \"how many test cases do I need\", cognitive captures \"how hard is this to read\". Run them together; the worst offenders fail both.\n\n```ts\n// flagged: 11 independent paths via &&/case/if combinations\nfunction dispatch(event: Event) {\n  switch (event.kind) {\n    case \"create\": return event.payload && event.payload.id ? handleCreate(event) : null;\n    case \"update\": return event.payload && event.payload.id ? handleUpdate(event) : null;\n    case \"delete\": return event.payload && event.payload.id ? handleDelete(event) : null;\n    case \"ping\": return null;\n    default: return null;\n  }\n}\n```\n\n```ts\n// fix: dispatch table flattens the case explosion\nconst handlers = { create: handleCreate, update: handleUpdate, delete: handleDelete } as const;\nfunction dispatch(event: Event) {\n  const handler = handlers[event.kind as keyof typeof handlers];\n  if (!handler || !event.payload?.id) return null;\n  return handler(event);\n}\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Refactor.DuplicateBlock",
+      "category": "Refactor",
+      "base_priority": 12,
+      "default_severity": "Medium",
+      "explanation": "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
+      "body": "---\nid: Refactor.DuplicateBlock\ncategory: Refactor\nbase_priority: 12\ndefault_severity: Medium\noptions: [min_statements, min_chars, include_tokens, include_ast]\n---\n\nRuns of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper. Canonicalisation maps identifier tokens to per-window local indices so renamed copies still match. Minimum window is `6` consecutive statements (and `80` characters) to keep noise low. Cross-file: per-file `run` writes fingerprints into the shared corpus; `finalize` groups by hash and emits one `Issue` per duplicate set with `related` spans pointing at every other occurrence.\n\n```ts\n// src/orders.ts:42\nconst items = parseItems(input);\nconst validated = validateItems(items);\nconst priced = priceItems(validated, currency);\nconst taxed = applyTax(priced, region);\nconst total = sumItems(taxed);\nreturn { items: taxed, total };\n```\n\n```ts\n// src/quotes.ts:88 — same shape, renamed: flagged as related\nconst products = parseItems(input);\nconst checkedProducts = validateItems(products);\nconst pricedProducts = priceItems(checkedProducts, currency);\nconst taxedProducts = applyTax(pricedProducts, region);\nconst total = sumItems(taxedProducts);\nreturn { items: taxedProducts, total };\n```\n\n```ts\n// fix: extract once\nexport function pipeline(input: RawInput, currency: Currency, region: Region) {\n  const items = parseItems(input);\n  const validated = validateItems(items);\n  const priced = priceItems(validated, currency);\n  const taxed = applyTax(priced, region);\n  return { items: taxed, total: sumItems(taxed) };\n}\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "min_statements",
+          "kind": "integer",
+          "doc": "minimum number of consecutive statements required to flag a duplicate block",
+          "default": 6
+        },
+        {
+          "id": "min_chars",
+          "kind": "integer",
+          "doc": "minimum raw byte length of a duplicate window; prevents trivial single-liner runs from firing",
+          "default": 80
+        },
+        {
+          "id": "include_tokens",
+          "kind": "boolean",
+          "doc": "also run a sliding token-window pass that catches duplicates spanning non-statement boundaries",
+          "default": false
+        },
+        {
+          "id": "include_ast",
+          "kind": "boolean",
+          "doc": "run the AST statement-window pass (disable to use token-mode only)",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "Refactor.PreferNullishCoalescing",
+      "category": "Refactor",
+      "base_priority": 3,
+      "default_severity": "Low",
+      "explanation": "`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`.",
+      "body": "---\nid: Refactor.PreferNullishCoalescing\ncategory: Refactor\nbase_priority: 3\ndefault_severity: Low\noptions: []\n---\n\n`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`. Today the check ships the narrow high-confidence shape: `member-access || default-literal` (string / number / bool / `null` / bare `undefined` / array literal / object literal). Bare-identifier LHS, function-call LHS, and arithmetic LHS are deliberately not flagged — they're too often genuine alt-branch logic without type info. The rule broadens once the type-aware tier lands.\n\n```ts\n// flagged\nconst timeout = config.timeout || 5000;     // 0 should NOT fall through\nconst name = user.name || \"anonymous\";      // \"\" should NOT fall through\n```\n\n```ts\n// fix\nconst timeout = config.timeout ?? 5000;\nconst name = user.name ?? \"anonymous\";\n```\n\n```ts\n// not flagged (intentional falsy fallthrough)\nconst flag = isAdmin || isOwner;            // bare identifier — alt branch\nconst value = compute() || 0;              // call result — return type ambiguous\nconst sum = (a + b) || 1;                  // arithmetic — clearly wants falsy\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Refactor.PreferOptionalChain",
+      "category": "Refactor",
+      "base_priority": 5,
+      "default_severity": "Low",
+      "explanation": "`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.",
+      "body": "---\nid: Refactor.PreferOptionalChain\ncategory: Refactor\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\n`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on `null`/`undefined`. The check flags `lhs && rhs` where the LHS is a \"safe to repeat\" expression (identifier, `this`, or a pure member chain — never contains a `CallExpression` or `NewExpression`) and the RHS is a member access (or call on a member access) whose object span renders to the same source bytes as the LHS span.\n\n```ts\n// flagged\nreturn user && user.profile;\nreturn user && user.profile && user.profile.name;\nreturn arr && arr[0];\n```\n\n```ts\n// fix\nreturn user?.profile;\nreturn user?.profile?.name;\nreturn arr?.[0];\n```\n\n```ts\n// not flagged (LHS is a call — rewriting would halve the call count)\nreturn get() && get().profile;\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Refactor.UnusedVariable",
+      "category": "Refactor",
+      "base_priority": 10,
+      "default_severity": "Low",
+      "explanation": "Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).",
+      "body": "---\nid: Refactor.UnusedVariable\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Low\noptions: []\n---\n\nVariables declared but never read are dead code. They add noise, mislead readers, and often indicate a logic error — the value was computed but never actually used. The check covers `let`/`const`/`var` bindings, function declarations, class declarations, catch-clause variables, and function parameters.\n\n```ts\n// flagged: count is declared but never read\nfunction summarise(items: Item[]) {\n  const count = items.length;   // unused\n  return items.map(i => i.name).join(\", \");\n}\n```\n\n```ts\n// fix: remove or use the binding\nfunction summarise(items: Item[]) {\n  return items.map(i => i.name).join(\", \");\n}\n```\n\n```ts\n// opt-out: prefix with _ to signal intentionally unused\nfunction handler(_event: Event, context: Context) {\n  return context.respond(\"ok\");\n}\n```\n\nThe check skips: ESM imports (tree-shaker territory), type-only symbols (TypeAlias, Interface, Enum — deferred to the type-aware tier), rest-pattern bindings (`...rest`), and all module-scope (top-level) bindings (which may be exported without the export being visible to the AST-only pass). Use the `_` prefix convention to opt out of flagging for positional parameters you cannot remove.\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Warning.NoConsoleLog",
+      "category": "Warning",
+      "base_priority": -10,
+      "default_severity": "Low",
+      "explanation": "`console.X(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.",
+      "body": "---\nid: Warning.NoConsoleLog\ncategory: Warning\nbase_priority: -10\ndefault_severity: Low\noptions: []\n---\n\n`console.X(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI. The check matches every method on `console` (`log`, `info`, `warn`, `error`, `debug`, `trace`, …) so projects can suppress per-call if they genuinely route errors via `console.error`. Bare-identifier match only — aliased calls (`const c = console; c.log(...)`) escape detection until the type-aware pass.\n\n```ts\n// flagged\nconsole.log(\"debug:\", value);\nconsole.error(\"failed:\", err);\n```\n\n```ts\n// fix: route through a logger that strips in production\nimport { logger } from \"./logger\";\nlogger.debug(\"debug:\", value);\nlogger.error(\"failed:\", err);\n```\n\n```toml\n# Demote to info-only if you genuinely use console.error in error paths.\n[checks.\"Warning.NoConsoleLog\"]\nseverity = \"info\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Warning.NoDebugger",
+      "category": "Warning",
+      "base_priority": 10,
+      "default_severity": "Medium",
+      "explanation": "`debugger` statements halt execution under attached devtools. Remove before shipping.",
+      "body": "---\nid: Warning.NoDebugger\ncategory: Warning\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\n`debugger` statements halt execution under attached devtools. Always a debugging leftover in shipped code — there's no benign use case in production builds. The fix is mechanical: delete the line.\n\n```ts\n// flagged\nfunction inspect(x: unknown) {\n  debugger;\n  return x;\n}\n```\n\n```ts\n// fix\nfunction inspect(x: unknown) {\n  return x;\n}\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Warning.NoEval",
+      "category": "Warning",
+      "base_priority": 18,
+      "default_severity": "High",
+      "explanation": "`eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.",
+      "body": "---\nid: Warning.NoEval\ncategory: Warning\nbase_priority: 18\ndefault_severity: High\noptions: []\n---\n\n`eval(...)` and `new Function(...)` execute arbitrary strings as code — both are universally banned in security-conscious codebases. The check has no opt-in for a reason. If you have a vetted, isolated use, suppress per-line with an inline directive. Aliased calls (`const f = eval; f(\"...\")`) are out of scope — the AST-only pass matches bare identifiers only.\n\n```ts\n// flagged\nreturn eval(userInput);                       // direct eval\nreturn new Function(\"a\", \"b\", body);          // eval-equivalent\n```\n\n```ts\n// fix: parse what you actually need, don't execute strings\nreturn JSON.parse(userInput);                 // for JSON\nreturn template(parameters);                  // for templating, use a real engine\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Warning.TripleEquals",
+      "category": "Warning",
+      "base_priority": 15,
+      "default_severity": "High",
+      "explanation": "`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.",
+      "body": "---\nid: Warning.TripleEquals\ncategory: Warning\nbase_priority: 15\ndefault_severity: High\noptions: []\n---\n\n`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. Walks every `BinaryExpression` and flags the equality operators.\n\n```ts\n// flagged\nif (a == b) return true;\nif (a != b) return false;\n```\n\n```ts\n// fix\nif (a === b) return true;\nif (a !== b) return false;\n```\n\n```ts\n// not relevant — relational operators don't coerce in the same way\nif (a < b) return true;\nif (a >= b) return false;\n```\n\n```toml\n# The default (high) gates CI — explicit override only useful to demote.\n[checks.\"Warning.TripleEquals\"]\nseverity = \"medium\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    }
+  ]
+}

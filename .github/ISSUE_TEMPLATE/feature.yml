@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the feature you would like to see and the problem it solves.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What are you trying to do? Describe the goal, not the solution.
+      placeholder: "When reviewing a large codebase I want to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-behaviour
+    attributes:
+      label: Why current behaviour is insufficient
+      description: What does cofferdam do today that falls short of this goal?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution (optional)
+      description: If you have a concrete idea for how this could be implemented, share it here.
+    validations:
+      required: false

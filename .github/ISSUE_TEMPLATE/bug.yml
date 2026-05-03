@@ -1,0 +1,62 @@
+name: Bug report
+description: Something is not working correctly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much detail as you can.
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal, self-contained sequence of steps that reliably triggers the bug.
+      placeholder: |
+        1. Run `cofferdam check path/to/file.ts`
+        2. Observe output...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-vs-actual
+    attributes:
+      label: Expected vs actual behaviour
+      description: What did you expect to happen, and what happened instead?
+      placeholder: |
+        Expected: no issue reported
+        Actual: Warning.TripleEquals fired on line 42, but the expression uses `===`
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Cofferdam version
+      description: Run `cofferdam --version` and paste the output here.
+      placeholder: "cofferdam 0.3.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os-arch
+    attributes:
+      label: OS / architecture
+      options:
+        - Linux x64
+        - Linux arm64
+        - macOS x64
+        - macOS arm64
+        - Windows x64
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample-ts
+    attributes:
+      label: Sample TypeScript (optional)
+      description: Paste a minimal TypeScript snippet that demonstrates the problem. It will be formatted as a code block.
+      render: typescript
+    validations:
+      required: false

@@ -118,6 +118,7 @@ impl Check for QuoteStyle {
                     priority: Priority(META.base_priority),
                     severity: Severity::Info,
                     related: Vec::new(),
+                    fix: None,
                 });
             }
         }

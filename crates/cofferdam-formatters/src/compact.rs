@@ -140,6 +140,7 @@ mod tests {
             severity: Severity::Low,
             priority: Priority(-5),
             related: Vec::new(),
+            fix: None,
         }
     }
 

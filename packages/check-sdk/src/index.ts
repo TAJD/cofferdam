@@ -15,7 +15,7 @@ export { Walk } from "./ast.js";
 export { defineCheck } from "./define-check.js";
 
 export type { Check, DefineCheckInput } from "./define-check.js";
-export type { CheckContext, ReportArgs, SourceFile } from "./check-context.js";
+export type { CheckContext, Fix, ReportArgs, SourceFile } from "./check-context.js";
 export type { LineView } from "./line-view.js";
 export type { Span, RelatedSpan } from "./span.js";
 export type {

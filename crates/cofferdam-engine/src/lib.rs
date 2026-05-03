@@ -304,5 +304,6 @@ fn parse_error_issue(file: &SourceFile, diagnostics: &[oxc_diagnostics::OxcDiagn
         priority: Priority(20),
         severity: Severity::Critical,
         related: Vec::new(),
+        fix: None,
     }
 }

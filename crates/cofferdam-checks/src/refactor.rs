@@ -112,6 +112,7 @@ impl<'a> CycVisitor<'a> {
                 priority: Priority(CYC_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
+                fix: None,
             });
         }
     }
@@ -301,6 +302,7 @@ impl<'a> CogVisitor<'a> {
                 priority: Priority(COG_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
+                fix: None,
             });
         }
     }
@@ -756,6 +758,7 @@ impl Check for DuplicateBlock {
                 priority: Priority(DUP_META.base_priority),
                 severity: Severity::Medium,
                 related,
+                fix: None,
             });
         }
         issues
@@ -1478,6 +1481,7 @@ impl<'a> Visit<'a> for OptionalChainVisitor<'a> {
                             priority: Priority(PREFER_OPTIONAL_CHAIN_META.base_priority),
                             severity: Severity::Medium,
                             related: Vec::new(),
+                            fix: None,
                         });
                     }
                 }
@@ -1588,6 +1592,7 @@ impl<'a> Visit<'a> for NullishVisitor<'a> {
                 priority: Priority(PREFER_NULLISH_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
+                fix: None,
             });
         }
         oxc_ast_visit::walk::walk_logical_expression(self, node);
@@ -1760,6 +1765,7 @@ impl Check for UnusedVariable {
                 priority: Priority(UNUSED_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
+                fix: None,
             });
         }
 

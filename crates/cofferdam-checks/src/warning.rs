@@ -137,6 +137,7 @@ impl<'a> Visit<'a> for Collector<'a> {
                 priority: Priority(META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
+                fix: None,
             });
         }
         // Walk into children — `==` can appear inside other binary ops
@@ -212,6 +213,7 @@ impl<'a> Visit<'a> for ConsoleCollector<'a> {
                         priority: Priority(NO_CONSOLE_LOG_META.base_priority),
                         severity: Severity::Medium,
                         related: Vec::new(),
+                        fix: None,
                     });
                 }
             }
@@ -274,6 +276,7 @@ impl<'a> Visit<'a> for DebuggerCollector<'a> {
             priority: Priority(NO_DEBUGGER_META.base_priority),
             severity: Severity::Medium,
             related: Vec::new(),
+            fix: None,
         });
         // DebuggerStatement has no children, but call walk for symmetry
         // and so future oxc versions adding fields don't silently drop
@@ -342,6 +345,7 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
                     priority: Priority(NO_EVAL_META.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
+                    fix: None,
                 });
             }
         }
@@ -361,6 +365,7 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
                     priority: Priority(NO_EVAL_META.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
+                    fix: None,
                 });
             }
         }

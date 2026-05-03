@@ -30,6 +30,20 @@ export interface SourceFile {
   readonly ast: AstView | null;
 }
 
+/**
+ * A single mechanical fix: replace the bytes in `span` with `replacement`.
+ * Mirrors `cofferdam_core::TextEdit`. Plugin authors attach this at
+ * report time; the cofferdam fix engine prefers it over the built-in
+ * `Check::autofix` trait method (cd-81a.6).
+ *
+ * Edits must be non-overlapping; the fix engine applies them in reverse
+ * byte-offset order so earlier replacements don't invalidate later spans.
+ */
+export interface Fix {
+  readonly span: Span;
+  readonly replacement: string;
+}
+
 /** Per-issue payload passed to {@link CheckContext.report}. */
 export interface ReportArgs {
   /** Required. Human-readable problem description. */
@@ -48,6 +62,11 @@ export interface ReportArgs {
    * duplicate-export. Omitted from JSON when empty.
    */
   readonly related?: readonly { readonly file: string; readonly span: Span }[];
+  /**
+   * Optional autofix payload. When present, `cofferdam fix` applies it
+   * in place of any built-in autofix logic for this check.
+   */
+  readonly fix?: Fix;
 }
 
 /**

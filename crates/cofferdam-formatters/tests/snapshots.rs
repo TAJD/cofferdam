@@ -50,6 +50,7 @@ fn fixture_issues() -> Vec<Issue> {
             priority: Priority::LOW,
             severity: Severity::Low,
             related: Vec::new(),
+            fix: None,
         },
         // Design — cross-file finding with `related` spans (mirrors DuplicateExportName shape)
         Issue {
@@ -63,6 +64,7 @@ fn fixture_issues() -> Vec<Issue> {
                 related("src/ui/index.ts", 7, 1, 120, 136),
                 related("src/shared/index.ts", 2, 1, 18, 34),
             ],
+            fix: None,
         },
         // Readability — below-normal priority
         Issue {
@@ -73,6 +75,7 @@ fn fixture_issues() -> Vec<Issue> {
             priority: Priority(-3),
             severity: Severity::Info,
             related: Vec::new(),
+            fix: None,
         },
         // Refactor — higher priority
         Issue {
@@ -84,6 +87,7 @@ fn fixture_issues() -> Vec<Issue> {
             priority: Priority::HIGHER,
             severity: Severity::High,
             related: Vec::new(),
+            fix: None,
         },
         // Warning — critical severity
         Issue {
@@ -94,6 +98,7 @@ fn fixture_issues() -> Vec<Issue> {
             priority: Priority::HIGHER,
             severity: Severity::Critical,
             related: Vec::new(),
+            fix: None,
         },
     ]
 }

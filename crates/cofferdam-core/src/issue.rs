@@ -135,6 +135,12 @@ pub struct Span {
 /// duplicate set, with the canonical location in `span` and the other
 /// occurrences in `related`). Empty for the common single-location case;
 /// formatters omit it when empty.
+///
+/// `fix` carries an optional autofix payload (cd-81a.6). Plugins attach
+/// fixes at report time via `ctx.report({ fix: ... })`; the fix engine
+/// prefers the attached fix when present and falls back to the
+/// `Check::autofix` trait method otherwise. `None` for issues without a
+/// mechanical fix, omitted from JSON in that common case.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub check_id: String,
@@ -145,6 +151,8 @@ pub struct Issue {
     pub severity: Severity,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedSpan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<crate::edit::TextEdit>,
 }
 
 /// A span in another file related to the primary `Issue.span`. Carries

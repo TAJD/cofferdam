@@ -94,6 +94,7 @@ impl<'a> Collector<'a> {
                 priority: Priority(META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
+                fix: None,
             });
         }
     }
@@ -225,6 +226,7 @@ impl Check for DuplicateExportName {
                 priority: Priority(DEN_META.base_priority),
                 severity: Severity::Medium,
                 related,
+                fix: None,
             });
         }
         issues

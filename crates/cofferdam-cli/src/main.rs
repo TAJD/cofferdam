@@ -904,11 +904,21 @@ fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
     let mut edits_by_file: HashMap<PathBuf, Vec<cofferdam_core::TextEdit>> = HashMap::new();
 
     for issue in &issues {
+        // cd-81a.6: prefer the fix attached at report time. Plugins that
+        // can't implement the `Check::autofix` trait method (because they
+        // run inside the napi worker_thread loader and can't surface a
+        // Rust trait impl) carry the fix payload directly on the Issue.
+        // Built-ins still go through `Check::autofix` for back-compat.
+        if let Some(edit) = issue.fix.clone() {
+            edits_by_file
+                .entry(issue.file.clone())
+                .or_default()
+                .push(edit);
+            continue;
+        }
         let Some(check) = check_map.get(issue.check_id.as_str()) else {
             continue;
         };
-        // Re-construct a SourceFile for the autofix call. The text was
-        // cached by analyze_with_text — no additional I/O required.
         let Some(text) = texts.get(&issue.file) else {
             continue;
         };

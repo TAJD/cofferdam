@@ -67,3 +67,7 @@ t9d-corpus/
 # Vendored TS corpus (dev-machine only; populated by scripts/fetch-corpus.sh)
 /tests/corpus/
 /tests/corpus-results/
+# bd worktree
+d1y-twopass/
+# bd worktree
+zaf-suppression-docs/

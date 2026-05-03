@@ -1,6 +1,8 @@
 # Output formats
 
-`cofferdam check` ships three rendering modes. Pick by `--format=<text|json|compact>`. The shorthand `--robot` defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins.
+`cofferdam check` ships three rendering modes. Pick by `--format=<text|json|compact>`.
+
+**`--robot` flag:** defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins. `--robot` does nothing else — it does not set `--quiet`, does not suppress ANSI (there is none), and does not change exit-code behavior. Its only effect is the format default. The idiomatic AI-agent invocation is `--robot --format=compact`, which combines the intent signal with the most token-economical output.
 
 | Format    | Audience                            | Schema                | Byte-economy* |
 |-----------|-------------------------------------|-----------------------|---------------|
@@ -49,6 +51,54 @@ Stable schema, machine-readable. The full contract is the canonical source for t
   ]
 }
 ```
+
+### Field reference
+
+Every field listed below is **stable** — field names and types are part of the contract. Adding new fields is non-breaking; renaming or removing fields, or changing a field's type, requires a major version bump.
+
+**Top-level object**
+
+| Field | Type | Always present | Description |
+|-------|------|----------------|-------------|
+| `findings` | `array` | Yes | Ordered array of finding objects, sorted by priority descending then check ID ascending. Empty array when no findings. |
+| `summary` | `object` | Yes | Aggregate counts for the run. |
+
+**`summary` object**
+
+| Field | Type | Always present | Description |
+|-------|------|----------------|-------------|
+| `total` | `integer` | Yes | Number of findings in the `findings` array. When `--max-issues` truncation is active, this equals the truncated count (not the full count — see `truncated_from`). |
+| `by_category` | `object` | Yes | Map of lowercase category name → finding count. Only categories with at least one finding appear; zero-count categories are omitted. Keys are a subset of: `consistency`, `design`, `readability`, `refactor`, `warning`. |
+| `new` | `integer` | No — baseline only | Count of findings **not** matched by the active baseline (i.e., genuinely new since `cofferdam baseline write`). Omitted when no baseline is active. |
+| `baselined` | `integer` | No — baseline only | Count of findings matched by the active baseline (these were present when the baseline was written and are acknowledged). Omitted when no baseline is active. |
+| `truncated_from` | `integer` | No — truncation only | Total findings produced before `--max-issues` capping. Always strictly greater than `total` when present. Omitted in the common case (no truncation) so the byte output is identical to pre-truncation cofferdam. |
+
+**Per-finding object (each element of `findings`)**
+
+| Field | Type | Always present | Description |
+|-------|------|----------------|-------------|
+| `id` | `string` | Yes | Dotted check ID, e.g. `Warning.TripleEquals`. Stable — safe to use as a map key or filter. |
+| `category` | `string` | Yes | Lowercase category: `consistency` \| `design` \| `readability` \| `refactor` \| `warning`. |
+| `priority` | `integer` | Yes | Computed sort priority in the range `-20..=20`. Higher value = surfaces first. Not configurable; derived by the engine. |
+| `severity` | `string` | Yes | Configured severity: `info` \| `low` \| `medium` \| `high` \| `critical`. Matches `--fail-on=<level>` threshold values. |
+| `file` | `string` | Yes | Path to the file containing the finding. Forward-slash normalized (even on Windows) so it is safe to use as an editor link or CLI argument on any platform. |
+| `line` | `integer` | Yes | 1-based line number of the finding's primary span. |
+| `column` | `integer` | Yes | 1-based column number of the finding's primary span. |
+| `start_byte` | `integer` | Yes | Byte offset of the span start into the file's UTF-8 text. Useful for span-based autofix or highlighting without re-parsing. |
+| `end_byte` | `integer` | Yes | Byte offset of the span end (exclusive). |
+| `message` | `string` | Yes | Human-readable finding description. May contain backtick-quoted identifiers. |
+| `related` | `array` | No — multi-location only | Additional locations participating in the same finding (e.g. the other files where a duplicate export or duplicate block appears). Omitted entirely (not present, not `[]`) when the finding is single-location. See sub-fields below. |
+| `baselined` | `boolean` | No — baseline only | `true` when this finding matched an entry in the active baseline; `false` when it did not. Omitted entirely when no baseline is active, so the JSON schema for a no-baseline run stays byte-identical to pre-baseline cofferdam. |
+
+**`related` array element sub-fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | `string` | Path to the related file, forward-slash normalized. |
+| `line` | `integer` | 1-based line of the related span. |
+| `column` | `integer` | 1-based column of the related span. |
+| `start_byte` | `integer` | Byte offset of the related span start. |
+| `end_byte` | `integer` | Byte offset of the related span end (exclusive). |
 
 Optional fields appear only when relevant — `summary.new` / `summary.baselined` / per-finding `baselined` show up when a baseline is active; `summary.truncated_from` shows up only under `--max-issues`. Schema additions are non-breaking; field renames or removals are.
 
@@ -113,3 +163,21 @@ Compact's win over JSON (≈44% bytes saved) is structural: no field-name repeti
 - **AI-agent prompt shovelling** → `compact` when token economy is the priority and you don't need baseline tags or related spans; `json` when you do.
 
 `--robot --format=compact` is the canonical AI-agent invocation.
+
+## Future formats
+
+These formats are planned for phase 6 and are **not yet implemented**. Passing `--format=sarif` or `--format=github-annotations` today will produce an error.
+
+### `sarif` (planned)
+
+SARIF (Static Analysis Results Interchange Format) is the [OASIS standard](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) for static-analysis tool output and the format GitHub Code Scanning ingests natively. When implemented, `--format=sarif` will emit a SARIF 2.1.0 document: each cofferdam finding maps to a SARIF `result`, check IDs map to SARIF `rules`, and file locations use SARIF `physicalLocation` with artifact URIs. The output will be suitable for direct upload to the GitHub Code Scanning API (`github/codeql-action/upload-sarif`) with no post-processing. Schema will follow SARIF 2.1.0 exactly.
+
+### `github-annotations` (planned)
+
+GitHub Actions supports [workflow commands](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#setting-a-warning-message) that annotate pull-request diffs inline. The `github-annotations` format will emit one line per finding in the format:
+
+```
+::warning file=src/auth.ts,line=42,col=7,endLine=42,endColumn=13::Warning.TripleEquals: use `===` instead of `==` to avoid type coercion
+```
+
+This is line-oriented and intended to be piped through `echo` inside a GitHub Actions step, producing annotations that appear directly in the PR file view. Like compact, it will not carry related spans or baseline tags (JSON is the right choice when you need those). Severity-to-level mapping: `info` → `::notice`, `low`/`medium` → `::warning`, `high`/`critical` → `::error`.

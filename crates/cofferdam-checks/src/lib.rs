@@ -24,6 +24,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(design::MaxParameters::new(5)),
         Box::new(design::DuplicateExportName),
         Box::new(design::OrphanExport),
+        Box::new(design::ImportCycle),
         Box::new(refactor::CyclomaticComplexity::new(10)),
         Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(refactor::DuplicateBlock::default()),

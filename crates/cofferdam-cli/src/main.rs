@@ -14,7 +14,9 @@ use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
-use cofferdam_formatters::{JsonFormatter, JsonRenderOpts, TextFormatter, TextRenderOpts};
+use cofferdam_formatters::{
+    CompactFormatter, JsonFormatter, JsonRenderOpts, TextFormatter, TextRenderOpts,
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
@@ -22,6 +24,10 @@ enum OutputFormat {
     Text,
     /// Machine-readable JSON. Stable schema, no ANSI, no decorative output.
     Json,
+    /// Pipe-delimited line-per-finding format. One header line followed
+    /// by one record per finding. Most token-economical — use when
+    /// shovelling findings into an AI prompt.
+    Compact,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -78,10 +84,13 @@ enum Cmd {
         /// Disable `.gitignore` / `.cofferdamignore` filtering.
         #[arg(long)]
         no_ignore: bool,
-        /// Output format.
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-        /// Shorthand for `--format=json`. Token-economical output for AI agents.
+        /// Output format. Default: `text`. With `--robot` and no
+        /// explicit `--format`, defaults to `json`.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<OutputFormat>,
+        /// Default to a machine-readable format when `--format` is not
+        /// set. Token-economical output for AI agents — pairs with
+        /// `--format=compact` for the smallest output by far.
         #[arg(long)]
         robot: bool,
         /// Pretty-print JSON output (only with `--format=json` / `--robot`).
@@ -243,7 +252,11 @@ fn main() -> ExitCode {
             paths,
             hidden,
             no_ignore,
-            format: if robot { OutputFormat::Json } else { format },
+            format: format.unwrap_or(if robot {
+                OutputFormat::Json
+            } else {
+                OutputFormat::Text
+            }),
             pretty,
             baseline_path: baseline,
             no_baseline,
@@ -356,10 +369,15 @@ fn run_check(args: CheckArgs) -> ExitCode {
     };
 
     if files.is_empty() {
-        if format == OutputFormat::Json {
-            println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#);
-        } else if !quiet {
-            eprintln!("no TypeScript files found under: {:?}", roots);
+        match format {
+            OutputFormat::Json => {
+                println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#)
+            }
+            OutputFormat::Compact => print!("{}", CompactFormatter::render(&[])),
+            OutputFormat::Text if !quiet => {
+                eprintln!("no TypeScript files found under: {:?}", roots);
+            }
+            OutputFormat::Text => {}
         }
         return ExitCode::SUCCESS;
     }
@@ -371,10 +389,17 @@ fn run_check(args: CheckArgs) -> ExitCode {
         Some(git_ref) => match filter_files_since(&files, git_ref) {
             Ok(filtered) => {
                 if filtered.is_empty() {
-                    if format == OutputFormat::Json {
-                        println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#);
-                    } else if !quiet {
-                        eprintln!("no TypeScript files changed since {git_ref}");
+                    match format {
+                        OutputFormat::Json => {
+                            println!(
+                                r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#
+                            )
+                        }
+                        OutputFormat::Compact => print!("{}", CompactFormatter::render(&[])),
+                        OutputFormat::Text if !quiet => {
+                            eprintln!("no TypeScript files changed since {git_ref}");
+                        }
+                        OutputFormat::Text => {}
                     }
                     return ExitCode::SUCCESS;
                 }
@@ -491,6 +516,14 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     JsonFormatter::render_with_baseline_with_opts(&tagged, opts)
                 );
             }
+            OutputFormat::Compact => {
+                // Compact v1 doesn't carry baseline tags. Strip them and
+                // render the underlying findings; users who need
+                // baseline info should use --format=json.
+                let issues_only: Vec<cofferdam_core::Issue> =
+                    tagged.iter().map(|(i, _)| i.clone()).collect();
+                print!("{}", CompactFormatter::render(&issues_only));
+            }
         }
 
         if triggering == 0 {
@@ -524,6 +557,9 @@ fn run_check(args: CheckArgs) -> ExitCode {
                             truncated_from,
                         };
                         println!("{}", JsonFormatter::render_with_opts(&issues, opts));
+                    }
+                    OutputFormat::Compact => {
+                        print!("{}", CompactFormatter::render(&issues));
                     }
                 }
                 if triggering == 0 {

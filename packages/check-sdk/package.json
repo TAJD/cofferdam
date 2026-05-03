@@ -1,0 +1,44 @@
+{
+  "name": "@cofferdam/check-sdk",
+  "version": "0.0.0",
+  "description": "Author cofferdam plugin checks in TypeScript. defineCheck factory + types.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TAJD/cofferdam.git",
+    "directory": "packages/check-sdk"
+  },
+  "homepage": "https://tajd.github.io/cofferdam",
+  "bugs": "https://github.com/TAJD/cofferdam/issues",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cofferdam",
+    "linter",
+    "static-analysis",
+    "plugin-sdk",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test:types": "tsc -p tests"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

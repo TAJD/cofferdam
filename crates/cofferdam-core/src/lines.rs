@@ -24,15 +24,22 @@
 //!   Implies `is_comment`.
 //! - `is_string_literal` — a `StringLiteral` or `TemplateLiteral` span
 //!   overlaps this line.
+//! - `is_jsx_text` — a `JSXText` span overlaps this line. JSX text is
+//!   the user-facing copy *between* JSX tags (`<p>Hello</p>` → "Hello"),
+//!   not attribute values or expression containers. Plugin checks that
+//!   target display copy (BrandCasing in cd-7e4) flag this alongside
+//!   `is_string_literal`. Filed as cd-0ne.
 //! - `is_pragma` — an annotation-style comment overlaps. Pragmas are
 //!   compiler-hint comments like `/* #__PURE__ */`, `/* @vite-ignore */`,
 //!   `/* webpackChunkName: "x" */` — *not* JSDoc and *not* legal
 //!   headers. Maps to `oxc_ast::Comment::is_annotation()`.
 
-use oxc_ast::ast::{Comment, StringLiteral, TemplateLiteral};
+use oxc_ast::ast::{Comment, JSXText, StringLiteral, TemplateLiteral};
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::Span as OxcSpan;
 use oxc_syntax::scope::ScopeFlags;
+
+use crate::issue::Span;
 
 /// One line of source plus classification flags.
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +51,31 @@ pub struct LineView<'a> {
     pub is_comment: bool,
     pub is_doc_comment: bool,
     pub is_string_literal: bool,
+    pub is_jsx_text: bool,
     pub is_pragma: bool,
+    /// 0-based byte offset of the start of this line in the full source
+    /// text. Drives [`span_for`](Self::span_for) — kept public so AST
+    /// checks that have already computed offsets can build spans
+    /// without re-walking the line table.
+    pub line_start: u32,
+}
+
+impl LineView<'_> {
+    /// Build a [`Span`] covering bytes `[char_start, char_end)` *within
+    /// this line*. Both arguments are byte offsets relative to
+    /// `self.text` (after CRLF stripping); the returned span carries
+    /// file-absolute `start_byte`/`end_byte` and 1-based line/column,
+    /// ready for `Issue.span` or plugin `ctx.report`.
+    ///
+    /// Filed as cd-cgd — keeps line-walk plugin authoring concise.
+    pub fn span_for(&self, char_start: u32, char_end: u32) -> Span {
+        Span {
+            line: self.line_no,
+            column: char_start + 1,
+            start_byte: self.line_start + char_start,
+            end_byte: self.line_start + char_end,
+        }
+    }
 }
 
 /// Iterator over [`LineView`]s for an `AstView`. Returned by
@@ -66,10 +97,16 @@ impl<'a> Lines<'a> {
             apply_comment(&line_starts, &mut flags, c);
         }
 
-        let mut literal = LiteralCollector { spans: Vec::new() };
+        let mut literal = LiteralCollector {
+            string_spans: Vec::new(),
+            jsx_text_spans: Vec::new(),
+        };
         literal.visit_program(program);
-        for sp in literal.spans {
+        for sp in literal.string_spans {
             apply_span(&line_starts, &mut flags, sp, |f| f.is_string_literal = true);
+        }
+        for sp in literal.jsx_text_spans {
+            apply_span(&line_starts, &mut flags, sp, |f| f.is_jsx_text = true);
         }
 
         Self {
@@ -110,7 +147,9 @@ impl<'a> Iterator for Lines<'a> {
             is_comment: f.is_comment,
             is_doc_comment: f.is_doc_comment,
             is_string_literal: f.is_string_literal,
+            is_jsx_text: f.is_jsx_text,
             is_pragma: f.is_pragma,
+            line_start: self.line_starts[i],
         })
     }
 }
@@ -120,6 +159,7 @@ struct LineFlags {
     is_comment: bool,
     is_doc_comment: bool,
     is_string_literal: bool,
+    is_jsx_text: bool,
     is_pragma: bool,
 }
 
@@ -182,21 +222,29 @@ fn apply_comment(line_starts: &[u32], flags: &mut [LineFlags], c: &Comment) {
     });
 }
 
-// ---- internal: AST walk for string + template literal spans --------
+// ---- internal: AST walk for string + template + JSX text spans -----
 
 struct LiteralCollector {
-    spans: Vec<OxcSpan>,
+    string_spans: Vec<OxcSpan>,
+    jsx_text_spans: Vec<OxcSpan>,
 }
 
 impl<'a> Visit<'a> for LiteralCollector {
     fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
-        self.spans.push(it.span);
+        self.string_spans.push(it.span);
     }
     fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
-        self.spans.push(it.span);
+        self.string_spans.push(it.span);
         // Descend so nested templates inside `${...}` interpolations
         // are still recorded.
         walk::walk_template_literal(self, it);
+    }
+    fn visit_jsx_text(&mut self, it: &JSXText<'a>) {
+        // JSXText spans are the user-facing copy *between* JSX tags.
+        // Attribute values (`title="..."`) are StringLiterals inside
+        // the attribute, picked up by visit_string_literal — not
+        // double-counted here.
+        self.jsx_text_spans.push(it.span);
     }
     // Keep descending the rest of the tree — the auto-walking impls
     // are fine, they'd only be a problem if we were trying to skip
@@ -210,6 +258,10 @@ impl<'a> Visit<'a> for LiteralCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::{parse_into, source_type_for};
+    use crate::source::SourceFile;
+    use oxc_allocator::Allocator;
+    use std::path::PathBuf;
 
     #[test]
     fn line_starts_basic() {
@@ -228,5 +280,92 @@ mod tests {
         assert_eq!(byte_to_line(&s, 9), 1);
         assert_eq!(byte_to_line(&s, 10), 2);
         assert_eq!(byte_to_line(&s, 99), 2);
+    }
+
+    /// Helper to keep the test boilerplate down: returns a closure that
+    /// owns the parser allocator + result, and lends LineView slices via
+    /// the callback. Avoids the "returns local borrow" lifetime problem.
+    fn with_lines(file: SourceFile, body: impl for<'a> FnOnce(&[LineView<'a>])) {
+        let alloc = Allocator::default();
+        let parsed = parse_into(&alloc, &file);
+        let lines: Vec<_> = Lines::build(&file.text, &parsed.program).collect();
+        let _st = source_type_for(&file.path); // exercise the helper
+        body(&lines);
+    }
+
+    // --- cd-cgd: span_for produces file-absolute byte offsets ---------
+
+    #[test]
+    fn span_for_uses_file_absolute_bytes() {
+        let file = SourceFile::new(
+            PathBuf::from("f.ts"),
+            "const x = 1;\nconst y = 2;\n".to_string(),
+        );
+        let text = file.text.clone();
+        with_lines(file, |lines| {
+            // Line 2 starts at byte 13 (right after the first '\n').
+            let line2 = lines[1];
+            assert_eq!(line2.line_no, 2);
+            assert_eq!(line2.line_start, 13);
+            // 'y' is at char offset 6 within "const y = 2;" — file byte 19.
+            let span = line2.span_for(6, 7);
+            assert_eq!(span.line, 2);
+            assert_eq!(span.column, 7);
+            assert_eq!(span.start_byte, 19);
+            assert_eq!(span.end_byte, 20);
+            assert_eq!(&text[span.start_byte as usize..span.end_byte as usize], "y");
+        });
+    }
+
+    // --- cd-0ne: is_jsx_text flagged for JSXText, not for attributes --
+
+    #[test]
+    fn is_jsx_text_flags_text_between_tags() {
+        let file = SourceFile::new(
+            PathBuf::from("f.tsx"),
+            "const el = <div title=\"hi\">Hello world</div>;\n".to_string(),
+        );
+        with_lines(file, |lines| {
+            let l = lines[0];
+            assert!(
+                l.is_jsx_text,
+                "JSX text `Hello world` should set is_jsx_text"
+            );
+            // The "hi" attribute is a StringLiteral, so is_string_literal also fires.
+            assert!(l.is_string_literal);
+        });
+    }
+
+    #[test]
+    fn is_jsx_text_does_not_fire_without_jsx() {
+        let file = SourceFile::new(
+            PathBuf::from("f.tsx"),
+            "const x: string = \"plain\";\n".to_string(),
+        );
+        with_lines(file, |lines| {
+            assert!(!lines[0].is_jsx_text);
+            assert!(lines[0].is_string_literal);
+        });
+    }
+
+    #[test]
+    fn is_jsx_text_spans_multiple_lines() {
+        // JSXText between <p> and </p> spans the inner lines. The
+        // span semantics are *touch-based* — any line a span overlaps
+        // gets flagged, including the line containing the opening
+        // tag's trailing newline if the JSXText starts there. Plugin
+        // checks rely on `is_jsx_text` as a coarse pre-filter and
+        // confirm with a regex against `text`, so this is safe and
+        // matches the existing string-literal flag's semantics.
+        let file = SourceFile::new(
+            PathBuf::from("f.tsx"),
+            "const el = <p>\nfirst line\nsecond line\n</p>;\n".to_string(),
+        );
+        with_lines(file, |lines| {
+            assert!(lines[1].is_jsx_text); // `first line`
+            assert!(lines[2].is_jsx_text); // `second line`
+                                           // Line 4 is `</p>;` — past the JSXText, should NOT be flagged.
+            assert!(!lines[3].is_jsx_text);
+        });
     }
 }

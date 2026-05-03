@@ -63,3 +63,7 @@ l32-format-docs/
 knj-autofix/
 # bd worktree
 t9d-corpus/
+
+# Vendored TS corpus (dev-machine only; populated by scripts/fetch-corpus.sh)
+/tests/corpus/
+/tests/corpus-results/

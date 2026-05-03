@@ -74,6 +74,17 @@ packages/                 # @cofferdam/* npm packages (phase 4+)
 examples/                 # fixture .ts files exercised by checks
 ```
 
+## Real-world corpus
+
+`scripts/fetch-corpus.sh` clones a curated set of TypeScript repos at pinned stable tags into `tests/corpus/` (gitignored, on-demand). The corpus is used by the `corpus_smoke` integration test in `crates/cofferdam-engine/tests/corpus_bench.rs`, which walks each repo, runs the full engine, and writes per-run metrics to `tests/corpus-results/` (also gitignored). Re-running the script is idempotent — already-cloned repos at the expected tag are skipped.
+
+```bash
+bash scripts/fetch-corpus.sh          # populate corpus (~couple minutes, network required)
+cargo test --test corpus_bench -- --nocapture   # run benchmark
+```
+
+To add a new repo to the corpus: append an entry to the three parallel arrays at the top of `fetch-corpus.sh`, verify the tag via `git ls-remote --tags <url>`, and confirm the repo licence is MIT, Apache-2.0, ISC, or BSD before committing.
+
 ## Further reading
 
 - Agent / contributor instructions: [CLAUDE.md](CLAUDE.md)

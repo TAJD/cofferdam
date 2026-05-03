@@ -1,0 +1,65 @@
+name: Check request
+description: Propose a new built-in check for cofferdam
+labels: [check-request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Cofferdam checks follow the `Category.Name` naming convention.
+        Categories are: Consistency, Design, Readability, Refactor, Warning.
+
+  - type: input
+    id: check-id
+    attributes:
+      label: Proposed check ID
+      description: Use the `Category.Name` form (e.g. `Refactor.DeadCode`, `Warning.NoConsoleLog`).
+      placeholder: "Category.Name"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Consistency
+        - Design
+        - Readability
+        - Refactor
+        - Warning
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-it-flags
+    attributes:
+      label: What it flags
+      description: Describe the code pattern this check should detect and why it is problematic.
+    validations:
+      required: true
+
+  - type: textarea
+    id: bad-example
+    attributes:
+      label: Example of bad code (flagged)
+      description: A TypeScript snippet that should trigger the check.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: good-example
+    attributes:
+      label: Example of good code (not flagged)
+      description: A TypeScript snippet that should pass the check cleanly.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: why-matters
+    attributes:
+      label: Why this matters (optional)
+      description: Real-world impact, relevant style guides, or prior art in other linters.
+    validations:
+      required: false

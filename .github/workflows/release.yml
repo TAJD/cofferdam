@@ -199,3 +199,52 @@ jobs:
           # filename and repo. --provenance is automatic with OIDC but we
           # pass it explicitly for clarity.
           npm publish --provenance --access public
+
+  npm-smoke:
+    # cd-5zn: end-to-end install verification on a fresh runner per OS,
+    # using the version we just published. Catches postinstall/binary
+    # bundling regressions within minutes of cutting a release.
+    #
+    # Deliberately separate from `publish-npm` so the smoke side can't
+    # roll back an otherwise good publish — but it `needs: publish-npm`
+    # and the matrix is fail-fast: false, so a failure on any OS still
+    # surfaces a red check at the workflow level. Whoever cut the release
+    # sees it within minutes.
+    name: smoke ${{ matrix.host }}
+    needs: publish-npm
+    runs-on: ${{ matrix.host }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Wait for npm registry to propagate
+        # The npm CDN can lag a minute or two after `npm publish` returns,
+        # especially on the macOS / Windows runners that pull from a
+        # different edge. Poll up to 2 minutes before giving up.
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 12); do
+            if npm view "cofferdam@$version" version > /dev/null 2>&1; then
+              echo "cofferdam@$version visible on npm (attempt $attempt)"
+              exit 0
+            fi
+            echo "waiting for cofferdam@$version on npm... ($attempt/12)"
+            sleep 10
+          done
+          echo "ERROR: cofferdam@$version still not visible after 2 minutes"
+          exit 1
+
+      - name: Run npm install smoke test
+        # `shell: bash` works on Windows runners too via Git Bash; the
+        # smoke script itself is pure Node and platform-agnostic.
+        shell: bash
+        run: node .github/scripts/npm-smoke.mjs "${GITHUB_REF_NAME#v}"

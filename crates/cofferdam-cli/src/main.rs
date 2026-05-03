@@ -3,6 +3,7 @@
 mod explain;
 mod init;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -192,6 +193,21 @@ enum Cmd {
         #[arg(long)]
         robot: bool,
     },
+    /// Apply mechanical autofixes for supported checks. Runs the engine
+    /// against the given paths, groups fixable findings by file, applies
+    /// edits in reverse byte-offset order, and writes each modified file
+    /// atomically (write to a temp path then rename). Unsupported checks
+    /// are silently skipped. Prints a summary to stderr.
+    Fix {
+        /// Files or directories to fix. Defaults to `.`.
+        paths: Vec<PathBuf>,
+        /// Walk hidden files/directories (default: skip).
+        #[arg(long)]
+        hidden: bool,
+        /// Disable `.gitignore` / `.cofferdamignore` filtering.
+        #[arg(long)]
+        no_ignore: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -305,6 +321,11 @@ fn main() -> ExitCode {
             },
             robot,
         }),
+        Cmd::Fix {
+            paths,
+            hidden,
+            no_ignore,
+        } => run_fix(paths, hidden, no_ignore),
     }
 }
 
@@ -792,5 +813,130 @@ fn resolve_and_load_config(
                 Ok((None, None))
             }
         }
+    }
+}
+
+fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
+    let roots: Vec<PathBuf> = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths
+    };
+
+    let opts = DiscoveryOptions {
+        respect_ignore: !no_ignore,
+        include_hidden: hidden,
+        ..DiscoveryOptions::default()
+    };
+    let files = match discover(&roots, &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if files.is_empty() {
+        eprintln!("no TypeScript files found under: {:?}", roots);
+        return ExitCode::SUCCESS;
+    }
+
+    let checks = all_builtins();
+
+    // Build a map from check_id → &dyn Check so we can call autofix per issue.
+    let check_map: HashMap<&str, &dyn cofferdam_core::Check> =
+        checks.iter().map(|c| (c.meta().id, c.as_ref())).collect();
+
+    let engine = Engine::new(all_builtins());
+    let (issues, texts) = match engine.analyze_with_text(&files) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Collect edits per file.
+    // edits_by_file: canonical path → Vec<TextEdit>
+    let mut edits_by_file: HashMap<PathBuf, Vec<cofferdam_core::TextEdit>> = HashMap::new();
+
+    for issue in &issues {
+        let Some(check) = check_map.get(issue.check_id.as_str()) else {
+            continue;
+        };
+        // Re-construct a SourceFile for the autofix call. The text was
+        // cached by analyze_with_text — no additional I/O required.
+        let Some(text) = texts.get(&issue.file) else {
+            continue;
+        };
+        let source = cofferdam_core::SourceFile::new(issue.file.clone(), text.clone());
+        if let Some(edit) = check.autofix(issue, &source) {
+            edits_by_file
+                .entry(issue.file.clone())
+                .or_default()
+                .push(edit);
+        }
+    }
+
+    if edits_by_file.is_empty() {
+        eprintln!("Applied 0 fix(es) across 0 file(s).");
+        return ExitCode::SUCCESS;
+    }
+
+    let mut total_fixes: usize = 0;
+    let mut total_files: usize = 0;
+    let mut had_error = false;
+
+    for (path, mut file_edits) in edits_by_file {
+        let Some(original_text) = texts.get(&path) else {
+            continue;
+        };
+
+        // Sort edits in REVERSE byte-offset order so applying one edit
+        // doesn't shift the byte positions of earlier edits.
+        file_edits.sort_by_key(|e| std::cmp::Reverse(e.span.start_byte));
+
+        let mut text = original_text.clone();
+        let mut applied = 0usize;
+        for edit in &file_edits {
+            let start = edit.span.start_byte as usize;
+            let end = edit.span.end_byte as usize;
+            if start > text.len() || end > text.len() || start > end {
+                // Guard against stale or invalid spans — skip rather than panic.
+                continue;
+            }
+            text.replace_range(start..end, &edit.replacement);
+            applied += 1;
+        }
+
+        // Write atomically: write to a temp sibling, then rename.
+        let tmp_path = path.with_extension("cofferdam-fix.tmp");
+        if let Err(e) = std::fs::write(&tmp_path, &text) {
+            eprintln!("error: could not write {}: {e}", tmp_path.display());
+            had_error = true;
+            continue;
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &path) {
+            eprintln!(
+                "error: could not rename {} → {}: {e}",
+                tmp_path.display(),
+                path.display()
+            );
+            // Best-effort cleanup of the temp file; ignore secondary error.
+            let _ = std::fs::remove_file(&tmp_path);
+            had_error = true;
+            continue;
+        }
+
+        total_fixes += applied;
+        total_files += 1;
+    }
+
+    eprintln!("Applied {total_fixes} fix(es) across {total_files} file(s).");
+
+    if had_error {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }

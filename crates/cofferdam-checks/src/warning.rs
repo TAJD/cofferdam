@@ -3,7 +3,7 @@
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile, TextEdit,
 };
 use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
@@ -45,6 +45,62 @@ impl Check for TripleEquals {
         };
         visitor.visit_program(parsed.program);
         visitor.issues
+    }
+
+    /// Replace the loose-equality operator with its strict equivalent.
+    ///
+    /// The issue span covers the whole `BinaryExpression` (e.g. `a == b`).
+    /// We scan the source bytes within that span to locate just the operator
+    /// token, taking care to skip `===`/`!==` and to handle `!=` before `==`
+    /// so a `!=` sequence isn't misidentified as `=`.
+    fn autofix(&self, issue: &Issue, source: &SourceFile) -> Option<TextEdit> {
+        let start = issue.span.start_byte as usize;
+        let end = issue.span.end_byte as usize;
+        let slice = source.text.get(start..end)?;
+        let bytes = slice.as_bytes();
+        let len = bytes.len();
+
+        // Scan for the operator token. We look for `!=` (not `!==`) and
+        // `==` (not `===`). The approach: walk byte-by-byte and test each
+        // position.
+        let mut i = 0usize;
+        while i < len {
+            // Try `!=` at position i.
+            if i + 1 < len && bytes[i] == b'!' && bytes[i + 1] == b'=' {
+                // Make sure it's `!=` not `!==`.
+                let is_strict = i + 2 < len && bytes[i + 2] == b'=';
+                if !is_strict {
+                    let op_start = (start + i) as u32;
+                    let op_end = op_start + 2;
+                    let op_span = span_from_bytes(&source.text, op_start, op_end);
+                    return Some(TextEdit {
+                        span: op_span,
+                        replacement: "!==".to_string(),
+                    });
+                }
+                // Skip past `!==` entirely so we don't re-test the `=` bytes.
+                i += 3;
+                continue;
+            }
+            // Try `==` at position i (not `===`).
+            if i + 1 < len && bytes[i] == b'=' && bytes[i + 1] == b'=' {
+                let is_strict = i + 2 < len && bytes[i + 2] == b'=';
+                if !is_strict {
+                    let op_start = (start + i) as u32;
+                    let op_end = op_start + 2;
+                    let op_span = span_from_bytes(&source.text, op_start, op_end);
+                    return Some(TextEdit {
+                        span: op_span,
+                        replacement: "===".to_string(),
+                    });
+                }
+                // Skip past `===`.
+                i += 3;
+                continue;
+            }
+            i += 1;
+        }
+        None
     }
 }
 
@@ -305,5 +361,72 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
             }
         }
         oxc_ast_visit::walk::walk_new_expression(self, node);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::parser::{parse_into, ParsedView};
+    use cofferdam_core::{Allocator, Check, CheckContext, SourceFile};
+    use std::path::PathBuf;
+
+    /// Parse `src` as TypeScript, run `TripleEquals`, and return all issues.
+    fn run_triple_equals(src: &str) -> Vec<Issue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src);
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        TripleEquals.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn autofix_equality_returns_triple_equals() {
+        // `a == b` — the operator is `==`, replacement should be `===`.
+        let src = "const r = a == b;";
+        let issues = run_triple_equals(src);
+        assert_eq!(issues.len(), 1, "expected exactly one issue for `==`");
+        let edit = TripleEquals
+            .autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src))
+            .expect("autofix should return Some for `==`");
+        // The replacement text must be the strict form.
+        assert_eq!(edit.replacement, "===");
+        // The edit span must cover only the operator, not the whole expression.
+        let op_slice = &src[edit.span.start_byte as usize..edit.span.end_byte as usize];
+        assert_eq!(op_slice, "==");
+    }
+
+    #[test]
+    fn autofix_inequality_returns_strict_not_equal() {
+        // `a != b` — the operator is `!=`, replacement should be `!==`.
+        let src = "const r = a != b;";
+        let issues = run_triple_equals(src);
+        assert_eq!(issues.len(), 1, "expected exactly one issue for `!=`");
+        let edit = TripleEquals
+            .autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src))
+            .expect("autofix should return Some for `!=`");
+        assert_eq!(edit.replacement, "!==");
+        let op_slice = &src[edit.span.start_byte as usize..edit.span.end_byte as usize];
+        assert_eq!(op_slice, "!=");
+    }
+
+    #[test]
+    fn autofix_strict_equality_returns_none() {
+        // `===` is already strict — no issue, so autofix is never called,
+        // but verify the check produces zero issues.
+        let src = "const r = a === b;";
+        let issues = run_triple_equals(src);
+        assert!(issues.is_empty(), "`===` should not be flagged");
+    }
+
+    #[test]
+    fn autofix_strict_inequality_returns_none() {
+        let src = "const r = a !== b;";
+        let issues = run_triple_equals(src);
+        assert!(issues.is_empty(), "`!==` should not be flagged");
     }
 }

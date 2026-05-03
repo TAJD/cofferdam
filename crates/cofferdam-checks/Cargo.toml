@@ -12,6 +12,7 @@ description = "Built-in checks shipped with cofferdam (Consistency, Design, Read
 cofferdam-core = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }
+oxc_semantic = "0.128.0"
 oxc_span = { workspace = true }
 oxc_syntax = "0.128"
 # unicode-ident already lives in the dep tree via oxc transitively;

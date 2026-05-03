@@ -19,16 +19,18 @@ use cofferdam_core::{
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
-    BlockStatement, BooleanLiteral, BreakStatement, CallExpression, Class, ConditionalExpression,
-    ContinueStatement, DoWhileStatement, Expression, ExpressionStatement, ForInStatement,
-    ForOfStatement, ForStatement, Function, FunctionBody, IdentifierName, IdentifierReference,
-    IfStatement, LogicalExpression, LogicalOperator, NewExpression, NullLiteral, NumericLiteral,
-    Program, ReturnStatement, Statement, StringLiteral, SwitchStatement, TemplateLiteral,
-    ThrowStatement, TryStatement, UnaryExpression, UpdateExpression, VariableDeclaration,
-    WhileStatement,
+    BindingRestElement, BlockStatement, BooleanLiteral, BreakStatement, CallExpression, Class,
+    ConditionalExpression, ContinueStatement, DoWhileStatement, Expression, ExpressionStatement,
+    ForInStatement, ForOfStatement, ForStatement, Function, FunctionBody, IdentifierName,
+    IdentifierReference, IfStatement, LogicalExpression, LogicalOperator, NewExpression,
+    NullLiteral, NumericLiteral, Program, ReturnStatement, Statement, StringLiteral,
+    SwitchStatement, TemplateLiteral, ThrowStatement, TryStatement, UnaryExpression,
+    UpdateExpression, VariableDeclaration, WhileStatement,
 };
 use oxc_ast_visit::Visit;
+use oxc_semantic::SemanticBuilder;
 use oxc_span::GetSpan;
+use oxc_syntax::symbol::SymbolFlags;
 
 // ─── Refactor.CyclomaticComplexity ─────────────────────────────────────────
 
@@ -1533,6 +1535,266 @@ impl<'a> Visit<'a> for NullishVisitor<'a> {
         }
         oxc_ast_visit::walk::walk_logical_expression(self, node);
     }
+}
+
+// ─── Refactor.UnusedVariable ───────────────────────────────────────────────
+//
+// Flag local-scope bindings (let/const/var/function/class/parameters/catch
+// variables) that are declared but never read. Built on top of
+// `oxc_semantic`, which gives us proper scope and reference tracking out of
+// the box — rolling our own scope walker would be a large yak-shave with a
+// high false-positive risk, and false positives on "unused" murder this
+// check's credibility.
+//
+// ## Filters (in skip order)
+//
+// - **Type-only symbols** (TypeAlias, Interface, Enum, TypeParameter,
+//   TypeImport, NamespaceModule). Out of scope per cd-ydw — needs the
+//   type-aware tier (phase 5).
+// - **ESM imports** (Import). Tree-shaker territory, not us.
+// - **Underscore prefix** (`_unused`). Universal opt-out convention; respect
+//   it without a config knob.
+// - **Rest patterns** (`const [a, ...rest] = arr` / `function (...args)`).
+//   Conventionally always considered used — flagging them produces noise on
+//   every codebase that uses `const [, ...rest]` for "skip first" semantics.
+// - **Resolved references non-empty.** The actual "is it used" signal.
+//
+// ## Position-of-parameter false-positives
+//
+// A common ESLint-no-unused-vars footgun: `function f(a, b) { return b; }`
+// flags `a` as unused, but you can't remove it without breaking the
+// signature. We rely on the `_` prefix convention to opt out (`_a`) rather
+// than implementing "after-used" semantics in v1. Document the convention
+// in the message so the fix is obvious. Revisit once we have telemetry on
+// real-world false-positive rates.
+//
+// ## Module-scope bindings
+//
+// Top-level (Program-scope) bindings might be exported, and oxc's semantic
+// model doesn't count export specifiers as "uses". Without walking the
+// export AST to enumerate exported names, we can't tell `export const foo`
+// from a real unused module-level binding — so v1 takes the conservative
+// line and skips Program-scope symbols entirely. The trade-off: a
+// top-level non-exported `const FOO = ...` that's truly unused won't
+// flag. Acceptable v1 cut; the alternative is false positives on every
+// `export const` in the codebase, which would torch the check's
+// credibility on day one.
+
+pub struct UnusedVariable;
+
+const UNUSED_META: CheckMeta = CheckMeta {
+    id: "Refactor.UnusedVariable",
+    category: Category::Refactor,
+    base_priority: 10,
+    default_severity: Severity::Low,
+    explanation: "Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).",
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+/// Bitmask of symbol kinds we'll flag when unused. Excludes type-only
+/// symbols, imports, and module-level value bindings that are exported.
+/// The exact filtering happens per-symbol below — this is the broad gate.
+const FLAGGABLE_KINDS: SymbolFlags = SymbolFlags::Variable
+    .union(SymbolFlags::CatchVariable)
+    .union(SymbolFlags::Function)
+    .union(SymbolFlags::Class);
+
+/// Symbol flags that disqualify a binding from the unused check, even if
+/// it has zero references. Type-only stuff defers to phase 5; imports
+/// belong to the tree-shaker; ambient declarations (`declare ...`) are
+/// type-system signals not real bindings.
+const SKIP_KINDS: SymbolFlags = SymbolFlags::TypeAlias
+    .union(SymbolFlags::Interface)
+    .union(SymbolFlags::Enum)
+    .union(SymbolFlags::EnumMember)
+    .union(SymbolFlags::TypeParameter)
+    .union(SymbolFlags::TypeImport)
+    .union(SymbolFlags::Import)
+    .union(SymbolFlags::NamespaceModule)
+    .union(SymbolFlags::ValueModule)
+    .union(SymbolFlags::Ambient);
+
+impl Check for UnusedVariable {
+    fn meta(&self) -> &'static CheckMeta {
+        &UNUSED_META
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+
+        // Collect rest-pattern spans up front. Symbols whose declaration
+        // sits inside any rest span are intentional discards and must not
+        // flag.
+        //
+        // Same pre-walk also collects TypeScript function-signature
+        // spans (TSFunctionType, TSMethodSignature, TSCallSignature,
+        // TSConstructSignature, TSIndexSignature). Parameters declared
+        // there exist purely for documentation/IDE tooltips — they're
+        // type-position, not value-position bindings, even though oxc's
+        // semantic builder still tracks them as FunctionScopedVariable.
+        let mut skip_collector = SkipSpanCollector {
+            rest_ranges: Vec::new(),
+            ts_signature_ranges: Vec::new(),
+            named_expression_id_ranges: Vec::new(),
+        };
+        skip_collector.visit_program(parsed.program);
+        let rest_ranges = skip_collector.rest_ranges;
+        let ts_signature_ranges = skip_collector.ts_signature_ranges;
+        let named_expr_ranges = skip_collector.named_expression_id_ranges;
+
+        let semantic_return = SemanticBuilder::new().build(parsed.program);
+        let scoping = semantic_return.semantic.scoping();
+        let root_scope = scoping.root_scope_id();
+
+        let mut issues = Vec::new();
+        for symbol_id in scoping.symbol_ids() {
+            let flags = scoping.symbol_flags(symbol_id);
+
+            if flags.intersects(SKIP_KINDS) {
+                continue;
+            }
+            if !flags.intersects(FLAGGABLE_KINDS) {
+                continue;
+            }
+            // Module-scope (program-level) bindings may be exported —
+            // see the file-header note above. Skip them in v1.
+            if scoping.symbol_scope_id(symbol_id) == root_scope {
+                continue;
+            }
+
+            let name = scoping.symbol_name(symbol_id);
+            if name.starts_with('_') {
+                continue;
+            }
+
+            let symbol_span = scoping.symbol_span(symbol_id);
+            if span_in_any_range(symbol_span.start, symbol_span.end, &rest_ranges) {
+                continue;
+            }
+            // TS type-position function signatures: parameter names
+            // there are documentation, not real bindings.
+            if span_in_any_range(symbol_span.start, symbol_span.end, &ts_signature_ranges) {
+                continue;
+            }
+            // Named function/class expressions: the inner name exists
+            // for self-reference + stack traces, not for outside use.
+            if span_in_any_range(symbol_span.start, symbol_span.end, &named_expr_ranges) {
+                continue;
+            }
+
+            // The actual "is it used" signal.
+            if scoping.get_resolved_references(symbol_id).next().is_some() {
+                continue;
+            }
+
+            let span = span_from_bytes(&file.text, symbol_span.start, symbol_span.end);
+            issues.push(Issue {
+                check_id: UNUSED_META.id.to_string(),
+                message: format!(
+                    "`{name}` is declared but never read (prefix with `_` if intentional)"
+                ),
+                file: file.path.clone(),
+                span,
+                priority: Priority(UNUSED_META.base_priority),
+                severity: Severity::Medium,
+                related: Vec::new(),
+            });
+        }
+
+        issues
+    }
+}
+
+struct SkipSpanCollector {
+    rest_ranges: Vec<(u32, u32)>,
+    ts_signature_ranges: Vec<(u32, u32)>,
+    /// Spans of binding identifiers that name a function expression or
+    /// class expression. These names exist for self-reference + clearer
+    /// stack traces (a common pattern in `React.forwardRef(function
+    /// Foo() {})` and named class-expression mocks); they're not really
+    /// "unused" in any actionable sense if the expression itself flows
+    /// somewhere via assignment.
+    named_expression_id_ranges: Vec<(u32, u32)>,
+}
+
+impl<'a> Visit<'a> for SkipSpanCollector {
+    fn visit_binding_rest_element(&mut self, node: &BindingRestElement<'a>) {
+        self.rest_ranges.push((node.span.start, node.span.end));
+        oxc_ast_visit::walk::walk_binding_rest_element(self, node);
+    }
+
+    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+        // Function expressions only — declarations bind into the
+        // surrounding scope and *should* flag if unused.
+        if matches!(
+            node.r#type,
+            oxc_ast::ast::FunctionType::FunctionExpression
+                | oxc_ast::ast::FunctionType::TSEmptyBodyFunctionExpression
+        ) {
+            if let Some(id) = node.id.as_ref() {
+                self.named_expression_id_ranges
+                    .push((id.span.start, id.span.end));
+            }
+        }
+        oxc_ast_visit::walk::walk_function(self, node, flags);
+    }
+
+    fn visit_class(&mut self, node: &Class<'a>) {
+        if matches!(node.r#type, oxc_ast::ast::ClassType::ClassExpression) {
+            if let Some(id) = node.id.as_ref() {
+                self.named_expression_id_ranges
+                    .push((id.span.start, id.span.end));
+            }
+        }
+        oxc_ast_visit::walk::walk_class(self, node);
+    }
+
+    fn visit_ts_function_type(&mut self, node: &oxc_ast::ast::TSFunctionType<'a>) {
+        self.ts_signature_ranges
+            .push((node.span.start, node.span.end));
+        oxc_ast_visit::walk::walk_ts_function_type(self, node);
+    }
+
+    fn visit_ts_method_signature(&mut self, node: &oxc_ast::ast::TSMethodSignature<'a>) {
+        self.ts_signature_ranges
+            .push((node.span.start, node.span.end));
+        oxc_ast_visit::walk::walk_ts_method_signature(self, node);
+    }
+
+    fn visit_ts_call_signature_declaration(
+        &mut self,
+        node: &oxc_ast::ast::TSCallSignatureDeclaration<'a>,
+    ) {
+        self.ts_signature_ranges
+            .push((node.span.start, node.span.end));
+        oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, node);
+    }
+
+    fn visit_ts_construct_signature_declaration(
+        &mut self,
+        node: &oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
+    ) {
+        self.ts_signature_ranges
+            .push((node.span.start, node.span.end));
+        oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, node);
+    }
+
+    fn visit_ts_index_signature(&mut self, node: &oxc_ast::ast::TSIndexSignature<'a>) {
+        self.ts_signature_ranges
+            .push((node.span.start, node.span.end));
+        oxc_ast_visit::walk::walk_ts_index_signature(self, node);
+    }
+}
+
+/// True iff `[start, end)` is fully contained within any of the given
+/// half-open ranges. Used to detect whether a symbol's declaration site
+/// sits inside a rest pattern.
+fn span_in_any_range(start: u32, end: u32, ranges: &[(u32, u32)]) -> bool {
+    ranges.iter().any(|&(rs, re)| start >= rs && end <= re)
 }
 
 #[cfg(test)]

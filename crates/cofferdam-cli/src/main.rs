@@ -1,5 +1,6 @@
 //! Cofferdam CLI entry point.
 
+mod doctor;
 mod explain;
 mod init;
 
@@ -193,6 +194,19 @@ enum Cmd {
         #[arg(long)]
         robot: bool,
     },
+    /// Diagnose install and configuration issues. Reports each check as
+    /// ✓ / ⚠ / ✗ with a one-line remediation hint on failure. Exit 0 on
+    /// all-pass, 1 if any check fails. Diagnostic only — never modifies
+    /// files.
+    Doctor {
+        /// Machine-readable JSON output. Schema mirrors the per-check
+        /// CheckResult and a top-level summary tally.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Apply mechanical autofixes for supported checks. Runs the engine
     /// against the given paths, groups fixable findings by file, applies
     /// edits in reverse byte-offset order, and writes each modified file
@@ -321,6 +335,7 @@ fn main() -> ExitCode {
             },
             robot,
         }),
+        Cmd::Doctor { robot, pretty } => doctor::run(robot, pretty),
         Cmd::Fix {
             paths,
             hidden,

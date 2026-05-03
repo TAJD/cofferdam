@@ -265,6 +265,17 @@ Before shipping a CI integration, walk through:
 4. **Output format.** `text` for human terminal logs, `json` for tooling integrations (PR-comment bots, dashboards), `compact` when the consumer is an LLM that pays per token.
 5. **Caching.** `actions/setup-node@v4 with: cache: npm` (or equivalent) handles the postinstall binary download for free.
 
+## Pre-flight checks
+
+Before wiring up a new CI pipeline, run [`cofferdam doctor --robot`](doctor.md) as a fast pre-flight step to verify the binary, config, baseline, and git integration are all in good shape. A non-zero exit from `doctor` means something is misconfigured that will cause `cofferdam check` to behave unexpectedly.
+
+```yaml
+      - name: Pre-flight
+        run: npx --yes cofferdam doctor --robot
+```
+
+`doctor` exits 0 on warns (so a missing baseline or unknown config key doesn't break CI) and exits 1 only when a hard failure is detected (missing git, corrupt baseline, binary version mismatch).
+
 ## What's not yet here
 
 - **SARIF output** for GitHub Code Scanning / GitLab Vulnerability Reports — tracked under cd-snv. Recipe will land in this file once SARIF support ships.

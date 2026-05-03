@@ -14,8 +14,8 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Priority,
-    RelatedSpan, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
+    OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
@@ -537,7 +537,37 @@ pub struct DuplicateBlock {
     /// boundaries (a multi-line conditional broken across statements
     /// differently in two places, JSX runs, etc.).
     include_tokens: bool,
+    /// AST-mode enabled (default: true). Can be disabled to run
+    /// token-mode only. Configurable via cofferdam.toml.
+    include_ast: bool,
 }
+
+const DUP_BLOCK_OPTIONS: &[OptionSpec] = &[
+    OptionSpec {
+        name: "min_statements",
+        kind: OptionKind::Int,
+        default: OptionDefault::Int(DUPLICATE_BLOCK_MIN_STATEMENTS as i64),
+        doc: "minimum number of consecutive statements required to flag a duplicate block",
+    },
+    OptionSpec {
+        name: "min_chars",
+        kind: OptionKind::Int,
+        default: OptionDefault::Int(DUPLICATE_BLOCK_MIN_CHARS as i64),
+        doc: "minimum raw byte length of a duplicate window; prevents trivial single-liner runs from firing",
+    },
+    OptionSpec {
+        name: "include_tokens",
+        kind: OptionKind::Bool,
+        default: OptionDefault::Bool(false),
+        doc: "also run a sliding token-window pass that catches duplicates spanning non-statement boundaries",
+    },
+    OptionSpec {
+        name: "include_ast",
+        kind: OptionKind::Bool,
+        default: OptionDefault::Bool(true),
+        doc: "run the AST statement-window pass (disable to use token-mode only)",
+    },
+];
 
 impl Default for DuplicateBlock {
     fn default() -> Self {
@@ -546,6 +576,7 @@ impl Default for DuplicateBlock {
             min_chars: DUPLICATE_BLOCK_MIN_CHARS,
             min_tokens: DUPLICATE_BLOCK_MIN_TOKENS,
             include_tokens: false,
+            include_ast: true,
         }
     }
 }
@@ -572,7 +603,7 @@ const DUP_META: CheckMeta = CheckMeta {
     explanation: "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: DUP_BLOCK_OPTIONS,
 };
 
 impl Check for DuplicateBlock {
@@ -584,25 +615,46 @@ impl Check for DuplicateBlock {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
-        let mut visitor = DupCollector {
-            file,
-            min_statements: self.min_statements,
-            min_chars: self.min_chars,
-            collected: Vec::new(),
-        };
-        visitor.visit_program(parsed.program);
+        let min_statements = ctx
+            .options
+            .get_int("min_statements")
+            .map(|v| v as usize)
+            .unwrap_or(self.min_statements);
+        let min_chars = ctx
+            .options
+            .get_int("min_chars")
+            .map(|v| v as usize)
+            .unwrap_or(self.min_chars);
+        // Bool flags: merge constructor opt-in with TOML config.
+        // `self.include_tokens` is true when the check was constructed via
+        // `with_tokens()`; TOML sets it to true for the default-constructed
+        // instance. Either source suffices — enabling is additive.
+        let include_tokens =
+            self.include_tokens || ctx.options.get_bool("include_tokens").unwrap_or(false);
+        // `include_ast` defaults to true. TOML can turn it off; the struct
+        // field can also turn it off (no existing constructor does this, but
+        // the option is there for completeness).
+        let include_ast = self.include_ast && ctx.options.get_bool("include_ast").unwrap_or(true);
 
-        if self.include_tokens {
-            collect_token_fingerprints(
+        let mut collected = Vec::new();
+
+        if include_ast {
+            let mut visitor = DupCollector {
                 file,
-                self.min_tokens,
-                self.min_chars,
-                &mut visitor.collected,
-            );
+                min_statements,
+                min_chars,
+                collected: Vec::new(),
+            };
+            visitor.visit_program(parsed.program);
+            collected.append(&mut visitor.collected);
+        }
+
+        if include_tokens {
+            collect_token_fingerprints(file, self.min_tokens, min_chars, &mut collected);
         }
 
         ctx.corpus.with_slot(&DUPLICATE_BLOCKS, |slot| {
-            slot.append(&mut visitor.collected);
+            slot.append(&mut collected);
         });
         Vec::new()
     }
@@ -1945,5 +1997,141 @@ mod tests {
             ast_hash_first_n_stmts(five, 1),
             ast_hash_first_n_stmts(six, 1)
         );
+    }
+
+    // ─── DuplicateBlock option wiring tests (cd-rt6) ───────────────────────
+    //
+    // Run the full run+finalize cycle on two files that share duplicate
+    // statement blocks, with overridden options, and assert the option
+    // values are picked up correctly.
+
+    use cofferdam_core::parser::ParsedView;
+    use cofferdam_core::{validate_options, CorpusIndex, FinalizeContext, RawOptionValue};
+    use std::collections::BTreeMap;
+
+    /// Duplicate snippet large enough to fire at default thresholds
+    /// (6 statements, >80 chars).
+    fn make_duplicate_source() -> String {
+        // Six structurally identical statements, each substantial enough to
+        // clear the min_chars floor when combined.
+        [
+            "const alpha = getValue(source);",
+            "const beta = transform(alpha);",
+            "const gamma = validate(beta);",
+            "const delta = normalize(gamma);",
+            "const epsilon = format(delta);",
+            "const result = finalize(epsilon);",
+        ]
+        .join("\n")
+    }
+
+    /// Run DuplicateBlock on two copies of the same source and return
+    /// the issues emitted by finalize.
+    fn run_duplicate_block_with_options(
+        check: &DuplicateBlock,
+        source: &str,
+        options: &cofferdam_core::CheckOptions,
+    ) -> Vec<Issue> {
+        let corpus = CorpusIndex::default();
+
+        let alloc_a = Allocator::default();
+        let file_a = SourceFile::new(PathBuf::from("a.ts"), source.to_string());
+        let ret_a = parse_into(&alloc_a, &file_a);
+        let view_a = ParsedView {
+            program: &ret_a.program,
+            diagnostics: &ret_a.errors,
+        };
+        let mut ctx_a = CheckContext::new(&file_a)
+            .with_parsed(&view_a)
+            .with_options(options)
+            .with_corpus(&corpus);
+        check.run(&file_a, &mut ctx_a);
+
+        let alloc_b = Allocator::default();
+        let file_b = SourceFile::new(PathBuf::from("b.ts"), source.to_string());
+        let ret_b = parse_into(&alloc_b, &file_b);
+        let view_b = ParsedView {
+            program: &ret_b.program,
+            diagnostics: &ret_b.errors,
+        };
+        let mut ctx_b = CheckContext::new(&file_b)
+            .with_parsed(&view_b)
+            .with_options(options)
+            .with_corpus(&corpus);
+        check.run(&file_b, &mut ctx_b);
+
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        check.finalize(&mut finalize_ctx)
+    }
+
+    #[test]
+    fn duplicate_block_default_options_fires_on_duplicate() {
+        let check = DuplicateBlock::default();
+        let opts = cofferdam_core::CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let issues = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
+        assert!(
+            !issues.is_empty(),
+            "expected at least one DuplicateBlock issue with default options"
+        );
+    }
+
+    #[test]
+    fn duplicate_block_high_min_statements_suppresses_finding() {
+        // min_statements=100 means our 6-statement duplicate is too short.
+        let check = DuplicateBlock::default();
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("min_statements".to_string(), RawOptionValue::Int(100));
+        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let issues = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
+        assert!(
+            issues.is_empty(),
+            "expected no issues when min_statements=100 but got {}",
+            issues.len()
+        );
+    }
+
+    #[test]
+    fn duplicate_block_min_statements_one_fires_on_tiny_duplicate() {
+        // min_statements=1 + min_chars=1 fires even on a single substantial statement.
+        let check = DuplicateBlock::default();
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("min_statements".to_string(), RawOptionValue::Int(1));
+        raw.insert("min_chars".to_string(), RawOptionValue::Int(1));
+        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let source = "const alpha = getValue(source);";
+        let issues = run_duplicate_block_with_options(&check, source, &opts);
+        assert!(
+            !issues.is_empty(),
+            "expected at least one issue with min_statements=1, min_chars=1"
+        );
+    }
+
+    #[test]
+    fn duplicate_block_include_ast_false_produces_no_ast_findings() {
+        // With include_ast=false and include_tokens=false (default), nothing fires.
+        let check = DuplicateBlock::default();
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("include_ast".to_string(), RawOptionValue::Bool(false));
+        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let issues = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
+        assert!(
+            issues.is_empty(),
+            "expected no issues when include_ast=false and include_tokens=false (default)"
+        );
+    }
+
+    #[test]
+    fn duplicate_block_include_tokens_option_is_read() {
+        // Confirm the include_tokens option is picked up by running with a
+        // large min_statements (disabling AST mode) but include_tokens=true.
+        // Token mode operates on different thresholds; the test only verifies
+        // that the option value is threaded through without panicking.
+        let check = DuplicateBlock::default();
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("include_tokens".to_string(), RawOptionValue::Bool(true));
+        raw.insert("include_ast".to_string(), RawOptionValue::Bool(false));
+        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        // Should not panic; token-mode may or may not produce issues for this source.
+        let _ = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
     }
 }

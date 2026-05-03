@@ -1,0 +1,79 @@
+# PR-time install smoke test (cd-u58).
+#
+# Hermetic: builds cofferdam locally and uses COFFERDAM_BINARY_PATH to
+# short-circuit the postinstall download. This catches packaging regressions
+# (npm pack file list, postinstall path resolution, bin shim spawn) on every
+# PR that touches the npm package or CLI, without depending on a real
+# GitHub Release being available.
+#
+# The release-tarball path (postinstall actually downloads from
+# github.com/TAJD/cofferdam/releases/...) is exercised separately by the
+# `npm-smoke` job in release.yml, which runs after publish against the
+# just-published version. Keeping the two paths split means a bad release
+# URL or SHA mismatch is caught post-publish (within minutes) without
+# slowing PR CI down with network round-trips.
+
+name: smoke-install
+
+on:
+  pull_request:
+    paths:
+      - "packages/cofferdam/**"
+      - "crates/cofferdam-cli/**"
+      - "scripts/smoke-install.sh"
+      - "scripts/smoke-install.ps1"
+      - ".github/workflows/smoke-install.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/cofferdam/**"
+      - "crates/cofferdam-cli/**"
+      - "scripts/smoke-install.sh"
+      - "scripts/smoke-install.ps1"
+      - ".github/workflows/smoke-install.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    name: smoke ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirror the user-facing platforms in release.yml. macos-13 is the
+        # x86_64 Intel runner; macos-15 is Apple Silicon. Both are kept so
+        # we exercise the postinstall's arch detection on each.
+        os: [ubuntu-latest, macos-13, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: smoke-install-${{ matrix.os }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Build cofferdam (release)
+        run: cargo build --release --bin cofferdam
+
+      - name: Run smoke install (bash)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          chmod +x ./scripts/smoke-install.sh
+          ./scripts/smoke-install.sh
+
+      - name: Run smoke install (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-install.ps1

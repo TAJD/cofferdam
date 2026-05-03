@@ -20,4 +20,5 @@ toml = { workspace = true }
 
 [dev-dependencies]
 cofferdam-checks = { workspace = true }
+proptest = { workspace = true }
 tempfile = "3"

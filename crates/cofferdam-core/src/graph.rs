@@ -78,6 +78,15 @@ pub struct ImportedName {
     pub kind: ImportKind,
     /// `import { type X }` — per-specifier type-only flag.
     pub type_only: bool,
+    /// Count of identifier references to `local_name` in the importing
+    /// file, AFTER the import statement itself is excluded. Filled in
+    /// pass 1 by the graph builder. Zero means the local binding is
+    /// imported but never used — feeds `Refactor.DeadExport`.
+    ///
+    /// Includes value references AND type references (cofferdam-engine
+    /// counts both `IdentifierReference` and `TSTypeName` hits since TS
+    /// allows the same identifier to appear in either position).
+    pub local_use_count: u32,
 }
 
 /// One export declaration from a source file.

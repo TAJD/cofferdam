@@ -50,11 +50,13 @@ use cofferdam_core::span_util::span_from_bytes;
 use cofferdam_core::{CorpusIndex, SourceFile};
 use oxc_ast::ast::{
     BindingPattern, Declaration, ExportAllDeclaration, ExportDefaultDeclaration,
-    ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
-    ImportExpression, ImportOrExportKind, ModuleExportName, Program, Statement,
+    ExportNamedDeclaration, Expression, IdentifierReference, ImportDeclaration,
+    ImportDeclarationSpecifier, ImportExpression, ImportOrExportKind, ModuleExportName, Program,
+    Statement,
 };
 use oxc_ast_visit::Visit;
 use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery};
+use std::collections::HashMap;
 
 /// Single shared resolver for an analysis run.
 pub struct GraphBuilder {
@@ -176,6 +178,73 @@ fn collect_program(
         _phantom: std::marker::PhantomData,
     };
     walker.visit_program(program);
+
+    // Count IdentifierReference hits per imported local-name, skipping
+    // the import statements themselves so the import declaration's own
+    // bindings don't artificially inflate use_count. Used by
+    // Refactor.DeadExport to spot imports that are imported then never
+    // referenced.
+    count_local_uses(file, program, imports);
+}
+
+fn count_local_uses(file: &SourceFile, program: &Program<'_>, imports: &mut [ImportRecord]) {
+    let mut tally: HashMap<String, u32> = HashMap::new();
+    for imp in imports.iter() {
+        // Only count for imports that originated in *this* file. Other
+        // files' records may already be in the slice when called from
+        // a shared corpus path.
+        if imp.from_file != file.path {
+            continue;
+        }
+        for n in &imp.names {
+            if n.local_name == "*" {
+                continue;
+            }
+            tally.entry(n.local_name.clone()).or_insert(0);
+        }
+    }
+    if tally.is_empty() {
+        return;
+    }
+    let mut counter = UseCounter {
+        tally: &mut tally,
+        in_import: false,
+    };
+    counter.visit_program(program);
+    for imp in imports.iter_mut() {
+        if imp.from_file != file.path {
+            continue;
+        }
+        for n in &mut imp.names {
+            if let Some(&c) = tally.get(&n.local_name) {
+                n.local_use_count = c;
+            }
+        }
+    }
+}
+
+struct UseCounter<'a> {
+    tally: &'a mut HashMap<String, u32>,
+    in_import: bool,
+}
+
+impl<'a, 'ast> Visit<'ast> for UseCounter<'a> {
+    fn visit_import_declaration(&mut self, node: &ImportDeclaration<'ast>) {
+        // Don't descend into import bindings — those would be miscounted
+        // as references to their own declarations.
+        let was = self.in_import;
+        self.in_import = true;
+        oxc_ast_visit::walk::walk_import_declaration(self, node);
+        self.in_import = was;
+    }
+
+    fn visit_identifier_reference(&mut self, node: &IdentifierReference<'ast>) {
+        if !self.in_import {
+            if let Some(c) = self.tally.get_mut(node.name.as_str()) {
+                *c += 1;
+            }
+        }
+    }
 }
 
 struct DynamicImportWalker<'a, 'ast> {
@@ -199,6 +268,7 @@ impl<'a, 'ast> Visit<'ast> for DynamicImportWalker<'a, 'ast> {
                     local_name: "*".to_string(),
                     kind: ImportKind::Namespace,
                     type_only: false,
+                    local_use_count: 0,
                 }],
                 type_only: false,
                 span: span_from_bytes(&self.file.text, node.span.start, node.span.end),
@@ -225,6 +295,7 @@ fn handle_import(
                         local_name: s.local.name.as_str().to_string(),
                         kind: ImportKind::Named,
                         type_only: matches!(s.import_kind, ImportOrExportKind::Type),
+                        local_use_count: 0,
                     });
                 }
                 ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
@@ -233,6 +304,7 @@ fn handle_import(
                         local_name: s.local.name.as_str().to_string(),
                         kind: ImportKind::Default,
                         type_only: false,
+                        local_use_count: 0,
                     });
                 }
                 ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
@@ -241,6 +313,7 @@ fn handle_import(
                         local_name: s.local.name.as_str().to_string(),
                         kind: ImportKind::Namespace,
                         type_only: false,
+                        local_use_count: 0,
                     });
                 }
             }
@@ -279,6 +352,7 @@ fn handle_export_named(
                 local_name: exported.clone(),
                 kind: ImportKind::Named,
                 type_only: type_only || matches!(spec.export_kind, ImportOrExportKind::Type),
+                local_use_count: 0,
             });
             exports.push(ExportRecord {
                 file: file.path.clone(),
@@ -503,6 +577,7 @@ fn handle_export_all(
             local_name: "*".to_string(),
             kind: ImportKind::Namespace,
             type_only: false,
+            local_use_count: 0,
         }],
         type_only,
         span: span_from_bytes(&file.text, decl.span.start, decl.span.end),

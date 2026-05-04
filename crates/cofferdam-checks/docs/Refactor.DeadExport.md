@@ -1,0 +1,53 @@
+---
+id: Refactor.DeadExport
+category: Refactor
+default_severity: Low
+base_priority: 4
+---
+
+# Refactor.DeadExport
+
+Flags exports that have at least one consumer but every consumer
+imports the local binding and never references it. The classic
+"someone removed the call site but not the import" residue.
+
+## Why
+
+`Design.OrphanExport` catches the easy case: an export with zero
+consumers. `Refactor.DeadExport` catches the quieter case: the export
+is technically used (something imports it), but every importer's
+import statement is itself dead. Cleaning these reduces the import
+graph's apparent connectivity, which makes refactors and dependency
+analysis cheaper.
+
+## What gets flagged
+
+* Named exports whose name appears in at least one `import { … }`
+  somewhere in the project, but every importer's local binding has
+  zero references after the import statement.
+* Default exports reached only by importers that never reference the
+  local default binding.
+
+## What's not flagged
+
+* Exports with no consumer at all — that's `Design.OrphanExport`.
+* Type-only exports — too many false positives without full type-
+  aware analysis (omitted argument annotations, JSX attribute types,
+  etc. don't always show up as identifier references).
+* Exports whose source file is reached via a namespace import
+  (`import * as ns`) anywhere in the project. Namespace touches are
+  opaque without member-access tracking, so we can't tell which named
+  export `ns.foo` actually used.
+* Exports whose source file is the target of any re-export
+  (`export { … } from './m'`). The re-exporter's barrel is the
+  consumer; whether the barrel itself is dead is a separate question.
+* Re-export records (forwarding nodes).
+
+## Limitations
+
+* `local_use_count` only counts `IdentifierReference` AST hits.
+  Decorator-injected references, `eval()`-tracked imports, and
+  string-key dynamic dispatch will look unused even when they're not.
+* Imports that are aliased (`import { foo as bar }`) count `bar`
+  references, not `foo` — correct, but worth knowing if a
+  refactor renames in one place but not the other.

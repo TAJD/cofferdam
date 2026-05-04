@@ -209,15 +209,14 @@ export default defineCheck({
 });
 ```
 
-Two failure assertions:
+CI assertion: `tsc -p tsconfig.fail.json` must exit **zero**. With
+`@ts-expect-error`, the directive expects the next line to fail; if the
+line stops failing (the SDK loosened its types), tsc reports the
+directive itself as unused (TS2578) and the build fails.
 
-1. The compiler emits an error on `file.lyne()` (asserted via the
-   `@ts-expect-error` directive — if the typo ever becomes valid, tsc errors
-   on the *directive* itself).
-2. CI runs `pnpm --filter brand-casing build:fail` and requires exit ≠ 0.
-
-The `@ts-expect-error` style is tighter than just "tsc fails" — it pins the
-exact line where the type system is supposed to fire.
+This is tighter than the "raw tsc must fail" approach — it pins the
+exact lines where the type system is supposed to fire, not just the
+overall pass/fail state.
 
 ## 4. The fixture — `fixture.ts`
 
@@ -339,11 +338,11 @@ to the existing `cofferdam-check.yml`):
 - name: Round-trip span check
   run: node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
 
-- name: Negative fixture must fail to compile
-  run: |
-    set +e
-    pnpm --filter brand-casing build:fail
-    test $? -ne 0
+- name: Negative fixture pins SDK type strictness
+  # tsc -p tsconfig.fail.json must exit zero — every `@ts-expect-error`
+  # in src/index.fail.ts must match a real type error. If the SDK ever
+  # loosens, one directive becomes unused and tsc fails the build.
+  run: pnpm --filter brand-casing build:fail
 ```
 
 ### Regeneration

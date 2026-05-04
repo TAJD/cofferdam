@@ -213,6 +213,7 @@ dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
  "cofferdam-formatters",
+ "globset",
  "serde",
  "serde_json",
  "tempfile",
@@ -223,6 +224,7 @@ dependencies = [
 name = "cofferdam-core"
 version = "0.1.4"
 dependencies = [
+ "globset",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",

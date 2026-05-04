@@ -1,5 +1,6 @@
 //! Cofferdam CLI entry point.
 
+mod advise;
 mod doctor;
 mod explain;
 mod gen_docs;
@@ -37,6 +38,14 @@ enum OutputFormat {
     /// `github/codeql-action/upload-sarif`, or feed Azure DevOps,
     /// GitLab, SonarQube, the VS Code Sarif Viewer, etc.
     Sarif,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum AdviseOutputFormat {
+    /// Human-readable text grouped by file (default).
+    Text,
+    /// Machine-readable JSON array. One object per file.
+    Json,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -236,6 +245,45 @@ enum Cmd {
         #[arg(long)]
         no_ignore: bool,
     },
+    /// JIT architectural advisory for agents — emit the rules that apply
+    /// to a given file or directory, INDEPENDENT of whether any current
+    /// code violates them. Designed for agentic edit loops: an LLM agent
+    /// shells out before editing a file, gets back layer membership and
+    /// per-rule constraints, and adjusts its plan before writing code.
+    /// Static projection — does not parse, does not run checks, does not
+    /// build the project graph. With no arguments, walks the current
+    /// directory.
+    Advise {
+        /// Files, directories, or globs to advise on. Defaults to `.`.
+        /// Glob patterns (`src/**/*.ts`) work; shell expansion is
+        /// honoured first, then the CLI's own globset matcher.
+        paths: Vec<PathBuf>,
+        /// Output format. Default: `text`. With `--robot` and no
+        /// explicit `--format`, defaults to `json`.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<AdviseOutputFormat>,
+        /// Default to a machine-readable JSON array when `--format` is
+        /// not set. Token-economical output for AI agents.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output.
+        #[arg(long)]
+        pretty: bool,
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the current directory until one is found or a `.git`
+        /// directory is reached. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+        /// Walk hidden files/directories (default: skip).
+        #[arg(long)]
+        hidden: bool,
+        /// Disable `.gitignore` / `.cofferdamignore` filtering.
+        #[arg(long)]
+        no_ignore: bool,
+    },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
     /// index, and the CLI reference page (from clap-markdown). Use
@@ -374,6 +422,31 @@ fn main() -> ExitCode {
             hidden,
             no_ignore,
         } => run_fix(paths, hidden, no_ignore),
+        Cmd::Advise {
+            paths,
+            format,
+            robot,
+            pretty,
+            config,
+            no_config,
+            hidden,
+            no_ignore,
+        } => advise::run(advise::AdviseArgs {
+            paths,
+            format: match format.unwrap_or(if robot {
+                AdviseOutputFormat::Json
+            } else {
+                AdviseOutputFormat::Text
+            }) {
+                AdviseOutputFormat::Text => advise::AdviseFormat::Text,
+                AdviseOutputFormat::Json => advise::AdviseFormat::Json,
+            },
+            pretty,
+            config_path: config,
+            no_config,
+            hidden,
+            no_ignore,
+        }),
         Cmd::GenDocs { out, check } => gen_docs::run(out, check),
     }
 }

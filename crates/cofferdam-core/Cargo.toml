@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Core types, traits, and AST surface for the cofferdam code-quality analyzer."
 
 [dependencies]
+globset = { workspace = true }
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }

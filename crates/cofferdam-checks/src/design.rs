@@ -777,49 +777,8 @@ impl Check for LayerViolation {
     }
 }
 
-/// Compile each layer's globs into one matcher. We use globset because
-/// it's already a transitive dep via `ignore` and supports gitignore-
-/// style `**` patterns out of the box.
-struct LayerMatcher {
-    name: String,
-    set: globset::GlobSet,
-}
-
-fn build_matchers(cfg: &LayersConfig) -> Vec<LayerMatcher> {
-    let mut out = Vec::with_capacity(cfg.layers.len());
-    for (name, globs) in &cfg.layers {
-        let mut builder = globset::GlobSetBuilder::new();
-        for g in globs {
-            // Bad globs are silently dropped; a future config-validation
-            // pass should surface them, but a typo shouldn't blow up
-            // every analysis run.
-            if let Ok(glob) = globset::Glob::new(g) {
-                builder.add(glob);
-            }
-        }
-        if let Ok(set) = builder.build() {
-            out.push(LayerMatcher {
-                name: name.clone(),
-                set,
-            });
-        }
-    }
-    out
-}
-
-fn layer_for(matchers: &[LayerMatcher], project_root: &Path, path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(project_root).unwrap_or(path);
-    let normalized = rel.to_string_lossy().replace('\\', "/");
-    // First match wins so authors can express "more specific" overrides
-    // by placing them earlier in the BTreeMap (alphabetical order today).
-    matchers
-        .iter()
-        .find(|m| m.set.is_match(&normalized))
-        .map(|m| m.name.clone())
-}
-
 fn compute_layer_violations(cfg: &LayersConfig, imports: &[ImportRecord]) -> Vec<Issue> {
-    let matchers = build_matchers(cfg);
+    let matchers = cofferdam_core::layers::build_matchers(cfg);
     if matchers.is_empty() {
         return Vec::new();
     }
@@ -832,7 +791,7 @@ fn compute_layer_violations(cfg: &LayersConfig, imports: &[ImportRecord]) -> Vec
         if let Some(cached) = layer_of.get(&key) {
             return cached.clone();
         }
-        let layer = layer_for(&matchers, &cfg.project_root, path);
+        let layer = cofferdam_core::layers::layer_for(&matchers, &cfg.project_root, path);
         layer_of.insert(key, layer.clone());
         layer
     };

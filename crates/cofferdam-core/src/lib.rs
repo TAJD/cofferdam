@@ -10,6 +10,7 @@ pub mod corpus;
 pub mod edit;
 pub mod graph;
 pub mod issue;
+pub mod layers;
 pub mod lines;
 pub mod options;
 pub mod parser;

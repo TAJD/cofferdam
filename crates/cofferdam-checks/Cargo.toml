@@ -10,6 +10,7 @@ description = "Built-in checks shipped with cofferdam (Consistency, Design, Read
 
 [dependencies]
 cofferdam-core = { workspace = true }
+globset = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }
 oxc_semantic = "0.128.0"

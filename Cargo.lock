@@ -194,6 +194,7 @@ name = "cofferdam-checks"
 version = "0.1.4"
 dependencies = [
  "cofferdam-core",
+ "globset",
  "oxc_ast",
  "oxc_ast_visit",
  "oxc_semantic",
@@ -241,6 +242,7 @@ version = "0.1.4"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
+ "globset",
  "ignore",
  "oxc_ast",
  "oxc_ast_visit",

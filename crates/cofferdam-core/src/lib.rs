@@ -21,7 +21,8 @@ pub use check::{Category, Check, CheckContext, CheckMeta, FinalizeContext};
 pub use corpus::{CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use graph::{
-    ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, EXPORTS, IMPORTS,
+    ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, LayersConfig, EXPORTS,
+    IMPORTS, LAYERS,
 };
 pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};
 pub use lines::{LineView, Lines};

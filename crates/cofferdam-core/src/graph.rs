@@ -26,6 +26,7 @@
 //! loading. Tracked as a follow-up; CommonJS-heavy projects shouldn't yet
 //! rely on `Design.OrphanExport` and friends.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::corpus::CorpusKey;
@@ -120,3 +121,31 @@ pub static IMPORTS: CorpusKey<Vec<ImportRecord>> = CorpusKey::new("__cofferdam.g
 
 /// All named/default/re-export declarations observed during pass 1.
 pub static EXPORTS: CorpusKey<Vec<ExportRecord>> = CorpusKey::new("__cofferdam.graph.exports");
+
+/// Project-wide layer/architecture rules read from `cofferdam.toml`.
+///
+/// `Design.LayerViolation` reads this in `finalize`. The engine writes a
+/// `Some` value here only when the loaded `ProjectConfig` had a
+/// `[layers]` table; otherwise the slot stays `None` and the check
+/// becomes a no-op.
+///
+/// We use `Option<LayersConfig>` (not `LayersConfig`) so the absence of
+/// configuration is distinguishable from an empty config, which would
+/// flag every cross-file edge.
+#[derive(Debug, Clone, Default)]
+pub struct LayersConfig {
+    /// Absolute path of the directory containing `cofferdam.toml`.
+    /// Glob patterns are matched against paths relative to this root.
+    pub project_root: PathBuf,
+    /// Layer name → list of glob patterns (gitignore-style). A file
+    /// belongs to a layer when one of its globs matches the file's path
+    /// relative to `project_root`.
+    pub layers: BTreeMap<String, Vec<String>>,
+    /// Layer name → list of layer names whose files this layer is
+    /// allowed to import from. A layer always implicitly allows imports
+    /// from itself; an entry of `[]` here means "isolated layer — must
+    /// not import any other in-project file".
+    pub allow: BTreeMap<String, Vec<String>>,
+}
+
+pub static LAYERS: CorpusKey<Option<LayersConfig>> = CorpusKey::new("__cofferdam.graph.layers");

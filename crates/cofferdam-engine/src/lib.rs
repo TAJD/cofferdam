@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, Issue, Priority,
-    Severity, SourceFile, Span,
+    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, Issue,
+    LayersConfig, Priority, Severity, SourceFile, Span, LAYERS,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +48,11 @@ pub struct Engine {
     /// post-pass in `analyze_with_text` stamps each emitted issue with
     /// the value from this map — checks don't set severity themselves.
     severities: BTreeMap<String, Severity>,
+    /// `[layers]` config from `cofferdam.toml`. `None` means the table
+    /// was missing; `Some` is published into the `LAYERS` corpus slot at
+    /// the start of each analysis run so `Design.LayerViolation` can
+    /// read it in `finalize`.
+    layers: Option<LayersConfig>,
 }
 
 impl Engine {
@@ -67,6 +72,7 @@ impl Engine {
             checks,
             options,
             severities,
+            layers: None,
         }
     }
 
@@ -103,6 +109,7 @@ impl Engine {
             checks,
             options,
             severities,
+            layers: config.layers.clone(),
         })
     }
 
@@ -135,6 +142,12 @@ impl Engine {
         // in finalize(). Per-check checks ignore it.
         let corpus = CorpusIndex::new();
         let graph_builder = graph::GraphBuilder::new();
+        // Publish the layers config (if any) so finalize-stage checks
+        // see it through the same corpus channel as the import/export
+        // tables. Done before any check sees a file.
+        if let Some(layers) = &self.layers {
+            corpus.with_slot(&LAYERS, |slot| *slot = Some(layers.clone()));
+        }
 
         for path in paths {
             let path = path.as_ref();

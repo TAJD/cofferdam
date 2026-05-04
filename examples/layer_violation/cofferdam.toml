@@ -1,0 +1,9 @@
+[layers]
+infra  = ["src/infra/**"]
+domain = ["src/domain/**"]
+app    = ["src/app/**"]
+
+[layers.allow]
+domain = ["infra"]
+app    = ["domain", "infra"]
+# infra has no allow entry → must not import from any other layer

@@ -94,3 +94,34 @@ if (file.ast) {
     expectType<string>(i.source);
   }
 }
+
+// --- cd-xlv: options round-trip — defaults survive into run() ---
+
+const optsRoundTrip = defineCheck({
+  id: "OptsTest",
+  category: Category.Refactor,
+  basePriority: 5,
+  explanation: "x",
+  options: {
+    foo: { default: "bar", type: "string" },
+    items: { default: [] as string[], type: "string[]" },
+    limit: { default: 10, type: "number" },
+    enabled: { default: true, type: "boolean" },
+    coords: { default: [0, 0] as number[], type: "number[]" },
+  },
+  run(_file, _ctx, opts) {
+    expectType<string>(opts.foo);
+    expectType<readonly string[]>(opts.items);
+    expectType<number>(opts.limit);
+    expectType<boolean>(opts.enabled);
+    expectType<readonly number[]>(opts.coords);
+  },
+});
+
+// At runtime, the returned check carries the schema verbatim — the
+// loader's runPlugin reads `check.options[key].default` to produce the
+// `opts` arg when no cofferdam.toml override is in play.
+expectType<typeof optsRoundTrip.options>(optsRoundTrip.options);
+expectType<"bar">(optsRoundTrip.options.foo.default);
+expectType<10>(optsRoundTrip.options.limit.default);
+expectType<true>(optsRoundTrip.options.enabled.default);

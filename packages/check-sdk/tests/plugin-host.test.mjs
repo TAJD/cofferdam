@@ -115,3 +115,103 @@ test("loadPlugins rejects non-Check default exports", async () => {
 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+test("cd-xlv: schema defaults survive round-trip into run()", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  // Capture the opts arg the run() callback received so we can assert
+  // on its shape AFTER the plugin host has materialised it.
+  /** @type {unknown} */
+  let captured;
+  const check = defineCheck({
+    id: "OptsRoundTrip",
+    category: Category.Refactor,
+    basePriority: 5,
+    explanation: "x",
+    options: {
+      foo: { default: "bar", type: "string" },
+      items: { default: ["a", "b"], type: "string[]" },
+      limit: { default: 10, type: "number" },
+      enabled: { default: true, type: "boolean" },
+    },
+    run(_file, _ctx, opts) {
+      captured = opts;
+    },
+  });
+
+  runPlugin(check, {
+    path: "f.ts",
+    text: "x",
+    lineViews: [{ lineNo: 1, text: "x", isComment: false, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 0 }],
+  });
+
+  assert.deepEqual(captured, {
+    foo: "bar",
+    items: ["a", "b"],
+    limit: 10,
+    enabled: true,
+  });
+});
+
+test("plugin magic comments filter inside run(); engine suppression filters at the engine boundary", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  const trigger = /\bRovikore\b/;
+
+  // Plugin defines its own magic-comment escape hatch — `// brand:ignore`
+  // on the previous line. This filtering runs INSIDE the plugin (cd-cmb
+  // precedence: layer 2). Engine suppression (`// cofferdam-ignore`)
+  // happens AFTER the plugin emits — that's a separate test against the
+  // engine in Rust.
+  const check = defineCheck({
+    id: "BrandCasing",
+    category: Category.Warning,
+    basePriority: 15,
+    explanation: "x",
+    run(file, ctx) {
+      const lines = [...file.lines()];
+      const ignored = new Set();
+      for (const ln of lines) {
+        if (/\bbrand:ignore\b/.test(ln.text)) ignored.add(ln.lineNo + 1);
+      }
+      for (const ln of lines) {
+        if (ignored.has(ln.lineNo)) continue;
+        if (!ln.isStringLiteral) continue;
+        const m = trigger.exec(ln.text);
+        if (!m) continue;
+        ctx.report({
+          message: "brand",
+          span: ln.spanFor(m.index, m.index + m[0].length),
+        });
+      }
+    },
+  });
+
+  const text = [
+    "const a = 'Rovikore one';",                        // line 1 — FLAG
+    "// brand:ignore — legacy fixture",                 // line 2 — magic comment
+    "const b = 'Rovikore two';",                        // line 3 — EXEMPT (plugin filter)
+    "const c = 'Rovikore three';",                      // line 4 — FLAG
+  ].join("\n") + "\n";
+
+  const lineViews = [
+    { lineNo: 1, text: "const a = 'Rovikore one';",  isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 0 },
+    { lineNo: 2, text: "// brand:ignore — legacy fixture", isComment: true, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 26 },
+    { lineNo: 3, text: "const b = 'Rovikore two';",  isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 60 },
+    { lineNo: 4, text: "const c = 'Rovikore three';", isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 86 },
+  ];
+
+  const reports = runPlugin(check, { path: "f.ts", text, lineViews });
+
+  // Two reports: lines 1 and 4. Line 3 was filtered by the plugin's own
+  // magic-comment logic before ctx.report fired.
+  assert.equal(reports.length, 2);
+  // The first should be at line 1 — span starts at byte 11 + 0 = 11.
+  assert.equal(reports[0].startByte, 11);
+  // The second at line 4.
+  assert.ok(reports[1].startByte > 86);
+});

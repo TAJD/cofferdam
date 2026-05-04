@@ -189,3 +189,69 @@ fn without_suppression_triple_equals_fires() {
         "expected at least one TripleEquals issue without suppression"
     );
 }
+
+// ============================================================
+// Biome-style suppressions on real built-in checks (cd-81a.4)
+// ============================================================
+
+#[test]
+fn biome_ignore_with_id_silences_engine_finding() {
+    let engine = Engine::new(all_builtins());
+    let temp_dir = TempDir::new().expect("temp dir");
+    let file_path = temp_dir.path().join("test.ts");
+
+    // Without the directive this would emit Warning.TripleEquals on line 2.
+    let code = "// cofferdam-ignore: Warning.TripleEquals\nif (a == b) { }";
+    std::fs::write(&file_path, code).expect("write file");
+
+    let issues = engine.analyze(&[&file_path]).expect("analyze");
+
+    let on_line_2: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .collect();
+    assert!(on_line_2.is_empty(), "Biome-style ignore should suppress");
+}
+
+#[test]
+fn biome_ignore_file_silences_whole_file() {
+    let engine = Engine::new(all_builtins());
+    let temp_dir = TempDir::new().expect("temp dir");
+    let file_path = temp_dir.path().join("test.ts");
+
+    let code = "// cofferdam-ignore-file: Warning.TripleEquals\nif (a == b) { }\nif (x == y) { }";
+    std::fs::write(&file_path, code).expect("write file");
+
+    let issues = engine.analyze(&[&file_path]).expect("analyze");
+
+    let triple_eq: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Warning.TripleEquals")
+        .collect();
+    assert!(
+        triple_eq.is_empty(),
+        "file-wide ignore should silence every TripleEquals match"
+    );
+}
+
+#[test]
+fn biome_ignore_with_reason_strips_reason_and_still_works() {
+    let engine = Engine::new(all_builtins());
+    let temp_dir = TempDir::new().expect("temp dir");
+    let file_path = temp_dir.path().join("test.ts");
+
+    let code =
+        "// cofferdam-ignore: Warning.TripleEquals: legacy code, see cd-XYZ\nif (a == b) { }";
+    std::fs::write(&file_path, code).expect("write file");
+
+    let issues = engine.analyze(&[&file_path]).expect("analyze");
+
+    let on_line_2: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .collect();
+    assert!(
+        on_line_2.is_empty(),
+        "ignore with reason should still match — reason text is parsed but discarded"
+    );
+}

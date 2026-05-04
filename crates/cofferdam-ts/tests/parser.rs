@@ -186,7 +186,7 @@ fn parse_into_result_works_with_check_context() {
         diagnostics: Box::leak(parsed_return.errors.into_boxed_slice()),
     }));
 
-    let ctx = CheckContext::new(file).with_parsed(parsed);
+    let ctx = CheckContext::new(file).with_parsed(*parsed);
 
     // Should successfully create context
     assert!(ctx.parsed.is_some());

@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use cofferdam_core::{LineView, SourceFile};
-use cofferdam_ts::{parse_into, Allocator, AstView, CheckContext, ParsedView};
+use cofferdam_ts::{parse_into, Allocator, AstView, CheckContext, CheckContextExt, ParsedView};
 
 fn view_for(text: &'static str) -> AstView<'static> {
     let path = PathBuf::from("test.ts");
@@ -23,7 +23,7 @@ fn view_for(text: &'static str) -> AstView<'static> {
         diagnostics: Box::leak(parsed_return.errors.into_boxed_slice()),
     }));
     CheckContext::new(file)
-        .with_parsed(parsed)
+        .with_parsed(*parsed)
         .ast()
         .expect("parsed view should produce AstView")
 }
@@ -245,7 +245,7 @@ fn crlf_is_stripped_from_text() {
         program: Box::leak(Box::new(parsed_return.program)),
         diagnostics: Box::leak(parsed_return.errors.into_boxed_slice()),
     }));
-    let view = CheckContext::new(file).with_parsed(parsed).ast().unwrap();
+    let view = CheckContext::new(file).with_parsed(*parsed).ast().unwrap();
 
     let lines: Vec<_> = view.lines().collect();
     // Two content lines + one trailing empty (matches `split('\n')`).

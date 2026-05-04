@@ -11,11 +11,13 @@
 //! for the canonical recipe.
 
 pub use crate::ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
-pub use crate::check::{Check, CheckContext};
+pub use crate::language::TypeScript;
 pub use crate::parser::{parse_into, source_type_for, ParsedView};
+pub use crate::{Check, CheckContext, DynCheck, TsCheck};
 pub use cofferdam_core::{
     span_from_bytes, Category, CheckMeta, CorpusIndex, CorpusKey, FileScope, FinalizeContext,
-    Issue, LineView, Lines, Priority, RelatedSpan, Severity, SourceFile, Span, TextEdit,
+    Issue, Language, LineView, Lines, ParseOutcome, Priority, RelatedSpan, Severity, SourceFile,
+    Span, TextEdit,
 };
 pub use oxc_ast_visit::{walk, Visit};
 pub use oxc_syntax::scope::ScopeFlags;

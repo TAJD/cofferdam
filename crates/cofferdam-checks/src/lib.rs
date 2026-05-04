@@ -11,12 +11,12 @@ pub mod readability;
 pub mod refactor;
 pub mod warning;
 
-use cofferdam_ts::Check;
+use cofferdam_ts::{Check, TypeScript};
 
 /// All built-in checks, ready for the engine to consume.
 ///
 /// Phase 0 returns five entries — one per category. Phase 1+ adds the rest.
-pub fn all_builtins() -> Vec<Box<dyn Check>> {
+pub fn all_builtins() -> Vec<Box<dyn Check<TypeScript>>> {
     vec![
         Box::new(readability::MaxLineLength::new(120)),
         Box::new(readability::MaxFunctionLength::new(50)),

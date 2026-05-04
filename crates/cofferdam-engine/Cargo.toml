@@ -10,7 +10,6 @@ description = "Orchestration: discovery, scheduling, baseline, severity gating, 
 
 [dependencies]
 cofferdam-core = { workspace = true }
-cofferdam-ts = { workspace = true }
 globset = "0.4"
 ignore = { workspace = true }
 serde = { workspace = true }
@@ -21,6 +20,7 @@ toml = { workspace = true }
 
 [dev-dependencies]
 cofferdam-checks = { workspace = true }
+cofferdam-ts = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

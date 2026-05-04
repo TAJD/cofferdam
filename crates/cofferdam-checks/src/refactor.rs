@@ -31,7 +31,7 @@ use cofferdam_ts::oxc_ast_visit::Visit;
 use cofferdam_ts::oxc_semantic::SemanticBuilder;
 use cofferdam_ts::oxc_span::GetSpan;
 use cofferdam_ts::oxc_syntax::symbol::SymbolFlags;
-use cofferdam_ts::{Check, CheckContext};
+use cofferdam_ts::{Check, CheckContext, TypeScript};
 
 // ─── Refactor.CyclomaticComplexity ─────────────────────────────────────────
 
@@ -64,12 +64,12 @@ const CYC_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for CyclomaticComplexity {
+impl Check<TypeScript> for CyclomaticComplexity {
     fn meta(&self) -> &'static CheckMeta {
         &CYC_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -241,12 +241,12 @@ const COG_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for CognitiveComplexity {
+impl Check<TypeScript> for CognitiveComplexity {
     fn meta(&self) -> &'static CheckMeta {
         &COG_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -623,12 +623,12 @@ const DUP_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for DuplicateBlock {
+impl Check<TypeScript> for DuplicateBlock {
     fn meta(&self) -> &'static CheckMeta {
         &DUP_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -1417,12 +1417,12 @@ const PREFER_OPTIONAL_CHAIN_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for PreferOptionalChain {
+impl Check<TypeScript> for PreferOptionalChain {
     fn meta(&self) -> &'static CheckMeta {
         &PREFER_OPTIONAL_CHAIN_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -1543,12 +1543,12 @@ const PREFER_NULLISH_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for PreferNullishCoalescing {
+impl Check<TypeScript> for PreferNullishCoalescing {
     fn meta(&self) -> &'static CheckMeta {
         &PREFER_NULLISH_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -1698,12 +1698,12 @@ const SKIP_KINDS: SymbolFlags = SymbolFlags::TypeAlias
     .union(SymbolFlags::ValueModule)
     .union(SymbolFlags::Ambient);
 
-impl Check for UnusedVariable {
+impl Check<TypeScript> for UnusedVariable {
     fn meta(&self) -> &'static CheckMeta {
         &UNUSED_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -2086,7 +2086,7 @@ mod tests {
             diagnostics: &ret_a.errors,
         };
         let mut ctx_a = CheckContext::new(&file_a)
-            .with_parsed(&view_a)
+            .with_parsed(view_a)
             .with_options(options)
             .with_corpus(&corpus);
         check.run(&file_a, &mut ctx_a);
@@ -2099,7 +2099,7 @@ mod tests {
             diagnostics: &ret_b.errors,
         };
         let mut ctx_b = CheckContext::new(&file_b)
-            .with_parsed(&view_b)
+            .with_parsed(view_b)
             .with_options(options)
             .with_corpus(&corpus);
         check.run(&file_b, &mut ctx_b);

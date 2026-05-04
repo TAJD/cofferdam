@@ -28,15 +28,17 @@ pub mod check;
 pub mod corpus;
 pub mod edit;
 pub mod issue;
+pub mod language;
 pub mod lines;
 pub mod options;
 pub mod source;
 pub mod span_util;
 
-pub use check::{Category, CheckMeta, FileScope, FinalizeContext};
+pub use check::{Category, Check, CheckContext, CheckMeta, FileScope, FinalizeContext};
 pub use corpus::{CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};
+pub use language::{Language, ParseOutcome};
 pub use lines::{apply_byte_range, byte_to_line, compute_line_starts, LineFlags, LineView, Lines};
 pub use options::{
     validate_options, CheckOptions, OptionDefault, OptionKind, OptionSpec, OptionValue,

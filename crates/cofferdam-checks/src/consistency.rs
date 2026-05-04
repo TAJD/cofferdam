@@ -8,7 +8,7 @@ use cofferdam_core::span_from_bytes;
 use cofferdam_core::{Category, CheckMeta, CorpusKey, Issue, Priority, Severity, SourceFile, Span};
 use cofferdam_ts::oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use cofferdam_ts::oxc_ast_visit::Visit;
-use cofferdam_ts::{Check, CheckContext};
+use cofferdam_ts::{Check, CheckContext, TypeScript};
 
 // ─── Consistency.QuoteStyle ─────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ const META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for QuoteStyle {
+impl Check<TypeScript> for QuoteStyle {
     fn meta(&self) -> &'static CheckMeta {
         &META
     }
@@ -51,7 +51,7 @@ impl Check for QuoteStyle {
     /// Pass 1: walk AST and collect per-file quote-usage statistics.
     /// Skips JSX attribute string values (they have different style rules)
     /// and strings whose content forces the alternate quote (e.g. `"don't"`).
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -72,7 +72,7 @@ impl Check for QuoteStyle {
 
     /// Pass 2: read the corpus slot for this file, determine dominant style,
     /// emit one issue per span that deviates from the dominant.
-    fn pass2(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn pass2(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let stats = ctx
             .corpus
             .with_slot(&QUOTE_STATS, |slot| slot.get(&file.path).cloned());
@@ -227,7 +227,7 @@ mod tests {
         // Pass 1: collect stats.
         {
             let mut ctx = CheckContext::new(&file)
-                .with_parsed(&parsed)
+                .with_parsed(parsed)
                 .with_corpus(&corpus);
             let p1 = check.run(&file, &mut ctx);
             assert!(p1.is_empty(), "pass 1 should emit no issues");
@@ -236,7 +236,7 @@ mod tests {
         // Pass 2: emit findings.
         {
             let mut ctx = CheckContext::new(&file)
-                .with_parsed(&parsed)
+                .with_parsed(parsed)
                 .with_corpus(&corpus);
             check.pass2(&file, &mut ctx)
         }
@@ -337,13 +337,13 @@ const c = 'three';
         let check = QuoteStyle;
         {
             let mut ctx = CheckContext::new(&file)
-                .with_parsed(&parsed)
+                .with_parsed(parsed)
                 .with_corpus(&corpus);
             check.run(&file, &mut ctx);
         }
         {
             let mut ctx = CheckContext::new(&file)
-                .with_parsed(&parsed)
+                .with_parsed(parsed)
                 .with_corpus(&corpus);
             check.pass2(&file, &mut ctx)
         }

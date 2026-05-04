@@ -887,7 +887,7 @@ fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
     let checks = all_builtins();
 
     // Build a map from check_id → &dyn Check so we can call autofix per issue.
-    let check_map: HashMap<&str, &dyn cofferdam_ts::Check> =
+    let check_map: HashMap<&str, &cofferdam_ts::DynCheck> =
         checks.iter().map(|c| (c.meta().id, c.as_ref())).collect();
 
     let engine = Engine::new(all_builtins());

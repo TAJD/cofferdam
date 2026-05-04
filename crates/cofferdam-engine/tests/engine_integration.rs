@@ -442,7 +442,7 @@ mod scope_filter {
     use cofferdam_core::{
         Category, CheckMeta, FileScope, Issue, Priority, Severity, SourceFile, Span,
     };
-    use cofferdam_ts::{Check, CheckContext};
+    use cofferdam_ts::{Check, CheckContext, TypeScript};
 
     static SCOPE: FileScope = FileScope {
         extensions: &["tsx"],
@@ -467,11 +467,11 @@ mod scope_filter {
     /// invocations indirectly via the issue list.
     struct ScopedTestCheck;
 
-    impl Check for ScopedTestCheck {
+    impl Check<TypeScript> for ScopedTestCheck {
         fn meta(&self) -> &'static CheckMeta {
             &META_SCOPED
         }
-        fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
             vec![Issue {
                 check_id: "Test.ScopedCheck".to_string(),
                 message: "scoped".to_string(),

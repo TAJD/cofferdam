@@ -12,7 +12,7 @@ use cofferdam_ts::oxc_ast::ast::{
     ArrowFunctionExpression, Declaration, ExportNamedDeclaration, Function, VariableDeclaration,
 };
 use cofferdam_ts::oxc_ast_visit::Visit;
-use cofferdam_ts::{Check, CheckContext};
+use cofferdam_ts::{Check, CheckContext, TypeScript};
 
 /// `Design.MaxParameters` — flag function signatures over `limit` params.
 ///
@@ -51,12 +51,12 @@ impl MaxParameters {
     }
 }
 
-impl Check for MaxParameters {
+impl Check<TypeScript> for MaxParameters {
     fn meta(&self) -> &'static CheckMeta {
         self.meta
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -171,12 +171,12 @@ const DEN_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for DuplicateExportName {
+impl Check<TypeScript> for DuplicateExportName {
     fn meta(&self) -> &'static CheckMeta {
         &DEN_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };

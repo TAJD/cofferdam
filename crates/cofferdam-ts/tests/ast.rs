@@ -11,7 +11,9 @@ use std::path::PathBuf;
 
 use cofferdam_core::SourceFile;
 use cofferdam_ts::oxc_ast::ast::Function;
-use cofferdam_ts::{parse_into, Allocator, AstView, AstVisitor, CheckContext, ParsedView, Walk};
+use cofferdam_ts::{
+    parse_into, Allocator, AstView, AstVisitor, CheckContext, CheckContextExt, ParsedView, Walk,
+};
 
 // ============================================================
 // AstView construction and access
@@ -27,7 +29,7 @@ fn setup_ast_view(text: &'static str, path: &str) -> AstView<'static> {
         diagnostics: Box::leak(parsed_return.errors.into_boxed_slice()),
     }));
     CheckContext::new(file)
-        .with_parsed(parsed)
+        .with_parsed(*parsed)
         .ast()
         .expect("parsed view should produce AstView")
 }

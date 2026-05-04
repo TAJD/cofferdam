@@ -80,6 +80,11 @@ pub fn parse_fatal(parsed: &ParserReturn<'_>) -> bool {
 
 /// Borrowed view exposed to checks: the parsed Program plus parse
 /// diagnostics. `Program` is the oxc AST root.
+///
+/// Two reference fields, so trivially `Copy`. The `Copy` bound is
+/// what lets `cofferdam_core::CheckContext.parsed` be a plain
+/// `Option<L::Parsed<'a>>` field that built-in checks read repeatedly.
+#[derive(Clone, Copy)]
 pub struct ParsedView<'a> {
     pub program: &'a Program<'a>,
     pub diagnostics: &'a [OxcDiagnostic],

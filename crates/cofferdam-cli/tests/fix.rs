@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use cofferdam_checks::all_builtins;
 use cofferdam_core::{SourceFile, TextEdit};
 use cofferdam_engine::Engine;
-use cofferdam_ts::Check;
+use cofferdam_ts::DynCheck;
 use tempfile::TempDir;
 
 /// Apply a sorted (reverse-offset) list of `TextEdit`s to `text` in place.
@@ -62,7 +62,7 @@ fn triple_equals_fix_round_trip() {
 
     // Build check_id → &dyn Check map.
     let checks = all_builtins();
-    let check_map: HashMap<&str, &dyn Check> =
+    let check_map: HashMap<&str, &DynCheck> =
         checks.iter().map(|c| (c.meta().id, c.as_ref())).collect();
 
     // Collect autofix edits for TripleEquals issues only.
@@ -147,7 +147,7 @@ fn fix_on_already_strict_file_produces_no_edits() {
         .expect("analyze");
 
     let checks = all_builtins();
-    let check_map: HashMap<&str, &dyn Check> =
+    let check_map: HashMap<&str, &DynCheck> =
         checks.iter().map(|c| (c.meta().id, c.as_ref())).collect();
 
     let edits: Vec<TextEdit> = issues

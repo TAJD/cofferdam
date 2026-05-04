@@ -5,19 +5,29 @@
 //! Configurable taxonomy (decision #8) lets projects *add* categories —
 //! never remove these five.
 //!
-//! Note: as of cd-8wj this trait + the [`CheckContext`] it consumes live
-//! in `cofferdam-core` only as the data-shaped portion of the contract.
-//! The actual `Check` trait that built-in and plugin checks implement
-//! lives in `cofferdam-ts` (or any future language adapter), where it
-//! pairs the structures here with a parsed-AST view. Keeping `Check`
-//! itself out of core is what lets core stay free of any oxc / language
-//! coupling — see `design/platform-extensibility.md`.
+//! `Check` and `CheckContext` are generic over `L: Language` — see
+//! `language.rs` for that trait. Today there is exactly one impl
+//! (`cofferdam_ts::TypeScript`); the CLI binary picks it. Tomorrow a
+//! Python adapter slots in alongside without touching this file.
+
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::corpus::CorpusIndex;
-use crate::issue::Severity;
-use crate::options::OptionSpec;
+use crate::edit::TextEdit;
+use crate::issue::{Issue, Severity};
+use crate::language::Language;
+use crate::options::{CheckOptions, OptionSpec, EMPTY_OPTIONS};
+use crate::source::SourceFile;
+
+/// Process-wide empty corpus, used as a default when callers (mostly tests)
+/// don't supply one. Lazily initialised because `CorpusIndex` is not const-
+/// constructible (`HashMap::new` is not const).
+fn empty_corpus() -> &'static CorpusIndex {
+    static EMPTY: OnceLock<CorpusIndex> = OnceLock::new();
+    EMPTY.get_or_init(CorpusIndex::default)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -119,12 +129,68 @@ impl FileScope {
     };
 }
 
-/// Context passed to `Check::finalize` (defined in language-adapter
-/// crates such as `cofferdam-ts`). Carries the same `CorpusIndex` that
-/// the per-file context shared, so cross-file checks can aggregate the
-/// state they collected per file. Lives in core because `finalize` has
-/// no current file or parsed AST — it operates only over the shared
-/// run-scoped corpus, which is platform-agnostic.
+/// Mutable per-file scratch passed to `Check::run`. Carries the
+/// SourceFile and (when available) the parsed AST.
+///
+/// Two lifetimes (cd-jub):
+/// - `'p` — the parsed view's lifetime, tied to the per-file arena
+///   the language adapter creates inside `Language::with_parsed`. Strictly
+///   shorter than the engine's run lifetime.
+/// - `'r` — the run lifetime: file, options, corpus all live for the
+///   whole engine run.
+///
+/// They have to be separate so the parsed-arena lifetime doesn't infect
+/// the long-lived borrows. (Earlier we tried a single `'a` and the
+/// HRTB on `with_parsed` forced `corpus`/`file` to be `'static`.)
+///
+/// `parsed` is `None` only when parsing produced no usable view. Checks
+/// that need the AST should treat `None` as "skip this file" rather
+/// than panicking.
+pub struct CheckContext<'p, 'r, L: Language> {
+    pub file: &'r SourceFile,
+    pub parsed: Option<L::Parsed<'p>>,
+    /// Resolved options for the running check, validated against its
+    /// schema at engine startup. Defaults to a process-wide empty bag
+    /// — useful for tests and for checks that declare no options.
+    pub options: &'r CheckOptions,
+    /// Run-scoped shared store for cross-file checks. Same instance
+    /// passed into every per-file `CheckContext` and reused by
+    /// `FinalizeContext`. Defaults to a process-wide empty corpus so
+    /// per-file unit tests don't have to plumb one through.
+    pub corpus: &'r CorpusIndex,
+}
+
+impl<'p, 'r, L: Language> CheckContext<'p, 'r, L> {
+    pub fn new(file: &'r SourceFile) -> Self {
+        Self {
+            file,
+            parsed: None,
+            options: &EMPTY_OPTIONS,
+            corpus: empty_corpus(),
+        }
+    }
+
+    pub fn with_parsed(mut self, parsed: L::Parsed<'p>) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_options(mut self, options: &'r CheckOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn with_corpus(mut self, corpus: &'r CorpusIndex) -> Self {
+        self.corpus = corpus;
+        self
+    }
+}
+
+/// Context passed to `Check::finalize`. Carries the same `CorpusIndex`
+/// that ran-phase `CheckContext` shared, so cross-file checks can
+/// aggregate the state they collected per file. Deliberately distinct
+/// from `CheckContext` because `finalize` has no current file or parsed
+/// AST.
 pub struct FinalizeContext<'a> {
     pub corpus: &'a CorpusIndex,
 }
@@ -132,5 +198,47 @@ pub struct FinalizeContext<'a> {
 impl<'a> FinalizeContext<'a> {
     pub fn new(corpus: &'a CorpusIndex) -> Self {
         Self { corpus }
+    }
+}
+
+/// The check contract.
+///
+/// `run` is called once per file. `pass2` is called once per file AFTER
+/// all checks' `run` has completed for every file — this is the two-pass
+/// consistency mode. `finalize` runs after all files have been processed
+/// (including pass 2) — that's where project-graph checks (decision #5)
+/// emit their findings, e.g. orphaned exports, context-boundary
+/// violations, or duplicate-block detection. `finalize` receives the
+/// shared `CorpusIndex` it filled during `run` via `FinalizeContext`.
+///
+/// `autofix` is called by the fix engine for each issue emitted by this
+/// check. Returning `Some(TextEdit)` opts the check into mechanical
+/// autofix; returning `None` (the default) opts out. The fix engine skips
+/// issues whose check returns `None` and processes the rest in reverse
+/// byte-offset order to avoid span-shift bugs.
+pub trait Check<L: Language>: Send + Sync {
+    fn meta(&self) -> &'static CheckMeta;
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_, L>) -> Vec<Issue>;
+    /// Per-file second pass. Runs AFTER all checks' first-pass `run`
+    /// completes for every file. Use when a check needs to see all files
+    /// before emitting findings (e.g. "the dominant quote style in this
+    /// file is X, flag deviations"). Reads evidence collected in pass 1
+    /// via `ctx.corpus`. Returns findings the same way `run` does.
+    ///
+    /// Only called for checks whose `meta().consistency == true`.
+    fn pass2(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_, '_, L>) -> Vec<Issue> {
+        Vec::new()
+    }
+    fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+    /// Return the `TextEdit` that would fix `issue`, or `None` if this
+    /// check does not support mechanical autofix for the given finding.
+    ///
+    /// The `source` parameter carries the raw text of the file that
+    /// produced `issue`, allowing the implementation to inspect the
+    /// bytes at `issue.span` without re-reading from disk.
+    fn autofix(&self, _issue: &Issue, _source: &SourceFile) -> Option<TextEdit> {
+        None
     }
 }

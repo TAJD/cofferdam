@@ -7,7 +7,7 @@ use cofferdam_ts::oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
 };
 use cofferdam_ts::oxc_ast_visit::Visit;
-use cofferdam_ts::{Check, CheckContext};
+use cofferdam_ts::{Check, CheckContext, TypeScript};
 
 /// `Warning.TripleEquals` — flags `==` and `!=` (vs `===` / `!==`).
 ///
@@ -31,12 +31,12 @@ const META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for TripleEquals {
+impl Check<TypeScript> for TripleEquals {
     fn meta(&self) -> &'static CheckMeta {
         &META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -174,12 +174,12 @@ const NO_CONSOLE_LOG_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for NoConsoleLog {
+impl Check<TypeScript> for NoConsoleLog {
     fn meta(&self) -> &'static CheckMeta {
         &NO_CONSOLE_LOG_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -244,12 +244,12 @@ const NO_DEBUGGER_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for NoDebugger {
+impl Check<TypeScript> for NoDebugger {
     fn meta(&self) -> &'static CheckMeta {
         &NO_DEBUGGER_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -312,12 +312,12 @@ const NO_EVAL_META: CheckMeta = CheckMeta {
     files: None,
 };
 
-impl Check for NoEval {
+impl Check<TypeScript> for NoEval {
     fn meta(&self) -> &'static CheckMeta {
         &NO_EVAL_META
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -392,7 +392,7 @@ mod tests {
             program: &parser_return.program,
             diagnostics: &parser_return.errors,
         };
-        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        let mut ctx = CheckContext::new(&file).with_parsed(parsed);
         TripleEquals.run(&file, &mut ctx)
     }
 

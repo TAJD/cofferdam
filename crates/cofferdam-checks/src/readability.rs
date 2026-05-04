@@ -7,7 +7,7 @@ use cofferdam_core::{
 };
 use cofferdam_ts::oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
 use cofferdam_ts::oxc_ast_visit::Visit;
-use cofferdam_ts::{Check, CheckContext};
+use cofferdam_ts::{Check, CheckContext, TypeScript};
 
 // ---------- Readability.MaxLineLength ----------
 
@@ -50,12 +50,12 @@ impl MaxLineLength {
     }
 }
 
-impl Check for MaxLineLength {
+impl Check<TypeScript> for MaxLineLength {
     fn meta(&self) -> &'static CheckMeta {
         self.meta
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let limit = ctx
             .options
             .get_int("limit")
@@ -134,12 +134,12 @@ impl MaxFunctionLength {
     }
 }
 
-impl Check for MaxFunctionLength {
+impl Check<TypeScript> for MaxFunctionLength {
     fn meta(&self) -> &'static CheckMeta {
         self.meta
     }
 
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };

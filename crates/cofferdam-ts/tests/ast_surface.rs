@@ -21,7 +21,8 @@ use cofferdam_ts::oxc_ast::ast::{
     Statement,
 };
 use cofferdam_ts::{
-    parse_into, Allocator, AstView, AstVisitor, CheckContext, NodeKind, NodeRef, ParsedView, Walk,
+    parse_into, Allocator, AstView, AstVisitor, CheckContext, CheckContextExt, NodeKind, NodeRef,
+    ParsedView, Walk,
 };
 
 /// Build an `AstView` for `text` parsed as a `.ts` file. The arena +
@@ -36,7 +37,7 @@ fn view_for(text: &'static str) -> AstView<'static> {
         program: Box::leak(Box::new(parsed_return.program)),
         diagnostics: Box::leak(parsed_return.errors.into_boxed_slice()),
     }));
-    let ctx = CheckContext::new(file).with_parsed(parsed);
+    let ctx = CheckContext::new(file).with_parsed(*parsed);
     ctx.ast().expect("parsed view should produce AstView")
 }
 

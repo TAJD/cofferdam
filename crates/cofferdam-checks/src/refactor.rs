@@ -60,6 +60,7 @@ const CYC_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for CyclomaticComplexity {
@@ -232,6 +233,7 @@ const COG_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for CognitiveComplexity {
@@ -609,6 +611,7 @@ const DUP_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: DUP_BLOCK_OPTIONS,
+    files: None,
 };
 
 impl Check for DuplicateBlock {
@@ -1398,6 +1401,7 @@ const PREFER_OPTIONAL_CHAIN_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for PreferOptionalChain {
@@ -1523,6 +1527,7 @@ const PREFER_NULLISH_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for PreferNullishCoalescing {
@@ -1654,6 +1659,7 @@ const UNUSED_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 /// Bitmask of symbol kinds we'll flag when unused. Excludes type-only

@@ -29,6 +29,7 @@ const META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for TripleEquals {
@@ -171,6 +172,7 @@ const NO_CONSOLE_LOG_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for NoConsoleLog {
@@ -240,6 +242,7 @@ const NO_DEBUGGER_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for NoDebugger {
@@ -307,6 +310,7 @@ const NO_EVAL_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for NoEval {

@@ -432,3 +432,107 @@ fn quote_style_fixture_produces_expected_count() {
         qs_issues
     );
 }
+
+// ============================================================
+// File scope filtering (cd-81a.5)
+// ============================================================
+
+mod scope_filter {
+    use super::*;
+    use cofferdam_core::{
+        Category, Check, CheckContext, CheckMeta, FileScope, Issue, Priority, Severity, SourceFile,
+        Span,
+    };
+
+    static SCOPE: FileScope = FileScope {
+        extensions: &["tsx"],
+        path_pattern: None,
+        exclude_patterns: &["**/dev_checks/**"],
+    };
+
+    static META_SCOPED: CheckMeta = CheckMeta {
+        id: "Test.ScopedCheck",
+        category: Category::Warning,
+        base_priority: 10,
+        default_severity: Severity::Medium,
+        explanation: "always emits one issue when invoked",
+        body: "",
+        requires_types: false,
+        consistency: false,
+        options: &[],
+        files: Some(&SCOPE),
+    };
+
+    /// Test check that emits one issue per file it's invoked on. Counts
+    /// invocations indirectly via the issue list.
+    struct ScopedTestCheck;
+
+    impl Check for ScopedTestCheck {
+        fn meta(&self) -> &'static CheckMeta {
+            &META_SCOPED
+        }
+        fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+            vec![Issue {
+                check_id: "Test.ScopedCheck".to_string(),
+                message: "scoped".to_string(),
+                file: file.path.clone(),
+                span: Span {
+                    line: 1,
+                    column: 1,
+                    start_byte: 0,
+                    end_byte: 1,
+                },
+                priority: Priority(10),
+                severity: Severity::Medium,
+                related: Vec::new(),
+                fix: None,
+            }]
+        }
+    }
+
+    #[test]
+    fn scope_skips_files_not_matching_extensions() {
+        let temp = TempDir::new().expect("tmp");
+        let ts_file = temp.path().join("a.ts");
+        let tsx_file = temp.path().join("b.tsx");
+        std::fs::write(&ts_file, "const x = 1;").unwrap();
+        std::fs::write(&tsx_file, "const x = <div/>;").unwrap();
+
+        let engine = Engine::new(vec![Box::new(ScopedTestCheck)]);
+        let issues = engine
+            .analyze(&[ts_file.clone(), tsx_file.clone()])
+            .unwrap();
+        // Only the .tsx file should produce an issue from ScopedTestCheck.
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.check_id == "Test.ScopedCheck")
+                .count(),
+            1
+        );
+        assert!(issues
+            .iter()
+            .any(|i| i.check_id == "Test.ScopedCheck" && i.file == tsx_file));
+    }
+
+    #[test]
+    fn scope_excludes_glob_match_even_when_extension_matches() {
+        let temp = TempDir::new().expect("tmp");
+        let dev_dir = temp.path().join("dev_checks");
+        std::fs::create_dir_all(&dev_dir).unwrap();
+        let normal_tsx = temp.path().join("ok.tsx");
+        let dev_tsx = dev_dir.join("internal.tsx");
+        std::fs::write(&normal_tsx, "const x = <div/>;").unwrap();
+        std::fs::write(&dev_tsx, "const y = <span/>;").unwrap();
+
+        let engine = Engine::new(vec![Box::new(ScopedTestCheck)]);
+        let issues = engine.analyze(&[normal_tsx.clone(), dev_tsx]).unwrap();
+        // Only the non-dev_checks file should produce an issue.
+        let scoped: Vec<_> = issues
+            .iter()
+            .filter(|i| i.check_id == "Test.ScopedCheck")
+            .collect();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].file, normal_tsx);
+    }
+}

@@ -42,6 +42,7 @@ const META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: true,
     options: &[],
+    files: None,
 };
 
 impl Check for QuoteStyle {

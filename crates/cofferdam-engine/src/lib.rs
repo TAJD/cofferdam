@@ -7,6 +7,7 @@
 pub mod baseline;
 pub mod config;
 pub mod discover;
+pub mod scope;
 pub mod since;
 pub mod suppress;
 
@@ -47,6 +48,13 @@ pub struct Engine {
     /// post-pass in `analyze_with_text` stamps each emitted issue with
     /// the value from this map — checks don't set severity themselves.
     severities: BTreeMap<String, Severity>,
+    /// Compiled file-scope matchers per check, parallel to `checks`.
+    /// `None` means the check applies to every file (cd-81a.5). The
+    /// per-file loop consults this before `run()` so inapplicable files
+    /// skip parsing entirely when ALL checks have a matcher that says
+    /// "no" — though in practice the engine still parses for any check
+    /// that does want the file.
+    scopes: Vec<Option<scope::ScopeMatcher>>,
 }
 
 impl Engine {
@@ -62,10 +70,21 @@ impl Engine {
                 (meta.id.to_string(), meta.default_severity)
             })
             .collect();
+        let scopes = checks
+            .iter()
+            .map(|c| {
+                // Built-ins universally have files = None. A bad glob
+                // here would be a programming bug, not user input — so
+                // panic on construction is acceptable.
+                scope::ScopeMatcher::from_meta(c.meta().files)
+                    .expect("built-in check FileScope must compile")
+            })
+            .collect();
         Self {
             checks,
             options,
             severities,
+            scopes,
         }
     }
 
@@ -98,10 +117,18 @@ impl Engine {
                 .unwrap_or(meta.default_severity);
             severities.insert(meta.id.to_string(), sev);
         }
+        let scopes = checks
+            .iter()
+            .map(|c| {
+                scope::ScopeMatcher::from_meta(c.meta().files)
+                    .expect("built-in check FileScope must compile")
+            })
+            .collect();
         Ok(Self {
             checks,
             options,
             severities,
+            scopes,
         })
     }
 
@@ -159,7 +186,22 @@ impl Engine {
                 diagnostics: &parsed_return.errors,
             };
 
-            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+            for ((check, opts), scope) in self
+                .checks
+                .iter()
+                .zip(self.options.iter())
+                .zip(self.scopes.iter())
+            {
+                // cd-81a.5: skip checks whose file scope excludes this
+                // path. The parse cost is already paid (other checks
+                // may want the file), so the saving is the run() body
+                // and any work it does — still meaningful when a
+                // plugin's run() is non-trivial.
+                if let Some(matcher) = scope {
+                    if !matcher.matches(&file.path) {
+                        continue;
+                    }
+                }
                 let mut ctx = CheckContext::new(&file)
                     .with_parsed(&parsed)
                     .with_options(opts)

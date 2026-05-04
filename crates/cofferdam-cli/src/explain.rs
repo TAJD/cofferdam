@@ -290,6 +290,7 @@ mod tests {
         requires_types: false,
         consistency: false,
         options: &[],
+        files: None,
     };
 
     const WITH_OPTS_META: CheckMeta = CheckMeta {
@@ -307,6 +308,7 @@ mod tests {
             default: OptionDefault::Int(120),
             doc: "max columns per line",
         }],
+        files: None,
     };
 
     #[test]

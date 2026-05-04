@@ -25,7 +25,7 @@ export type {
 } from "./plugin-host.js";
 export type { LoadedPlugin, RunPluginsOptions } from "./loader.js";
 
-export type { Check, DefineCheckInput } from "./define-check.js";
+export type { Check, DefineCheckInput, FileScope } from "./define-check.js";
 export type { CheckContext, Fix, ReportArgs, SourceFile } from "./check-context.js";
 export type { LineView } from "./line-view.js";
 export type { Span, RelatedSpan } from "./span.js";

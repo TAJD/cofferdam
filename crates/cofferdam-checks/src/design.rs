@@ -41,6 +41,7 @@ const META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: MP_OPTIONS,
+    files: None,
 };
 
 impl MaxParameters {
@@ -162,6 +163,7 @@ const DEN_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    files: None,
 };
 
 impl Check for DuplicateExportName {

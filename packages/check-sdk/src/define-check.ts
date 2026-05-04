@@ -11,6 +11,27 @@ import type { OptionsSchema, ResolvedOptions } from "./options.js";
 import type { Severity } from "./severity.js";
 
 /**
+ * Declarative file-scope filter (cd-81a.5). When set, the engine
+ * pre-filters discovered files against this scope before invoking
+ * `run()`. Replaces the `scannable?` boilerplate that rovikore-host
+ * checks ship today.
+ */
+export interface FileScope {
+  /** File extensions (without leading dot). Empty/omitted = any. */
+  readonly extensions?: readonly string[];
+  /**
+   * Optional include glob (gitignore syntax via globset). When set,
+   * the file path must match.
+   */
+  readonly pathPattern?: string;
+  /**
+   * Exclude globs. Paths matching any of these are skipped, even if
+   * `pathPattern` matched.
+   */
+  readonly excludePatterns?: readonly string[];
+}
+
+/**
  * The shape `defineCheck` returns — what the napi loader picks up
  * from the plugin module's default export. Holds the static metadata
  * + the `run` callback.
@@ -32,6 +53,8 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
   /** Two-pass consistency mode. */
   readonly consistency: boolean;
   readonly options: S;
+  /** File-scope filter. `undefined` = applies to every file. */
+  readonly files: FileScope | undefined;
   run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void;
 }
 
@@ -52,6 +75,8 @@ export interface DefineCheckInput<S extends OptionsSchema> {
   readonly consistency?: boolean;
   /** Schema; defaults to `{}`. Inferred at the call site. */
   readonly options?: S;
+  /** File-scope filter; defaults to "every file". */
+  readonly files?: FileScope;
   run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void;
 }
 
@@ -99,7 +124,8 @@ export function defineCheck<const S extends OptionsSchema = {}>(
     body: input.body,
     requiresTypes: input.requiresTypes ?? false,
     consistency: input.consistency ?? false,
-    options: (input.options ?? ({} as S)),
+    options: input.options ?? ({} as S),
+    files: input.files,
     run: input.run,
   };
 }

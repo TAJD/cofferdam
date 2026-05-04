@@ -235,6 +235,7 @@ version = "0.1.4"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
+ "globset",
  "ignore",
  "oxc_diagnostics",
  "proptest",

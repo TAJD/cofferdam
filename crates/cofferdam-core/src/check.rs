@@ -90,6 +90,38 @@ pub struct CheckMeta {
     /// this and lends the resolved values to `CheckContext::options`
     /// for every file. `&[]` means the check takes no options.
     pub options: &'static [OptionSpec],
+    /// Optional file-scope filter (cd-81a.5). When `Some`, the engine
+    /// pre-filters discovered files against this scope before invoking
+    /// `run()` — saves the parse cost on inapplicable files. `None`
+    /// (the default for built-ins) means the check runs on every file
+    /// the engine sees.
+    pub files: Option<&'static FileScope>,
+}
+
+/// Declarative file-scope filter for a check.
+///
+/// Plugin authors typically use `extensions` to constrain by file
+/// extension (e.g. `&["ts", "tsx"]` for a JSX-aware check). `path_pattern`
+/// and `exclude_patterns` use the standard ignore-crate glob syntax
+/// (`**/resources/**`, `!**/dev_checks/**`).
+#[derive(Debug, Clone, Copy)]
+pub struct FileScope {
+    /// File extensions (without leading dot) the check applies to. Empty
+    /// slice = any extension.
+    pub extensions: &'static [&'static str],
+    /// Optional include glob — when `Some`, the file path must match.
+    pub path_pattern: Option<&'static str>,
+    /// Exclude globs — paths matching any of these are skipped, even if
+    /// `path_pattern` matched.
+    pub exclude_patterns: &'static [&'static str],
+}
+
+impl FileScope {
+    pub const ANY: FileScope = FileScope {
+        extensions: &[],
+        path_pattern: None,
+        exclude_patterns: &[],
+    };
 }
 
 /// Mutable per-file scratch passed to `Check::run`. Carries the

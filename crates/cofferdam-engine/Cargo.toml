@@ -10,6 +10,7 @@ description = "Orchestration: discovery, scheduling, baseline, severity gating, 
 
 [dependencies]
 cofferdam-core = { workspace = true }
+globset = "0.4"
 ignore = { workspace = true }
 oxc_diagnostics = { workspace = true }
 serde = { workspace = true }

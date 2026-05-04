@@ -40,6 +40,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use cofferdam_core::graph::LayersConfig;
 use cofferdam_core::{validate_options, CheckOptions, OptionsError, RawOptionValue, Severity};
 use serde::Deserialize;
 
@@ -63,6 +64,11 @@ pub struct ProjectConfig {
     /// Per-check severity overrides parsed from `[checks."X.Y"] severity = "..."`.
     /// Keyed by check_id. Engine consults this in its severity post-pass.
     pub severity_overrides: BTreeMap<String, Severity>,
+    /// `[layers]` block. `None` when the table is missing — keeps the
+    /// `Design.LayerViolation` check a no-op for projects that haven't
+    /// declared an architecture. The `project_root` field is filled in
+    /// after parsing (load knows the path; parse doesn't).
+    pub layers: Option<LayersConfig>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,13 +116,17 @@ pub enum ConfigError {
     },
 }
 
-/// TOML document layout. Anchored to a single top-level `[checks]` table
-/// so we have an obvious place to grow future top-level sections later
-/// (e.g. `[output]`, `[discovery]`) without breaking existing files.
+/// TOML document layout. Top-level sections grow additively here.
 #[derive(Debug, Deserialize, Default)]
 struct TomlDoc {
     #[serde(default)]
     checks: BTreeMap<String, toml::Value>,
+    /// `[layers]` for `Design.LayerViolation`. Each top-level key is
+    /// either a layer name (whose value is a string array of globs) or
+    /// the reserved sub-table `allow` mapping layer names to lists of
+    /// allowed dependency layers.
+    #[serde(default)]
+    layers: BTreeMap<String, toml::Value>,
 }
 
 /// Walk up from `start` looking for `cofferdam.toml`. Stops at the
@@ -217,10 +227,114 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         checks.insert(check_id, options);
     }
 
+    let layers = if doc.layers.is_empty() {
+        None
+    } else {
+        Some(parse_layers(path, doc.layers)?)
+    };
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
+        layers,
     })
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_layers(
+    path: &Path,
+    raw: BTreeMap<String, toml::Value>,
+) -> Result<LayersConfig, ConfigError> {
+    let mut layers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut allow: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (key, val) in raw {
+        if key == "allow" {
+            let table = match val {
+                toml::Value::Table(t) => t,
+                other => {
+                    return Err(ConfigError::UnsupportedValue {
+                        path: path.to_path_buf(),
+                        check_id: "[layers].allow".to_string(),
+                        key: "<root>".to_string(),
+                        reason: layer_kind_message(&other),
+                    });
+                }
+            };
+            for (layer_name, deps) in table {
+                let arr = match deps {
+                    toml::Value::Array(a) => a,
+                    other => {
+                        return Err(ConfigError::UnsupportedValue {
+                            path: path.to_path_buf(),
+                            check_id: format!("[layers].allow.{}", layer_name),
+                            key: "<value>".to_string(),
+                            reason: layer_kind_message(&other),
+                        });
+                    }
+                };
+                let mut names = Vec::with_capacity(arr.len());
+                for item in arr {
+                    match item {
+                        toml::Value::String(s) => names.push(s),
+                        other => {
+                            return Err(ConfigError::UnsupportedValue {
+                                path: path.to_path_buf(),
+                                check_id: format!("[layers].allow.{}", layer_name),
+                                key: "<element>".to_string(),
+                                reason: layer_kind_message(&other),
+                            });
+                        }
+                    }
+                }
+                allow.insert(layer_name, names);
+            }
+            continue;
+        }
+
+        let arr = match val {
+            toml::Value::Array(a) => a,
+            other => {
+                return Err(ConfigError::UnsupportedValue {
+                    path: path.to_path_buf(),
+                    check_id: format!("[layers].{}", key),
+                    key: "<value>".to_string(),
+                    reason: layer_kind_message(&other),
+                });
+            }
+        };
+        let mut globs = Vec::with_capacity(arr.len());
+        for item in arr {
+            match item {
+                toml::Value::String(s) => globs.push(s),
+                other => {
+                    return Err(ConfigError::UnsupportedValue {
+                        path: path.to_path_buf(),
+                        check_id: format!("[layers].{}", key),
+                        key: "<element>".to_string(),
+                        reason: layer_kind_message(&other),
+                    });
+                }
+            }
+        }
+        layers.insert(key, globs);
+    }
+    let project_root = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    Ok(LayersConfig {
+        project_root,
+        layers,
+        allow,
+    })
+}
+
+fn layer_kind_message(v: &toml::Value) -> &'static str {
+    match v {
+        toml::Value::Table(_) => "expected an array of layer-name strings",
+        toml::Value::Array(_) => "expected a string layer name",
+        _ => "expected an array of glob strings or a string",
+    }
 }
 
 fn toml_kind(v: &toml::Value) -> &'static str {
@@ -390,6 +504,7 @@ severity = 5
         let project = ProjectConfig {
             checks,
             severity_overrides: BTreeMap::new(),
+            layers: None,
         };
 
         let opts = options_for(
@@ -419,6 +534,7 @@ severity = 5
         let project = ProjectConfig {
             checks,
             severity_overrides: BTreeMap::new(),
+            layers: None,
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -433,6 +549,7 @@ severity = 5
         let project = ProjectConfig {
             checks,
             severity_overrides: BTreeMap::new(),
+            layers: None,
         };
 
         let registered = ["Readability.MaxLineLength"];

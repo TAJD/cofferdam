@@ -26,12 +26,14 @@ cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.1.4"
 
 # Third-party (kept narrow at phase 0; expanded as phases land)
 clap = { version = "4", features = ["derive"] }
+globset = "0.4"
 ignore = "0.4"
 oxc_allocator = "0.128"
 oxc_ast = "0.128"
 oxc_ast_visit = "0.128"
 oxc_diagnostics = "0.128"
 oxc_parser = "0.128"
+oxc_resolver = "11"
 oxc_span = "0.128"
 oxc_syntax = "0.128"
 serde = { version = "1", features = ["derive"] }

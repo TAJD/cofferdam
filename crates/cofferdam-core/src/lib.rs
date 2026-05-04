@@ -8,6 +8,7 @@ pub mod ast;
 pub mod check;
 pub mod corpus;
 pub mod edit;
+pub mod graph;
 pub mod issue;
 pub mod lines;
 pub mod options;
@@ -19,6 +20,10 @@ pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{Category, Check, CheckContext, CheckMeta, FinalizeContext};
 pub use corpus::{CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
+pub use graph::{
+    ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, LayersConfig, EXPORTS,
+    IMPORTS, LAYERS,
+};
 pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};
 pub use lines::{LineView, Lines};
 pub use options::{

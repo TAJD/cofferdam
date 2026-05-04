@@ -1,9 +1,13 @@
 //! Warning checks — likely bugs. Default severity is `Error` for this
 //! category once the per-category severity defaults wire up (phase 3).
 
+use std::collections::HashSet;
+use std::path::Path;
+
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile, TextEdit,
+    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Priority, Severity,
+    SourceFile, TextEdit,
 };
 use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
@@ -366,6 +370,201 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
         }
         oxc_ast_visit::walk::walk_new_expression(self, node);
     }
+}
+
+// ─── Warning.UnusedImport ──────────────────────────────────────────────────
+//
+// Project-aware unused-import: catches re-export passthroughs that
+// single-file linters (tsc's noUnusedLocals, ESLint's no-unused-vars)
+// miss because the file's own re-export "uses" the symbol from the
+// file's perspective. We see the whole graph, so we can flag re-exports
+// nobody downstream actually imports.
+//
+// Scope: re-export forwarders only. Plain unused imports inside a file
+// are tsc's job.
+
+const UI_META: CheckMeta = CheckMeta {
+    id: "Warning.UnusedImport",
+    category: Category::Warning,
+    base_priority: 7,
+    default_severity: Severity::Low,
+    explanation: "Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.",
+    body: include_str!("../docs/Warning.UnusedImport.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+pub struct UnusedImport;
+
+impl Check for UnusedImport {
+    fn meta(&self) -> &'static CheckMeta {
+        &UI_META
+    }
+
+    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        use cofferdam_core::graph::{
+            ExportKind as GExportKind, ExportRecord as GExportRecord, ImportKind as GImportKind,
+            ImportRecord as GImportRecord, EXPORTS as G_EXPORTS, IMPORTS as G_IMPORTS,
+        };
+
+        let imports: Vec<GImportRecord> = ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.clone());
+        let exports: Vec<GExportRecord> = ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.clone());
+
+        // For each (re-exporter_path_key, name) — is anyone in the
+        // project importing it?
+        let mut named_consumed: HashSet<(String, String)> = HashSet::new();
+        let mut default_consumed: HashSet<String> = HashSet::new();
+        let mut ns_consumed: HashSet<String> = HashSet::new();
+        for imp in &imports {
+            let Some(resolved) = &imp.resolved else {
+                continue;
+            };
+            let key = path_key(resolved);
+            for n in &imp.names {
+                match n.kind {
+                    GImportKind::Default => {
+                        default_consumed.insert(key.clone());
+                    }
+                    GImportKind::Namespace => {
+                        ns_consumed.insert(key.clone());
+                    }
+                    GImportKind::Named => {
+                        named_consumed.insert((key.clone(), n.source_name.clone()));
+                    }
+                }
+            }
+        }
+
+        let mut issues = Vec::new();
+        for exp in &exports {
+            if !matches!(exp.kind, GExportKind::ReExport) {
+                continue;
+            }
+            // Star re-exports (`export * from './m'`) are tracked as
+            // `name = "*"` — namespace consumption is the matching shape.
+            if exp.name == "*" {
+                continue;
+            }
+            // Type-only re-exports: skip in v1, same false-positive
+            // surface as DeadExport.
+            if exp.type_only {
+                continue;
+            }
+            // Framework-entry / config files: their re-exports are
+            // consumed by the runtime, not by other user code. Mirrors
+            // the OrphanExport default patterns; if these grow we should
+            // hoist into a shared helper.
+            if is_framework_entry(&exp.file) {
+                continue;
+            }
+            let key = path_key(&exp.file);
+            // If the re-exporter is itself reached by a namespace import
+            // anywhere, every name on it is opaquely consumed.
+            if ns_consumed.contains(&key) {
+                continue;
+            }
+            let consumed = if exp.name == "default" {
+                default_consumed.contains(&key)
+            } else {
+                named_consumed.contains(&(key.clone(), exp.name.clone()))
+            };
+            if consumed {
+                continue;
+            }
+            let display = if exp.name == "default" {
+                "default re-export".to_string()
+            } else {
+                format!("re-export `{}`", exp.name)
+            };
+            issues.push(Issue {
+                check_id: UI_META.id.to_string(),
+                message: format!("{} is never imported by another file", display),
+                file: exp.file.clone(),
+                span: exp.span,
+                priority: Priority(UI_META.base_priority),
+                severity: UI_META.default_severity,
+                related: Vec::new(),
+            });
+        }
+        issues.sort_by(|a, b| {
+            a.file
+                .cmp(&b.file)
+                .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+        });
+        issues
+    }
+}
+
+fn path_key(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+/// Substring-matched filenames that mark a file as a framework entry
+/// point (Next.js routing/metadata, SvelteKit, Pages Router, common
+/// build configs). These files' re-exports/exports are consumed by the
+/// runtime — not by application code — so they shouldn't be flagged.
+/// Kept in sync by hand with `Design.OrphanExport`'s defaults; cd-7h5
+/// follow-up should hoist into a shared helper.
+const FRAMEWORK_ENTRY_PATTERNS: &[&str] = &[
+    "/page.",
+    "/layout.",
+    "/route.",
+    "/error.",
+    "/loading.",
+    "/not-found.",
+    "/default.",
+    "/template.",
+    "/global-error.",
+    "/middleware.",
+    "/instrumentation.",
+    "/manifest.",
+    "/robots.",
+    "/sitemap.",
+    "/icon.",
+    "/apple-icon.",
+    "/opengraph-image.",
+    "/twitter-image.",
+    "/favicon.",
+    "/_app.",
+    "/_document.",
+    "/_error.",
+    "/+page.",
+    "/+layout.",
+    "/+server.",
+    "/next.config.",
+    "/vite.config.",
+    "/vitest.config.",
+    "/tsup.config.",
+    "/tailwind.config.",
+    "/postcss.config.",
+    "/astro.config.",
+    "/svelte.config.",
+    "/remix.config.",
+    "/playwright.config.",
+    "/jest.config.",
+    "/rollup.config.",
+    "/webpack.config.",
+    "/babel.config.",
+    "/eslint.config.",
+    "/prettier.config.",
+];
+
+fn is_framework_entry(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    let normalized = s.replace('\\', "/");
+    FRAMEWORK_ENTRY_PATTERNS
+        .iter()
+        .any(|p| normalized.contains(p))
 }
 
 #[cfg(test)]

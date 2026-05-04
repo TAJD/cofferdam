@@ -29,6 +29,11 @@ jobs:
       - run: cargo test --workspace
       - name: Verify auto-generated docs are up to date
         run: cargo run -p cofferdam-cli --quiet -- gen-docs --check
+      - name: Platform-purity guardrails (cd-7ws)
+        # Four mechanical checks that prevent oxc / TypeScript coupling
+        # from leaking back into the platform-layer crates after the
+        # cd-8wj + cd-jub split. See design/platform-extensibility.md.
+        run: node scripts/platform-purity.mjs
 
   coverage:
     runs-on: ubuntu-latest

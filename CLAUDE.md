@@ -26,16 +26,26 @@ CI runners pick up their native host triple and need no override. Never edit `ru
 
 ```
 crates/
-  cofferdam-core/         # Check trait, Issue, Span, parser, AST surface
-  cofferdam-engine/       # discovery, orchestration, parse loop, sort
-  cofferdam-checks/       # built-in checks (one file per category)
+  cofferdam-core/         # Platform layer: Issue, Span, CheckMeta, generic
+                          # Check<L> + CheckContext<'p,'r,L>, Language trait,
+                          # CorpusIndex, LineView struct. Zero oxc / TS coupling.
+  cofferdam-ts/           # TypeScript adapter: oxc parser, AstView, build_lines,
+                          # `struct TypeScript; impl Language`, oxc re-exports.
+                          # The ONLY crate allowed to `use oxc_*`.
+  cofferdam-engine/       # Generic orchestration: Engine<L>. Uses L::with_parsed.
+  cofferdam-checks/       # Built-in checks (one file per category). Routes oxc
+                          # references via `cofferdam_ts::oxc_*`.
   cofferdam-formatters/   # text + json output, future compact/SARIF
-  cofferdam-cli/          # `cofferdam` binary
+  cofferdam-cli/          # `cofferdam` binary — wires Engine<TypeScript>
   cofferdam-lsp/          # LSP server (phase 6, stub today)
-  cofferdam-napi/         # napi-rs FFI surface (phase 4, stub today)
+  cofferdam-napi/         # napi-rs FFI surface (phase 4, excluded from workspace)
 packages/                 # @cofferdam/* npm packages (phase 4+)
 examples/                 # fixture .ts files exercised by checks
 ```
+
+The platform / language split is enforced by `scripts/platform-purity.mjs`
+(run in CI). See `design/platform-extensibility.md` for the architectural
+rationale.
 
 ## Writing a check (the recipe)
 
@@ -51,24 +61,34 @@ Almost every new check is one file in `cofferdam-checks/src/<category>.rs`, one 
 
 ### Required scaffolding for any AST check
 
+After cd-8wj + cd-jub: every oxc reference goes through `cofferdam-ts`,
+which is the only crate allowed to depend on `oxc_*` directly. Built-in
+checks impl `Check<TypeScript>` and accept `&mut CheckContext<'_, '_>`.
+
 ```rust
-use cofferdam_core::span_from_bytes;
-use cofferdam_core::{Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile};
-use oxc_ast::ast::{...};
-use oxc_ast_visit::Visit;
+use cofferdam_core::{
+    span_from_bytes, Category, CheckMeta, Issue, Priority, Severity, SourceFile,
+};
+use cofferdam_ts::oxc_ast::ast::{...};
+use cofferdam_ts::oxc_ast_visit::Visit;
+use cofferdam_ts::{Check, CheckContext, TypeScript};
 
 const META: CheckMeta = CheckMeta {
     id: "Category.Name",          // Stable, dotted. Don't rename.
     category: Category::Warning,  // Pick one of the five.
     base_priority: 15,            // -20..=20. Warning=15, Refactor=10, Design=5, Readability=-5, etc.
+    default_severity: Severity::Medium,
     explanation: "...",
+    body: include_str!("../docs/Category.Name.md"),  // companion markdown enforced at compile time
     requires_types: false,        // true → routes to ts-morph in phase 5
     consistency: false,           // true → engine runs in two-pass mode
+    options: &[],                 // schema for `[checks."Category.Name"]` in cofferdam.toml
+    files: None,                  // None = run on every file the engine sees
 };
 
-impl Check for X {
+impl Check<TypeScript> for X {
     fn meta(&self) -> &'static CheckMeta { &META }
-    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else { return Vec::new(); };  // ALWAYS first
         let mut visitor = Collector { file, issues: Vec::new() };
         visitor.visit_program(parsed.program);
@@ -77,11 +97,23 @@ impl Check for X {
 }
 ```
 
+For a non-AST text-line scan, omit the `parsed` check and walk
+`file.text.lines()` directly — see `readability.rs::MaxLineLength`.
+
 ### Cofferdam-specific gotchas (every agent needs these)
 
-- **`oxc_syntax::scope::ScopeFlags`**, NOT `oxc_ast_visit::walk::ScopeFlags`. The `visit_function` impl signature requires it — wrong import is the most common build failure.
+- **All oxc paths go through `cofferdam_ts::oxc_*`.** `use oxc_ast::ast::Foo;`
+  is a CI failure (the `scripts/platform-purity.mjs` guardrail catches
+  `use oxc_*` outside cofferdam-ts itself). The sanctioned form is
+  `use cofferdam_ts::oxc_ast::ast::Foo;`.
+- **`ScopeFlags`** comes from `cofferdam_ts::oxc_syntax::scope::ScopeFlags`,
+  NOT from `oxc_ast_visit::walk::ScopeFlags`. The `visit_function` impl
+  signature requires it — wrong import is the most common build failure.
 - **`cofferdam_core::span_from_bytes(text, start, end)`** is the only correct way to convert oxc byte offsets into our `Span` (with line/column). Do not roll your own — there's a UTF-8 nuance on the column count.
-- **Always `let Some(parsed) = ctx.parsed else { return Vec::new(); };`** at the top of `run()` for AST checks. `ctx.parsed` is `None` when parsing failed (we already emitted `Warning.ParseError` for that file).
+- **`CheckContext<'_, '_>`** has two lifetimes: `'p` for the parse arena
+  (whatever `Language::with_parsed` set up), `'r` for the run-scoped
+  borrows (file, options, corpus). Built-ins always elide both as `'_`.
+- **Always `let Some(parsed) = ctx.parsed else { return Vec::new(); };`** at the top of `run()` for AST checks. `ctx.parsed` is `None` when parsing failed (we already emitted `Warning.ParseError` for that file). `ctx.parsed` is `Option<ParsedView<'_>>` (Copy by value, not a reference).
 - **Visitors must call `walk::walk_<node>(self, ...)`** at the end of overridden visit methods to descend into children. Forgetting this means nested matches are missed.
 - **Register the new check** in `cofferdam-checks/src/lib.rs::all_builtins()`. The compiler doesn't catch a forgotten registration.
 - **Fixtures live in `examples/`** with one file per check (`triple_equals.ts`, `max_params.ts`, ...). Mix flagged + non-flagged cases.
@@ -92,6 +124,7 @@ impl Check for X {
   cargo clippy --workspace --all-targets -- -D warnings
   cargo fmt --all -- --check
   cargo run -p cofferdam-cli -- check examples/<your-fixture>.ts
+  node scripts/platform-purity.mjs   # cd-7ws — keeps the platform/TS split clean
   ```
 
 ## Issue tracking — beads (bd)

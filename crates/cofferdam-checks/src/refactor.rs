@@ -14,10 +14,10 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
-    OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    Category, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault, OptionKind, OptionSpec,
+    Priority, RelatedSpan, Severity, SourceFile, Span,
 };
-use oxc_ast::ast::{
+use cofferdam_ts::oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
     BindingRestElement, BlockStatement, BooleanLiteral, BreakStatement, CallExpression, Class,
     ConditionalExpression, ContinueStatement, DoWhileStatement, Expression, ExpressionStatement,
@@ -27,10 +27,11 @@ use oxc_ast::ast::{
     SwitchStatement, TemplateLiteral, ThrowStatement, TryStatement, UnaryExpression,
     UpdateExpression, VariableDeclaration, WhileStatement,
 };
-use oxc_ast_visit::Visit;
-use oxc_semantic::SemanticBuilder;
-use oxc_span::GetSpan;
-use oxc_syntax::symbol::SymbolFlags;
+use cofferdam_ts::oxc_ast_visit::Visit;
+use cofferdam_ts::oxc_semantic::SemanticBuilder;
+use cofferdam_ts::oxc_span::GetSpan;
+use cofferdam_ts::oxc_syntax::symbol::SymbolFlags;
+use cofferdam_ts::{Check, CheckContext};
 
 // ─── Refactor.CyclomaticComplexity ─────────────────────────────────────────
 
@@ -126,51 +127,55 @@ impl<'a> CycVisitor<'a> {
 }
 
 impl<'a> Visit<'a> for CycVisitor<'a> {
-    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+    fn visit_function(
+        &mut self,
+        node: &Function<'a>,
+        flags: cofferdam_ts::oxc_syntax::scope::ScopeFlags,
+    ) {
         let name = node
             .id
             .as_ref()
             .map(|id| id.name.as_str().to_string())
             .unwrap_or_else(|| "anonymous function".to_string());
         self.enter();
-        oxc_ast_visit::walk::walk_function(self, node, flags);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function(self, node, flags);
         self.exit(name, node.span.start, node.span.end);
     }
 
     fn visit_arrow_function_expression(&mut self, node: &ArrowFunctionExpression<'a>) {
         self.enter();
-        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
         self.exit("arrow function".to_string(), node.span.start, node.span.end);
     }
 
     fn visit_if_statement(&mut self, node: &IfStatement<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_if_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_if_statement(self, node);
     }
 
     fn visit_for_statement(&mut self, node: &ForStatement<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_for_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_statement(self, node);
     }
 
     fn visit_for_in_statement(&mut self, node: &ForInStatement<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_for_in_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_in_statement(self, node);
     }
 
     fn visit_for_of_statement(&mut self, node: &ForOfStatement<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_for_of_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_of_statement(self, node);
     }
 
     fn visit_while_statement(&mut self, node: &WhileStatement<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_while_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_while_statement(self, node);
     }
 
     fn visit_do_while_statement(&mut self, node: &DoWhileStatement<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_do_while_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_do_while_statement(self, node);
     }
 
     fn visit_switch_statement(&mut self, node: &SwitchStatement<'a>) {
@@ -181,25 +186,25 @@ impl<'a> Visit<'a> for CycVisitor<'a> {
                 self.add();
             }
         }
-        oxc_ast_visit::walk::walk_switch_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_switch_statement(self, node);
     }
 
     fn visit_logical_expression(&mut self, node: &LogicalExpression<'a>) {
         // && || ?? all introduce short-circuit branches.
         self.add();
-        oxc_ast_visit::walk::walk_logical_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_logical_expression(self, node);
     }
 
     fn visit_conditional_expression(&mut self, node: &ConditionalExpression<'a>) {
         self.add();
-        oxc_ast_visit::walk::walk_conditional_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_conditional_expression(self, node);
     }
 
     fn visit_try_statement(&mut self, node: &TryStatement<'a>) {
         if node.handler.is_some() {
             self.add();
         }
-        oxc_ast_visit::walk::walk_try_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_try_statement(self, node);
     }
 }
 
@@ -326,7 +331,11 @@ impl<'a> CogVisitor<'a> {
 }
 
 impl<'a> Visit<'a> for CogVisitor<'a> {
-    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+    fn visit_function(
+        &mut self,
+        node: &Function<'a>,
+        flags: cofferdam_ts::oxc_syntax::scope::ScopeFlags,
+    ) {
         let func_name = node.id.as_ref().map(|id| id.name.as_str().to_string());
         let display_name = func_name
             .as_ref()
@@ -336,7 +345,7 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
         let saved_nesting = self.nesting;
         let saved_logical_op_stack = self.logical_op_stack.clone();
         self.enter(func_name);
-        oxc_ast_visit::walk::walk_function(self, node, flags);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function(self, node, flags);
         self.exit(display_name, node.span.start, node.span.end);
         self.nesting = saved_nesting;
         self.logical_op_stack = saved_logical_op_stack;
@@ -346,7 +355,7 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
         let saved_nesting = self.nesting;
         let saved_logical_op_stack = self.logical_op_stack.clone();
         self.enter(None); // Arrow functions don't have names; recursion-by-name not applicable
-        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
         self.exit("arrow function".to_string(), node.span.start, node.span.end);
         self.nesting = saved_nesting;
         self.logical_op_stack = saved_logical_op_stack;
@@ -362,7 +371,7 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
                 }
             }
         }
-        oxc_ast_visit::walk::walk_call_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_call_expression(self, node);
     }
 
     fn visit_if_statement(&mut self, node: &IfStatement<'a>) {
@@ -393,42 +402,42 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
     fn visit_for_statement(&mut self, node: &ForStatement<'a>) {
         self.structural();
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_for_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_statement(self, node);
         self.nesting -= 1;
     }
 
     fn visit_for_in_statement(&mut self, node: &ForInStatement<'a>) {
         self.structural();
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_for_in_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_in_statement(self, node);
         self.nesting -= 1;
     }
 
     fn visit_for_of_statement(&mut self, node: &ForOfStatement<'a>) {
         self.structural();
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_for_of_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_of_statement(self, node);
         self.nesting -= 1;
     }
 
     fn visit_while_statement(&mut self, node: &WhileStatement<'a>) {
         self.structural();
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_while_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_while_statement(self, node);
         self.nesting -= 1;
     }
 
     fn visit_do_while_statement(&mut self, node: &DoWhileStatement<'a>) {
         self.structural();
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_do_while_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_do_while_statement(self, node);
         self.nesting -= 1;
     }
 
     fn visit_switch_statement(&mut self, node: &SwitchStatement<'a>) {
         self.structural();
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_switch_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_switch_statement(self, node);
         self.nesting -= 1;
     }
 
@@ -437,7 +446,7 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
             self.structural();
         }
         self.nesting += 1;
-        oxc_ast_visit::walk::walk_try_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_try_statement(self, node);
         self.nesting -= 1;
     }
 
@@ -445,7 +454,7 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
         self.structural();
         // Ternary branches are sub-expressions, not statements — Sonar
         // counts the `?:` itself but not extra nesting for the arms.
-        oxc_ast_visit::walk::walk_conditional_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_conditional_expression(self, node);
     }
 
     fn visit_logical_expression(&mut self, node: &LogicalExpression<'a>) {
@@ -463,7 +472,7 @@ impl<'a> Visit<'a> for CogVisitor<'a> {
             self.flat();
         }
         self.logical_op_stack.push(node.operator);
-        oxc_ast_visit::walk::walk_logical_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_logical_expression(self, node);
         self.logical_op_stack.pop();
     }
 }
@@ -809,12 +818,12 @@ impl<'a> DupCollector<'a> {
 impl<'a> Visit<'a> for DupCollector<'a> {
     fn visit_program(&mut self, node: &Program<'a>) {
         self.scan(&node.body);
-        oxc_ast_visit::walk::walk_program(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_program(self, node);
     }
 
     fn visit_block_statement(&mut self, node: &BlockStatement<'a>) {
         self.scan(&node.body);
-        oxc_ast_visit::walk::walk_block_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_block_statement(self, node);
     }
 
     fn visit_function_body(&mut self, node: &FunctionBody<'a>) {
@@ -822,7 +831,7 @@ impl<'a> Visit<'a> for DupCollector<'a> {
         // BlockStatement, in oxc. Scan their `statements` directly so
         // duplicates inside ordinary function bodies are caught.
         self.scan(&node.statements);
-        oxc_ast_visit::walk::walk_function_body(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function_body(self, node);
     }
 }
 
@@ -990,12 +999,12 @@ impl AstHashWalker {
 impl<'a> Visit<'a> for AstHashWalker {
     fn visit_block_statement(&mut self, node: &BlockStatement<'a>) {
         self.tag(b"Blk");
-        oxc_ast_visit::walk::walk_block_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_block_statement(self, node);
     }
 
     fn visit_expression_statement(&mut self, node: &ExpressionStatement<'a>) {
         self.tag(b"ExpS");
-        oxc_ast_visit::walk::walk_expression_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_expression_statement(self, node);
     }
 
     fn visit_if_statement(&mut self, node: &IfStatement<'a>) {
@@ -1003,37 +1012,37 @@ impl<'a> Visit<'a> for AstHashWalker {
         if node.alternate.is_some() {
             self.tag(b"+E");
         }
-        oxc_ast_visit::walk::walk_if_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_if_statement(self, node);
     }
 
     fn visit_for_statement(&mut self, node: &ForStatement<'a>) {
         self.tag(b"For");
-        oxc_ast_visit::walk::walk_for_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_statement(self, node);
     }
 
     fn visit_for_in_statement(&mut self, node: &ForInStatement<'a>) {
         self.tag(b"ForIn");
-        oxc_ast_visit::walk::walk_for_in_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_in_statement(self, node);
     }
 
     fn visit_for_of_statement(&mut self, node: &ForOfStatement<'a>) {
         self.tag(b"ForOf");
-        oxc_ast_visit::walk::walk_for_of_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_for_of_statement(self, node);
     }
 
     fn visit_while_statement(&mut self, node: &WhileStatement<'a>) {
         self.tag(b"Whl");
-        oxc_ast_visit::walk::walk_while_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_while_statement(self, node);
     }
 
     fn visit_do_while_statement(&mut self, node: &DoWhileStatement<'a>) {
         self.tag(b"Do");
-        oxc_ast_visit::walk::walk_do_while_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_do_while_statement(self, node);
     }
 
     fn visit_switch_statement(&mut self, node: &SwitchStatement<'a>) {
         self.tag(b"Sw");
-        oxc_ast_visit::walk::walk_switch_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_switch_statement(self, node);
     }
 
     fn visit_try_statement(&mut self, node: &TryStatement<'a>) {
@@ -1044,94 +1053,98 @@ impl<'a> Visit<'a> for AstHashWalker {
         if node.finalizer.is_some() {
             self.tag(b"+F");
         }
-        oxc_ast_visit::walk::walk_try_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_try_statement(self, node);
     }
 
     fn visit_return_statement(&mut self, node: &ReturnStatement<'a>) {
         self.tag(b"Ret");
-        oxc_ast_visit::walk::walk_return_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_return_statement(self, node);
     }
 
     fn visit_throw_statement(&mut self, node: &ThrowStatement<'a>) {
         self.tag(b"Thr");
-        oxc_ast_visit::walk::walk_throw_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_throw_statement(self, node);
     }
 
     fn visit_break_statement(&mut self, node: &BreakStatement<'a>) {
         self.tag(b"Brk");
-        oxc_ast_visit::walk::walk_break_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_break_statement(self, node);
     }
 
     fn visit_continue_statement(&mut self, node: &ContinueStatement<'a>) {
         self.tag(b"Cnt");
-        oxc_ast_visit::walk::walk_continue_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_continue_statement(self, node);
     }
 
     fn visit_variable_declaration(&mut self, node: &VariableDeclaration<'a>) {
         self.tag(b"Var:");
         self.tag(node.kind.as_str().as_bytes());
-        oxc_ast_visit::walk::walk_variable_declaration(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_variable_declaration(self, node);
     }
 
-    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+    fn visit_function(
+        &mut self,
+        node: &Function<'a>,
+        flags: cofferdam_ts::oxc_syntax::scope::ScopeFlags,
+    ) {
         self.tag(b"Fn");
-        oxc_ast_visit::walk::walk_function(self, node, flags);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function(self, node, flags);
     }
 
     fn visit_arrow_function_expression(&mut self, node: &ArrowFunctionExpression<'a>) {
         self.tag(b"Arrow");
-        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
     }
 
     fn visit_class(&mut self, node: &Class<'a>) {
         self.tag(b"Cls");
-        oxc_ast_visit::walk::walk_class(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_class(self, node);
     }
 
     fn visit_binary_expression(&mut self, node: &BinaryExpression<'a>) {
         self.tag(b"Bin:");
         self.tag(node.operator.as_str().as_bytes());
-        oxc_ast_visit::walk::walk_binary_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_binary_expression(self, node);
     }
 
     fn visit_logical_expression(&mut self, node: &LogicalExpression<'a>) {
         self.tag(b"Log:");
         self.tag(node.operator.as_str().as_bytes());
-        oxc_ast_visit::walk::walk_logical_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_logical_expression(self, node);
     }
 
     fn visit_unary_expression(&mut self, node: &UnaryExpression<'a>) {
         self.tag(b"Una:");
         self.tag(node.operator.as_str().as_bytes());
-        oxc_ast_visit::walk::walk_unary_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_unary_expression(self, node);
     }
 
     fn visit_update_expression(&mut self, node: &UpdateExpression<'a>) {
         self.tag(b"Upd:");
         self.tag(node.operator.as_str().as_bytes());
         self.tag(if node.prefix { b"P" } else { b"S" });
-        oxc_ast_visit::walk::walk_update_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_update_expression(self, node);
     }
 
     fn visit_assignment_expression(&mut self, node: &AssignmentExpression<'a>) {
         self.tag(b"Asn:");
         self.tag(node.operator.as_str().as_bytes());
-        oxc_ast_visit::walk::walk_assignment_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_assignment_expression(self, node);
     }
 
     fn visit_conditional_expression(&mut self, node: &ConditionalExpression<'a>) {
         self.tag(b"Tern");
-        oxc_ast_visit::walk::walk_conditional_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_conditional_expression(self, node);
     }
 
     fn visit_call_expression(&mut self, node: &CallExpression<'a>) {
         self.tag(b"Call");
-        oxc_ast_visit::walk::walk_call_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_call_expression(self, node);
     }
 
     fn visit_new_expression(&mut self, node: &NewExpression<'a>) {
         self.tag(b"New");
-        oxc_ast_visit::walk::walk_new_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_new_expression(self, node);
     }
 
     fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
@@ -1172,7 +1185,7 @@ impl<'a> Visit<'a> for AstHashWalker {
 
     fn visit_template_literal(&mut self, node: &TemplateLiteral<'a>) {
         self.tag(b"Tmpl");
-        oxc_ast_visit::walk::walk_template_literal(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_template_literal(self, node);
     }
 }
 
@@ -1491,7 +1504,7 @@ impl<'a> Visit<'a> for OptionalChainVisitor<'a> {
                 }
             }
         }
-        oxc_ast_visit::walk::walk_logical_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_logical_expression(self, node);
     }
 }
 
@@ -1600,7 +1613,7 @@ impl<'a> Visit<'a> for NullishVisitor<'a> {
                 fix: None,
             });
         }
-        oxc_ast_visit::walk::walk_logical_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_logical_expression(self, node);
     }
 }
 
@@ -1794,69 +1807,82 @@ struct SkipSpanCollector {
 impl<'a> Visit<'a> for SkipSpanCollector {
     fn visit_binding_rest_element(&mut self, node: &BindingRestElement<'a>) {
         self.rest_ranges.push((node.span.start, node.span.end));
-        oxc_ast_visit::walk::walk_binding_rest_element(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_binding_rest_element(self, node);
     }
 
-    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+    fn visit_function(
+        &mut self,
+        node: &Function<'a>,
+        flags: cofferdam_ts::oxc_syntax::scope::ScopeFlags,
+    ) {
         // Function expressions only — declarations bind into the
         // surrounding scope and *should* flag if unused.
         if matches!(
             node.r#type,
-            oxc_ast::ast::FunctionType::FunctionExpression
-                | oxc_ast::ast::FunctionType::TSEmptyBodyFunctionExpression
+            cofferdam_ts::oxc_ast::ast::FunctionType::FunctionExpression
+                | cofferdam_ts::oxc_ast::ast::FunctionType::TSEmptyBodyFunctionExpression
         ) {
             if let Some(id) = node.id.as_ref() {
                 self.named_expression_id_ranges
                     .push((id.span.start, id.span.end));
             }
         }
-        oxc_ast_visit::walk::walk_function(self, node, flags);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function(self, node, flags);
     }
 
     fn visit_class(&mut self, node: &Class<'a>) {
-        if matches!(node.r#type, oxc_ast::ast::ClassType::ClassExpression) {
+        if matches!(
+            node.r#type,
+            cofferdam_ts::oxc_ast::ast::ClassType::ClassExpression
+        ) {
             if let Some(id) = node.id.as_ref() {
                 self.named_expression_id_ranges
                     .push((id.span.start, id.span.end));
             }
         }
-        oxc_ast_visit::walk::walk_class(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_class(self, node);
     }
 
-    fn visit_ts_function_type(&mut self, node: &oxc_ast::ast::TSFunctionType<'a>) {
+    fn visit_ts_function_type(&mut self, node: &cofferdam_ts::oxc_ast::ast::TSFunctionType<'a>) {
         self.ts_signature_ranges
             .push((node.span.start, node.span.end));
-        oxc_ast_visit::walk::walk_ts_function_type(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_ts_function_type(self, node);
     }
 
-    fn visit_ts_method_signature(&mut self, node: &oxc_ast::ast::TSMethodSignature<'a>) {
+    fn visit_ts_method_signature(
+        &mut self,
+        node: &cofferdam_ts::oxc_ast::ast::TSMethodSignature<'a>,
+    ) {
         self.ts_signature_ranges
             .push((node.span.start, node.span.end));
-        oxc_ast_visit::walk::walk_ts_method_signature(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_ts_method_signature(self, node);
     }
 
     fn visit_ts_call_signature_declaration(
         &mut self,
-        node: &oxc_ast::ast::TSCallSignatureDeclaration<'a>,
+        node: &cofferdam_ts::oxc_ast::ast::TSCallSignatureDeclaration<'a>,
     ) {
         self.ts_signature_ranges
             .push((node.span.start, node.span.end));
-        oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_ts_call_signature_declaration(self, node);
     }
 
     fn visit_ts_construct_signature_declaration(
         &mut self,
-        node: &oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
+        node: &cofferdam_ts::oxc_ast::ast::TSConstructSignatureDeclaration<'a>,
     ) {
         self.ts_signature_ranges
             .push((node.span.start, node.span.end));
-        oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_ts_construct_signature_declaration(self, node);
     }
 
-    fn visit_ts_index_signature(&mut self, node: &oxc_ast::ast::TSIndexSignature<'a>) {
+    fn visit_ts_index_signature(
+        &mut self,
+        node: &cofferdam_ts::oxc_ast::ast::TSIndexSignature<'a>,
+    ) {
         self.ts_signature_ranges
             .push((node.span.start, node.span.end));
-        oxc_ast_visit::walk::walk_ts_index_signature(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_ts_index_signature(self, node);
     }
 }
 
@@ -1944,8 +1970,8 @@ mod tests {
     // Run a quick parse on a synthetic source, then compare hashes to verify
     // structural canonicalisation does what we expect.
 
-    use cofferdam_core::parser::parse_into;
-    use cofferdam_core::{Allocator, SourceFile};
+    use cofferdam_core::SourceFile;
+    use cofferdam_ts::{parse_into, Allocator};
     use std::path::PathBuf;
 
     fn ast_hash_first_n_stmts(text: &str, n: usize) -> u64 {
@@ -2023,8 +2049,8 @@ mod tests {
     // statement blocks, with overridden options, and assert the option
     // values are picked up correctly.
 
-    use cofferdam_core::parser::ParsedView;
     use cofferdam_core::{validate_options, CorpusIndex, FinalizeContext, RawOptionValue};
+    use cofferdam_ts::ParsedView;
     use std::collections::BTreeMap;
 
     /// Duplicate snippet large enough to fire at default thresholds

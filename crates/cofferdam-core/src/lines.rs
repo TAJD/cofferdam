@@ -1,43 +1,36 @@
-//! Plugin-facing line view + classification (cd-81a.1).
+//! Line view + line-table mechanics — the **data shape** of per-line
+//! classification. The actual classification (string-literal walk,
+//! JSX-text walk, comment-table mapping) is language-specific and lives
+//! in language-adapter crates such as `cofferdam-ts`.
 //!
-//! `AstView::lines()` yields a [`LineView`] for every textual line in
-//! the source, with classification flags populated from the parsed
-//! comment list and an AST walk over string/template literals.
-//!
-//! Why this isn't text-only: a regex like `^\s*//` misses block
-//! comments split across lines, JSDoc, and pragmas — and a regex over
-//! quote characters misclassifies escape sequences and template
-//! interpolations. oxc has already paid the parse cost; we lift its
-//! comment table and a one-pass literal walk to get accurate flags
-//! for free.
+//! Why this split (cd-8wj): every text-based language has lines and
+//! shares the byte-offset → line/column nuance; only the *flag-setting*
+//! pass differs. Keeping the struct + line-table here means a future
+//! Python or Go adapter only re-implements the flag-population step,
+//! not the iterator plumbing.
 //!
 //! # Flag semantics
 //!
 //! Each flag is true when the line is **touched** by the named
 //! construct — a multi-line block comment marks every line it spans;
 //! a template literal marks every line of the backtick-enclosed text
-//! including embedded `${expr}` lines.
+//! including embedded `${expr}` lines. The *meaning* is fixed by this
+//! struct; the *populator* is owned by the language adapter and may
+//! choose to leave a flag permanently `false` if the language has no
+//! corresponding construct.
 //!
-//! - `is_comment` — any comment (line `//`, single-line block, or
-//!   multi-line block) overlaps this line.
-//! - `is_doc_comment` — a JSDoc-style block (`/** ... */`) overlaps.
-//!   Implies `is_comment`.
-//! - `is_string_literal` — a `StringLiteral` or `TemplateLiteral` span
+//! - `is_comment` — any comment overlaps this line.
+//! - `is_doc_comment` — a doc-style comment (e.g. JSDoc `/** ... */`)
+//!   overlaps. Implies `is_comment`.
+//! - `is_string_literal` — a string-literal or template-literal span
 //!   overlaps this line.
-//! - `is_jsx_text` — a `JSXText` span overlaps this line. JSX text is
-//!   the user-facing copy *between* JSX tags (`<p>Hello</p>` → "Hello"),
-//!   not attribute values or expression containers. Plugin checks that
-//!   target display copy (BrandCasing in cd-7e4) flag this alongside
-//!   `is_string_literal`. Filed as cd-0ne.
-//! - `is_pragma` — an annotation-style comment overlaps. Pragmas are
+//! - `is_jsx_text` — a JSXText span overlaps this line. Adapter-specific
+//!   (TS only); other languages always leave this `false`.
+//! - `is_pragma` — an annotation-style comment overlaps. For TS that
+//!   maps to `oxc_ast::Comment::is_annotation()` — pragmas are
 //!   compiler-hint comments like `/* #__PURE__ */`, `/* @vite-ignore */`,
 //!   `/* webpackChunkName: "x" */` — *not* JSDoc and *not* legal
-//!   headers. Maps to `oxc_ast::Comment::is_annotation()`.
-
-use oxc_ast::ast::{Comment, JSXText, StringLiteral, TemplateLiteral};
-use oxc_ast_visit::{walk, Visit};
-use oxc_span::Span as OxcSpan;
-use oxc_syntax::scope::ScopeFlags;
+//!   headers.
 
 use crate::issue::Span;
 
@@ -78,8 +71,8 @@ impl LineView<'_> {
     }
 }
 
-/// Iterator over [`LineView`]s for an `AstView`. Returned by
-/// [`crate::AstView::lines`].
+/// Iterator over [`LineView`]s. Constructed by language adapters via
+/// [`Lines::from_parts`] after they've populated per-line flags.
 pub struct Lines<'a> {
     text: &'a str,
     /// Byte offset of the start of each line. `len() == number of lines`.
@@ -89,26 +82,16 @@ pub struct Lines<'a> {
 }
 
 impl<'a> Lines<'a> {
-    pub(crate) fn build(text: &'a str, program: &'a oxc_ast::ast::Program<'a>) -> Self {
-        let line_starts = compute_line_starts(text);
-        let mut flags = vec![LineFlags::default(); line_starts.len().max(1)];
-
-        for c in &program.comments {
-            apply_comment(&line_starts, &mut flags, c);
-        }
-
-        let mut literal = LiteralCollector {
-            string_spans: Vec::new(),
-            jsx_text_spans: Vec::new(),
-        };
-        literal.visit_program(program);
-        for sp in literal.string_spans {
-            apply_span(&line_starts, &mut flags, sp, |f| f.is_string_literal = true);
-        }
-        for sp in literal.jsx_text_spans {
-            apply_span(&line_starts, &mut flags, sp, |f| f.is_jsx_text = true);
-        }
-
+    /// Build `Lines` from a fully-populated flag table. Adapter-facing:
+    /// language adapters compute `line_starts` (typically via
+    /// [`compute_line_starts`]) and `flags` (via their own classification
+    /// pass), then hand both back here for iteration.
+    pub fn from_parts(text: &'a str, line_starts: Vec<u32>, flags: Vec<LineFlags>) -> Self {
+        debug_assert_eq!(
+            line_starts.len().max(1),
+            flags.len(),
+            "flag table must match line count"
+        );
         Self {
             text,
             line_starts,
@@ -154,18 +137,25 @@ impl<'a> Iterator for Lines<'a> {
     }
 }
 
+/// Per-line flag table populated by language adapters. Adapter walks
+/// the parsed comment list + string/JSX/template-literal spans, then
+/// hands the table back to [`Lines::from_parts`].
+///
+/// Public so adapters in sibling crates can construct + mutate it; the
+/// fields stay `pub` rather than going through setters because every
+/// adapter wants the same flat write pattern (`flags[i].is_comment = true`).
 #[derive(Default, Clone, Copy)]
-struct LineFlags {
-    is_comment: bool,
-    is_doc_comment: bool,
-    is_string_literal: bool,
-    is_jsx_text: bool,
-    is_pragma: bool,
+pub struct LineFlags {
+    pub is_comment: bool,
+    pub is_doc_comment: bool,
+    pub is_string_literal: bool,
+    pub is_jsx_text: bool,
+    pub is_pragma: bool,
 }
 
 /// Indices into the source where each line starts. Always begins with 0;
 /// subsequent entries point one byte past every `\n`.
-fn compute_line_starts(text: &str) -> Vec<u32> {
+pub fn compute_line_starts(text: &str) -> Vec<u32> {
     let mut starts = Vec::with_capacity(text.bytes().filter(|&b| b == b'\n').count() + 1);
     starts.push(0);
     for (i, b) in text.bytes().enumerate() {
@@ -180,7 +170,7 @@ fn compute_line_starts(text: &str) -> Vec<u32> {
 }
 
 /// Largest line index `i` such that `line_starts[i] <= byte`.
-fn byte_to_line(line_starts: &[u32], byte: u32) -> u32 {
+pub fn byte_to_line(line_starts: &[u32], byte: u32) -> u32 {
     match line_starts.binary_search(&byte) {
         Ok(i) => i as u32,
         // Err(i) means byte fits between starts[i-1] and starts[i].
@@ -190,16 +180,22 @@ fn byte_to_line(line_starts: &[u32], byte: u32) -> u32 {
     }
 }
 
-fn apply_span(
+/// Apply `set` to every line that the byte range `[start, end)` overlaps.
+/// Adapter-facing helper for the classification pass — every adapter
+/// applies its own per-construct flag, but the line-overlap iteration
+/// is identical across languages.
+///
+/// `start..end` is the *exclusive* convention; an empty span (start == end)
+/// is treated as touching `start`'s line only.
+pub fn apply_byte_range(
     line_starts: &[u32],
     flags: &mut [LineFlags],
-    span: OxcSpan,
+    start: u32,
+    end: u32,
     mut set: impl FnMut(&mut LineFlags),
 ) {
-    let start_line = byte_to_line(line_starts, span.start);
-    // Span end is exclusive — the last byte covered is end-1. For an
-    // empty span (start == end) treat it as touching `start`.
-    let last_byte = span.end.saturating_sub(1).max(span.start);
+    let start_line = byte_to_line(line_starts, start);
+    let last_byte = end.saturating_sub(1).max(start);
     let end_line = byte_to_line(line_starts, last_byte);
     for li in start_line..=end_line {
         if let Some(f) = flags.get_mut(li as usize) {
@@ -208,60 +204,9 @@ fn apply_span(
     }
 }
 
-fn apply_comment(line_starts: &[u32], flags: &mut [LineFlags], c: &Comment) {
-    let is_jsdoc = c.is_jsdoc();
-    let is_annotation = c.is_annotation();
-    apply_span(line_starts, flags, c.span, |f| {
-        f.is_comment = true;
-        if is_jsdoc {
-            f.is_doc_comment = true;
-        }
-        if is_annotation {
-            f.is_pragma = true;
-        }
-    });
-}
-
-// ---- internal: AST walk for string + template + JSX text spans -----
-
-struct LiteralCollector {
-    string_spans: Vec<OxcSpan>,
-    jsx_text_spans: Vec<OxcSpan>,
-}
-
-impl<'a> Visit<'a> for LiteralCollector {
-    fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
-        self.string_spans.push(it.span);
-    }
-    fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
-        self.string_spans.push(it.span);
-        // Descend so nested templates inside `${...}` interpolations
-        // are still recorded.
-        walk::walk_template_literal(self, it);
-    }
-    fn visit_jsx_text(&mut self, it: &JSXText<'a>) {
-        // JSXText spans are the user-facing copy *between* JSX tags.
-        // Attribute values (`title="..."`) are StringLiterals inside
-        // the attribute, picked up by visit_string_literal — not
-        // double-counted here.
-        self.jsx_text_spans.push(it.span);
-    }
-    // Keep descending the rest of the tree — the auto-walking impls
-    // are fine, they'd only be a problem if we were trying to skip
-    // subtrees. Touch visit_function so the ScopeFlags import isn't
-    // dropped if we add helpers later.
-    fn visit_function(&mut self, it: &oxc_ast::ast::Function<'a>, flags: ScopeFlags) {
-        walk::walk_function(self, it, flags);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{parse_into, source_type_for};
-    use crate::source::SourceFile;
-    use oxc_allocator::Allocator;
-    use std::path::PathBuf;
 
     #[test]
     fn line_starts_basic() {
@@ -282,90 +227,22 @@ mod tests {
         assert_eq!(byte_to_line(&s, 99), 2);
     }
 
-    /// Helper to keep the test boilerplate down: returns a closure that
-    /// owns the parser allocator + result, and lends LineView slices via
-    /// the callback. Avoids the "returns local borrow" lifetime problem.
-    fn with_lines(file: SourceFile, body: impl for<'a> FnOnce(&[LineView<'a>])) {
-        let alloc = Allocator::default();
-        let parsed = parse_into(&alloc, &file);
-        let lines: Vec<_> = Lines::build(&file.text, &parsed.program).collect();
-        let _st = source_type_for(&file.path); // exercise the helper
-        body(&lines);
-    }
-
-    // --- cd-cgd: span_for produces file-absolute byte offsets ---------
-
     #[test]
     fn span_for_uses_file_absolute_bytes() {
-        let file = SourceFile::new(
-            PathBuf::from("f.ts"),
-            "const x = 1;\nconst y = 2;\n".to_string(),
-        );
-        let text = file.text.clone();
-        with_lines(file, |lines| {
-            // Line 2 starts at byte 13 (right after the first '\n').
-            let line2 = lines[1];
-            assert_eq!(line2.line_no, 2);
-            assert_eq!(line2.line_start, 13);
-            // 'y' is at char offset 6 within "const y = 2;" — file byte 19.
-            let span = line2.span_for(6, 7);
-            assert_eq!(span.line, 2);
-            assert_eq!(span.column, 7);
-            assert_eq!(span.start_byte, 19);
-            assert_eq!(span.end_byte, 20);
-            assert_eq!(&text[span.start_byte as usize..span.end_byte as usize], "y");
-        });
-    }
-
-    // --- cd-0ne: is_jsx_text flagged for JSXText, not for attributes --
-
-    #[test]
-    fn is_jsx_text_flags_text_between_tags() {
-        let file = SourceFile::new(
-            PathBuf::from("f.tsx"),
-            "const el = <div title=\"hi\">Hello world</div>;\n".to_string(),
-        );
-        with_lines(file, |lines| {
-            let l = lines[0];
-            assert!(
-                l.is_jsx_text,
-                "JSX text `Hello world` should set is_jsx_text"
-            );
-            // The "hi" attribute is a StringLiteral, so is_string_literal also fires.
-            assert!(l.is_string_literal);
-        });
-    }
-
-    #[test]
-    fn is_jsx_text_does_not_fire_without_jsx() {
-        let file = SourceFile::new(
-            PathBuf::from("f.tsx"),
-            "const x: string = \"plain\";\n".to_string(),
-        );
-        with_lines(file, |lines| {
-            assert!(!lines[0].is_jsx_text);
-            assert!(lines[0].is_string_literal);
-        });
-    }
-
-    #[test]
-    fn is_jsx_text_spans_multiple_lines() {
-        // JSXText between <p> and </p> spans the inner lines. The
-        // span semantics are *touch-based* — any line a span overlaps
-        // gets flagged, including the line containing the opening
-        // tag's trailing newline if the JSXText starts there. Plugin
-        // checks rely on `is_jsx_text` as a coarse pre-filter and
-        // confirm with a regex against `text`, so this is safe and
-        // matches the existing string-literal flag's semantics.
-        let file = SourceFile::new(
-            PathBuf::from("f.tsx"),
-            "const el = <p>\nfirst line\nsecond line\n</p>;\n".to_string(),
-        );
-        with_lines(file, |lines| {
-            assert!(lines[1].is_jsx_text); // `first line`
-            assert!(lines[2].is_jsx_text); // `second line`
-                                           // Line 4 is `</p>;` — past the JSXText, should NOT be flagged.
-            assert!(!lines[3].is_jsx_text);
-        });
+        let text = "const x = 1;\nconst y = 2;\n";
+        let line_starts = compute_line_starts(text);
+        // Empty flag table — we're testing the iterator + span_for, not
+        // classification.
+        let flags = vec![LineFlags::default(); line_starts.len()];
+        let lines: Vec<_> = Lines::from_parts(text, line_starts, flags).collect();
+        let line2 = lines[1];
+        assert_eq!(line2.line_no, 2);
+        assert_eq!(line2.line_start, 13);
+        let span = line2.span_for(6, 7);
+        assert_eq!(span.line, 2);
+        assert_eq!(span.column, 7);
+        assert_eq!(span.start_byte, 19);
+        assert_eq!(span.end_byte, 20);
+        assert_eq!(&text[span.start_byte as usize..span.end_byte as usize], "y");
     }
 }

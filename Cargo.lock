@@ -188,11 +188,7 @@ name = "cofferdam-checks"
 version = "0.1.4"
 dependencies = [
  "cofferdam-core",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_semantic",
- "oxc_span",
- "oxc_syntax",
+ "cofferdam-ts",
  "unicode-ident",
 ]
 
@@ -206,6 +202,7 @@ dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
  "cofferdam-formatters",
+ "cofferdam-ts",
  "serde",
  "serde_json",
  "tempfile",
@@ -216,13 +213,6 @@ dependencies = [
 name = "cofferdam-core"
 version = "0.1.4"
 dependencies = [
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_diagnostics",
- "oxc_parser",
- "oxc_span",
- "oxc_syntax",
  "proptest",
  "serde",
  "tempfile",
@@ -235,9 +225,9 @@ version = "0.1.4"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
+ "cofferdam-ts",
  "globset",
  "ignore",
- "oxc_diagnostics",
  "proptest",
  "serde",
  "serde_json",
@@ -263,6 +253,23 @@ version = "0.1.4"
 dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
+]
+
+[[package]]
+name = "cofferdam-ts"
+version = "0.1.4"
+dependencies = [
+ "cofferdam-core",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_diagnostics",
+ "oxc_parser",
+ "oxc_semantic",
+ "oxc_span",
+ "oxc_syntax",
+ "proptest",
+ "tempfile",
 ]
 
 [[package]]

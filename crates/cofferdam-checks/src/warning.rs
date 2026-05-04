@@ -2,13 +2,12 @@
 //! category once the per-category severity defaults wire up (phase 3).
 
 use cofferdam_core::span_from_bytes;
-use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile, TextEdit,
-};
-use oxc_ast::ast::{
+use cofferdam_core::{Category, CheckMeta, Issue, Priority, Severity, SourceFile, TextEdit};
+use cofferdam_ts::oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
 };
-use oxc_ast_visit::Visit;
+use cofferdam_ts::oxc_ast_visit::Visit;
+use cofferdam_ts::{Check, CheckContext};
 
 /// `Warning.TripleEquals` — flags `==` and `!=` (vs `===` / `!==`).
 ///
@@ -143,7 +142,7 @@ impl<'a> Visit<'a> for Collector<'a> {
         }
         // Walk into children — `==` can appear inside other binary ops
         // (e.g. `a && b == c`).
-        oxc_ast_visit::walk::walk_binary_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_binary_expression(self, node);
     }
 }
 
@@ -220,7 +219,7 @@ impl<'a> Visit<'a> for ConsoleCollector<'a> {
                 }
             }
         }
-        oxc_ast_visit::walk::walk_call_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_call_expression(self, node);
     }
 }
 
@@ -284,7 +283,7 @@ impl<'a> Visit<'a> for DebuggerCollector<'a> {
         // DebuggerStatement has no children, but call walk for symmetry
         // and so future oxc versions adding fields don't silently drop
         // them.
-        oxc_ast_visit::walk::walk_debugger_statement(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_debugger_statement(self, node);
     }
 }
 
@@ -353,7 +352,7 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
                 });
             }
         }
-        oxc_ast_visit::walk::walk_call_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_call_expression(self, node);
     }
 
     fn visit_new_expression(&mut self, node: &NewExpression<'a>) {
@@ -373,15 +372,15 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
                 });
             }
         }
-        oxc_ast_visit::walk::walk_new_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_new_expression(self, node);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::parser::{parse_into, ParsedView};
-    use cofferdam_core::{Allocator, Check, CheckContext, SourceFile};
+    use cofferdam_core::SourceFile;
+    use cofferdam_ts::{parse_into, Allocator, Check, CheckContext, ParsedView};
     use std::path::PathBuf;
 
     /// Parse `src` as TypeScript, run `TripleEquals`, and return all issues.

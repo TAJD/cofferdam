@@ -10,12 +10,9 @@ description = "Built-in checks shipped with cofferdam (Consistency, Design, Read
 
 [dependencies]
 cofferdam-core = { workspace = true }
-oxc_ast = { workspace = true }
-oxc_ast_visit = { workspace = true }
-oxc_semantic = "0.128.0"
-oxc_span = { workspace = true }
-oxc_syntax = "0.128"
-# unicode-ident already lives in the dep tree via oxc transitively;
-# pull it in directly so DuplicateBlock's tokeniser can recognise
-# Unicode identifiers (TS allows `λ`, `α`, Han characters, etc.).
+cofferdam-ts = { workspace = true }
+# unicode-ident is the only non-cofferdam dep we keep direct: oxc pulls
+# it in transitively, but DuplicateBlock's tokeniser needs the public
+# Unicode-identifier predicates and shouldn't depend on a transitive
+# pin. Not an oxc crate, so the platform-purity guardrail doesn't apply.
 unicode-ident = "1"

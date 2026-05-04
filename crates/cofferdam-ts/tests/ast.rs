@@ -9,9 +9,9 @@
 
 use std::path::PathBuf;
 
-use cofferdam_core::oxc_ast::ast::Function;
-use cofferdam_core::parser::{parse_into, ParsedView};
-use cofferdam_core::{Allocator, AstView, AstVisitor, CheckContext, SourceFile, Walk};
+use cofferdam_core::SourceFile;
+use cofferdam_ts::oxc_ast::ast::Function;
+use cofferdam_ts::{parse_into, Allocator, AstView, AstVisitor, CheckContext, ParsedView, Walk};
 
 // ============================================================
 // AstView construction and access
@@ -75,7 +75,7 @@ impl<'a> AstVisitor<'a> for CountingVisitor {
 
     fn visit_call_expression(
         &mut self,
-        _call: &cofferdam_core::oxc_ast::ast::CallExpression<'a>,
+        _call: &cofferdam_ts::oxc_ast::ast::CallExpression<'a>,
     ) -> Walk {
         self.call_count += 1;
         Walk::Continue
@@ -169,10 +169,10 @@ struct CallCollector {
 impl<'a> AstVisitor<'a> for CallCollector {
     fn visit_call_expression(
         &mut self,
-        call: &cofferdam_core::oxc_ast::ast::CallExpression<'a>,
+        call: &cofferdam_ts::oxc_ast::ast::CallExpression<'a>,
     ) -> Walk {
         // Try to extract simple identifier calls
-        if let cofferdam_core::oxc_ast::ast::Expression::Identifier(id) = &call.callee {
+        if let cofferdam_ts::oxc_ast::ast::Expression::Identifier(id) = &call.callee {
             self.calls.push(id.name.to_string());
         }
         Walk::Continue

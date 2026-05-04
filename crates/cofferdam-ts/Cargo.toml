@@ -1,0 +1,24 @@
+[package]
+name = "cofferdam-ts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "TypeScript language adapter for cofferdam — parser invocation, AST surface, and line classification over oxc."
+
+[dependencies]
+cofferdam-core = { workspace = true }
+oxc_allocator = { workspace = true }
+oxc_ast = { workspace = true }
+oxc_ast_visit = { workspace = true }
+oxc_diagnostics = { workspace = true }
+oxc_parser = { workspace = true }
+oxc_semantic = "0.128.0"
+oxc_span = { workspace = true }
+oxc_syntax = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"

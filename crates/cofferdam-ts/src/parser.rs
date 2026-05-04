@@ -1,6 +1,6 @@
 //! TypeScript parser — thin wrapper over oxc.
 //!
-//! Why this lives in `cofferdam-core`: every check that wants AST access
+//! Why this lives in `cofferdam-ts`: every check that wants AST access
 //! takes a `&CheckContext`, which exposes the parsed Program. Putting the
 //! parser elsewhere means CheckContext can't carry the right type.
 //!
@@ -17,13 +17,12 @@
 
 use std::path::Path;
 
+use cofferdam_core::SourceFile;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_parser::{ParseOptions, Parser, ParserReturn};
 use oxc_span::SourceType;
-
-use crate::source::SourceFile;
 
 /// Pick the correct oxc `SourceType` from a file path.
 ///

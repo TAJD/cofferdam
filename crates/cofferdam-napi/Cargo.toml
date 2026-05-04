@@ -21,6 +21,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 cofferdam-core = { path = "../cofferdam-core", version = "0.1.4" }
+cofferdam-ts = { path = "../cofferdam-ts", version = "0.1.4" }
 cofferdam-engine = { path = "../cofferdam-engine", version = "0.1.4" }
 cofferdam-checks = { path = "../cofferdam-checks", version = "0.1.4" }
 napi = { version = "3", default-features = false, features = ["napi8", "serde-json"] }

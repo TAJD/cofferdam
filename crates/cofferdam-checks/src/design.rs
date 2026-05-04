@@ -5,13 +5,14 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
-    OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    Category, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault, OptionKind, OptionSpec,
+    Priority, RelatedSpan, Severity, SourceFile, Span,
 };
-use oxc_ast::ast::{
+use cofferdam_ts::oxc_ast::ast::{
     ArrowFunctionExpression, Declaration, ExportNamedDeclaration, Function, VariableDeclaration,
 };
-use oxc_ast_visit::Visit;
+use cofferdam_ts::oxc_ast_visit::Visit;
+use cofferdam_ts::{Check, CheckContext};
 
 /// `Design.MaxParameters` — flag function signatures over `limit` params.
 ///
@@ -102,7 +103,11 @@ impl<'a> Collector<'a> {
 }
 
 impl<'a> Visit<'a> for Collector<'a> {
-    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+    fn visit_function(
+        &mut self,
+        node: &Function<'a>,
+        flags: cofferdam_ts::oxc_syntax::scope::ScopeFlags,
+    ) {
         let name = node
             .id
             .as_ref()
@@ -114,7 +119,7 @@ impl<'a> Visit<'a> for Collector<'a> {
             node.span.start,
             node.span.end,
         );
-        oxc_ast_visit::walk::walk_function(self, node, flags);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function(self, node, flags);
     }
 
     fn visit_arrow_function_expression(&mut self, node: &ArrowFunctionExpression<'a>) {
@@ -124,7 +129,7 @@ impl<'a> Visit<'a> for Collector<'a> {
             node.span.start,
             node.span.end,
         );
-        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
     }
 }
 
@@ -279,6 +284,6 @@ impl<'a> Visit<'a> for ExportCollector<'a> {
                 _ => {}
             }
         }
-        oxc_ast_visit::walk::walk_export_named_declaration(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_export_named_declaration(self, node);
     }
 }

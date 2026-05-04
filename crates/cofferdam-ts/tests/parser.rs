@@ -9,9 +9,9 @@
 
 use std::path::PathBuf;
 
-use cofferdam_core::parser::{parse_fatal, parse_into, source_type_for, ParsedView};
-use cofferdam_core::{Allocator, CheckContext, SourceFile};
-use oxc_span::SourceType;
+use cofferdam_core::SourceFile;
+use cofferdam_ts::oxc_span::SourceType;
+use cofferdam_ts::{parse_fatal, parse_into, source_type_for, Allocator, CheckContext, ParsedView};
 
 // ============================================================
 // source_type_for: extension → SourceType mapping

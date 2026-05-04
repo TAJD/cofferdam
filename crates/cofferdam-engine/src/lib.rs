@@ -20,11 +20,11 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
 
-use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, Issue, Priority,
-    Severity, SourceFile, Span,
+    CheckOptions, CorpusIndex, FinalizeContext, Issue, Priority, Severity, SourceFile, Span,
 };
+use cofferdam_ts::oxc_diagnostics;
+use cofferdam_ts::{parse_fatal, parse_into, Allocator, Check, CheckContext, ParsedView};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

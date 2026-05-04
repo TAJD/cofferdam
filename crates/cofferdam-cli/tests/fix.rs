@@ -16,8 +16,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cofferdam_checks::all_builtins;
-use cofferdam_core::{Check, SourceFile, TextEdit};
+use cofferdam_core::{SourceFile, TextEdit};
 use cofferdam_engine::Engine;
+use cofferdam_ts::Check;
 use tempfile::TempDir;
 
 /// Apply a sorted (reverse-offset) list of `TextEdit`s to `text` in place.

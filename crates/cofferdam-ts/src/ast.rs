@@ -25,8 +25,9 @@
 //! Every node we re-expose has a `span()` accessor returning `oxc_span::Span`
 //! (byte offsets). Use [`AstView::span_of`] to convert to our
 //! line/column [`Span`] — that is the only correct conversion path
-//! (UTF-8 column nuance, see [`crate::span_util::span_from_bytes`]).
+//! (UTF-8 column nuance, see [`cofferdam_core::span_from_bytes`]).
 
+use cofferdam_core::{span_from_bytes, Span};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BinaryExpression, CallExpression, Class, Function,
     IdentifierReference, ImportDeclaration, MemberExpression, NewExpression, NumericLiteral,
@@ -34,9 +35,6 @@ use oxc_ast::ast::{
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_syntax::scope::ScopeFlags;
-
-use crate::issue::Span;
-use crate::span_util::span_from_bytes;
 
 /// Borrowed view of a parsed file's AST. Cheap to construct; clones share
 /// the same underlying borrow.
@@ -92,9 +90,10 @@ impl<'a> AstView<'a> {
 
     /// Iterate every line in the source with classification flags
     /// drawn from the parsed comment list and an AST walk over string
-    /// + template literals. See [`crate::LineView`] for flag semantics.
-    pub fn lines(&self) -> crate::lines::Lines<'a> {
-        crate::lines::Lines::build(self.text, self.program)
+    /// and template literals. See [`cofferdam_core::LineView`] for flag
+    /// semantics.
+    pub fn lines(&self) -> cofferdam_core::Lines<'a> {
+        crate::line_classify::build_lines(self.text, self.program)
     }
 }
 

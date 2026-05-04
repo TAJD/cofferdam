@@ -15,13 +15,13 @@
 
 use std::path::PathBuf;
 
-use cofferdam_core::oxc_ast::ast::{
+use cofferdam_core::SourceFile;
+use cofferdam_ts::oxc_ast::ast::{
     Argument, Declaration, Expression, ImportDeclarationSpecifier, MemberExpression, PropertyKey,
     Statement,
 };
-use cofferdam_core::parser::{parse_into, ParsedView};
-use cofferdam_core::{
-    Allocator, AstView, AstVisitor, CheckContext, NodeKind, NodeRef, SourceFile, Walk,
+use cofferdam_ts::{
+    parse_into, Allocator, AstView, AstVisitor, CheckContext, NodeKind, NodeRef, ParsedView, Walk,
 };
 
 /// Build an `AstView` for `text` parsed as a `.ts` file. The arena +
@@ -107,24 +107,24 @@ struct CountVisitor {
 }
 
 impl<'a> AstVisitor<'a> for CountVisitor {
-    fn visit_class(&mut self, _: &'a cofferdam_core::oxc_ast::ast::Class<'a>) -> Walk {
+    fn visit_class(&mut self, _: &'a cofferdam_ts::oxc_ast::ast::Class<'a>) -> Walk {
         self.classes += 1;
         Walk::Continue
     }
-    fn visit_function(&mut self, _: &'a cofferdam_core::oxc_ast::ast::Function<'a>) -> Walk {
+    fn visit_function(&mut self, _: &'a cofferdam_ts::oxc_ast::ast::Function<'a>) -> Walk {
         self.functions += 1;
         Walk::Continue
     }
     fn visit_arrow_function_expression(
         &mut self,
-        _: &'a cofferdam_core::oxc_ast::ast::ArrowFunctionExpression<'a>,
+        _: &'a cofferdam_ts::oxc_ast::ast::ArrowFunctionExpression<'a>,
     ) -> Walk {
         self.arrows += 1;
         Walk::Continue
     }
     fn visit_call_expression(
         &mut self,
-        _: &'a cofferdam_core::oxc_ast::ast::CallExpression<'a>,
+        _: &'a cofferdam_ts::oxc_ast::ast::CallExpression<'a>,
     ) -> Walk {
         self.calls += 1;
         Walk::Continue
@@ -166,13 +166,13 @@ struct SkipClassesVisitor {
 }
 
 impl<'a> AstVisitor<'a> for SkipClassesVisitor {
-    fn visit_class(&mut self, _: &'a cofferdam_core::oxc_ast::ast::Class<'a>) -> Walk {
+    fn visit_class(&mut self, _: &'a cofferdam_ts::oxc_ast::ast::Class<'a>) -> Walk {
         self.classes_seen += 1;
         Walk::Skip // do not descend into class body
     }
     fn visit_call_expression(
         &mut self,
-        _: &'a cofferdam_core::oxc_ast::ast::CallExpression<'a>,
+        _: &'a cofferdam_ts::oxc_ast::ast::CallExpression<'a>,
     ) -> Walk {
         self.calls_seen += 1;
         Walk::Continue
@@ -226,12 +226,12 @@ struct DimensionClassVisitor {
 }
 
 impl<'a> AstVisitor<'a> for DimensionClassVisitor {
-    fn visit_class(&mut self, node: &'a cofferdam_core::oxc_ast::ast::Class<'a>) -> Walk {
+    fn visit_class(&mut self, node: &'a cofferdam_ts::oxc_ast::ast::Class<'a>) -> Walk {
         let mut has_width = false;
         let mut has_height = false;
 
         for elem in &node.body.body {
-            if let cofferdam_core::oxc_ast::ast::ClassElement::PropertyDefinition(p) = elem {
+            if let cofferdam_ts::oxc_ast::ast::ClassElement::PropertyDefinition(p) = elem {
                 if let PropertyKey::StaticIdentifier(ident) = &p.key {
                     match ident.name.as_str() {
                         "width" => has_width = true,

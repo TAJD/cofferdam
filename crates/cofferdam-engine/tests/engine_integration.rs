@@ -440,9 +440,9 @@ fn quote_style_fixture_produces_expected_count() {
 mod scope_filter {
     use super::*;
     use cofferdam_core::{
-        Category, Check, CheckContext, CheckMeta, FileScope, Issue, Priority, Severity, SourceFile,
-        Span,
+        Category, CheckMeta, FileScope, Issue, Priority, Severity, SourceFile, Span,
     };
+    use cofferdam_ts::{Check, CheckContext};
 
     static SCOPE: FileScope = FileScope {
         extensions: &["tsx"],

@@ -10,9 +10,9 @@ description = "Orchestration: discovery, scheduling, baseline, severity gating, 
 
 [dependencies]
 cofferdam-core = { workspace = true }
+cofferdam-ts = { workspace = true }
 globset = "0.4"
 ignore = { workspace = true }
-oxc_diagnostics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

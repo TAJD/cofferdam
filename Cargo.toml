@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/cofferdam-core",
+    "crates/cofferdam-ts",
     "crates/cofferdam-engine",
     "crates/cofferdam-checks",
     "crates/cofferdam-formatters",
@@ -35,6 +36,7 @@ rust-version = "1.78"
 
 [workspace.dependencies]
 cofferdam-core = { path = "crates/cofferdam-core", version = "0.1.4" }
+cofferdam-ts = { path = "crates/cofferdam-ts", version = "0.1.4" }
 cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.1.4" }
 cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.1.4" }
 cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.1.4" }

@@ -2,11 +2,12 @@
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, OptionDefault, OptionKind, OptionSpec,
-    Priority, Severity, SourceFile, Span,
+    Category, CheckMeta, Issue, OptionDefault, OptionKind, OptionSpec, Priority, Severity,
+    SourceFile, Span,
 };
-use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
-use oxc_ast_visit::Visit;
+use cofferdam_ts::oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
+use cofferdam_ts::oxc_ast_visit::Visit;
+use cofferdam_ts::{Check, CheckContext};
 
 // ---------- Readability.MaxLineLength ----------
 
@@ -188,7 +189,11 @@ impl<'a> MFLCollector<'a> {
 }
 
 impl<'a> Visit<'a> for MFLCollector<'a> {
-    fn visit_function(&mut self, node: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+    fn visit_function(
+        &mut self,
+        node: &Function<'a>,
+        flags: cofferdam_ts::oxc_syntax::scope::ScopeFlags,
+    ) {
         if let Some(body) = &node.body {
             let name = node
                 .id
@@ -197,7 +202,7 @@ impl<'a> Visit<'a> for MFLCollector<'a> {
                 .unwrap_or_else(|| "anonymous function".to_string());
             self.measure(body, &name);
         }
-        oxc_ast_visit::walk::walk_function(self, node, flags);
+        cofferdam_ts::oxc_ast_visit::walk::walk_function(self, node, flags);
     }
 
     fn visit_arrow_function_expression(&mut self, node: &ArrowFunctionExpression<'a>) {
@@ -212,6 +217,6 @@ impl<'a> Visit<'a> for MFLCollector<'a> {
             // a BlockStatement with one ExpressionStatement; nothing to
             // measure.
         }
-        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        cofferdam_ts::oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
     }
 }

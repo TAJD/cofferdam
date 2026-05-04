@@ -134,15 +134,14 @@ pub struct JsLineView {
 /// calls this per file before invoking each plugin.
 #[napi]
 pub fn line_views(path: String, text: String) -> Result<Vec<JsLineView>> {
-    use cofferdam_core::lines::Lines;
-    use cofferdam_core::parser::{parse_into, source_type_for};
     use cofferdam_core::SourceFile;
+    use cofferdam_ts::{parse_into, source_type_for, Allocator};
 
     let file = SourceFile::new(PathBuf::from(&path), text.clone());
     let _source_type = source_type_for(&file.path);
-    let allocator = cofferdam_core::Allocator::default();
+    let allocator = Allocator::default();
     let parsed = parse_into(&allocator, &file);
-    let views: Vec<JsLineView> = Lines::build(&file.text, &parsed.program)
+    let views: Vec<JsLineView> = cofferdam_ts::build_lines(&file.text, &parsed.program)
         .map(|lv| JsLineView {
             line_no: lv.line_no,
             text: lv.text.to_string(),

@@ -5,12 +5,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
-use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, Issue, Priority, Severity, SourceFile,
-    Span,
-};
-use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
-use oxc_ast_visit::Visit;
+use cofferdam_core::{Category, CheckMeta, CorpusKey, Issue, Priority, Severity, SourceFile, Span};
+use cofferdam_ts::oxc_ast::ast::{JSXAttributeValue, StringLiteral};
+use cofferdam_ts::oxc_ast_visit::Visit;
+use cofferdam_ts::{Check, CheckContext};
 
 // ─── Consistency.QuoteStyle ─────────────────────────────────────────────────
 
@@ -191,7 +189,7 @@ impl<'a> Visit<'a> for QuoteCollector<'a> {
     fn visit_string_literal(&mut self, lit: &StringLiteral<'a>) {
         self.record_literal(lit);
         // StringLiteral has no sub-nodes that need walking.
-        oxc_ast_visit::walk::walk_string_literal(self, lit);
+        cofferdam_ts::oxc_ast_visit::walk::walk_string_literal(self, lit);
     }
 
     /// Override JSX attribute value visitor to skip string literals that
@@ -209,8 +207,8 @@ impl<'a> Visit<'a> for QuoteCollector<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::parser::{parse_into, ParsedView};
-    use cofferdam_core::{Allocator, Check, CheckContext, CorpusIndex, SourceFile};
+    use cofferdam_core::{CorpusIndex, SourceFile};
+    use cofferdam_ts::{parse_into, Allocator, Check, CheckContext, ParsedView};
     use std::path::PathBuf;
 
     /// Run QuoteStyle against `src` (full two-pass cycle) and return the issues

@@ -11,7 +11,7 @@ pub mod readability;
 pub mod refactor;
 pub mod warning;
 
-use cofferdam_core::Check;
+use cofferdam_ts::Check;
 
 /// All built-in checks, ready for the engine to consume.
 ///

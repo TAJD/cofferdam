@@ -10,8 +10,8 @@
 
 use std::path::PathBuf;
 
-use cofferdam_core::parser::{parse_into, ParsedView};
-use cofferdam_core::{Allocator, AstView, CheckContext, LineView, SourceFile};
+use cofferdam_core::{LineView, SourceFile};
+use cofferdam_ts::{parse_into, Allocator, AstView, CheckContext, ParsedView};
 
 fn view_for(text: &'static str) -> AstView<'static> {
     let path = PathBuf::from("test.ts");

@@ -7,6 +7,7 @@
 
 pub mod consistency;
 pub mod design;
+pub mod framework_paths;
 pub mod readability;
 pub mod refactor;
 pub mod warning;

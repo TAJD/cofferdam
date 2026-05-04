@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::framework_paths::FRAMEWORK_ENTRY_PATTERNS;
 use cofferdam_core::graph::{
     ExportKind, ExportRecord, ImportKind, ImportRecord, LayersConfig, EXPORTS as GRAPH_EXPORTS,
     IMPORTS as GRAPH_IMPORTS, LAYERS as GRAPH_LAYERS,
@@ -286,59 +287,10 @@ const OE_OPTIONS: &[OptionSpec] = &[
     OptionSpec {
         name: "framework_entry_patterns",
         kind: OptionKind::StringList,
-        // Next.js App Router (`page`/`layout`/`route`/`error`/`loading`/...
-        // are loaded by the framework, not user code), Pages Router
-        // (`_app`, `_document`), Next/Vite/Vitest config files, and
-        // SvelteKit `+page.svelte` / `+layout.ts` style routing.
-        // Substring-matched against the forward-slash-normalized path.
-        default: OptionDefault::StringList(&[
-            // Next.js App Router routing files.
-            "/page.",
-            "/layout.",
-            "/route.",
-            "/error.",
-            "/loading.",
-            "/not-found.",
-            "/default.",
-            "/template.",
-            "/global-error.",
-            "/middleware.",
-            "/instrumentation.",
-            // Next.js metadata files (consumed by the framework, not user code).
-            "/manifest.",
-            "/robots.",
-            "/sitemap.",
-            "/icon.",
-            "/apple-icon.",
-            "/opengraph-image.",
-            "/twitter-image.",
-            "/favicon.",
-            // Next.js Pages Router.
-            "/_app.",
-            "/_document.",
-            "/_error.",
-            // SvelteKit routing.
-            "/+page.",
-            "/+layout.",
-            "/+server.",
-            // Common project-config files.
-            "/next.config.",
-            "/vite.config.",
-            "/vitest.config.",
-            "/tsup.config.",
-            "/tailwind.config.",
-            "/postcss.config.",
-            "/astro.config.",
-            "/svelte.config.",
-            "/remix.config.",
-            "/playwright.config.",
-            "/jest.config.",
-            "/rollup.config.",
-            "/webpack.config.",
-            "/babel.config.",
-            "/eslint.config.",
-            "/prettier.config.",
-        ]),
+        // Source-of-truth list lives in `crate::framework_paths` so
+        // `Warning.UnusedImport` shares it (cd-q53). Substring-matched
+        // against the forward-slash-normalized path.
+        default: OptionDefault::StringList(FRAMEWORK_ENTRY_PATTERNS),
         doc: "Filename substrings for framework entry-point files (Next.js App Router, Pages Router, SvelteKit, config files). Exports from matching files are skipped because the framework runtime — not application code — consumes them.",
     },
 ];
@@ -370,26 +322,29 @@ impl Check for OrphanExport {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        // FinalizeContext doesn't carry per-check options today, so we
-        // pull defaults straight from the static schema. cd-7h5 follow-up
-        // can plumb options through once a user-facing override matters.
+        // Resolved options come through FinalizeContext (cd-3uj) so
+        // user overrides in cofferdam.toml take effect. The engine
+        // populates every declared key with at least its schema
+        // default before finalize runs, so the unwrap_or_default
+        // arms only fire if a future refactor drops a key.
         let opts = OrphanOptions {
-            include_type_only: false,
-            test_patterns: string_list_default(&OE_OPTIONS[1].default),
-            framework_entry_patterns: string_list_default(&OE_OPTIONS[2].default),
+            include_type_only: ctx.options.get_bool("include_type_only").unwrap_or(false),
+            test_patterns: ctx
+                .options
+                .get_string_list("test_file_patterns")
+                .map(|xs| xs.to_vec())
+                .unwrap_or_default(),
+            framework_entry_patterns: ctx
+                .options
+                .get_string_list("framework_entry_patterns")
+                .map(|xs| xs.to_vec())
+                .unwrap_or_default(),
         };
 
         let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
 
         compute_orphans(&imports, &exports, &opts)
-    }
-}
-
-fn string_list_default(d: &OptionDefault) -> Vec<String> {
-    match d {
-        OptionDefault::StringList(xs) => xs.iter().map(|s| (*s).to_string()).collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -614,9 +569,12 @@ impl Check for ImportCycle {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        // Honour user-supplied option override (cd-3uj). Default mirrors
+        // the schema (true) when the key is missing.
+        let ignore_type_only = ctx.options.get_bool("ignore_type_only").unwrap_or(true);
         let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
-        compute_cycles(&imports, &exports, /* ignore_type_only */ true)
+        compute_cycles(&imports, &exports, ignore_type_only)
     }
 }
 

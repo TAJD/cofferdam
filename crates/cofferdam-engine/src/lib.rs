@@ -230,8 +230,12 @@ impl Engine {
             }
         }
 
-        let mut finalize_ctx = FinalizeContext::new(&corpus);
-        for check in &self.checks {
+        // Per-check options flow into `finalize` the same way they do
+        // into `run` (cd-3uj). Each check sees its own slot of the
+        // engine's resolved-options vector — no more reaching into
+        // static schema defaults from finalize-stage checks.
+        for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+            let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
             issues.extend(check.finalize(&mut finalize_ctx));
         }
 

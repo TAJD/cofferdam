@@ -154,13 +154,31 @@ impl<'a> CheckContext<'a> {
 /// aggregate the state they collected per file. Deliberately distinct
 /// from `CheckContext` because `finalize` has no current file or parsed
 /// AST.
+///
+/// `options` carries the running check's resolved options, mirroring
+/// `CheckContext::options` (cd-3uj). The engine pairs each check with
+/// its slot when calling `finalize` so cross-file checks can honour
+/// `cofferdam.toml` overrides for the same option keys exposed in
+/// per-file `run`.
 pub struct FinalizeContext<'a> {
     pub corpus: &'a CorpusIndex,
+    /// Resolved options for the running check. Defaults to a process-
+    /// wide empty bag — useful for tests and for checks that declare
+    /// no options.
+    pub options: &'a CheckOptions,
 }
 
 impl<'a> FinalizeContext<'a> {
     pub fn new(corpus: &'a CorpusIndex) -> Self {
-        Self { corpus }
+        Self {
+            corpus,
+            options: &EMPTY_OPTIONS,
+        }
+    }
+
+    pub fn with_options(mut self, options: &'a CheckOptions) -> Self {
+        self.options = options;
+        self
     }
 }
 

@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::framework_paths::is_framework_entry;
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Priority, Severity,
@@ -456,9 +457,9 @@ impl Check for UnusedImport {
                 continue;
             }
             // Framework-entry / config files: their re-exports are
-            // consumed by the runtime, not by other user code. Mirrors
-            // the OrphanExport default patterns; if these grow we should
-            // hoist into a shared helper.
+            // consumed by the runtime, not by other user code. Pattern
+            // list shared with `Design.OrphanExport` via
+            // `crate::framework_paths` (cd-q53).
             if is_framework_entry(&exp.file) {
                 continue;
             }
@@ -507,64 +508,6 @@ fn path_key(p: &Path) -> String {
     } else {
         s
     }
-}
-
-/// Substring-matched filenames that mark a file as a framework entry
-/// point (Next.js routing/metadata, SvelteKit, Pages Router, common
-/// build configs). These files' re-exports/exports are consumed by the
-/// runtime — not by application code — so they shouldn't be flagged.
-/// Kept in sync by hand with `Design.OrphanExport`'s defaults; cd-7h5
-/// follow-up should hoist into a shared helper.
-const FRAMEWORK_ENTRY_PATTERNS: &[&str] = &[
-    "/page.",
-    "/layout.",
-    "/route.",
-    "/error.",
-    "/loading.",
-    "/not-found.",
-    "/default.",
-    "/template.",
-    "/global-error.",
-    "/middleware.",
-    "/instrumentation.",
-    "/manifest.",
-    "/robots.",
-    "/sitemap.",
-    "/icon.",
-    "/apple-icon.",
-    "/opengraph-image.",
-    "/twitter-image.",
-    "/favicon.",
-    "/_app.",
-    "/_document.",
-    "/_error.",
-    "/+page.",
-    "/+layout.",
-    "/+server.",
-    "/next.config.",
-    "/vite.config.",
-    "/vitest.config.",
-    "/tsup.config.",
-    "/tailwind.config.",
-    "/postcss.config.",
-    "/astro.config.",
-    "/svelte.config.",
-    "/remix.config.",
-    "/playwright.config.",
-    "/jest.config.",
-    "/rollup.config.",
-    "/webpack.config.",
-    "/babel.config.",
-    "/eslint.config.",
-    "/prettier.config.",
-];
-
-fn is_framework_entry(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    let normalized = s.replace('\\', "/");
-    FRAMEWORK_ENTRY_PATTERNS
-        .iter()
-        .any(|p| normalized.contains(p))
 }
 
 #[cfg(test)]

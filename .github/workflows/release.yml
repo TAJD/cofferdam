@@ -244,6 +244,46 @@ jobs:
           # pass it explicitly for clarity.
           npm publish --provenance --access public
 
+  publish-check-sdk:
+    # Companion to publish-npm: ships @cofferdam/check-sdk in lockstep
+    # with the cofferdam binary on the same v* tag. Plugin authors get a
+    # known-compatible (SDK X.Y.Z, cofferdam X.Y.Z) pair from one
+    # release. Lockstep is intentional pre-1.0 — see packages/check-sdk/
+    # README "Versioning" section.
+    name: publish @cofferdam/check-sdk to npm
+    needs: publish
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          # OIDC Trusted Publisher must be configured at
+          # npmjs.com/package/@cofferdam/check-sdk/access pointing at
+          # this workflow filename + repo. Same setup as the cofferdam
+          # package, just on the SDK's own access page.
+
+      - name: Pin npm to 11.x
+        run: npm install -g npm@11
+
+      - name: Sync SDK package version with tag
+        working-directory: packages/check-sdk
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          npm version "$version" --no-git-tag-version --allow-same-version
+
+      - name: Build the SDK (tsc → dist/)
+        working-directory: packages/check-sdk
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Publish @cofferdam/check-sdk via Trusted Publisher (OIDC)
+        working-directory: packages/check-sdk
+        run: npm publish --provenance --access public
+
   npm-smoke:
     # cd-5zn: end-to-end install verification on a fresh runner per OS,
     # using the version we just published. Catches postinstall/binary

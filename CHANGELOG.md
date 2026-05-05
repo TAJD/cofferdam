@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-05
+
+### Added
+- `@cofferdam/check-sdk` is now published on npm. Released in lockstep with the `cofferdam` binary — `@cofferdam/check-sdk@X.Y.Z` is built and tested against `cofferdam@X.Y.Z`. Pre-1.0, pin both packages to the same exact version.
+- `packages/check-sdk/README.md` ships as the npmjs.com listing — install snippet, three-pattern overview, full API surface index, versioning policy.
+
+### Changed
+- Release pipeline gains a `publish-check-sdk` job alongside `publish-npm`. Both fire on the same `v*` tag, both authenticate via OIDC Trusted Publisher.
+
 ## [0.2.1] - 2026-05-05
 
 ### Added

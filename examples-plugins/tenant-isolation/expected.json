@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "Warning.TenantIsolation",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/tenant-isolation/fixture.ts",
+      "line": 36,
+      "column": 10,
+      "start_byte": 1417,
+      "end_byte": 1477,
+      "message": "Prisma findMany call's where clause is missing a tenant field (expected one of: siteId, merchantId, tenantId, organizationId)."
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "by_category": {
+      "warning": 1
+    }
+  }
+}

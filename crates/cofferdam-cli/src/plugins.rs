@@ -53,6 +53,11 @@ struct ManifestFile<'a> {
     text: &'a str,
     #[serde(rename = "lineViews")]
     line_views: Vec<ManifestLineView>,
+    /// Flat-array AST per `design/sdk-ast-wire.md` (cd-svf). `None` when
+    /// the file failed to parse — host treats that as `ast: null` and
+    /// the engine has already emitted `Warning.ParseError` for the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ast: Option<crate::ast_wire::AstWire>,
 }
 
 #[derive(Serialize)]
@@ -182,10 +187,14 @@ pub fn run_plugins(
                 line_start: lv.line_start,
             })
             .collect();
+        // Build the flat-array AST wire (cd-svf). One Visit pass per file;
+        // re-uses the parse already done for line views.
+        let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
         manifest_files.push(ManifestFile {
             path: forward_slash(path),
             text,
             line_views,
+            ast: Some(ast),
         });
     }
 

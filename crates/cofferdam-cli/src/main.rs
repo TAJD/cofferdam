@@ -1,5 +1,6 @@
 //! Cofferdam CLI entry point.
 
+mod ast_wire;
 mod doctor;
 mod explain;
 mod gen_docs;

@@ -64,7 +64,7 @@ jobs:
       - name: Run cofferdam against fixture, diff against golden
         run: node scripts/check-plugin-fixtures.mjs
 
-      - name: Round-trip span check
+      - name: Round-trip span check (plugin reports)
         # The reported span byte-ranges, sliced from the source, must
         # equal the literal `Rovikore` string. Catches off-by-one /
         # encoding bugs in the host's `lineStart + charStart` arithmetic.
@@ -73,6 +73,13 @@ jobs:
             --format json --pretty \
             --config examples-plugins/brand-casing/cofferdam.toml > actual.json || true
           node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
+
+      - name: Round-trip span check (AST wire — cd-svf)
+        # Every wire-emitted AST node's (start_byte, end_byte) sliced from
+        # source must produce non-empty bytes that pass per-kind sanity
+        # rules. Catches off-by-one bugs in the Rust serializer + UTF-8
+        # boundary issues in the host's reconstruction.
+        run: node scripts/check-ast-spans.mjs
 
       - name: Negative fixture pins SDK type strictness (cd-81a.2)
         working-directory: examples-plugins/brand-casing

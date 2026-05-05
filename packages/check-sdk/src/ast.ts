@@ -31,6 +31,7 @@ export type Walk = (typeof Walk)[keyof typeof Walk];
  * justifies them — adding kinds is non-breaking, removing isn't.
  */
 export type NodeKind =
+  | "Program"
   | "CallExpression"
   | "ImportDeclaration"
   | "Function"
@@ -50,6 +51,18 @@ export interface AstNodeBase<K extends NodeKind> {
 }
 
 // ---- typed kind shapes (subset; expand as needed by plugins) ---------
+
+/**
+ * The Program root — entry point for `view.root`. Body holds top-level
+ * statements; iterate it for declarations / imports / exports without
+ * walking the rest of the tree.
+ *
+ * Added in cd-svf to make `view.root: AstNode` typeable. Without
+ * Program in the union, root narrows to `never` on any TS switch.
+ */
+export interface ProgramNode extends AstNodeBase<"Program"> {
+  readonly body: readonly AstNode[];
+}
 
 export interface CallExpressionNode extends AstNodeBase<"CallExpression"> {
   /** The callee expression — typically an `IdentifierReference` or `MemberExpression`. */
@@ -98,6 +111,7 @@ export interface IdentifierReferenceNode extends AstNodeBase<"IdentifierReferenc
 
 /** Discriminated union of every node kind {@link AstView} surfaces. */
 export type AstNode =
+  | ProgramNode
   | CallExpressionNode
   | ImportDeclarationNode
   | FunctionNode
@@ -117,6 +131,7 @@ export type NodeOfKind<K extends NodeKind> = Extract<AstNode, { kind: K }>;
  * visit.
  */
 export interface AstVisitor {
+  visitProgram?(node: ProgramNode): Walk;
   visitCallExpression?(node: CallExpressionNode): Walk;
   visitImportDeclaration?(node: ImportDeclarationNode): Walk;
   visitFunction?(node: FunctionNode): Walk;

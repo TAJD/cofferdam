@@ -53,6 +53,21 @@ import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 
+// Map from wire-side AST node kind to the visitor method name plugins
+// implement. Declared up here so it's initialised before the main
+// per-file loop runs the AstView walk (TDZ matters at module scope).
+const VISITOR_METHODS = {
+  Program: "visitProgram",
+  CallExpression: "visitCallExpression",
+  ImportDeclaration: "visitImportDeclaration",
+  Function: "visitFunction",
+  ArrowFunctionExpression: "visitArrowFunctionExpression",
+  Class: "visitClass",
+  ObjectExpression: "visitObjectExpression",
+  MemberExpression: "visitMemberExpression",
+  IdentifierReference: "visitIdentifierReference",
+};
+
 const manifest = readManifest();
 const reports = [];
 const errors = [];
@@ -85,9 +100,27 @@ for (const pluginPath of manifest.plugins) {
 if (process.env.COFFERDAM_PLUGIN_HOST_DEBUG) {
   for (const file of manifest.files) {
     process.stderr.write(
-      `[host] file=${file.path} lines=${file.lineViews.length} plugins=${loadedPlugins.length}\n`,
+      `[host] file=${file.path} lines=${file.lineViews.length} ` +
+        `astNodes=${file.ast?.nodes?.length ?? 0} plugins=${loadedPlugins.length}\n`,
     );
   }
+}
+
+// Dump the wire payload as JSON to a file when COFFERDAM_PLUGIN_HOST_DUMP_WIRE
+// is set — used by scripts/check-ast-spans.mjs to verify byte-range
+// round-trip without instrumenting the host script's main path. cd-svf
+// span round-trip CI guardrail.
+if (process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE) {
+  const dumpPath = process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(
+    dumpPath,
+    JSON.stringify(
+      manifest.files.map((f) => ({ path: f.path, text: f.text, ast: f.ast })),
+      null,
+      2,
+    ),
+  );
 }
 
 for (const file of manifest.files) {
@@ -211,8 +244,150 @@ function buildSourceFile(file) {
       };
       return it;
     },
-    ast: null,
+    ast: file.ast ? buildAstView(file.ast) : null,
   };
+}
+
+// AstView reconstruction (cd-svf). The wire ships a flat array of nodes
+// with firstChild/nextSibling indices and per-kind typed extras. This
+// builds the typed object graph plugins program against:
+//
+//   findAll<K>(kind): returns nodes of that kind in document order
+//   walk(visitor):     depth-first traversal, honours Walk.Skip
+//   root:              nodes[rootIdx], the Program node
+//
+// Children referenced by per-kind extras (calleeIdx, paramIdxs, etc.)
+// are rehydrated as typed object references via lazy getters so deeply
+// nested ASTs don't pay for objects plugins never touch.
+function buildAstView(wire) {
+  const { rootIdx, nodes } = wire;
+  const built = new Array(nodes.length);
+
+  function get(idx) {
+    if (idx < 0 || idx >= nodes.length) return null;
+    if (built[idx]) return built[idx];
+    const w = nodes[idx];
+    const out = { kind: w.kind, span: w.span };
+    switch (w.kind) {
+      case "Program": {
+        Object.defineProperty(out, "body", {
+          enumerable: true,
+          get: () => collectChildren(idx),
+        });
+        break;
+      }
+      case "CallExpression": {
+        Object.defineProperty(out, "callee", {
+          enumerable: true,
+          get: () => get(w.calleeIdx),
+        });
+        Object.defineProperty(out, "arguments", {
+          enumerable: true,
+          get: () => (w.argumentIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "ImportDeclaration": {
+        out.source = w.source;
+        out.specifiers = w.specifiers ?? [];
+        break;
+      }
+      case "Function": {
+        out.name = w.name ?? undefined;
+        out.async = !!w.async;
+        out.generator = !!w.generator;
+        Object.defineProperty(out, "params", {
+          enumerable: true,
+          get: () => (w.paramIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "ArrowFunctionExpression": {
+        out.async = !!w.async;
+        out.expression = !!w.expression;
+        Object.defineProperty(out, "params", {
+          enumerable: true,
+          get: () => (w.paramIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "Class": {
+        out.name = w.name ?? undefined;
+        break;
+      }
+      case "ObjectExpression": {
+        Object.defineProperty(out, "properties", {
+          enumerable: true,
+          get: () => (w.propertyIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "MemberExpression": {
+        out.property = w.property ?? undefined;
+        out.computed = !!w.computed;
+        Object.defineProperty(out, "object", {
+          enumerable: true,
+          get: () => get(w.objectIdx),
+        });
+        break;
+      }
+      case "IdentifierReference": {
+        out.name = w.name;
+        break;
+      }
+    }
+    built[idx] = out;
+    return out;
+  }
+
+  function collectChildren(idx) {
+    const out = [];
+    let cursor = nodes[idx]?.firstChild ?? -1;
+    while (cursor >= 0) {
+      const node = get(cursor);
+      if (node) out.push(node);
+      cursor = nodes[cursor].nextSibling;
+    }
+    return out;
+  }
+
+  // Pre-build a kind index for findAll. O(N) one-pass; subsequent
+  // findAll calls are O(1) lookups + O(M) hydration of M matching nodes.
+  const indexByKind = new Map();
+  for (let i = 0; i < nodes.length; i++) {
+    const k = nodes[i].kind;
+    if (!indexByKind.has(k)) indexByKind.set(k, []);
+    indexByKind.get(k).push(i);
+  }
+
+  return {
+    get root() {
+      return get(rootIdx);
+    },
+    findAll(kind) {
+      const idxs = indexByKind.get(kind) ?? [];
+      return idxs.map(get);
+    },
+    walk(visitor) {
+      const visit = (idx) => {
+        if (idx < 0) return;
+        const w = nodes[idx];
+        const fn = visitorMethod(visitor, w.kind);
+        const node = get(idx);
+        const decision = fn ? fn.call(visitor, node) : "continue";
+        if (decision !== "skip" && w.firstChild >= 0) visit(w.firstChild);
+        visit(w.nextSibling);
+      };
+      visit(rootIdx);
+    },
+  };
+}
+
+function visitorMethod(visitor, kind) {
+  const name = VISITOR_METHODS[kind];
+  if (!name) return null;
+  const fn = visitor[name];
+  return typeof fn === "function" ? fn : null;
 }
 
 function buildLineView(native) {

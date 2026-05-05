@@ -34,6 +34,7 @@ export type {
   AstVisitor,
   AstNode,
   AstNodeBase,
+  ProgramNode,
   CallExpressionNode,
   ImportDeclarationNode,
   FunctionNode,

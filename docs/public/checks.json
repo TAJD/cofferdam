@@ -26,6 +26,35 @@
       "options": []
     },
     {
+      "id": "Design.ImportCycle",
+      "category": "Design",
+      "base_priority": 8,
+      "default_severity": "Medium",
+      "explanation": "Files in this group import each other in a cycle. Cycles cause initialization-order surprises and obscure module boundaries.",
+      "body": "---\nid: Design.ImportCycle\ncategory: Design\ndefault_severity: Medium\nbase_priority: 8\n---\n\n# Design.ImportCycle\n\nFlags circular import chains in the project graph. Cycles cause\ninitialization-order surprises, complicate refactoring, and usually point\nat modules that should be split.\n\n## Why\n\nWhen file A imports B and B imports A (directly or through any chain),\nthe runtime has to choose which module is \"half-loaded\" while resolving\nthe other. The result is a class of bugs where exports appear `undefined`\nat first call, work later, and disappear again under HMR. Static analysis\ncan find these cleanly — there's no reason to wait for them to bite.\n\n## What gets flagged\n\n* Direct cycles: `a.ts → b.ts → a.ts` (two-file cycle).\n* Longer cycles: `a → b → c → … → a` of any length.\n* Self-imports: a file importing itself (degenerate but always wrong).\n\nEach cycle produces one finding, anchored at the alphabetically-lowest\nmember's first import edge into the cycle. Other members appear in the\nfinding's `related` spans so editors and the SARIF formatter can\nhighlight every participant.\n\n## What's not flagged\n\n* Cycles that exist only via `import type { … }` edges. TypeScript erases\n  type-only imports during compilation, so they cause no runtime cycle.\n  Flip `ignore_type_only = false` in config to see them anyway.\n* Edges that leave the project graph (anything resolving into\n  `node_modules`, or unresolved bare specifiers). The check is\n  in-project-only by design.\n\n## Configuration\n\n```toml\n[checks.\"Design.ImportCycle\"]\nignore_type_only = true\n```\n\n## Limitations\n\n* Dynamic imports (`import('./m')`) participate in the cycle detection —\n  they're real edges. If your code uses dynamic imports specifically to\n  break a static cycle, you'll still get a finding; suppress with the\n  inline directive at the import site.\n* `require()` is not tracked, so CommonJS-only cycles slip through.\n* Re-export forwarders (`export { x } from './y'`) ARE edges because the\n  re-exporter performs the import; if barrel files form a cycle, that\n  shows up here.\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "ignore_type_only",
+          "kind": "boolean",
+          "doc": "Skip cycles that exist only via `import type` edges. TS allows clean type-only cycles.",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "Design.LayerViolation",
+      "category": "Design",
+      "base_priority": 9,
+      "default_severity": "High",
+      "explanation": "An import crosses a declared architectural layer in a direction not permitted by [layers].allow.",
+      "body": "---\nid: Design.LayerViolation\ncategory: Design\ndefault_severity: High\nbase_priority: 9\n---\n\n# Design.LayerViolation\n\nEnforces architectural layering rules declared in `cofferdam.toml`. Each\nfile is mapped to a layer via gitignore-style globs, and every import\nedge is checked against an explicit allow-list of cross-layer\ndependencies.\n\n## Why\n\nLayered architectures (hexagonal, onion, clean, n-tier) are easier to\nreason about and refactor when the dependency direction is enforced\nmechanically. Without enforcement, an `app/` file imports a `domain/`\nhelper which imports back into `app/` \"just this once,\" and within a\nquarter the layers are sand. Cofferdam can hold the line at PR time.\n\n## Configuration\n\n```toml\n[layers]\ninfra  = [\"src/infra/**\"]\ndomain = [\"src/domain/**\", \"src/shared/**\"]\napp    = [\"src/app/**\"]\n\n[layers.allow]\ndomain = [\"infra\"]              # domain may import from infra\napp    = [\"domain\", \"infra\"]    # app may import from both\n# infra omitted → infra is isolated, must not import from any other layer\n```\n\nGlob patterns follow gitignore syntax. They're matched against each\nfile's path relative to the directory containing `cofferdam.toml`. The\nfirst matching layer (in alphabetical layer-name order) wins, so place\nspecific layer globs ahead of broad ones if they overlap.\n\n## What gets flagged\n\nEvery static or dynamic import whose source file is in layer **A** and\nwhose resolved target is in layer **B**, where **B** is not in the\n`allow` list for **A**.\n\n## What's not flagged\n\n* Files outside any declared layer — the project hasn't said how to\n  think about them yet, so the check stays silent.\n* Same-layer imports — always permitted.\n* Type-only imports (`import type { … }`) — they're erased at compile\n  time, no runtime layering implication.\n* External imports (anything in `node_modules`) — out of scope.\n\n## Limitations\n\n* No \"test layer\" sugar yet. If you want tests to import from anywhere,\n  add a `test` layer to your config and put it on every other layer's\n  `allow` list (or, simpler: exclude tests from the analysis via\n  `.cofferdamignore` since tests typically don't need their own layer).\n* Re-exports through barrel files attribute the violation to the\n  re-exporter, not the eventual consumer. If you want barrels to be\n  transparent, file an issue — the graph already records re-export\n  source paths so attribution can chain.\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
       "id": "Design.MaxParameters",
       "category": "Design",
       "base_priority": 5,
@@ -40,6 +69,85 @@
           "kind": "integer",
           "doc": "maximum number of parameters per function signature",
           "default": 5
+        }
+      ]
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Medium",
+      "explanation": "An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.",
+      "body": "---\nid: Design.OrphanExport\ncategory: Design\ndefault_severity: Medium\nbase_priority: 5\n---\n\n# Design.OrphanExport\n\nFlags exports that no other file in the project imports — the most common\nform of dead code left behind by refactors.\n\n## Why\n\nSingle-file linters (like `tsc`'s `noUnusedLocals`) miss this case: an\nexport marked `export` is \"used\" from the file's perspective even if no\nconsumer ever imports it. The waste is only visible when you look at the\nproject as a whole.\n\n## What gets flagged\n\n* `export function foo() {}` / `export class Foo {}` / `export const x = ...`\n  whose name appears in zero `import { ... }` statements anywhere in the\n  project.\n* `export default ...` whose file is never the target of an\n  `import x from './that/file'`.\n* Local re-exports (`export { x }`) when neither `x` nor the file is\n  reachable from any import or namespace touch.\n\n## What's not flagged\n\n* Re-export forwarding nodes (`export { x } from './y'`,\n  `export * from './y'`) — they're routing, not endpoints. Whether the\n  underlying definition is consumed is what matters, and that's evaluated\n  on its own row.\n* Anything in test or mock files, by default. Configurable via\n  `test_file_patterns`.\n* Type-only exports (`export type X`, `export interface I`,\n  `export type { X } from './m'`), unless `include_type_only = true`.\n  Type-only consumption is harder to attribute reliably without full\n  type-aware analysis; opt in if your project's types matter as much as\n  its values.\n* Files reached via `import * as ns from './m'` — namespace imports are\n  treated as touching every named export of the target file. If you want\n  finer-grained tracking, switch the consumer to named imports.\n\n## Configuration\n\n```toml\n[checks.\"Design.OrphanExport\"]\ninclude_type_only = false  # set true to flag unused type-only exports\ntest_file_patterns = [\".test.\", \".spec.\", \"_test.\", \"_spec.\", \"/__tests__/\", \"/__mocks__/\"]\n```\n\n## Limitations\n\n* Only static `import` and `export` declarations are tracked. `require()`,\n  `module.exports = ...`, and dynamic `import('...')` calls are ignored —\n  flagged exports that are reached only through dynamic loading will be\n  false positives.\n* No `package.json` `main`/`module`/`exports` allowlist yet — public-API\n  entry points appear orphan if no in-project file imports them. Run with\n  the project's published surface in mind for now; an allowlist is a\n  planned follow-up.\n* Re-export chain attribution stops at the immediate re-exporter; if your\n  intermediate barrel re-exports `x` and only the barrel is consumed, the\n  underlying `x` will (correctly) be considered touched. If the barrel\n  itself is also unused, you'll see two findings rather than one — pick a\n  side and fix that file.\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "include_type_only",
+          "kind": "boolean",
+          "doc": "Flag type-only exports (interfaces, type aliases, declared types) as orphans.",
+          "default": false
+        },
+        {
+          "id": "test_file_patterns",
+          "kind": "string[]",
+          "doc": "Filename substrings that mark a file as test/mocks. Exports from matching files are skipped.",
+          "default": [
+            ".test.",
+            ".spec.",
+            "_test.",
+            "_spec.",
+            "/__tests__/",
+            "/__mocks__/"
+          ]
+        },
+        {
+          "id": "framework_entry_patterns",
+          "kind": "string[]",
+          "doc": "Filename substrings for framework entry-point files (Next.js App Router, Pages Router, SvelteKit, config files). Exports from matching files are skipped because the framework runtime — not application code — consumes them.",
+          "default": [
+            "/page.",
+            "/layout.",
+            "/route.",
+            "/error.",
+            "/loading.",
+            "/not-found.",
+            "/default.",
+            "/template.",
+            "/global-error.",
+            "/middleware.",
+            "/instrumentation.",
+            "/manifest.",
+            "/robots.",
+            "/sitemap.",
+            "/icon.",
+            "/apple-icon.",
+            "/opengraph-image.",
+            "/twitter-image.",
+            "/favicon.",
+            "/_app.",
+            "/_document.",
+            "/_error.",
+            "/+page.",
+            "/+layout.",
+            "/+server.",
+            "/next.config.",
+            "/vite.config.",
+            "/vitest.config.",
+            "/tsup.config.",
+            "/tailwind.config.",
+            "/postcss.config.",
+            "/astro.config.",
+            "/svelte.config.",
+            "/remix.config.",
+            "/playwright.config.",
+            "/jest.config.",
+            "/rollup.config.",
+            "/webpack.config.",
+            "/babel.config.",
+            "/eslint.config.",
+            "/prettier.config."
+          ]
         }
       ]
     },
@@ -97,6 +205,17 @@
       "default_severity": "Medium",
       "explanation": "McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.",
       "body": "---\nid: Refactor.CyclomaticComplexity\ncategory: Refactor\nbase_priority: 8\ndefault_severity: Medium\noptions: []\n---\n\nMcCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`.\n\nCyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures \"how many test cases do I need\", cognitive captures \"how hard is this to read\". Run them together; the worst offenders fail both.\n\n```ts\n// flagged: 11 independent paths via &&/case/if combinations\nfunction dispatch(event: Event) {\n  switch (event.kind) {\n    case \"create\": return event.payload && event.payload.id ? handleCreate(event) : null;\n    case \"update\": return event.payload && event.payload.id ? handleUpdate(event) : null;\n    case \"delete\": return event.payload && event.payload.id ? handleDelete(event) : null;\n    case \"ping\": return null;\n    default: return null;\n  }\n}\n```\n\n```ts\n// fix: dispatch table flattens the case explosion\nconst handlers = { create: handleCreate, update: handleUpdate, delete: handleDelete } as const;\nfunction dispatch(event: Event) {\n  const handler = handlers[event.kind as keyof typeof handlers];\n  if (!handler || !event.payload?.id) return null;\n  return handler(event);\n}\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Refactor.DeadExport",
+      "category": "Refactor",
+      "base_priority": 4,
+      "default_severity": "Low",
+      "explanation": "Every importer of this export imports its local binding and never references it. The export is dead even though it appears used.",
+      "body": "---\nid: Refactor.DeadExport\ncategory: Refactor\ndefault_severity: Low\nbase_priority: 4\n---\n\n# Refactor.DeadExport\n\nFlags exports that have at least one consumer but every consumer\nimports the local binding and never references it. The classic\n\"someone removed the call site but not the import\" residue.\n\n## Why\n\n`Design.OrphanExport` catches the easy case: an export with zero\nconsumers. `Refactor.DeadExport` catches the quieter case: the export\nis technically used (something imports it), but every importer's\nimport statement is itself dead. Cleaning these reduces the import\ngraph's apparent connectivity, which makes refactors and dependency\nanalysis cheaper.\n\n## What gets flagged\n\n* Named exports whose name appears in at least one `import { … }`\n  somewhere in the project, but every importer's local binding has\n  zero references after the import statement.\n* Default exports reached only by importers that never reference the\n  local default binding.\n\n## What's not flagged\n\n* Exports with no consumer at all — that's `Design.OrphanExport`.\n* Type-only exports — too many false positives without full type-\n  aware analysis (omitted argument annotations, JSX attribute types,\n  etc. don't always show up as identifier references).\n* Exports whose source file is reached via a namespace import\n  (`import * as ns`) anywhere in the project. Namespace touches are\n  opaque without member-access tracking, so we can't tell which named\n  export `ns.foo` actually used.\n* Exports whose source file is the target of any re-export\n  (`export { … } from './m'`). The re-exporter's barrel is the\n  consumer; whether the barrel itself is dead is a separate question.\n* Re-export records (forwarding nodes).\n\n## Limitations\n\n* `local_use_count` only counts `IdentifierReference` AST hits.\n  Decorator-injected references, `eval()`-tracked imports, and\n  string-key dynamic dispatch will look unused even when they're not.\n* Imports that are aliased (`import { foo as bar }`) count `bar`\n  references, not `foo` — correct, but worth knowing if a\n  refactor renames in one place but not the other.\n",
       "requires_types": false,
       "consistency": false,
       "options": []
@@ -210,6 +329,17 @@
       "default_severity": "High",
       "explanation": "`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.",
       "body": "---\nid: Warning.TripleEquals\ncategory: Warning\nbase_priority: 15\ndefault_severity: High\noptions: []\n---\n\n`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. Walks every `BinaryExpression` and flags the equality operators.\n\n```ts\n// flagged\nif (a == b) return true;\nif (a != b) return false;\n```\n\n```ts\n// fix\nif (a === b) return true;\nif (a !== b) return false;\n```\n\n```ts\n// not relevant — relational operators don't coerce in the same way\nif (a < b) return true;\nif (a >= b) return false;\n```\n\n```toml\n# The default (high) gates CI — explicit override only useful to demote.\n[checks.\"Warning.TripleEquals\"]\nseverity = \"medium\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
+      "id": "Warning.UnusedImport",
+      "category": "Warning",
+      "base_priority": 7,
+      "default_severity": "Low",
+      "explanation": "Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.",
+      "body": "---\nid: Warning.UnusedImport\ncategory: Warning\ndefault_severity: Low\nbase_priority: 7\n---\n\n# Warning.UnusedImport\n\nFlags re-export passthroughs (`export { Bar } from './bar'`) when no\nother file in the project imports `Bar` from the re-exporter. The\nclassic case single-file linters miss because the file's own re-export\ncounts as \"using\" the symbol locally.\n\n## Why\n\n```ts\n// barrel.ts\nexport { Bar } from './bar';   // tsc: \"Bar is used (in the export)\"\n                               // reality: nobody imports Bar from barrel.ts\n```\n\n`tsc --noUnusedLocals` and ESLint `no-unused-vars` treat the re-export\nas a use site, so this kind of dead barrel entry survives indefinitely.\nCofferdam sees the whole project graph and can confirm whether anyone\ndownstream actually imports the re-exported name.\n\n## What gets flagged\n\n* `export { Bar } from './m'` when no other file has\n  `import { Bar } from './barrel'` (or `import Bar from './barrel'` for\n  default re-exports).\n* Default re-exports (`export { default } from './m'`,\n  `export { default as foo } from './m'`) when nobody imports the\n  default (or the renamed name) from the re-exporter.\n\n## What's not flagged\n\n* Plain unused imports inside a single file — tsc/ESLint already do\n  this well, and we deliberately don't duplicate.\n* Star re-exports (`export * from './m'`) — they have no specific\n  name to track. If the re-exporter file itself is unused, that's\n  `Design.OrphanExport`'s job.\n* Type-only re-exports — same false-positive surface as\n  `Refactor.DeadExport`. Will be enabled with type-aware analysis.\n* Re-exports from a file reached by `import * as ns` somewhere — the\n  namespace import opaquely consumes everything.\n* Side-effect imports (`import './polyfill'`) — they have no name\n  bindings.\n\n## Limitations\n\n* Re-export chain depth: we look one hop at a time. If `a.ts`\n  re-exports from `b.ts` re-exports from `c.ts` and only `c.ts`'s\n  origin export is consumed (skipping the barrel layers), each\n  re-exporter shows up separately. Walking through chains for\n  attribution is a planned enhancement.\n* Dynamic imports of the re-exporter module DO count as namespace\n  consumption (matching real runtime semantics), so a single\n  `import('./barrel').then(m => m.Bar)` keeps every re-export off the\n  list.\n",
       "requires_types": false,
       "consistency": false,
       "options": []

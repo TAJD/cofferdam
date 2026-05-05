@@ -19,7 +19,10 @@ export const checksItems = [
     collapsed: true,
     items: [
       { text: 'DuplicateExportName', link: '/checks/Design.DuplicateExportName' },
+      { text: 'ImportCycle', link: '/checks/Design.ImportCycle' },
+      { text: 'LayerViolation', link: '/checks/Design.LayerViolation' },
       { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },
+      { text: 'OrphanExport', link: '/checks/Design.OrphanExport' },
     ],
   },
   {
@@ -36,6 +39,7 @@ export const checksItems = [
     items: [
       { text: 'CognitiveComplexity', link: '/checks/Refactor.CognitiveComplexity' },
       { text: 'CyclomaticComplexity', link: '/checks/Refactor.CyclomaticComplexity' },
+      { text: 'DeadExport', link: '/checks/Refactor.DeadExport' },
       { text: 'DuplicateBlock', link: '/checks/Refactor.DuplicateBlock' },
       { text: 'PreferNullishCoalescing', link: '/checks/Refactor.PreferNullishCoalescing' },
       { text: 'PreferOptionalChain', link: '/checks/Refactor.PreferOptionalChain' },
@@ -50,6 +54,7 @@ export const checksItems = [
       { text: 'NoDebugger', link: '/checks/Warning.NoDebugger' },
       { text: 'NoEval', link: '/checks/Warning.NoEval' },
       { text: 'TripleEquals', link: '/checks/Warning.TripleEquals' },
+      { text: 'UnusedImport', link: '/checks/Warning.UnusedImport' },
     ],
   },
 ]

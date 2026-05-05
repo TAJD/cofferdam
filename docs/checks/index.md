@@ -15,7 +15,10 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 ## Design
 
 - [`Design.DuplicateExportName`](Design.DuplicateExportName.md) — The same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got.
+- [`Design.ImportCycle`](Design.ImportCycle.md) — Files in this group import each other in a cycle. Cycles cause initialization-order surprises and obscure module boundaries.
+- [`Design.LayerViolation`](Design.LayerViolation.md) — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
 - [`Design.MaxParameters`](Design.MaxParameters.md) — Functions with too many parameters are hard to call correctly. Pass an options object instead.
+- [`Design.OrphanExport`](Design.OrphanExport.md) — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
 
 ## Readability
 
@@ -26,6 +29,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 - [`Refactor.CognitiveComplexity`](Refactor.CognitiveComplexity.md) — Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.
 - [`Refactor.CyclomaticComplexity`](Refactor.CyclomaticComplexity.md) — McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.
+- [`Refactor.DeadExport`](Refactor.DeadExport.md) — Every importer of this export imports its local binding and never references it. The export is dead even though it appears used.
 - [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md) — Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.
 - [`Refactor.PreferNullishCoalescing`](Refactor.PreferNullishCoalescing.md) — `x || default` falls through on every falsy value (`0`, `""`, `false`). Use `??` to fall through only on `null`/`undefined`.
 - [`Refactor.PreferOptionalChain`](Refactor.PreferOptionalChain.md) — `a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.
@@ -37,3 +41,4 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Warning.NoDebugger`](Warning.NoDebugger.md) — `debugger` statements halt execution under attached devtools. Remove before shipping.
 - [`Warning.NoEval`](Warning.NoEval.md) — `eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.
 - [`Warning.TripleEquals`](Warning.TripleEquals.md) — `==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.
+- [`Warning.UnusedImport`](Warning.UnusedImport.md) — Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.

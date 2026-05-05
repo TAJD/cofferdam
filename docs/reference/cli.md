@@ -19,6 +19,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam init`↴](#cofferdam-init)
 * [`cofferdam doctor`↴](#cofferdam-doctor)
 * [`cofferdam fix`↴](#cofferdam-fix)
+* [`cofferdam advise`↴](#cofferdam-advise)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
 
 ## `cofferdam`
@@ -36,6 +37,7 @@ TypeScript code-quality analyzer
 * `init` — Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries so a new project has a working `cofferdam check` after one command. Refuses to overwrite an existing cofferdam.toml without `--force`
 * `doctor` — Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗ with a one-line remediation hint on failure. Exit 0 on all-pass, 1 if any check fails. Diagnostic only — never modifies files
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
+* `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
 
 
@@ -71,6 +73,8 @@ Run all checks against files or directories. With no arguments, walks the curren
     Machine-readable JSON. Stable schema, no ANSI, no decorative output
   - `compact`:
     Pipe-delimited line-per-finding format. One header line followed by one record per finding. Most token-economical — use when shovelling findings into an AI prompt
+  - `sarif`:
+    SARIF 2.1.0 — OASIS-standard JSON for static-analysis tools. Upload directly to GitHub Code Scanning via `github/codeql-action/upload-sarif`, or feed Azure DevOps, GitLab, SonarQube, the VS Code Sarif Viewer, etc
 
 * `--robot` — Default to a machine-readable format when `--format` is not set. Token-economical output for AI agents — pairs with `--format=compact` for the smallest output by far
 * `--pretty` — Pretty-print JSON output (only with `--format=json` / `--robot`)
@@ -189,6 +193,35 @@ Apply mechanical autofixes for supported checks. Runs the engine against the giv
 
 ###### **Options:**
 
+* `--hidden` — Walk hidden files/directories (default: skip)
+* `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
+
+
+
+## `cofferdam advise`
+
+JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
+
+**Usage:** `cofferdam advise [OPTIONS] [PATHS]...`
+
+###### **Arguments:**
+
+* `<PATHS>` — Files, directories, or globs to advise on. Defaults to `.`. Glob patterns (`src/**/*.ts`) work; shell expansion is honoured first, then the CLI's own globset matcher
+
+###### **Options:**
+
+* `--format <FORMAT>` — Output format. Default: `text`. With `--robot` and no explicit `--format`, defaults to `json`
+
+  Possible values:
+  - `text`:
+    Human-readable text grouped by file (default)
+  - `json`:
+    Machine-readable JSON array. One object per file
+
+* `--robot` — Default to a machine-readable JSON array when `--format` is not set. Token-economical output for AI agents
+* `--pretty` — Pretty-print JSON output
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--no-config` — Disable config-file discovery entirely
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
 

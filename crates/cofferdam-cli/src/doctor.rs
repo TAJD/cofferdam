@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use cofferdam_checks::all_builtins;
+use cofferdam_core::invariants;
 use cofferdam_engine::baseline::{self, Baseline, DEFAULT_PATH as BASELINE_DEFAULT_PATH};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::suppress;
@@ -119,6 +120,7 @@ pub fn run(robot: bool, pretty: bool) -> ExitCode {
     let results = vec![
         check_binary_integrity(),
         check_config(),
+        check_invariants_layers(),
         check_baseline(),
         check_git(),
         check_discovery(),
@@ -288,7 +290,79 @@ fn check_config() -> CheckResult {
     }
 }
 
-// ── Check 3 — baseline ───────────────────────────────────────────────────────
+// ── Check 3 — invariants-layers ──────────────────────────────────────────────
+
+/// Warn when `cofferdam.invariants.toml` is present but has an empty or absent
+/// `[layers]` block. In that state `Design.LayerViolation` silently checks
+/// nothing — a common footgun. If the file is missing entirely we pass
+/// (the user hasn't opted into layer enforcement, which is fine).
+fn check_invariants_layers() -> CheckResult {
+    const NAME: &str = "invariants-layers";
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return CheckResult::fail(
+                NAME,
+                format!("could not determine current directory: {e}"),
+                "check your working directory",
+            );
+        }
+    };
+    check_invariants_layers_at(&cwd)
+}
+
+/// Test-friendly variant: search for `cofferdam.invariants.toml` starting
+/// from `start` rather than process-global CWD. Keeps doctor tests free of
+/// `std::env::set_current_dir` mutations, which race when test threads run
+/// in parallel.
+fn check_invariants_layers_at(start: &Path) -> CheckResult {
+    const NAME: &str = "invariants-layers";
+
+    // Reuse the same walk-up discovery the engine uses.
+    let path = match invariants::discover(start) {
+        Some(p) => p,
+        None => {
+            return CheckResult::pass(
+                NAME,
+                "no cofferdam.invariants.toml — Design.LayerViolation skipped",
+            );
+        }
+    };
+
+    // Parse the file.  A broken invariants.toml is surfaced as a fail
+    // here (it means the file exists but is unusable), matching the tone
+    // of check_config().
+    let spec = match invariants::load(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            return CheckResult::fail(
+                NAME,
+                format!("failed to parse {}: {e}", path.display()),
+                format!("fix the syntax error in {}", path.display()),
+            );
+        }
+    };
+
+    // TODO(cd-5lh): same warn for [invariants] / [public_api]
+    if spec.layers.is_empty() {
+        CheckResult::warn(
+            NAME,
+            format!(
+                "{} present but [layers] is empty; Design.LayerViolation will not fire",
+                path.display()
+            ),
+            "add a [layers] block — see https://tajd.github.io/cofferdam/invariants/",
+        )
+    } else {
+        let count = spec.layers.len();
+        CheckResult::pass(
+            NAME,
+            format!("{} — {} layer(s) declared", path.display(), count),
+        )
+    }
+}
+
+// ── Check 4 — baseline ───────────────────────────────────────────────────────
 
 fn check_baseline() -> CheckResult {
     const NAME: &str = "baseline";
@@ -382,7 +456,7 @@ fn stale_baseline_files(bl: &Baseline, baseline_path: &Path) -> Vec<String> {
     missing
 }
 
-// ── Check 4 — git ────────────────────────────────────────────────────────────
+// ── Check 5 — git ────────────────────────────────────────────────────────────
 
 fn check_git() -> CheckResult {
     const NAME: &str = "git";
@@ -426,7 +500,7 @@ fn check_git() -> CheckResult {
     }
 }
 
-// ── Check 5 — discovery ──────────────────────────────────────────────────────
+// ── Check 6 — discovery ──────────────────────────────────────────────────────
 
 fn check_discovery() -> CheckResult {
     const NAME: &str = "discovery";
@@ -484,7 +558,7 @@ fn has_discovery_scope_in_config() -> bool {
     }
 }
 
-// ── Check 6 — suppression-directives ─────────────────────────────────────────
+// ── Check 7 — suppression-directives ─────────────────────────────────────────
 
 fn check_suppression_directives() -> CheckResult {
     const NAME: &str = "suppression-directives";
@@ -548,7 +622,7 @@ fn check_suppression_directives() -> CheckResult {
     }
 }
 
-// ── Check 7 — wrapper-version ────────────────────────────────────────────────
+// ── Check 8 — wrapper-version ────────────────────────────────────────────────
 
 fn check_wrapper_version() -> CheckResult {
     const NAME: &str = "wrapper-version";
@@ -661,5 +735,92 @@ mod tests {
         assert_eq!(Status::Warn.icon(), "⚠");
         assert_eq!(Status::Fail.icon(), "✗");
         assert_eq!(Status::Skipped.icon(), "-");
+    }
+
+    // ── check_invariants_layers tests ─────────────────────────────────────────
+
+    /// Helper: run `check_invariants_layers_at` rooted at a tempdir.
+    /// Avoids `std::env::set_current_dir` so parallel test threads cannot
+    /// race on process-global CWD.
+    fn run_invariants_check_in(dir: &std::path::Path) -> CheckResult {
+        check_invariants_layers_at(dir)
+    }
+
+    #[test]
+    fn check_passes_when_invariants_file_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let r = run_invariants_check_in(dir.path());
+        assert_eq!(
+            r.status,
+            Status::Pass,
+            "missing file should be pass: {}",
+            r.message
+        );
+        assert_eq!(r.name, "invariants-layers");
+    }
+
+    #[test]
+    fn check_warns_when_invariants_layers_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // [layers] section present but no entries beneath it.
+        std::fs::write(dir.path().join("cofferdam.invariants.toml"), "[layers]\n").expect("write");
+        let r = run_invariants_check_in(dir.path());
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "empty [layers] should warn: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("empty") || r.message.contains("will not fire"),
+            "message should mention empty/will not fire: {}",
+            r.message
+        );
+        assert!(r.remediation.is_some());
+    }
+
+    #[test]
+    fn check_warns_when_invariants_layers_section_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // File present but has no [layers] at all — only another block.
+        std::fs::write(
+            dir.path().join("cofferdam.invariants.toml"),
+            "[invariants]\n",
+        )
+        .expect("write");
+        let r = run_invariants_check_in(dir.path());
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "[layers] absent should warn: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("empty") || r.message.contains("will not fire"),
+            "message should mention empty/will not fire: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn check_passes_when_invariants_layers_populated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("cofferdam.invariants.toml"),
+            "[layers]\nui = [\"src/ui/**\"]\n",
+        )
+        .expect("write");
+        let r = run_invariants_check_in(dir.path());
+        assert_eq!(
+            r.status,
+            Status::Pass,
+            "populated [layers] should pass: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("layer(s)"),
+            "message should mention layer count: {}",
+            r.message
+        );
     }
 }

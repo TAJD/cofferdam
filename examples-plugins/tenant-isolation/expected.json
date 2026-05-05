@@ -1,0 +1,59 @@
+{
+  "findings": [
+    {
+      "id": "Warning.TenantIsolation",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/tenant-isolation/fixture.ts",
+      "line": 36,
+      "column": 10,
+      "start_byte": 1417,
+      "end_byte": 1477,
+      "message": "Prisma findMany call's where clause is missing a tenant field (expected one of: siteId, merchantId, tenantId, organizationId)."
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/tenant-isolation/fixture.ts",
+      "line": 27,
+      "column": 23,
+      "start_byte": 1100,
+      "end_byte": 1111,
+      "message": "`getMerchant` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/tenant-isolation/fixture.ts",
+      "line": 35,
+      "column": 23,
+      "start_byte": 1384,
+      "end_byte": 1403,
+      "message": "`listActiveMerchants` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/tenant-isolation/fixture.ts",
+      "line": 44,
+      "column": 23,
+      "start_byte": 1692,
+      "end_byte": 1713,
+      "message": "`listAllMerchantsAdmin` is exported but never imported in the project"
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "by_category": {
+      "design": 3,
+      "warning": 1
+    }
+  }
+}

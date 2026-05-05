@@ -1,0 +1,21 @@
+# cofferdam.toml — local config for the tenant-isolation e2e fixture (cd-11j).
+#
+# Self-contained next to the fixture so `cofferdam check fixture.ts
+# --config ./cofferdam.toml` is reproducible without polluting the
+# repo-root config.
+
+plugins = ["./"]
+
+[checks."TenantIsolation"]
+# Field names that scope a query to a single tenant. Any one of these
+# present in a query's `where` clause clears the finding.
+tenantFields = ["siteId", "merchantId", "tenantId", "organizationId"]
+
+# Local bindings whose presence in a file's imports indicates the file
+# routes its queries through a tenant-aware wrapper — suppress all
+# findings in such files.
+wrapperLocalNames = ["withTenantScope", "scopedPrisma"]
+
+# Module specifiers that own the wrapper helpers; importing from any of
+# these counts as "this file has the wrapper available".
+wrapperSourcePrefixes = ["@org/db"]

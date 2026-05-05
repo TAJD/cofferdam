@@ -1,0 +1,107 @@
+{
+  "findings": [
+    {
+      "id": "Warning.BrandCasing",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 13,
+      "column": 24,
+      "start_byte": 611,
+      "end_byte": 619,
+      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+    },
+    {
+      "id": "Warning.BrandCasing",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 17,
+      "column": 24,
+      "start_byte": 689,
+      "end_byte": 697,
+      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 17,
+      "column": 14,
+      "start_byte": 679,
+      "end_byte": 685,
+      "message": "`HEADER` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 21,
+      "column": 14,
+      "start_byte": 894,
+      "end_byte": 900,
+      "message": "`LEGACY` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 25,
+      "column": 14,
+      "start_byte": 1133,
+      "end_byte": 1141,
+      "message": "`CAMPAIGN` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 31,
+      "column": 17,
+      "start_byte": 1448,
+      "end_byte": 1450,
+      "message": "`ok` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 37,
+      "column": 14,
+      "start_byte": 1684,
+      "end_byte": 1691,
+      "message": "`VERSION` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 42,
+      "column": 14,
+      "start_byte": 1936,
+      "end_byte": 1940,
+      "message": "`HINT` is exported but never imported in the project"
+    }
+  ],
+  "summary": {
+    "total": 8,
+    "by_category": {
+      "design": 6,
+      "warning": 2
+    }
+  }
+}

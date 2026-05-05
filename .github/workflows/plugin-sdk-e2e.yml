@@ -1,0 +1,93 @@
+# cd-7e4 — end-to-end plugin SDK fixture run.
+#
+# Builds the brand-casing plugin, runs cofferdam against its fixture,
+# diffs the JSON output against the committed `expected.json`, and
+# round-trips the spans against the source bytes. Negative-fixture step
+# pins type tightness (cd-81a.2): `tsc -p tsconfig.fail.json` must
+# succeed (every `@ts-expect-error` directive still fires); if any
+# directive becomes unused (SDK types loosened), tsc fails the build.
+#
+# Skipping the matrix today: this is a single-host smoke run on
+# ubuntu-latest. Fan out across OSes once the postinstall plugin
+# resolution path matters in CI.
+
+name: plugin-sdk-e2e
+
+on:
+  push:
+    branches: [main, cd-7e4-plugin-sdk-e2e]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build cofferdam binary
+        run: cargo build --release -p cofferdam-cli
+
+      - name: Install + build SDK package
+        working-directory: packages/check-sdk
+        run: |
+          pnpm install --frozen-lockfile=false --ignore-scripts
+          pnpm build
+
+      - name: Bundle SDK into each plugin's local node_modules
+        # The plugins declare `@cofferdam/check-sdk: "*"` but the SDK
+        # isn't published to npm yet; copy the built dist into each
+        # plugin's node_modules so the host script's `import` resolves.
+        run: |
+          for plugin in brand-casing no-http-client tenant-isolation; do
+            mkdir -p examples-plugins/$plugin/node_modules/@cofferdam/check-sdk
+            cp -r packages/check-sdk/package.json packages/check-sdk/dist \
+              examples-plugins/$plugin/node_modules/@cofferdam/check-sdk/
+          done
+
+      - name: Build plugins (TS → dist)
+        run: |
+          for plugin in brand-casing no-http-client tenant-isolation; do
+            (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p .)
+          done
+
+      - name: Run cofferdam against every fixture, diff against goldens
+        run: node scripts/check-plugin-fixtures.mjs
+
+      - name: Round-trip span check (plugin reports — brand-casing)
+        # The reported span byte-ranges, sliced from the source, must
+        # equal the literal `Rovikore` string. Catches off-by-one /
+        # encoding bugs in the host's `lineStart + charStart` arithmetic.
+        run: |
+          ./target/release/cofferdam check examples-plugins/brand-casing/fixture.ts \
+            --format json --pretty \
+            --config examples-plugins/brand-casing/cofferdam.toml > actual.json || true
+          node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
+
+      - name: Round-trip span check (AST wire — cd-svf, all fixtures)
+        # Every wire-emitted AST node's (start_byte, end_byte) sliced from
+        # source must produce non-empty bytes that pass per-kind sanity
+        # rules. Catches off-by-one bugs in the Rust serializer + UTF-8
+        # boundary issues in the host's reconstruction.
+        run: |
+          node scripts/check-ast-spans.mjs examples-plugins/brand-casing/fixture.ts examples-plugins/brand-casing/cofferdam.toml
+          node scripts/check-ast-spans.mjs examples-plugins/no-http-client/fixture.ts examples-plugins/no-http-client/cofferdam.toml
+          node scripts/check-ast-spans.mjs examples-plugins/tenant-isolation/fixture.ts examples-plugins/tenant-isolation/cofferdam.toml
+
+      - name: Negative fixtures pin SDK type strictness (cd-81a.2 / cd-svf)
+        run: |
+          for plugin in brand-casing no-http-client tenant-isolation; do
+            (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json)
+          done

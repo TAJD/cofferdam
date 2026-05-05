@@ -69,6 +69,11 @@ pub struct ProjectConfig {
     /// declared an architecture. The `project_root` field is filled in
     /// after parsing (load knows the path; parse doesn't).
     pub layers: Option<LayersConfig>,
+    /// `plugins = [...]` array — paths (or package specifiers) that
+    /// resolve to local Node.js plugin modules implementing the
+    /// `@cofferdam/check-sdk` `defineCheck` shape. Resolved relative to
+    /// the config file's directory. Empty when no plugins declared.
+    pub plugins: Vec<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -127,6 +132,10 @@ struct TomlDoc {
     /// allowed dependency layers.
     #[serde(default)]
     layers: BTreeMap<String, toml::Value>,
+    /// `plugins = [...]` — Node-side plugin module paths (cd-7e4 / cd-81a.7).
+    /// Resolved relative to the config file's directory.
+    #[serde(default)]
+    plugins: Vec<String>,
 }
 
 /// Walk up from `start` looking for `cofferdam.toml`. Stops at the
@@ -233,10 +242,28 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         Some(parse_layers(path, doc.layers)?)
     };
 
+    let config_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let plugins = doc
+        .plugins
+        .into_iter()
+        .map(|p| {
+            let pb = PathBuf::from(&p);
+            if pb.is_absolute() {
+                pb
+            } else {
+                config_dir.join(pb)
+            }
+        })
+        .collect();
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
         layers,
+        plugins,
     })
 }
 
@@ -505,6 +532,7 @@ severity = 5
             checks,
             severity_overrides: BTreeMap::new(),
             layers: None,
+            plugins: Vec::new(),
         };
 
         let opts = options_for(
@@ -535,6 +563,7 @@ severity = 5
             checks,
             severity_overrides: BTreeMap::new(),
             layers: None,
+            plugins: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -550,6 +579,7 @@ severity = 5
             checks,
             severity_overrides: BTreeMap::new(),
             layers: None,
+            plugins: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];

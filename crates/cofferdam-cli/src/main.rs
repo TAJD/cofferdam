@@ -1,10 +1,12 @@
 //! Cofferdam CLI entry point.
 
 mod advise;
+mod ast_wire;
 mod doctor;
 mod explain;
 mod gen_docs;
 mod init;
+mod plugins;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -592,16 +594,22 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
     let registered: Vec<&str> = all_builtins().iter().map(|c| c.meta().id).collect();
     if let Some(cfg) = project_config.as_ref() {
-        let unknown = cfg::unknown_check_ids(cfg, &registered);
-        if !unknown.is_empty() {
-            eprintln!(
-                "warning: cofferdam.toml references unknown check id(s): {}",
-                unknown
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+        // When plugins are configured the unknown-check-id warning over-fires
+        // — plugin-emitted IDs aren't in the built-in registry. Silence the
+        // warning in that case; the host already surfaces plugin load errors
+        // explicitly.
+        if cfg.plugins.is_empty() {
+            let unknown = cfg::unknown_check_ids(cfg, &registered);
+            if !unknown.is_empty() {
+                eprintln!(
+                    "warning: cofferdam.toml references unknown check id(s): {}",
+                    unknown
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
         }
     }
 
@@ -713,6 +721,56 @@ fn run_check(args: CheckArgs) -> ExitCode {
     } else {
         match engine.analyze(&files) {
             Ok(mut issues) => {
+                // Plugin host invocation (cd-7e4 / cd-81a.7). Runs Node-side
+                // plugins declared in `cofferdam.toml`'s `plugins = [...]`
+                // array against the same file set, merges resulting
+                // findings into the engine's stream. Plugin issues bypass
+                // the engine's suppression filter, so we re-run the
+                // suppression directives parser against them here.
+                if let Some(cfg) = project_config.as_ref() {
+                    if !cfg.plugins.is_empty() {
+                        let cfg_dir = resolved_config_path
+                            .as_deref()
+                            .and_then(Path::parent)
+                            .map(Path::to_path_buf)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                        let plugin_issues =
+                            plugins::run_plugins(&cfg.plugins, &files, &cfg_dir, &cfg.checks);
+                        let suppression_cache: HashMap<
+                            PathBuf,
+                            cofferdam_engine::suppress::Suppressions,
+                        > = files
+                            .iter()
+                            .filter_map(|p| {
+                                let text = std::fs::read_to_string(p).ok()?;
+                                Some((
+                                    p.clone(),
+                                    cofferdam_engine::suppress::Suppressions::parse(&text),
+                                ))
+                            })
+                            .collect();
+                        let filtered: Vec<_> = plugin_issues
+                            .into_iter()
+                            .filter(|issue| {
+                                let Some(sup) = suppression_cache.get(&issue.file) else {
+                                    return true;
+                                };
+                                let bare =
+                                    issue.check_id.rsplit('.').next().unwrap_or(&issue.check_id);
+                                !sup.is_suppressed(issue.span.line, &issue.check_id)
+                                    && !sup.is_suppressed(issue.span.line, bare)
+                            })
+                            .collect();
+                        issues.extend(filtered);
+                        issues.sort_by(|a, b| {
+                            b.priority
+                                .0
+                                .cmp(&a.priority.0)
+                                .then_with(|| a.check_id.cmp(&b.check_id))
+                                .then_with(|| a.file.cmp(&b.file))
+                        });
+                    }
+                }
                 // CI gate: any finding at or above `--fail-on` triggers
                 // exit 1. Computed from the full set BEFORE truncation
                 // so `--max-issues` cannot hide a failure.
@@ -840,16 +898,22 @@ fn run_baseline_write(
 
     let registered: Vec<&str> = all_builtins().iter().map(|c| c.meta().id).collect();
     if let Some(cfg) = project_config.as_ref() {
-        let unknown = cfg::unknown_check_ids(cfg, &registered);
-        if !unknown.is_empty() {
-            eprintln!(
-                "warning: cofferdam.toml references unknown check id(s): {}",
-                unknown
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+        // When plugins are configured the unknown-check-id warning over-fires
+        // — plugin-emitted IDs aren't in the built-in registry. Silence the
+        // warning in that case; the host already surfaces plugin load errors
+        // explicitly.
+        if cfg.plugins.is_empty() {
+            let unknown = cfg::unknown_check_ids(cfg, &registered);
+            if !unknown.is_empty() {
+                eprintln!(
+                    "warning: cofferdam.toml references unknown check id(s): {}",
+                    unknown
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
         }
     }
 

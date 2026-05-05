@@ -1,0 +1,45 @@
+// LineView — plugin-facing view of a source line with classification
+// flags populated by the engine from the parsed comment list and an AST
+// walk over string/template literals. Mirrors
+// cofferdam_core::lines::LineView.
+//
+// Flag semantics (kept in sync with cofferdam-core/src/lines.rs):
+//
+// - `isComment` — any comment (line `//`, single-line block, or
+//   multi-line block) overlaps this line.
+// - `isDocComment` — a JSDoc-style block (`/** ... */`) overlaps. Implies
+//   `isComment`.
+// - `isStringLiteral` — a `StringLiteral` or `TemplateLiteral` span
+//   overlaps this line.
+// - `isJsxText` — JSX text content overlaps this line. Filed as cd-0ne;
+//   present in the SDK so plugins can target it as soon as the engine
+//   ships the flag.
+// - `isPragma` — an annotation-style comment (`/* #__PURE__ */`,
+//   `/* @vite-ignore */`, etc.) overlaps. *Not* JSDoc.
+
+import type { Span } from "./span.js";
+
+export interface LineView {
+  /** 1-based line number. */
+  readonly lineNo: number;
+  /** Line text with the trailing `\r` (CRLF) stripped, no `\n`. */
+  readonly text: string;
+  readonly isComment: boolean;
+  readonly isDocComment: boolean;
+  readonly isStringLiteral: boolean;
+  readonly isJsxText: boolean;
+  readonly isPragma: boolean;
+
+  /**
+   * Build a `Span` covering bytes `[charStart, charEnd)` *within this
+   * line*. `charStart`/`charEnd` are byte offsets relative to the start
+   * of `text` (after CRLF stripping). The returned span carries
+   * file-absolute `start_byte`/`end_byte` for direct use in
+   * `ctx.report({ span })`.
+   *
+   * Filed as cd-cgd to keep authoring concise — without this the check
+   * has to reconstruct the file-absolute offset by hand from the line's
+   * own start.
+   */
+  spanFor(charStart: number, charEnd: number): Span;
+}

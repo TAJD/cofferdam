@@ -29,7 +29,8 @@
 //!   `/* webpackChunkName: "x" */` — *not* JSDoc and *not* legal
 //!   headers. Maps to `oxc_ast::Comment::is_annotation()`.
 
-use oxc_ast::ast::{Comment, StringLiteral, TemplateLiteral};
+use crate::issue::Span;
+use oxc_ast::ast::{Comment, JSXText, StringLiteral, TemplateLiteral};
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::Span as OxcSpan;
 use oxc_syntax::scope::ScopeFlags;
@@ -44,7 +45,33 @@ pub struct LineView<'a> {
     pub is_comment: bool,
     pub is_doc_comment: bool,
     pub is_string_literal: bool,
+    /// True when a `JSXText` span overlaps this line. Plugin authors
+    /// running line-walk Pattern A (BrandCasing-style) gate on this to
+    /// avoid double-counting JSX-string content that AST checks already
+    /// scan via JSXAttributeValue (cd-0ne).
+    pub is_jsx_text: bool,
     pub is_pragma: bool,
+    /// 0-based byte offset of the start of this line in the full source
+    /// text. Drives [`span_for`](Self::span_for) — kept public so AST
+    /// checks that have already computed offsets can build spans
+    /// without re-walking the line table.
+    pub line_start: u32,
+}
+
+impl LineView<'_> {
+    /// Build a [`Span`] covering bytes `[char_start, char_end)` *within
+    /// this line*. Both arguments are byte offsets relative to
+    /// `self.text` (after CRLF stripping); the returned span carries
+    /// file-absolute `start_byte`/`end_byte` and 1-based line/column,
+    /// ready for `Issue.span` or plugin `ctx.report` (cd-cgd).
+    pub fn span_for(&self, char_start: u32, char_end: u32) -> Span {
+        Span {
+            line: self.line_no,
+            column: char_start + 1,
+            start_byte: self.line_start + char_start,
+            end_byte: self.line_start + char_end,
+        }
+    }
 }
 
 /// Iterator over [`LineView`]s for an `AstView`. Returned by
@@ -58,7 +85,11 @@ pub struct Lines<'a> {
 }
 
 impl<'a> Lines<'a> {
-    pub(crate) fn build(text: &'a str, program: &'a oxc_ast::ast::Program<'a>) -> Self {
+    /// Build a [`Lines`] iterator with classification flags populated
+    /// from `program`'s comment table + AST walk. Public so the CLI
+    /// plugin host can build line views without going through the
+    /// engine path.
+    pub fn build(text: &'a str, program: &'a oxc_ast::ast::Program<'a>) -> Self {
         let line_starts = compute_line_starts(text);
         let mut flags = vec![LineFlags::default(); line_starts.len().max(1)];
 
@@ -66,10 +97,16 @@ impl<'a> Lines<'a> {
             apply_comment(&line_starts, &mut flags, c);
         }
 
-        let mut literal = LiteralCollector { spans: Vec::new() };
+        let mut literal = LiteralCollector {
+            string_spans: Vec::new(),
+            jsx_text_spans: Vec::new(),
+        };
         literal.visit_program(program);
-        for sp in literal.spans {
+        for sp in literal.string_spans {
             apply_span(&line_starts, &mut flags, sp, |f| f.is_string_literal = true);
+        }
+        for sp in literal.jsx_text_spans {
+            apply_span(&line_starts, &mut flags, sp, |f| f.is_jsx_text = true);
         }
 
         Self {
@@ -110,7 +147,9 @@ impl<'a> Iterator for Lines<'a> {
             is_comment: f.is_comment,
             is_doc_comment: f.is_doc_comment,
             is_string_literal: f.is_string_literal,
+            is_jsx_text: f.is_jsx_text,
             is_pragma: f.is_pragma,
+            line_start: self.line_starts[i],
         })
     }
 }
@@ -120,6 +159,7 @@ struct LineFlags {
     is_comment: bool,
     is_doc_comment: bool,
     is_string_literal: bool,
+    is_jsx_text: bool,
     is_pragma: bool,
 }
 
@@ -185,18 +225,22 @@ fn apply_comment(line_starts: &[u32], flags: &mut [LineFlags], c: &Comment) {
 // ---- internal: AST walk for string + template literal spans --------
 
 struct LiteralCollector {
-    spans: Vec<OxcSpan>,
+    string_spans: Vec<OxcSpan>,
+    jsx_text_spans: Vec<OxcSpan>,
 }
 
 impl<'a> Visit<'a> for LiteralCollector {
     fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
-        self.spans.push(it.span);
+        self.string_spans.push(it.span);
     }
     fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
-        self.spans.push(it.span);
+        self.string_spans.push(it.span);
         // Descend so nested templates inside `${...}` interpolations
         // are still recorded.
         walk::walk_template_literal(self, it);
+    }
+    fn visit_jsx_text(&mut self, it: &JSXText<'a>) {
+        self.jsx_text_spans.push(it.span);
     }
     // Keep descending the rest of the tree — the auto-walking impls
     // are fine, they'd only be a problem if we were trying to skip

@@ -15,6 +15,17 @@
       "options": []
     },
     {
+      "id": "Design.BoundaryFrozen",
+      "category": "Design",
+      "base_priority": 0,
+      "default_severity": "Low",
+      "explanation": "File lives inside an architectural boundary marked frozen=true in cofferdam.invariants.toml. New code in this area should be reviewed against the boundary's stated reason.",
+      "body": "# Design.BoundaryFrozen\n\nStub-warns when a source file lives inside a boundary marked `frozen = true`\nin `cofferdam.invariants.toml`. The intent is to make a frozen architectural\narea visible during code review without blocking work.\n\n## Configuration\n\n```toml\n[boundaries]\n\"src/legacy/**\" = { frozen = true, reason = \"see ADR-0007\" }\n```\n\nWhen `frozen = true`, every source file matching the glob receives one\nfinding from this check, with the configured `reason` echoed in the\nmessage. v0 does not yet distinguish *new* additions to the area from\nexisting files — every match emits. Per-file deltas against a baseline\nare tracked under a follow-up bead.\n\n## Suppression\n\nUse a normal severity override or the inline `// cofferdam-disable-next-line`\nsuppression directive when the area is intentionally still active during\nmigration work.\n\n## Rationale\n\nA frozen boundary is an architectural intent: \"no new code here\". v0\nsurfaces the intent; v1 will turn intent into enforcement using the\nbaseline machinery already used by `cofferdam check --baseline`.\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
       "id": "Design.DuplicateExportName",
       "category": "Design",
       "base_priority": 6,
@@ -42,6 +53,17 @@
           "default": true
         }
       ]
+    },
+    {
+      "id": "Design.InvariantViolation",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Medium",
+      "explanation": "An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.",
+      "body": "# Design.InvariantViolation\n\nGeneric forbid-imports / require-imports rule, fired per declared\ninvariant in `cofferdam.invariants.toml`. Supports declarative\narchitectural rules without writing a new check.\n\n## Configuration\n\n```toml\n[invariants]\n\"no-direct-db-access\" = { forbid_imports = [\"src/infra/db\"], from_layers = [\"app\"] }\n\"telemetry-required\"  = { require_imports = [\"src/infra/telemetry\"], from_layers = [\"app\"] }\n```\n\nEach invariant supports three keys:\n\n* `forbid_imports` — list of project-relative path prefixes (or bare\n  specifiers like `lodash`). An import edge whose resolved path or\n  source specifier starts with any prefix triggers a finding at the\n  import statement.\n* `require_imports` — list of prefixes that must be imported by every\n  file in `from_layers`. A file with no matching import receives one\n  finding at its first import statement.\n* `from_layers` — optional layer-name allowlist. When non-empty the\n  rule applies only to importing files whose path falls into one of\n  those layers (per the merged `[layers]` config). Empty means\n  \"applies to every in-project file\".\n\n## Matching semantics\n\nResolved paths are matched against the project-relative, forward-slash\nform (`src/infra/db/connection.ts`). Bare specifiers (`react`,\n`lodash`) match verbatim — a `forbid_imports = [\"lodash\"]` rule fires\non `import _ from 'lodash'` and `import { map } from 'lodash/fp'`\nalike. Prefix boundaries are honoured: `src/infra/db` matches\n`src/infra/db/x.ts` but not `src/infra/database.ts`.\n\n## Output\n\nFindings carry the invariant name, the specifier that violated it, and\nthe matched prefix. Suppress per-line with the standard inline\ndirective, or per-rule with a severity override on\n`Design.InvariantViolation` (every invariant shares one check id).\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
     },
     {
       "id": "Design.LayerViolation",

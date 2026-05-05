@@ -18,8 +18,10 @@ export const checksItems = [
     text: 'Design',
     collapsed: true,
     items: [
+      { text: 'BoundaryFrozen', link: '/checks/Design.BoundaryFrozen' },
       { text: 'DuplicateExportName', link: '/checks/Design.DuplicateExportName' },
       { text: 'ImportCycle', link: '/checks/Design.ImportCycle' },
+      { text: 'InvariantViolation', link: '/checks/Design.InvariantViolation' },
       { text: 'LayerViolation', link: '/checks/Design.LayerViolation' },
       { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },
       { text: 'OrphanExport', link: '/checks/Design.OrphanExport' },

@@ -158,3 +158,31 @@ pub struct LayersConfig {
 }
 
 pub static LAYERS: CorpusKey<Option<LayersConfig>> = CorpusKey::new("__cofferdam.graph.layers");
+
+/// Project-wide invariants from `cofferdam.invariants.toml`.
+///
+/// One runtime bundle — checks read whichever slice they care about
+/// from a single `with_slot` call. `project_root` is the directory of
+/// the loaded invariants.toml, used by checks to normalise globs and
+/// project-relative paths.
+#[derive(Debug, Clone, Default)]
+pub struct InvariantsRuntime {
+    pub project_root: PathBuf,
+    pub public_api: crate::invariants::PublicApiSpec,
+    pub boundaries: BTreeMap<String, crate::invariants::BoundarySpec>,
+    pub invariants: BTreeMap<String, crate::invariants::InvariantSpec>,
+}
+
+impl InvariantsRuntime {
+    pub fn is_empty(&self) -> bool {
+        self.public_api.exports.is_empty()
+            && self.boundaries.is_empty()
+            && self.invariants.is_empty()
+    }
+}
+
+/// Read by `Design.BoundaryFrozen`, `Design.InvariantViolation`, and
+/// `Design.OrphanExport` (for its `[public_api]` allowlist). `None`
+/// when no invariants spec was loaded — dependent checks become no-ops.
+pub static INVARIANTS: CorpusKey<Option<InvariantsRuntime>> =
+    CorpusKey::new("__cofferdam.graph.invariants");

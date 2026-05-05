@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use crate::framework_paths::FRAMEWORK_ENTRY_PATTERNS;
 use cofferdam_core::graph::{
-    ExportKind, ExportRecord, ImportKind, ImportRecord, LayersConfig, EXPORTS as GRAPH_EXPORTS,
-    IMPORTS as GRAPH_IMPORTS, LAYERS as GRAPH_LAYERS,
+    ExportKind, ExportRecord, ImportKind, ImportRecord, InvariantsRuntime, LayersConfig,
+    EXPORTS as GRAPH_EXPORTS, IMPORTS as GRAPH_IMPORTS, INVARIANTS as GRAPH_INVARIANTS,
+    LAYERS as GRAPH_LAYERS,
 };
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
@@ -343,9 +344,39 @@ impl Check for OrphanExport {
 
         let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
+        // [public_api] from cofferdam.invariants.toml. None when no
+        // spec was loaded — the per-export skip below becomes a no-op
+        // and existing exemption logic (test_patterns,
+        // framework_entry_patterns) is the only filter.
+        let runtime: Option<InvariantsRuntime> =
+            ctx.corpus.with_slot(&GRAPH_INVARIANTS, |slot| slot.clone());
+        let public_api_files = runtime
+            .as_ref()
+            .map(|r| resolve_public_api(&r.public_api.exports, &r.project_root))
+            .unwrap_or_default();
 
-        compute_orphans(&imports, &exports, &opts)
+        compute_orphans(&imports, &exports, &opts, &public_api_files)
     }
+}
+
+/// Convert `[public_api].exports` entries into a set of normalised file
+/// keys for fast lookup. Today only direct file paths are honoured —
+/// `package.json:<key>` entries parse but are no-ops (follow-up bead
+/// will resolve them via the package's exports map). Empty input yields
+/// an empty set; OrphanExport's caller treats that as "no allowlist".
+fn resolve_public_api(entries: &[String], project_root: &Path) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for entry in entries {
+        if entry.starts_with("package.json:") {
+            // Resolution deferred — see follow-up bead. Listed here so
+            // the schema accepts it; today these strings are dropped.
+            continue;
+        }
+        let trimmed = entry.trim_start_matches("./");
+        let abs = project_root.join(trimmed);
+        out.insert(path_key(&abs));
+    }
+    out
 }
 
 fn matches_substring(path: &Path, patterns: &[String]) -> bool {
@@ -371,6 +402,7 @@ fn compute_orphans(
     imports: &[ImportRecord],
     exports: &[ExportRecord],
     opts: &OrphanOptions,
+    public_api_files: &HashSet<String>,
 ) -> Vec<Issue> {
     // Set of (resolved_path_key, source_name) tuples: every named touch.
     let mut touched: HashSet<(String, String)> = HashSet::new();
@@ -424,6 +456,7 @@ fn compute_orphans(
         let file_path = sorted[0].file.clone();
         if matches_substring(&file_path, &opts.test_patterns)
             || matches_substring(&file_path, &opts.framework_entry_patterns)
+            || public_api_files.contains(&file_key)
         {
             continue;
         }
@@ -915,4 +948,275 @@ fn tarjan_sccs(adj: &[Vec<(usize, Span, PathBuf)>]) -> Vec<Vec<usize>> {
     }
 
     sccs
+}
+
+// ─── Design.BoundaryFrozen ─────────────────────────────────────────────────
+//
+// `[boundaries] "src/legacy/**" = { frozen = true, reason = "..." }` in
+// cofferdam.invariants.toml signals "no new code in this area". v0
+// stub-warns: emits one finding per source file matching a frozen glob,
+// with the configured reason in the message. The intended full
+// semantic — flag *additions* to the frozen area against a baseline — is
+// gated on a follow-up bead. Today's stub gives authors a visible
+// reminder; suppress with a directive or a severity override on
+// projects where the area is intentionally still active during
+// migration.
+
+const BF_META: CheckMeta = CheckMeta {
+    id: "Design.BoundaryFrozen",
+    category: Category::Design,
+    base_priority: 0,
+    default_severity: Severity::Low,
+    explanation: "File lives inside an architectural boundary marked frozen=true in cofferdam.invariants.toml. New code in this area should be reviewed against the boundary's stated reason.",
+    body: include_str!("../docs/Design.BoundaryFrozen.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+pub struct BoundaryFrozen;
+
+impl Check for BoundaryFrozen {
+    fn meta(&self) -> &'static CheckMeta {
+        &BF_META
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let runtime: Option<InvariantsRuntime> =
+            ctx.corpus.with_slot(&GRAPH_INVARIANTS, |slot| slot.clone());
+        let Some(runtime) = runtime else {
+            return Vec::new();
+        };
+        if runtime.boundaries.is_empty() {
+            return Vec::new();
+        }
+        let normalized_rel = relative_normalised(&runtime.project_root, &file.path);
+        let mut issues = Vec::new();
+        for (glob, spec) in &runtime.boundaries {
+            if !spec.frozen {
+                continue;
+            }
+            let Ok(matcher) = globset::Glob::new(glob) else {
+                continue;
+            };
+            if !matcher.compile_matcher().is_match(&normalized_rel) {
+                continue;
+            }
+            let reason = spec
+                .reason
+                .as_deref()
+                .map(|r| format!(": {}", r))
+                .unwrap_or_default();
+            issues.push(Issue {
+                check_id: BF_META.id.to_string(),
+                message: format!("file is in frozen boundary `{}`{}", glob, reason),
+                file: file.path.clone(),
+                span: Span {
+                    start_byte: 0,
+                    end_byte: 0,
+                    line: 1,
+                    column: 1,
+                },
+                priority: Priority(0),
+                severity: Severity::Medium, // engine post-pass overwrites with default_severity
+                related: Vec::new(),
+            });
+        }
+        issues
+    }
+}
+
+fn relative_normalised(project_root: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(project_root).unwrap_or(path);
+    let s = rel.to_string_lossy().replace('\\', "/");
+    // Discovery sometimes hands us paths like `./src/foo.ts`; strip the
+    // leading `./` so glob authors don't have to anticipate it. Also
+    // strip a leading `/` for the rare case where strip_prefix fell
+    // through and we got an absolute-looking string.
+    s.trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string()
+}
+
+// ─── Design.InvariantViolation ─────────────────────────────────────────────
+//
+// Generic forbid-imports / require-imports rule engine. `[invariants]`
+// in cofferdam.invariants.toml declares one or more rules, each fired
+// independently per import edge. Findings are emitted in `finalize`
+// once the project graph is fully populated.
+//
+// `forbid_imports`: emits a finding at the import statement when the
+// importing file is in `from_layers` (or `from_layers` is empty) AND
+// the resolved-or-specifier form starts with any forbidden prefix.
+//
+// `require_imports`: emits one finding per file in `from_layers` when
+// the file imports nothing matching any required prefix.
+
+const IV_META: CheckMeta = CheckMeta {
+    id: "Design.InvariantViolation",
+    category: Category::Design,
+    base_priority: 5,
+    default_severity: Severity::Medium,
+    explanation:
+        "An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.",
+    body: include_str!("../docs/Design.InvariantViolation.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+pub struct InvariantViolation;
+
+impl Check for InvariantViolation {
+    fn meta(&self) -> &'static CheckMeta {
+        &IV_META
+    }
+
+    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        let runtime: Option<InvariantsRuntime> =
+            ctx.corpus.with_slot(&GRAPH_INVARIANTS, |slot| slot.clone());
+        let Some(runtime) = runtime else {
+            return Vec::new();
+        };
+        if runtime.invariants.is_empty() {
+            return Vec::new();
+        }
+        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
+        let layers: Option<LayersConfig> = ctx.corpus.with_slot(&GRAPH_LAYERS, |slot| slot.clone());
+        let layer_matchers = layers
+            .as_ref()
+            .map(cofferdam_core::layers::build_matchers)
+            .unwrap_or_default();
+        let project_root = runtime.project_root.clone();
+
+        let mut issues = Vec::new();
+
+        // forbid_imports — emit per offending import edge.
+        for (name, spec) in &runtime.invariants {
+            if spec.forbid_imports.is_empty() {
+                continue;
+            }
+            for imp in &imports {
+                if !file_in_layers(
+                    &layer_matchers,
+                    &project_root,
+                    &imp.from_file,
+                    &spec.from_layers,
+                ) {
+                    continue;
+                }
+                if let Some(forbidden) =
+                    matches_any_prefix(&project_root, imp, &spec.forbid_imports)
+                {
+                    issues.push(Issue {
+                        check_id: IV_META.id.to_string(),
+                        message: format!(
+                            "invariant `{}` violated: forbidden import `{}` (matches prefix `{}`)",
+                            name, imp.source_specifier, forbidden
+                        ),
+                        file: imp.from_file.clone(),
+                        span: imp.span,
+                        priority: Priority(IV_META.base_priority),
+                        severity: Severity::Medium,
+                        related: Vec::new(),
+                    });
+                }
+            }
+        }
+
+        // require_imports — emit one finding per file-in-layer that has
+        // no import matching any required prefix.
+        for (name, spec) in &runtime.invariants {
+            if spec.require_imports.is_empty() {
+                continue;
+            }
+            // Group imports by from_file once.
+            let mut by_file: HashMap<PathBuf, Vec<&ImportRecord>> = HashMap::new();
+            for imp in &imports {
+                by_file.entry(imp.from_file.clone()).or_default().push(imp);
+            }
+            // Collect the set of files that need to satisfy the rule —
+            // every file with at least one import that's "in layer".
+            // (A file outside from_layers is unaffected; a file in
+            // from_layers with no imports at all is also unaffected —
+            // require_imports speaks to import edges, not to bare
+            // file existence.)
+            for (file, file_imports) in &by_file {
+                if !file_in_layers(&layer_matchers, &project_root, file, &spec.from_layers) {
+                    continue;
+                }
+                let satisfied = file_imports.iter().any(|imp| {
+                    matches_any_prefix(&project_root, imp, &spec.require_imports).is_some()
+                });
+                if satisfied {
+                    continue;
+                }
+                let first = &file_imports[0];
+                issues.push(Issue {
+                    check_id: IV_META.id.to_string(),
+                    message: format!(
+                        "invariant `{}` violated: file is missing required import matching one of {:?}",
+                        name, spec.require_imports
+                    ),
+                    file: file.clone(),
+                    span: first.span,
+                    priority: Priority(IV_META.base_priority),
+                    severity: Severity::Medium,
+                    related: Vec::new(),
+                });
+            }
+        }
+
+        issues
+    }
+}
+
+/// True when `file` matches any of `layers` (or `layers` is empty —
+/// "applies everywhere"). Uses the LayersConfig matchers built from
+/// the merged `[layers]` config. When no layers are declared at all,
+/// an empty `from_layers` still matches; a non-empty `from_layers`
+/// without a matching layer drops the rule.
+fn file_in_layers(
+    matchers: &[cofferdam_core::layers::LayerMatcher],
+    project_root: &Path,
+    file: &Path,
+    layers: &[String],
+) -> bool {
+    if layers.is_empty() {
+        return true;
+    }
+    let Some(layer) = cofferdam_core::layers::layer_for(matchers, project_root, file) else {
+        return false;
+    };
+    layers.iter().any(|l| l == &layer)
+}
+
+/// Return the matched prefix when an import's resolved path or
+/// specifier starts with one of `prefixes`. Resolved paths are
+/// matched against the project-relative, forward-slash form;
+/// specifiers are matched verbatim.
+fn matches_any_prefix(
+    project_root: &Path,
+    imp: &ImportRecord,
+    prefixes: &[String],
+) -> Option<String> {
+    let rel: Option<String> = imp
+        .resolved
+        .as_ref()
+        .map(|p| relative_normalised(project_root, p));
+    for pfx in prefixes {
+        if imp.source_specifier == *pfx || imp.source_specifier.starts_with(&format!("{}/", pfx)) {
+            return Some(pfx.clone());
+        }
+        if let Some(rel) = &rel {
+            if rel == pfx || rel.starts_with(&format!("{}/", pfx)) {
+                return Some(pfx.clone());
+            }
+        }
+    }
+    None
 }

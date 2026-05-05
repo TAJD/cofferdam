@@ -14,8 +14,10 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 ## Design
 
+- [`Design.BoundaryFrozen`](Design.BoundaryFrozen.md) — File lives inside an architectural boundary marked frozen=true in cofferdam.invariants.toml. New code in this area should be reviewed against the boundary's stated reason.
 - [`Design.DuplicateExportName`](Design.DuplicateExportName.md) — The same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got.
 - [`Design.ImportCycle`](Design.ImportCycle.md) — Files in this group import each other in a cycle. Cycles cause initialization-order surprises and obscure module boundaries.
+- [`Design.InvariantViolation`](Design.InvariantViolation.md) — An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.
 - [`Design.LayerViolation`](Design.LayerViolation.md) — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
 - [`Design.MaxParameters`](Design.MaxParameters.md) — Functions with too many parameters are hard to call correctly. Pass an options object instead.
 - [`Design.OrphanExport`](Design.OrphanExport.md) — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.

@@ -28,6 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use cofferdam_core::{Issue, Priority, RawOptionValue, Severity, SourceFile, Span};
 use cofferdam_ts::{parse_into, Allocator};
@@ -248,6 +249,41 @@ pub fn run_plugins(
         if let Err(e) = stdin.write_all(manifest_json.as_bytes()) {
             return vec![host_failed_issue(&format!("write manifest: {e}"))];
         }
+        // Drop closes stdin → host script's `readFileSync(0, 'utf8')` returns.
+    }
+
+    // cd-81a.7 acceptance criterion #3: enforce a wall-clock timeout on
+    // plugin host execution. A genuinely-stuck plugin (infinite loop in
+    // run(), runaway regex, deadlock in user code) would otherwise hang
+    // cofferdam indefinitely. Default 60s — generous for cold Node
+    // startup + dynamic-import cache miss + processing thousands of
+    // files; tightened via COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS.
+    //
+    // Per-plugin / per-file timeouts (the bead's original aspiration)
+    // require worker_threads inside the host so a stuck synchronous
+    // run() can be terminated without taking down its siblings.
+    // Subprocess containment can't preempt synchronous JS; the process
+    // boundary is the kill grain, so the timeout applies to the whole
+    // host call rather than each plugin × file pair. Recorded in the
+    // bead notes as a deferred refinement.
+    let timeout = host_timeout();
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return vec![host_failed_issue(&format!(
+                        "plugin host exceeded {}s timeout (set COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS to change)",
+                        timeout.as_secs()
+                    ))];
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => return vec![host_failed_issue(&format!("try_wait: {e}"))],
+        }
     }
 
     let output = match child.wait_with_output() {
@@ -394,6 +430,20 @@ fn parse_severity(s: &str) -> Option<Severity> {
 
 fn forward_slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
+}
+
+/// Wall-clock budget for one invocation of the plugin host. Default 60s;
+/// override via `COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS=<n>`. Invalid values
+/// (non-numeric, zero) fall back to the default — bad config never
+/// produces a no-timeout state.
+fn host_timeout() -> Duration {
+    const DEFAULT: u64 = 60;
+    let secs = std::env::var("COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT);
+    Duration::from_secs(secs)
 }
 
 fn host_unavailable_issue(detail: &str) -> Issue {

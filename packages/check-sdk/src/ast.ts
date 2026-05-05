@@ -24,20 +24,21 @@ export type Walk = (typeof Walk)[keyof typeof Walk];
  * Kinds exposed via {@link AstView.findAll} and the {@link AstNode}
  * union. Deliberately a small set covering the rovikore-host plugin
  * patterns; grows as plugin needs surface.
+ *
+ * v0 freeze: cd-717 (`design/sdk-ast-surface.md`). 5 strict +
+ * 4 borderline kinds. `NewExpression`, `BinaryExpression`,
+ * `StringLiteral`, `NumericLiteral` are deferred until a fixture
+ * justifies them — adding kinds is non-breaking, removing isn't.
  */
 export type NodeKind =
   | "CallExpression"
-  | "NewExpression"
   | "ImportDeclaration"
   | "Function"
   | "ArrowFunctionExpression"
-  | "BinaryExpression"
   | "Class"
   | "ObjectExpression"
   | "MemberExpression"
-  | "IdentifierReference"
-  | "StringLiteral"
-  | "NumericLiteral";
+  | "IdentifierReference";
 
 /**
  * Common base for every AST node exposed across the FFI. Concrete
@@ -52,11 +53,6 @@ export interface AstNodeBase<K extends NodeKind> {
 
 export interface CallExpressionNode extends AstNodeBase<"CallExpression"> {
   /** The callee expression — typically an `IdentifierReference` or `MemberExpression`. */
-  readonly callee: AstNode;
-  readonly arguments: readonly AstNode[];
-}
-
-export interface NewExpressionNode extends AstNodeBase<"NewExpression"> {
   readonly callee: AstNode;
   readonly arguments: readonly AstNode[];
 }
@@ -81,12 +77,6 @@ export interface ArrowFunctionExpressionNode extends AstNodeBase<"ArrowFunctionE
   readonly expression: boolean;
 }
 
-export interface BinaryExpressionNode extends AstNodeBase<"BinaryExpression"> {
-  readonly operator: string;
-  readonly left: AstNode;
-  readonly right: AstNode;
-}
-
 export interface ClassNode extends AstNodeBase<"Class"> {
   readonly name: string | undefined;
 }
@@ -106,28 +96,16 @@ export interface IdentifierReferenceNode extends AstNodeBase<"IdentifierReferenc
   readonly name: string;
 }
 
-export interface StringLiteralNode extends AstNodeBase<"StringLiteral"> {
-  readonly value: string;
-}
-
-export interface NumericLiteralNode extends AstNodeBase<"NumericLiteral"> {
-  readonly value: number;
-}
-
 /** Discriminated union of every node kind {@link AstView} surfaces. */
 export type AstNode =
   | CallExpressionNode
-  | NewExpressionNode
   | ImportDeclarationNode
   | FunctionNode
   | ArrowFunctionExpressionNode
-  | BinaryExpressionNode
   | ClassNode
   | ObjectExpressionNode
   | MemberExpressionNode
-  | IdentifierReferenceNode
-  | StringLiteralNode
-  | NumericLiteralNode;
+  | IdentifierReferenceNode;
 
 /** Map from kind string to typed node — drives `findAll`'s return type. */
 export type NodeOfKind<K extends NodeKind> = Extract<AstNode, { kind: K }>;
@@ -140,17 +118,13 @@ export type NodeOfKind<K extends NodeKind> = Extract<AstNode, { kind: K }>;
  */
 export interface AstVisitor {
   visitCallExpression?(node: CallExpressionNode): Walk;
-  visitNewExpression?(node: NewExpressionNode): Walk;
   visitImportDeclaration?(node: ImportDeclarationNode): Walk;
   visitFunction?(node: FunctionNode): Walk;
   visitArrowFunctionExpression?(node: ArrowFunctionExpressionNode): Walk;
-  visitBinaryExpression?(node: BinaryExpressionNode): Walk;
   visitClass?(node: ClassNode): Walk;
   visitObjectExpression?(node: ObjectExpressionNode): Walk;
   visitMemberExpression?(node: MemberExpressionNode): Walk;
   visitIdentifierReference?(node: IdentifierReferenceNode): Walk;
-  visitStringLiteral?(node: StringLiteralNode): Walk;
-  visitNumericLiteral?(node: NumericLiteralNode): Walk;
 }
 
 /**

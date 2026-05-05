@@ -71,6 +71,22 @@ function detectPackageManager() {
   return null;
 }
 
+// Guard against broken-pipe conditions (e.g. `cofferdam check --format=json | head`).
+//
+// On POSIX, when the consumer closes the pipe, the kernel sends SIGPIPE to the
+// child process first (Rust's stdlib already handles it cleanly). The pnpm
+// wrapper — this script — may still have its own writes fail with EPIPE (e.g.
+// the error-not-found message path above, or any Node internal flush). Node 22+
+// delivers SIGPIPE to non-default handlers; older versions silently terminate.
+// Belt-and-suspenders: listen for both the signal and the stream error.
+//
+// On Windows there is no SIGPIPE signal; writes to a closed pipe throw EPIPE
+// synchronously through the stream 'error' event. The error handlers cover that
+// path — registering the signal handler on Windows is harmless (never fires).
+process.on('SIGPIPE', () => process.exit(0));
+process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); else throw err; });
+process.stderr.on('error', (err) => { if (err.code === 'EPIPE') process.exit(0); else throw err; });
+
 const result = spawnSync(binaryPath, process.argv.slice(2), {
   stdio: 'inherit',
   windowsHide: false,

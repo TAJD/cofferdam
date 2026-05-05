@@ -202,6 +202,113 @@ impl<'a> Visit<'a> for QuoteCollector<'a> {
     }
 }
 
+// ─── Consistency.BroadSuppression ──────────────────────────────────────────
+
+/// Flags `// cofferdam-ignore` (with no check id) — the broad form
+/// silences every check on the next non-blank line, which makes
+/// suppression audits hard. Per cd-81a.4: the engine accepts the broad
+/// form but emits an info-level diagnostic at the directive line so
+/// users notice and (usually) tighten it to `// cofferdam-ignore: <id>`.
+///
+/// Self-suppression is possible via the explicit form
+/// `// cofferdam-ignore: Consistency.BroadSuppression: <reason>` — the
+/// broad form on a previous line never suppresses this check on the
+/// same line (suppression targets the next non-blank line, not the
+/// directive line itself), which is what makes flagging on the
+/// directive line the right anchor.
+pub struct BroadSuppression;
+
+const BS_META: CheckMeta = CheckMeta {
+    id: "Consistency.BroadSuppression",
+    category: Category::Consistency,
+    base_priority: 0,
+    default_severity: Severity::Info,
+    explanation: "Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to `// cofferdam-ignore: <CheckId>: <reason>` so suppression intent is auditable.",
+    body: include_str!("../docs/Consistency.BroadSuppression.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+    files: None,
+};
+
+impl Check<TypeScript> for BroadSuppression {
+    fn meta(&self) -> &'static CheckMeta {
+        &BS_META
+    }
+
+    fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_, '_>) -> Vec<Issue> {
+        let mut out = Vec::new();
+        let mut byte_offset: u32 = 0;
+
+        for (line_no, line) in file.lines() {
+            if let Some(directive_col) = find_broad_suppression(line) {
+                let start = byte_offset + directive_col as u32;
+                let end = byte_offset + line.len() as u32;
+                out.push(Issue {
+                    check_id: BS_META.id.to_string(),
+                    message: "Broad `// cofferdam-ignore` (no check id) — narrow it to a specific id and add a reason.".to_string(),
+                    file: file.path.clone(),
+                    span: Span {
+                        start_byte: start,
+                        end_byte: end,
+                        line: line_no,
+                        column: directive_col as u32 + 1,
+                    },
+                    priority: Priority(BS_META.base_priority),
+                    severity: BS_META.default_severity,
+                    related: Vec::new(),
+                    fix: None,
+                });
+            }
+            byte_offset = byte_offset.saturating_add(line.len() as u32 + 1);
+        }
+
+        out
+    }
+}
+
+/// If `line` is a Biome-style broad suppression (`cofferdam-ignore`
+/// with no following `:` and no `-start` / `-end` / `-file` variant),
+/// return the byte column where the marker starts. Returns `None` for
+/// the scoped form, the multi-line variants, and lines that mention
+/// the directive only in prose (`// the cofferdam-ignore directive…`).
+///
+/// Tighter than the engine's substring match on purpose: the bead's
+/// nudge goal is "tighten broad-form usages", and false positives on
+/// comments-about-directives would generate noise in this file's own
+/// docs. The directive must be the comment's first non-whitespace
+/// token to count.
+fn find_broad_suppression(line: &str) -> Option<usize> {
+    let needle = "cofferdam-ignore";
+    let leading_ws = line.len() - line.trim_start().len();
+    let trimmed = &line[leading_ws..];
+
+    let after_marker = trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix("/*"))?;
+
+    let inner = after_marker.trim_start();
+    let directive_offset_in_inner = after_marker.len() - inner.len();
+
+    if !inner.starts_with(needle) {
+        return None;
+    }
+    let after = &inner[needle.len()..];
+
+    if after.starts_with("-start") || after.starts_with("-end") || after.starts_with("-file") {
+        return None;
+    }
+
+    if after.trim_start().starts_with(':') {
+        // Scoped form: `// cofferdam-ignore: <id>[: <reason>]`. Engine
+        // applies the suppression; this check stays quiet.
+        return None;
+    }
+
+    let comment_marker_len = trimmed.len() - after_marker.len();
+    Some(leading_ws + comment_marker_len + directive_offset_in_inner)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -372,5 +479,97 @@ const el = <Foo className="ignored" />;
             "only the non-JSX double-quoted string should be flagged; got: {:?}",
             issues
         );
+    }
+
+    // ─── BroadSuppression tests ─────────────────────────────────────────
+
+    fn run_broad_suppression(src: &str) -> Vec<Issue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src);
+        let corpus = CorpusIndex::new();
+        let mut ctx = CheckContext::new(&file).with_corpus(&corpus);
+        BroadSuppression.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn broad_suppression_flags_idless_form() {
+        let src = "// cofferdam-ignore\nconst x = 1;\n";
+        let issues = run_broad_suppression(src);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].span.line, 1);
+        assert_eq!(issues[0].severity, Severity::Info);
+    }
+
+    #[test]
+    fn broad_suppression_skips_scoped_form() {
+        let src = "// cofferdam-ignore: Warning.TripleEquals\nif (a == b) {}\n";
+        let issues = run_broad_suppression(src);
+        assert!(issues.is_empty(), "scoped form must not be flagged: {:?}", issues);
+    }
+
+    #[test]
+    fn broad_suppression_skips_scoped_form_with_reason() {
+        let src = "// cofferdam-ignore: Warning.TripleEquals: legacy comparator\nif (a == b) {}\n";
+        let issues = run_broad_suppression(src);
+        assert!(issues.is_empty(), "scoped+reason form must not be flagged: {:?}", issues);
+    }
+
+    #[test]
+    fn broad_suppression_skips_block_and_file_variants() {
+        // -start, -end, and -file must not fire — they have their own
+        // semantics and aren't the broad next-line form the bead targets.
+        for src in [
+            "// cofferdam-ignore-start: Warning.X\nfoo();\n// cofferdam-ignore-end\n",
+            "// cofferdam-ignore-file: Warning.X\nfoo();\n",
+            "// cofferdam-ignore-file\nfoo();\n",
+        ] {
+            let issues = run_broad_suppression(src);
+            assert!(issues.is_empty(), "variant should not fire: {} → {:?}", src, issues);
+        }
+    }
+
+    #[test]
+    fn broad_suppression_flags_each_occurrence() {
+        let src = "// cofferdam-ignore\nfoo();\n// cofferdam-ignore\nbar();\n";
+        let issues = run_broad_suppression(src);
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].span.line, 1);
+        assert_eq!(issues[1].span.line, 3);
+    }
+
+    #[test]
+    fn broad_suppression_skips_prose_mentions() {
+        // The directive in prose (after other words in the comment) is
+        // not a directive — this check tightens the engine's substring
+        // match to avoid noisy false positives on docs/comments.
+        let src = "// the cofferdam-ignore directive is broad-form\nconst a = 1;\n";
+        let issues = run_broad_suppression(src);
+        assert!(issues.is_empty(), "prose mention must not fire: {:?}", issues);
+    }
+
+    #[test]
+    fn broad_suppression_handles_block_comments() {
+        let src = "/* cofferdam-ignore */\nconst a = 1;\n";
+        let issues = run_broad_suppression(src);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].span.line, 1);
+    }
+
+    #[test]
+    fn broad_suppression_handles_indented_directives() {
+        let src = "    // cofferdam-ignore\n    const a = 1;\n";
+        let issues = run_broad_suppression(src);
+        assert_eq!(issues.len(), 1);
+        // column is 1-based; directive starts at the `c` of cofferdam-ignore.
+        assert_eq!(issues[0].span.column, 8);
+    }
+
+    #[test]
+    fn broad_suppression_does_not_match_disable_aliases() {
+        // The bead scopes the broad-info diagnostic to the Biome
+        // `cofferdam-ignore` form. ESLint-style `cofferdam-disable*`
+        // aliases stay outside this check's scope.
+        let src = "// cofferdam-disable-next-line\nif (a == b) {}\n";
+        let issues = run_broad_suppression(src);
+        assert!(issues.is_empty(), "disable-next-line is out of scope: {:?}", issues);
     }
 }

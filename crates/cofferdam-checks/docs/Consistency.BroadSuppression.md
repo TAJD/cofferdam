@@ -1,0 +1,19 @@
+---
+id: Consistency.BroadSuppression
+category: Consistency
+base_priority: 0
+default_severity: Info
+options: []
+---
+
+`// cofferdam-ignore` (with no check id) silences every check on the next non-blank line. That makes suppression intent invisible to reviewers — they have to read the surrounding code to guess what was being suppressed.
+
+The narrowed form is `// cofferdam-ignore: <Check.Id>: <reason>` (Biome-style). Pin the check id and write a one-line reason; future readers (and linters) can audit it.
+
+This diagnostic is informational — it never fails CI on its own. To suppress this nudge for a specific intentional broad form, write:
+
+```
+// cofferdam-ignore: Consistency.BroadSuppression: chosen broad scope intentionally
+// cofferdam-ignore
+some_call_that_legitimately_needs_broad_silence();
+```

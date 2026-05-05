@@ -40,9 +40,16 @@ app    = ["domain", "infra"]    # app may import from both
 
 Glob patterns follow gitignore syntax. They're matched against each
 file's path relative to the project root (where
-`cofferdam.invariants.toml` lives). The first matching layer (in
-alphabetical layer-name order) wins, so place specific layer globs
-ahead of broad ones if they overlap.
+`cofferdam.invariants.toml` lives). When multiple layers match a file,
+the one with the most-specific glob (longest non-glob prefix in its
+include patterns) wins; alphabetical layer name breaks true ties. Use
+`!pattern` within a layer's glob list to carve out subtrees explicitly:
+
+```toml
+[layers]
+ui         = ["components/ui/**"]
+components = ["components/**", "!components/ui/**"]
+```
 
 ## What gets flagged
 

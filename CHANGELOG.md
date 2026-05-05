@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Layer resolution now picks the most-specific layer when multiple `[layers]` globs match (cd-31r / gh #5). Honors `!negation` patterns within a single layer's glob list. Configs that previously relied on alphabetical layer-name ordering for overlapping globs may see different layer assignments — use a `!` exclude or rely on prefix specificity instead.
+
 ## [0.2.2] - 2026-05-05
 
 ### Added

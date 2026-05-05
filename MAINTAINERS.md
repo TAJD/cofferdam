@@ -38,15 +38,43 @@ The `cofferdam` npm package downloads a prebuilt binary on `postinstall`. Two es
 
 For air-gapped runners: download the archive for your platform from the GitHub Release, extract it, then point `COFFERDAM_BINARY_PATH` at the extracted binary and run `npm rebuild cofferdam`.
 
-## Cutting a manual release
+## Cutting a release
 
-Bump the version in `Cargo.toml` first, commit, then:
+The Rust workspace, the `cofferdam` npm package, and `@cofferdam/check-sdk` ship in lockstep — every `vX.Y.Z` tag publishes all three at the same version. `release.yml` enforces this on the CI side; locally, use the helper so the bump diff is reviewable in one go.
 
-```pwsh
-pwsh scripts/release.ps1 -Tag v0.1.0
+```bash
+# Install once per machine
+cargo install cargo-edit --locked
+
+# Bump everything, commit, tag, push
+bash scripts/bump-version.sh 0.2.3
+git diff -- Cargo.toml packages/        # sanity-check the diff
+git commit -am "release: v0.2.3"
+git tag v0.2.3 && git push --follow-tags
 ```
 
-The PowerShell helper builds a Windows binary, tags, pushes, and creates a GitHub Release with the artifact attached. Full multi-platform builds happen automatically when the tag arrives at the `release.yml` workflow on GitHub.
+`bump-version.sh` runs `cargo set-version --workspace` (updates `[workspace.package].version` plus every `[workspace.dependencies]` path-dep pin) and `npm version` against both `packages/cofferdam` and `packages/check-sdk`. Single source of truth; no regex-on-TOML.
+
+Once the tag lands on GitHub, `release.yml` builds the multi-platform binaries, publishes the GitHub Release, and runs `publish-npm` + `publish-check-sdk` via OIDC Trusted Publisher.
+
+### Windows-only smoke / dry-run
+
+```pwsh
+pwsh scripts/release.ps1 -Tag v0.2.3
+```
+
+Builds a Windows binary, tags, pushes, and creates a GitHub Release with that single artifact attached — useful for testing the tag-and-publish flow without the full matrix. Production releases always go through the GitHub Actions matrix.
+
+## npm org & ownership
+
+Both npm packages are published to and owned by the `@cofferdam` organisation on npmjs.com:
+
+- `cofferdam` (unscoped binary wrapper) — <https://www.npmjs.com/package/cofferdam>
+- `@cofferdam/check-sdk` (plugin author SDK) — <https://www.npmjs.com/package/@cofferdam/check-sdk>
+
+The unscoped name `cofferdam` is intentional — it matches the binary, every existing `npm install` line in the wild, and is more discoverable than a scoped alias. Don't rename it.
+
+Both packages publish via OIDC Trusted Publisher pinned to `TAJD/cofferdam` → `release.yml`. If the org's package list ever shows only the SDK, the Trusted Publisher config has likely been reset on a transfer — re-confirm the publisher at `npmjs.com/package/<name>/access` points at this exact workflow file before the next release.
 
 ## Phased build
 

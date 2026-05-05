@@ -94,6 +94,15 @@ jobs:
         if: matrix.cross
         run: cargo install --locked cargo-zigbuild
 
+      - name: Install cargo-edit
+        # Provides `cargo set-version`, which updates
+        # [workspace.package].version and every [workspace.dependencies]
+        # path-dep version pin in one call. Replaces the regex-on-TOML
+        # approach this job used pre-cd-8rp. `--locked` keeps the
+        # install reproducible across matrix shards.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cargo install cargo-edit --locked
+
       - name: Sync workspace version with tag
         # The cofferdam npm package is bumped at publish-npm time via
         # `npm version`; the Rust workspace version needs the same
@@ -106,20 +115,10 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          export VERSION="$version"
-          python3 -c '
-          import os, re, pathlib
-          v = os.environ["VERSION"]
-          p = pathlib.Path("Cargo.toml")
-          src = p.read_text()
-          # workspace.package: version = "X.Y.Z" — first occurrence only
-          src = re.sub(r"^version = \"[^\"]+\"", f"version = \"{v}\"", src, count=1, flags=re.MULTILINE)
-          # workspace.dependencies path-deps: { ..., version = "X.Y.Z" }
-          q = chr(34)
-          src = re.sub(r"(version = )\"\d+\.\d+\.\d+\"( \})", lambda m: f"{m.group(1)}{q}{v}{q}{m.group(2)}", src)
-          p.write_text(src)
-          print(p.read_text())
-          '
+          cargo set-version --workspace "$version"
+          # Echo the result so the run log shows what landed in Cargo.toml
+          # (matches the print() the old python step emitted).
+          cat Cargo.toml
 
       - name: Build (native)
         if: ${{ !matrix.cross }}

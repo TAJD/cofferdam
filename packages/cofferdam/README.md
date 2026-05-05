@@ -46,21 +46,15 @@ new finding flagged.
 
 ## Built-in checks
 
-| Check ID                          | Category    | Default severity | Default limit |
-|-----------------------------------|-------------|------------------|---------------|
-| `Warning.TripleEquals`            | Warning     | high             | —             |
-| `Refactor.CyclomaticComplexity`   | Refactor    | medium           | 10            |
-| `Refactor.CognitiveComplexity`    | Refactor    | medium           | 15            |
-| `Refactor.DuplicateBlock`         | Refactor    | medium           | —             |
-| `Design.MaxParameters`            | Design      | medium           | 5             |
-| `Design.DuplicateExportName`      | Design      | medium           | —             |
-| `Readability.MaxLineLength`       | Readability | low              | 120           |
-| `Readability.MaxFunctionLength`   | Readability | low              | 50            |
-| `Consistency.QuoteStyle`          | Consistency | low              | —             |
+Cofferdam ships 20+ built-in checks across all five categories,
+including project-graph rules (`Design.OrphanExport`,
+`Design.ImportCycle`, `Design.LayerViolation`, `Refactor.DeadExport`)
+and complexity rules (`Refactor.CyclomaticComplexity`,
+`Refactor.CognitiveComplexity`). Severity gates CI; priority sorts
+the report — the two are deliberately separate axes.
 
-Severity gates CI; priority sorts the report. The two are deliberately
-separate axes — see [the project repo](https://github.com/TAJD/cofferdam)
-for the design rationale and the full check catalog.
+Full catalog with bad/good examples, options, and per-check defaults:
+**<https://tajd.github.io/cofferdam/checks/>**.
 
 ## CI integration
 
@@ -91,7 +85,7 @@ pnpm exec cofferdam check --since HEAD --fail-on=high
 
 `cofferdam.toml` at the project root. Discovered by walking up from the
 working directory until a `.git` is reached. Every key is optional —
-unset values fall back to the defaults above.
+unset values fall back to the defaults.
 
 ```toml
 # Lower a check's severity so it stops failing CI but still appears in reports
@@ -108,23 +102,46 @@ Override per invocation: `--config <path>` points at a specific file,
 
 ## Suppression
 
-Two inline directive forms; both accept an optional comma-separated
-list of check IDs to scope the silencing.
+Inline directives let you silence a finding with an auditable reason
+field. Canonical form:
 
 ```ts
-// cofferdam-disable-next-line Warning.TripleEquals
-if (a == b) { /* legitimate type-coercion comparison */ }
-
-/* cofferdam-disable Refactor.CyclomaticComplexity */
-function legacyDispatcher(event) {
-  // big switch statement — refactor is tracked separately
-}
-/* cofferdam-enable */
+// cofferdam-ignore: Warning.NoEval: codegen bootstrap, not user input
+eval(generatedCode);
 ```
 
-Without an ID list, `disable-next-line` silences every check on the
-next non-blank line; an unmatched `cofferdam-disable` block extends to
-end of file.
+Range and file-scoped variants:
+
+```ts
+// cofferdam-ignore-start: Refactor.CyclomaticComplexity
+function generatedRouter(req, res) { /* ... */ }
+// cofferdam-ignore-end
+
+// cofferdam-ignore-file: Readability.MaxLineLength
+```
+
+ESLint-style aliases (`// cofferdam-disable-next-line <CheckId>`,
+`/* cofferdam-disable */ ... /* cofferdam-enable */`) are also
+recognised for ergonomic continuity. Full syntax and reason-field
+rules: <https://tajd.github.io/cofferdam/suppression/>.
+
+## Custom checks
+
+Author project-specific checks in TypeScript with
+[`@cofferdam/check-sdk`](https://www.npmjs.com/package/@cofferdam/check-sdk).
+The `defineCheck` API gives you AST and line views over the same
+sources cofferdam already parsed; the cofferdam binary spawns a Node
+host and merges your findings into its stream. Plugin authoring guide:
+<https://tajd.github.io/cofferdam/plugin-sdk/> (in progress).
+
+## Architectural specs
+
+Pin the shape of your codebase in `cofferdam.invariants.toml` —
+declare layer boundaries (`ui` cannot import `db`), freeze a public
+surface (`packages/sdk` exports may not change without a deliberate
+update), and let `Design.LayerViolation` and `Design.BoundaryFrozen`
+fail CI on drift. Spec reference:
+<https://tajd.github.io/cofferdam/invariants/>.
 
 ## Exit codes
 
@@ -156,7 +173,10 @@ downloaded. Two recovery paths:
 
 The npm package version tracks the cofferdam release version.
 `cofferdam@0.1.0` downloads the binary from the `v0.1.0` GitHub
-Release. Lockfile-pinned installs are deterministic.
+Release. Lockfile-pinned installs are deterministic. The Rust
+workspace and the `cofferdam` + `@cofferdam/check-sdk` npm packages
+are released in lockstep — a `cofferdam@X.Y.Z` install always pairs
+with an SDK at the same `X.Y.Z`.
 
 ## License
 

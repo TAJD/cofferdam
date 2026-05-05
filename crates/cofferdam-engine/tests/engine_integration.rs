@@ -432,3 +432,87 @@ fn quote_style_fixture_produces_expected_count() {
         qs_issues
     );
 }
+
+// ============================================================
+// Refactor.LongAndComplex + MaxFunctionLength comment skip
+// ============================================================
+
+#[test]
+fn long_and_complex_only_flags_tangled_function() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace dir")
+        .parent()
+        .expect("repo root")
+        .join("examples")
+        .join("long_and_complex.ts");
+
+    // Engine pre-fills options from spec defaults, so the constructor
+    // values would be overridden anyway. Use the production defaults
+    // (75, 15) and rely on the fixture clearing both. `flatLong`
+    // (cyc 1), `shortBranchy` (length ~15), and `commentHeavy`
+    // (effective length ~2, cyc 1) all stay below at least one
+    // threshold; `tangled` is constructed to comfortably clear both.
+    use cofferdam_checks::refactor::LongAndComplex;
+    let engine = Engine::new(vec![Box::new(LongAndComplex::new(75, 15))]);
+    let issues = engine.analyze(&[&fixture]).expect("analyze should succeed");
+
+    let lac: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Refactor.LongAndComplex")
+        .collect();
+
+    assert_eq!(
+        lac.len(),
+        1,
+        "expected exactly one LongAndComplex finding (the `tangled` function); got {} findings: {:?}",
+        lac.len(),
+        lac.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+    assert!(
+        lac[0].message.contains("tangled"),
+        "expected the finding to name `tangled`; got: {}",
+        lac[0].message
+    );
+}
+
+#[test]
+fn max_function_length_skips_blanks_and_comments() {
+    // `commentHeavy` in the fixture has a body that spans ~40 lines but
+    // ~35 of them are pure-comment lines. With a default limit of 50 the
+    // raw-span measurement would (just barely) not flag it, but the
+    // comment-heavy case is intentionally constructed so that effective
+    // length stays well under 50 — the test guards against regressions
+    // toward raw-span counting.
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace dir")
+        .parent()
+        .expect("repo root")
+        .join("examples")
+        .join("long_and_complex.ts");
+
+    // Engine pre-fills options from spec defaults (limit=50), so use
+    // those defaults. `commentHeavy` has ~37 raw body lines but ~35
+    // are pure comment lines — effective length ~2, well under 50.
+    // The previous raw-span measurement would have given 37 (still
+    // under 50) so this test guards against a regression that flips
+    // the default to a tighter value AND drops the comment-skip.
+    use cofferdam_checks::readability::MaxFunctionLength;
+    let engine = Engine::new(vec![Box::new(MaxFunctionLength::new(50))]);
+    let issues = engine.analyze(&[&fixture]).expect("analyze should succeed");
+
+    let mfl: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Readability.MaxFunctionLength")
+        .collect();
+
+    let comment_heavy_flagged = mfl.iter().any(|i| i.message.contains("commentHeavy"));
+    assert!(
+        !comment_heavy_flagged,
+        "commentHeavy should not be flagged — its effective length \
+         (excluding blanks and comments) is ~2, well below the 50-line \
+         limit. Findings: {:?}",
+        mfl.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+}

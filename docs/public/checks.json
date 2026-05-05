@@ -290,6 +290,30 @@
       ]
     },
     {
+      "id": "Refactor.LongAndComplex",
+      "category": "Refactor",
+      "base_priority": 12,
+      "default_severity": "High",
+      "explanation": "Functions that are both long and complex are the strongest refactor candidates. Length alone catches flat config tables; complexity alone catches deeply-branching short helpers. The intersection is almost always a real refactor target.",
+      "body": "---\nid: Refactor.LongAndComplex\ncategory: Refactor\nbase_priority: 12\ndefault_severity: High\noptions: [length_limit, cyclomatic_limit]\n---\n\nFlag functions that are **both** long and cyclomatically complex. Length alone catches flat config blocks and long switch tables that may be perfectly readable; complexity alone catches deeply branching helpers that may still fit on one screen. Functions that exceed both thresholds are the strongest refactor candidates.\n\nLength is measured the same way `Readability.MaxFunctionLength` measures it — body lines excluding blanks and pure-comment lines. Cyclomatic complexity is measured the same way `Refactor.CyclomaticComplexity` measures it — McCabe count starting at `1`, adding `1` per branching node.\n\nDefaults: `length_limit = 75`, `cyclomatic_limit = 15`. These are intentionally above the standalone limits — this check is about the worst offenders, not the long tail.\n\n```ts\n// flagged: 90 effective lines AND cyclomatic 17 — both dimensions exceeded\nfunction processOrder(order: Order, config: Config, env: Env) {\n  // ... 90 lines of validation, branching, side effects ...\n}\n```\n\n```ts\n// fix: split along the seams the complexity exposes\nfunction processOrder(order: Order, config: Config, env: Env) {\n  const validated = validateOrder(order, config);\n  const priced = priceOrder(validated, env);\n  return persistOrder(priced);\n}\n```\n\n```toml\n[checks.\"Refactor.LongAndComplex\"]\nlength_limit = 100\ncyclomatic_limit = 20\nseverity = \"high\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": [
+        {
+          "id": "length_limit",
+          "kind": "integer",
+          "doc": "minimum non-blank-non-comment body lines for a function to be considered long",
+          "default": 75
+        },
+        {
+          "id": "cyclomatic_limit",
+          "kind": "integer",
+          "doc": "minimum cyclomatic complexity for a function to be considered complex",
+          "default": 15
+        }
+      ]
+    },
+    {
       "id": "Refactor.PreferNullishCoalescing",
       "category": "Refactor",
       "base_priority": 3,

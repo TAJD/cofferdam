@@ -44,6 +44,7 @@ export const checksItems = [
       { text: 'CyclomaticComplexity', link: '/checks/Refactor.CyclomaticComplexity' },
       { text: 'DeadExport', link: '/checks/Refactor.DeadExport' },
       { text: 'DuplicateBlock', link: '/checks/Refactor.DuplicateBlock' },
+      { text: 'LongAndComplex', link: '/checks/Refactor.LongAndComplex' },
       { text: 'PreferNullishCoalescing', link: '/checks/Refactor.PreferNullishCoalescing' },
       { text: 'PreferOptionalChain', link: '/checks/Refactor.PreferOptionalChain' },
       { text: 'UnusedVariable', link: '/checks/Refactor.UnusedVariable' },

@@ -2,11 +2,13 @@
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, OptionDefault, OptionKind, OptionSpec,
-    Priority, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, Issue, LineView, Lines, OptionDefault, OptionKind,
+    OptionSpec, Priority, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
 use oxc_ast_visit::Visit;
+
+use crate::count_skippable_lines;
 
 // ---------- Readability.MaxLineLength ----------
 
@@ -90,12 +92,15 @@ impl Check for MaxLineLength {
 
 // ---------- Readability.MaxFunctionLength ----------
 
-/// `Readability.MaxFunctionLength` — flag function bodies whose line span
-/// exceeds `limit`.
+/// `Readability.MaxFunctionLength` — flag function bodies whose effective
+/// line count exceeds `limit`.
 ///
-/// Measures end_line - start_line on the body block. Arrow functions
-/// with expression bodies (`x => x + 1`) are skipped — they're by
-/// definition short. Block-bodied arrows (`x => { ... }`) are measured.
+/// "Effective" excludes blank lines and pure-comment lines (lines whose
+/// trimmed text starts with `//`, `/*`, or `*` and oxc's comment table
+/// flags as a comment). Trailing inline comments on otherwise-code lines
+/// still count. Computed as `(end_line - start_line) - skippable_lines`
+/// over the body block. Arrow functions with expression bodies
+/// (`x => x + 1`) are skipped. Block-bodied arrows are measured.
 pub struct MaxFunctionLength {
     limit: u32,
     meta: &'static CheckMeta,
@@ -144,9 +149,11 @@ impl Check for MaxFunctionLength {
             .get_int("limit")
             .map(|v| v as u32)
             .unwrap_or(self.limit);
+        let line_views: Vec<LineView<'_>> = Lines::build(&file.text, parsed.program).collect();
         let mut visitor = MFLCollector {
             file,
             limit,
+            line_views: &line_views,
             issues: Vec::new(),
         };
         visitor.visit_program(parsed.program);
@@ -157,6 +164,7 @@ impl Check for MaxFunctionLength {
 struct MFLCollector<'a> {
     file: &'a SourceFile,
     limit: u32,
+    line_views: &'a [LineView<'a>],
     issues: Vec<Issue>,
 }
 
@@ -164,13 +172,21 @@ impl<'a> MFLCollector<'a> {
     fn measure(&mut self, body: &FunctionBody<'_>, name: &str) {
         let start_span = span_from_bytes(&self.file.text, body.span.start, body.span.start);
         let end_span = span_from_bytes(&self.file.text, body.span.end, body.span.end);
-        let length = end_span.line.saturating_sub(start_span.line);
+        let raw = end_span.line.saturating_sub(start_span.line);
+        // Discount blank + pure-comment lines strictly between the braces
+        // — `start_line + 1 ..= end_line - 1`. The brace lines themselves
+        // are outside the body's interior, so excluding them matches the
+        // previous `end_line - start_line` semantics.
+        let inner_lo = start_span.line.saturating_add(1);
+        let inner_hi = end_span.line.saturating_sub(1);
+        let skipped = count_skippable_lines(self.line_views, inner_lo, inner_hi);
+        let length = raw.saturating_sub(skipped);
         if length > self.limit {
             let span = span_from_bytes(&self.file.text, body.span.start, body.span.end);
             self.issues.push(Issue {
                 check_id: MFL_META.id.to_string(),
                 message: format!(
-                    "{} is {} lines, exceeds limit of {}",
+                    "{} is {} lines (excluding blanks and comments), exceeds limit of {}",
                     name, length, self.limit
                 ),
                 file: self.file.path.clone(),

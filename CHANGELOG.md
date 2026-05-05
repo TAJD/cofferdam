@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-05
+
 ### Added
 - Plugin SDK (`@cofferdam/check-sdk`) and Node-side plugin host: declare `plugins = [...]` in `cofferdam.toml`, write checks in TypeScript via `defineCheck`, and the cofferdam binary spawns a Node host that runs them alongside the built-in checks (cd-81a).
 - AST surface for plugins: `AstView.findAll(kind)` + `AstView.walk(visitor)` over a v0 frozen 9-kind union (Program, CallExpression, ImportDeclaration, Function, ArrowFunctionExpression, Class, ObjectExpression, MemberExpression, IdentifierReference). Span data on every node round-trips back to source bytes (cd-81a.2, cd-svf).
@@ -22,7 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cofferdam.invariants.toml` — canonical project-wide architectural spec, replacing per-check `[layers]` blocks. Adds `Design.BoundaryFrozen` and `Design.InvariantViolation` checks (cd-9ph).
 - `LineView` gains `is_jsx_text` classification flag, `line_start` byte offset, and a `span_for(start, end)` helper for plugin authors (cd-0ne, cd-cgd).
 
+### Fixed
+- Binary `--version` and Cargo workspace version now sync with the published git tag at release time (was reporting `0.1.4` inside the `v0.2.0` release because only npm was bumped). The release workflow now runs the same regex-replace on `Cargo.toml` that `publish-npm` already ran on `package.json`.
+- `scripts/check-spans.mjs` now accepts an optional `[check-id]` filter so the brand-casing fixture's plugin spans can be verified independently of the project-graph checks (`OrphanExport`, `DeadExport`, …) that now also fire on the same source.
+- `scripts/smoke-install.ps1` exits 0 explicitly so transient Windows file-locks during `node_modules` cleanup don't bubble into the smoke-test exit code.
 
+## [0.2.0] - 2026-05-03
 
 ### Added
 - `cofferdam init` command to scaffold a `cofferdam.toml` configuration file in a project (cd-fnm).

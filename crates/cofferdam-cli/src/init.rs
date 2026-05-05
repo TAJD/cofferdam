@@ -234,12 +234,22 @@ fn write_baseline_for_init(root: &Path, target: &Path) -> Result<usize, String> 
 /// Append the cofferdam-specific entries to `.gitignore`, creating it
 /// if missing. Returns `true` when the file changed.
 ///
-/// We add `.cofferdam/` (ignore everything cofferdam writes) but
-/// negate `!.cofferdam/baseline.json` — the baseline file is committed
-/// (it's the project's record of accepted findings); only future cache
-/// directories underneath it are gitignored.
+/// We add `.cofferdam/*` (ignore the directory's contents file-by-file)
+/// and negate `!.cofferdam/baseline.json` — the baseline file is committed
+/// (it's the project's record of accepted findings); other entries
+/// underneath are gitignored.
+///
+/// Subtle: per gitignore semantics, excluding a directory with `dir/`
+/// means git will not even look inside it — so a later
+/// `!dir/baseline.json` cannot un-ignore the file. The `dir/*` form
+/// matches files individually, which lets the negation reach.
+/// 0.2.x scaffolded the broken `.cofferdam/` form (cd-6we / gh #4); if
+/// we see it alongside the negation, we migrate it to `.cofferdam/*`.
 pub fn merge_gitignore(path: &Path) -> io::Result<bool> {
-    const ENTRIES: &[&str] = &[".cofferdam/", "!.cofferdam/baseline.json"];
+    const DIR_GLOB: &str = ".cofferdam/*";
+    const DIR_BROKEN: &str = ".cofferdam/";
+    const NEGATE_BASELINE: &str = "!.cofferdam/baseline.json";
+    const ENTRIES: &[&str] = &[DIR_GLOB, NEGATE_BASELINE];
 
     let existing = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -247,30 +257,70 @@ pub fn merge_gitignore(path: &Path) -> io::Result<bool> {
         Err(e) => return Err(e),
     };
 
-    let already: std::collections::HashSet<&str> = existing.lines().map(|l| l.trim()).collect();
+    let trimmed_lines: Vec<&str> = existing.lines().map(str::trim).collect();
+    let has_broken = trimmed_lines.contains(&DIR_BROKEN);
+    let has_glob = trimmed_lines.contains(&DIR_GLOB);
+    let has_negate = trimmed_lines.contains(&NEGATE_BASELINE);
 
-    let mut to_add: Vec<&str> = ENTRIES
+    // Detect the 0.2.x broken state and migrate in place: rewrite
+    // `.cofferdam/` to `.cofferdam/*` so the baseline-negate works.
+    let needs_migration = has_broken && !has_glob;
+
+    let already: std::collections::HashSet<&str> = trimmed_lines.iter().copied().collect();
+    let to_add: Vec<&str> = ENTRIES
         .iter()
         .copied()
-        .filter(|e| !already.contains(e))
+        .filter(|e| {
+            // After migration, the glob is effectively present; don't
+            // also append it.
+            if *e == DIR_GLOB && (has_glob || needs_migration) {
+                return false;
+            }
+            if *e == NEGATE_BASELINE && has_negate {
+                return false;
+            }
+            !already.contains(e)
+        })
         .collect();
 
-    if to_add.is_empty() {
+    if !needs_migration && to_add.is_empty() {
         return Ok(false);
     }
 
-    let mut new = existing.clone();
-    if !new.is_empty() && !new.ends_with('\n') {
-        new.push('\n');
-    }
-    if !new.is_empty() {
-        new.push_str("\n# cofferdam\n");
+    let mut new = if needs_migration {
+        // Rewrite the broken bare-directory line to the glob form,
+        // preserving the rest of the file unchanged.
+        let mut out = String::with_capacity(existing.len() + 2);
+        let trailing_newline = existing.ends_with('\n');
+        let mut iter = existing.lines().peekable();
+        while let Some(line) = iter.next() {
+            if line.trim() == DIR_BROKEN {
+                out.push_str(DIR_GLOB);
+            } else {
+                out.push_str(line);
+            }
+            if iter.peek().is_some() || trailing_newline {
+                out.push('\n');
+            }
+        }
+        out
     } else {
-        new.push_str("# cofferdam\n");
-    }
-    for line in to_add.drain(..) {
-        new.push_str(line);
-        new.push('\n');
+        existing.clone()
+    };
+
+    if !to_add.is_empty() {
+        if !new.is_empty() && !new.ends_with('\n') {
+            new.push('\n');
+        }
+        if !new.is_empty() {
+            new.push_str("\n# cofferdam\n");
+        } else {
+            new.push_str("# cofferdam\n");
+        }
+        for line in &to_add {
+            new.push_str(line);
+            new.push('\n');
+        }
     }
     std::fs::write(path, new)?;
     Ok(true)
@@ -348,8 +398,11 @@ mod tests {
         let changed = merge_gitignore(&path).unwrap();
         assert!(changed);
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains(".cofferdam/"));
+        assert!(content.contains(".cofferdam/*"));
         assert!(content.contains("!.cofferdam/baseline.json"));
+        // Must be the glob form, not the bare directory form (see
+        // cd-6we / gh #4 — bare-directory exclusion blocks the negate).
+        assert!(!content.lines().any(|l| l.trim() == ".cofferdam/"));
     }
 
     #[test]
@@ -362,7 +415,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         // Existing entries preserved.
         assert!(content.starts_with("node_modules/\n.env\n"));
-        assert!(content.contains(".cofferdam/"));
+        assert!(content.contains(".cofferdam/*"));
         assert!(content.contains("!.cofferdam/baseline.json"));
     }
 
@@ -370,7 +423,7 @@ mod tests {
     fn merge_gitignore_idempotent() {
         let dir = tempdir().unwrap();
         let path = dir.path().join(".gitignore");
-        std::fs::write(&path, ".cofferdam/\n!.cofferdam/baseline.json\n").unwrap();
+        std::fs::write(&path, ".cofferdam/*\n!.cofferdam/baseline.json\n").unwrap();
         let changed = merge_gitignore(&path).unwrap();
         assert!(!changed);
     }
@@ -379,14 +432,113 @@ mod tests {
     fn merge_gitignore_partial_existing_only_adds_missing() {
         let dir = tempdir().unwrap();
         let path = dir.path().join(".gitignore");
-        // Only the directory line is there; the negation is missing.
-        std::fs::write(&path, ".cofferdam/\n").unwrap();
+        // Only the glob is there; the negation is missing.
+        std::fs::write(&path, ".cofferdam/*\n").unwrap();
         let changed = merge_gitignore(&path).unwrap();
         assert!(changed);
         let content = std::fs::read_to_string(&path).unwrap();
-        // Original line preserved exactly once.
-        assert_eq!(content.matches(".cofferdam/").count(), 2); // once original + once in the negation
+        // Original line preserved exactly once; only the negate appended.
+        assert_eq!(content.matches(".cofferdam/*").count(), 1);
         assert!(content.contains("!.cofferdam/baseline.json"));
+    }
+
+    #[test]
+    fn merge_gitignore_migrates_broken_bare_directory_form() {
+        // 0.2.x scaffolded `.cofferdam/` + `!.cofferdam/baseline.json`,
+        // which is the broken state per cd-6we. Re-running init must
+        // rewrite the bare-directory line to the glob form so the
+        // negate actually un-ignores baseline.json.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(
+            &path,
+            "node_modules/\n\n# cofferdam\n.cofferdam/\n!.cofferdam/baseline.json\n",
+        )
+        .unwrap();
+        let changed = merge_gitignore(&path).unwrap();
+        assert!(changed, "must migrate the broken state");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains(".cofferdam/*"), "wrote: {content:?}");
+        assert!(content.contains("!.cofferdam/baseline.json"));
+        assert!(
+            !content.lines().any(|l| l.trim() == ".cofferdam/"),
+            "bare-directory line must be removed; got: {content:?}"
+        );
+        // Surrounding content preserved.
+        assert!(content.starts_with("node_modules/"));
+    }
+
+    /// End-to-end: in a real git repo, after `init --baseline`'s gitignore
+    /// merge, `git check-ignore` must report `.cofferdam/baseline.json`
+    /// as NOT ignored. Skip silently if git isn't on PATH (rare in CI,
+    /// but we don't want to flake locally on minimal images).
+    #[test]
+    fn baseline_json_is_not_gitignored_after_merge() {
+        let Ok(git_check) = std::process::Command::new("git").arg("--version").output() else {
+            eprintln!("git not on PATH — skipping check-ignore smoke");
+            return;
+        };
+        if !git_check.status.success() {
+            eprintln!("git --version failed — skipping check-ignore smoke");
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let repo = dir.path();
+
+        // Fresh repo, no commits needed for check-ignore.
+        let init = std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(repo)
+            .status()
+            .unwrap();
+        assert!(init.success(), "git init failed");
+
+        // Run our merge.
+        let gitignore = repo.join(".gitignore");
+        merge_gitignore(&gitignore).unwrap();
+
+        // Path must exist for check-ignore to evaluate it on some git
+        // versions; create the directory and a stub baseline file.
+        std::fs::create_dir_all(repo.join(".cofferdam")).unwrap();
+        std::fs::write(repo.join(".cofferdam/baseline.json"), "{}\n").unwrap();
+
+        // `git check-ignore` (no `-v`) exit codes:
+        //   0 → path would be ignored
+        //   1 → path would not be ignored (no rule, or negation wins)
+        // With `-v`, git treats a matching negation as a "match" and
+        // exits 0 — wrong signal for our test. Use the plain form.
+        let out = std::process::Command::new("git")
+            .args(["check-ignore", ".cofferdam/baseline.json"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "baseline.json should NOT be gitignored — \
+             exit={:?} stdout={stdout:?} stderr={stderr:?} \
+             gitignore={:?}",
+            out.status.code(),
+            std::fs::read_to_string(&gitignore).unwrap(),
+        );
+
+        // Sanity: a peer file under .cofferdam/ SHOULD still be ignored.
+        std::fs::write(repo.join(".cofferdam/cache.bin"), b"x").unwrap();
+        let peer = std::process::Command::new("git")
+            .args(["check-ignore", ".cofferdam/cache.bin"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert_eq!(
+            peer.status.code(),
+            Some(0),
+            "peer files under .cofferdam/ should still be ignored",
+        );
     }
 
     #[test]

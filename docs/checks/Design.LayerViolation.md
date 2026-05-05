@@ -12,10 +12,11 @@ options: []
 
 # Design.LayerViolation
 
-Enforces architectural layering rules declared in `cofferdam.toml`. Each
-file is mapped to a layer via gitignore-style globs, and every import
-edge is checked against an explicit allow-list of cross-layer
-dependencies.
+Enforces architectural layering rules declared in
+`cofferdam.invariants.toml` (see [docs/invariants.md](../../../docs/invariants.md)
+for the canonical config location and field reference). Each file is
+mapped to a layer via gitignore-style globs, and every import edge is
+checked against an explicit allow-list of cross-layer dependencies.
 
 ## Why
 
@@ -26,6 +27,9 @@ helper which imports back into `app/` "just this once," and within a
 quarter the layers are sand. Cofferdam can hold the line at PR time.
 
 ## Configuration
+
+In `cofferdam.invariants.toml` (the legacy single-file `cofferdam.toml`
+form is deprecated — see `docs/invariants.md`):
 
 ```toml
 [layers]
@@ -40,9 +44,10 @@ app    = ["domain", "infra"]    # app may import from both
 ```
 
 Glob patterns follow gitignore syntax. They're matched against each
-file's path relative to the directory containing `cofferdam.toml`. The
-first matching layer (in alphabetical layer-name order) wins, so place
-specific layer globs ahead of broad ones if they overlap.
+file's path relative to the project root (where
+`cofferdam.invariants.toml` lives). The first matching layer (in
+alphabetical layer-name order) wins, so place specific layer globs
+ahead of broad ones if they overlap.
 
 ## What gets flagged
 

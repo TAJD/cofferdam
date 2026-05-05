@@ -1,8 +1,5 @@
 # Suppression directives
 
-> **Planned (cd-81a.4) — syntax locked, implementation pending.**
-> This document describes the contract that will ship. The directives below are not yet recognised by the engine. If you try them today, cofferdam will ignore the comments and report the findings as normal.
-
 Sometimes a finding is correct but not actionable right now: a third-party type mismatch you can't fix, a complexity score on generated code you don't own, a `console.log` left deliberately in a debugging harness. Suppression directives let you tell the engine "I see this finding; I'm choosing not to fix it" — inline, in the source file, with an optional reason field so the decision is auditable.
 
 The design goal is **explicit, reasoned, audit-friendly suppression**: every suppression is a line of source code that a reviewer can see, question, and remove. There are no out-of-band suppression lists, no opaque config keys, and no suppression-of-suppressions.

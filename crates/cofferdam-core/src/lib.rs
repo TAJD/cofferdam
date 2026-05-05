@@ -9,6 +9,7 @@ pub mod check;
 pub mod corpus;
 pub mod edit;
 pub mod graph;
+pub mod invariants;
 pub mod issue;
 pub mod layers;
 pub mod lines;
@@ -22,9 +23,10 @@ pub use check::{Category, Check, CheckContext, CheckMeta, FinalizeContext};
 pub use corpus::{CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use graph::{
-    ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, LayersConfig, EXPORTS,
-    IMPORTS, LAYERS,
+    ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, InvariantsRuntime,
+    LayersConfig, EXPORTS, IMPORTS, INVARIANTS, LAYERS,
 };
+pub use invariants::{BoundarySpec, InvariantSpec, InvariantsSpec, PublicApiSpec};
 pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};
 pub use lines::{LineView, Lines};
 pub use options::{

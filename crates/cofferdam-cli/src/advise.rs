@@ -467,27 +467,17 @@ fn resolve_and_load_config(
     explicit: Option<&Path>,
     no_config: bool,
 ) -> Result<(Option<ProjectConfig>, Option<PathBuf>), ()> {
-    if no_config {
-        return Ok((None, None));
-    }
-    let path = match explicit {
-        Some(p) => Some(p.to_path_buf()),
-        None => std::env::current_dir().ok().and_then(|d| cfg::discover(&d)),
-    };
-    let path = match path {
-        Some(p) => p,
-        None => return Ok((None, None)),
-    };
-    match cfg::load(&path) {
-        Ok(c) => Ok((Some(c), Some(path))),
-        Err(e) => {
-            if explicit.is_some() {
-                eprintln!("error: {e}");
-                Err(())
-            } else {
-                eprintln!("warning: ignoring config ({e})");
-                Ok((None, None))
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match cfg::resolve_with_invariants(explicit, &cwd, no_config) {
+        Ok((cfg, path, diags)) => {
+            for w in &diags.warnings {
+                eprintln!("warning: {w}");
             }
+            Ok((cfg, path))
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Err(())
         }
     }
 }

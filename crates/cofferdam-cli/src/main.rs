@@ -613,15 +613,24 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
-    let engine = match (project_config.as_ref(), resolved_config_path.as_deref()) {
-        (Some(cfg), Some(path)) => match Engine::with_config(all_builtins(), cfg, path) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
+    let engine = match project_config.as_ref() {
+        Some(cfg) => {
+            // Path is only used for option-validation error context;
+            // when only cofferdam.invariants.toml was loaded (no
+            // cofferdam.toml), there's no per-check options bag to
+            // validate, so a synthetic path is fine.
+            let path = resolved_config_path
+                .as_deref()
+                .unwrap_or_else(|| Path::new("cofferdam.invariants.toml"));
+            match Engine::with_config(all_builtins(), cfg, path) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
             }
-        },
-        _ => Engine::new(all_builtins()),
+        }
+        None => Engine::new(all_builtins()),
     };
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
 
@@ -917,15 +926,20 @@ fn run_baseline_write(
         }
     }
 
-    let engine = match (project_config.as_ref(), resolved_config_path.as_deref()) {
-        (Some(cfg), Some(path)) => match Engine::with_config(all_builtins(), cfg, path) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
+    let engine = match project_config.as_ref() {
+        Some(cfg) => {
+            let path = resolved_config_path
+                .as_deref()
+                .unwrap_or_else(|| Path::new("cofferdam.invariants.toml"));
+            match Engine::with_config(all_builtins(), cfg, path) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
             }
-        },
-        _ => Engine::new(all_builtins()),
+        }
+        None => Engine::new(all_builtins()),
     };
     let signed = match engine.analyze_with_signatures(&files) {
         Ok(s) => s,
@@ -1023,29 +1037,17 @@ fn resolve_and_load_config(
     explicit: Option<&Path>,
     no_config: bool,
 ) -> Result<(Option<ProjectConfig>, Option<PathBuf>), ()> {
-    if no_config {
-        return Ok((None, None));
-    }
-    let path = match explicit {
-        Some(p) => Some(p.to_path_buf()),
-        None => std::env::current_dir().ok().and_then(|d| cfg::discover(&d)),
-    };
-    let path = match path {
-        Some(p) => p,
-        None => return Ok((None, None)),
-    };
-    match cfg::load(&path) {
-        Ok(c) => Ok((Some(c), Some(path))),
-        Err(e) => {
-            if explicit.is_some() {
-                // The user pointed at this path explicitly — fail loudly
-                // rather than silently ignore.
-                eprintln!("error: {e}");
-                Err(())
-            } else {
-                eprintln!("warning: ignoring config ({e})");
-                Ok((None, None))
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match cfg::resolve_with_invariants(explicit, &cwd, no_config) {
+        Ok((cfg, path, diags)) => {
+            for w in &diags.warnings {
+                eprintln!("warning: {w}");
             }
+            Ok((cfg, path))
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Err(())
         }
     }
 }

@@ -28,6 +28,8 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(design::OrphanExport),
         Box::new(design::ImportCycle),
         Box::new(design::LayerViolation),
+        Box::new(design::BoundaryFrozen),
+        Box::new(design::InvariantViolation),
         Box::new(refactor::CyclomaticComplexity::new(10)),
         Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(refactor::DuplicateBlock::default()),

@@ -1,0 +1,43 @@
+# Design.InvariantViolation
+
+Generic forbid-imports / require-imports rule, fired per declared
+invariant in `cofferdam.invariants.toml`. Supports declarative
+architectural rules without writing a new check.
+
+## Configuration
+
+```toml
+[invariants]
+"no-direct-db-access" = { forbid_imports = ["src/infra/db"], from_layers = ["app"] }
+"telemetry-required"  = { require_imports = ["src/infra/telemetry"], from_layers = ["app"] }
+```
+
+Each invariant supports three keys:
+
+* `forbid_imports` — list of project-relative path prefixes (or bare
+  specifiers like `lodash`). An import edge whose resolved path or
+  source specifier starts with any prefix triggers a finding at the
+  import statement.
+* `require_imports` — list of prefixes that must be imported by every
+  file in `from_layers`. A file with no matching import receives one
+  finding at its first import statement.
+* `from_layers` — optional layer-name allowlist. When non-empty the
+  rule applies only to importing files whose path falls into one of
+  those layers (per the merged `[layers]` config). Empty means
+  "applies to every in-project file".
+
+## Matching semantics
+
+Resolved paths are matched against the project-relative, forward-slash
+form (`src/infra/db/connection.ts`). Bare specifiers (`react`,
+`lodash`) match verbatim — a `forbid_imports = ["lodash"]` rule fires
+on `import _ from 'lodash'` and `import { map } from 'lodash/fp'`
+alike. Prefix boundaries are honoured: `src/infra/db` matches
+`src/infra/db/x.ts` but not `src/infra/database.ts`.
+
+## Output
+
+Findings carry the invariant name, the specifier that violated it, and
+the matched prefix. Suppress per-line with the standard inline
+directive, or per-rule with a severity override on
+`Design.InvariantViolation` (every invariant shares one check id).

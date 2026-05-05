@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, Issue,
-    LayersConfig, Priority, Severity, SourceFile, Span, LAYERS,
+    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
+    InvariantsSpec, Issue, LayersConfig, Priority, Severity, SourceFile, Span, INVARIANTS, LAYERS,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +53,11 @@ pub struct Engine {
     /// the start of each analysis run so `Design.LayerViolation` can
     /// read it in `finalize`.
     layers: Option<LayersConfig>,
+    /// Parsed `cofferdam.invariants.toml` spec, published into the
+    /// PUBLIC_API / BOUNDARIES / INVARIANTS corpus slots at the start of
+    /// each analysis run. `None` skips publication, leaving the
+    /// dependent checks no-ops.
+    invariants: Option<InvariantsSpec>,
 }
 
 impl Engine {
@@ -73,6 +78,7 @@ impl Engine {
             options,
             severities,
             layers: None,
+            invariants: None,
         }
     }
 
@@ -110,6 +116,7 @@ impl Engine {
             options,
             severities,
             layers: config.layers.clone(),
+            invariants: config.invariants.clone(),
         })
     }
 
@@ -147,6 +154,22 @@ impl Engine {
         // tables. Done before any check sees a file.
         if let Some(layers) = &self.layers {
             corpus.with_slot(&LAYERS, |slot| *slot = Some(layers.clone()));
+        }
+        // Publish invariants runtime when a spec was loaded. One slot,
+        // one lock — checks (BoundaryFrozen, InvariantViolation, and
+        // OrphanExport's public_api allowlist) read whichever slice
+        // they care about from the same bundle. Empty bundles are
+        // skipped so dependent checks no-op without touching the slot.
+        if let Some(spec) = &self.invariants {
+            let runtime = InvariantsRuntime {
+                project_root: spec.project_root.clone(),
+                public_api: spec.public_api.clone(),
+                boundaries: spec.boundaries.clone(),
+                invariants: spec.invariants.clone(),
+            };
+            if !runtime.is_empty() {
+                corpus.with_slot(&INVARIANTS, |slot| *slot = Some(runtime));
+            }
         }
 
         for path in paths {

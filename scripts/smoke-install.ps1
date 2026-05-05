@@ -125,5 +125,13 @@ try {
   }
 } finally {
   Pop-Location
-  Remove-Item -LiteralPath (Join-Path $PkgDir $tarball) -Force -ErrorAction SilentlyContinue
+  if ($tarball) {
+    Remove-Item -LiteralPath (Join-Path $PkgDir $tarball) -Force -ErrorAction SilentlyContinue
+  }
 }
+
+# Cleanup may leave $LASTEXITCODE non-zero (e.g. node_modules holds a
+# file lock on Windows during Remove-Item -Recurse). The script body
+# itself succeeded — explicitly exit 0 so the runner doesn't flag
+# cleanup noise as a smoke-test failure.
+exit 0

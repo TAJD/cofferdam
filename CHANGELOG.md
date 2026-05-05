@@ -5,9 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+<!-- Is there a script that generates this file? --> 
+
 ## [Unreleased]
 
-## [0.2.0] - 2026-05-03
+### Added
+- Plugin SDK (`@cofferdam/check-sdk`) and Node-side plugin host: declare `plugins = [...]` in `cofferdam.toml`, write checks in TypeScript via `defineCheck`, and the cofferdam binary spawns a Node host that runs them alongside the built-in checks (cd-81a).
+- AST surface for plugins: `AstView.findAll(kind)` + `AstView.walk(visitor)` over a v0 frozen 9-kind union (Program, CallExpression, ImportDeclaration, Function, ArrowFunctionExpression, Class, ObjectExpression, MemberExpression, IdentifierReference). Span data on every node round-trips back to source bytes (cd-81a.2, cd-svf).
+- AST wire format (option D — flat array + firstChild/nextSibling indices) crossing the Rust→Node host boundary, with byte-accurate spans (cd-svf).
+- Three e2e plugin fixtures demonstrating Pattern A (line walk — `brand-casing`), Pattern B (AST findAll — `no-http-client`), and Pattern C (stateful walk — `tenant-isolation`); all three exercised in CI by `plugin-sdk-e2e.yml` (cd-7e4, cd-b5h, cd-11j).
+- Plugin host wall-clock timeout (default 60 s, override with `COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS`) so a stuck plugin can't hang cofferdam indefinitely (cd-81a.7).
+- Plugin host rejects plugins whose vendored `@cofferdam/check-sdk` major is incompatible with the host, with a named load error (cd-b1q).
+- Biome-style suppression syntax (`// cofferdam-ignore: <CheckId>: <reason>`), file-wide and ranged variants, alongside the existing ESLint-style aliases (cd-81a.4).
+- `Consistency.BroadSuppression` info-level nudge that flags any `// cofferdam-ignore` directive lacking a check id, so suppression intent stays auditable (cd-81a.4).
+- `cofferdam.invariants.toml` — canonical project-wide architectural spec, replacing per-check `[layers]` blocks. Adds `Design.BoundaryFrozen` and `Design.InvariantViolation` checks (cd-9ph).
+- `LineView` gains `is_jsx_text` classification flag, `line_start` byte offset, and a `span_for(start, end)` helper for plugin authors (cd-0ne, cd-cgd).
+
+
 
 ### Added
 - `cofferdam init` command to scaffold a `cofferdam.toml` configuration file in a project (cd-fnm).

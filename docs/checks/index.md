@@ -10,6 +10,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 ## Consistency
 
+- [`Consistency.BroadSuppression`](Consistency.BroadSuppression.md) — Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to `// cofferdam-ignore: <CheckId>: <reason>` so suppression intent is auditable.
 - [`Consistency.QuoteStyle`](Consistency.QuoteStyle.md) — Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.
 
 ## Design

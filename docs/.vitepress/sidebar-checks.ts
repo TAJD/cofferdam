@@ -11,6 +11,7 @@ export const checksItems = [
     text: 'Consistency',
     collapsed: true,
     items: [
+      { text: 'BroadSuppression', link: '/checks/Consistency.BroadSuppression' },
       { text: 'QuoteStyle', link: '/checks/Consistency.QuoteStyle' },
     ],
   },

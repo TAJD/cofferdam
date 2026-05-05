@@ -53,6 +53,14 @@ import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 
+// SDK major versions this host knows how to drive (cd-b1q). Plugins
+// vendor their own `@cofferdam/check-sdk` via their package.json, so
+// resolution flows through the plugin's own `node_modules` tree rather
+// than a cofferdam-bundled copy. This guard rejects a plugin that
+// pulls in an SDK major outside this set with a loud, named error
+// instead of letting it explode inside `run()` with a cryptic mismatch.
+const SUPPORTED_SDK_MAJORS = new Set(["0"]);
+
 // Map from wire-side AST node kind to the visitor method name plugins
 // implement. Declared up here so it's initialised before the main
 // per-file loop runs the AstView walk (TDZ matters at module scope).
@@ -75,7 +83,12 @@ const errors = [];
 const loadedPlugins = [];
 for (const pluginPath of manifest.plugins) {
   try {
-    const resolved = resolveEntryPoint(resolvePath(manifest.cwd, pluginPath));
+    const pluginDir = resolvePath(manifest.cwd, pluginPath);
+    const sdkCheck = checkPluginSdkMajor(pluginDir);
+    if (sdkCheck.kind === "incompatible") {
+      throw new Error(sdkCheck.message);
+    }
+    const resolved = resolveEntryPoint(pluginDir);
     const url = pathToFileURL(resolved).href;
     const mod = await import(url);
     const check = mod.default;
@@ -165,6 +178,51 @@ for (const file of manifest.files) {
 process.stdout.write(JSON.stringify({ reports, errors }) + "\n");
 
 // ---- helpers --------------------------------------------------------
+
+/**
+ * Walk up from `pluginDir` looking for `node_modules/@cofferdam/check-sdk/package.json`,
+ * then verify its `version`'s major component is in `SUPPORTED_SDK_MAJORS`.
+ *
+ * Returns one of:
+ *   { kind: "ok", version }      — found and compatible (or absent — see below)
+ *   { kind: "incompatible", message }  — found but SDK major outside the set
+ *
+ * The "absent" case is treated as ok because Node's own `import()` will
+ * raise a clear `Cannot find package '@cofferdam/check-sdk'` if the SDK
+ * isn't actually resolvable when the plugin is loaded — no need to
+ * duplicate that error here. We only want to short-circuit when we *can*
+ * see a wrong-major install before letting the dynamic import succeed
+ * against type defs that don't match the runtime contract this host
+ * speaks (cd-b1q acceptance: loud, named error, not a silent crash
+ * inside run()).
+ */
+function checkPluginSdkMajor(pluginDir) {
+  let dir = pluginDir;
+  for (let depth = 0; depth < 16; depth++) {
+    const pkgPath = joinPath(dir, "node_modules", "@cofferdam", "check-sdk", "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      const version = typeof pkg.version === "string" ? pkg.version : "";
+      const major = version.split(".")[0] ?? "";
+      if (!SUPPORTED_SDK_MAJORS.has(major)) {
+        return {
+          kind: "incompatible",
+          message:
+            `plugin's @cofferdam/check-sdk@${version} is incompatible with this cofferdam ` +
+            `(supported SDK majors: ${[...SUPPORTED_SDK_MAJORS].join(", ")}). ` +
+            `Update the plugin to a compatible SDK version, or upgrade cofferdam.`,
+        };
+      }
+      return { kind: "ok", version };
+    } catch {
+      // try parent
+    }
+    const parent = joinPath(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return { kind: "ok", version: null };
+}
 
 function resolveEntryPoint(absPath) {
   // Node's ESM `import()` rejects directory imports — resolve them via

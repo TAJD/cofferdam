@@ -94,6 +94,33 @@ jobs:
         if: matrix.cross
         run: cargo install --locked cargo-zigbuild
 
+      - name: Sync workspace version with tag
+        # The cofferdam npm package is bumped at publish-npm time via
+        # `npm version`; the Rust workspace version needs the same
+        # treatment so the binary's `--version` matches the released
+        # tag. Without this the tarballs ship with a stale source
+        # version (e.g. binary reports 0.1.4 inside the v0.2.0 release).
+        # Repeated for every matrix shard — cheap, deterministic, no
+        # cross-job artifact passing required.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export VERSION="$version"
+          python3 -c '
+          import os, re, pathlib
+          v = os.environ["VERSION"]
+          p = pathlib.Path("Cargo.toml")
+          src = p.read_text()
+          # workspace.package: version = "X.Y.Z" — first occurrence only
+          src = re.sub(r"^version = \"[^\"]+\"", f"version = \"{v}\"", src, count=1, flags=re.MULTILINE)
+          # workspace.dependencies path-deps: { ..., version = "X.Y.Z" }
+          q = chr(34)
+          src = re.sub(r"(version = )\"\d+\.\d+\.\d+\"( \})", lambda m: f"{m.group(1)}{q}{v}{q}{m.group(2)}", src)
+          p.write_text(src)
+          print(p.read_text())
+          '
+
       - name: Build (native)
         if: ${{ !matrix.cross }}
         run: cargo build --release --bin cofferdam --target ${{ matrix.target }}

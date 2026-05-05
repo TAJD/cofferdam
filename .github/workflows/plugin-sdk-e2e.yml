@@ -91,3 +91,6 @@ jobs:
           for plugin in brand-casing no-http-client tenant-isolation; do
             (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json)
           done
+
+      - name: Plugin host rejects incompatible SDK major (cd-b1q)
+        run: node scripts/test-plugin-sdk-major.mjs

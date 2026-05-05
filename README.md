@@ -4,7 +4,7 @@
 
 Maintainers / contributors: see [MAINTAINERS.md](MAINTAINERS.md).
 
-`cofferdam` is a code-quality analyzer for TypeScript. The name comes from naval architecture: a cofferdam is a sealed compartment that lets crews work safely below the waterline. The metaphor maps to the tool: keep questionable code isolated, measure it, and surface a prioritised list of what to fix first.
+`cofferdam` is a software architecture and code-quality analyzer for TypeScript. The name comes from naval architecture: a cofferdam is a sealed compartment that lets crews work safely below the waterline. The metaphor maps to the tool: keep questionable code isolated, measure it, and surface a prioritised list of what to fix first.
 
 The category model and several design choices are inspired by **[Credo](https://github.com/rrrene/credo)**, the Elixir static analyzer by [@rrrene](https://github.com/rrrene). If you've used Credo, the category names and report shape will feel familiar.
 
@@ -27,7 +27,7 @@ Cofferdam exists to bring those ideas to TypeScript and then improve on them:
 Two-tier:
 
 - **Tier 1 (Rust):** engine, AST via [oxc](https://github.com/oxc-project/oxc), project graph via `oxc_resolver`, parallel runner via rayon, baseline diffing, priority computation, formatters, CLI, LSP server via `tower-lsp`.
-- **Tier 2 (TS):** type-aware checks via `ts-morph`, plus user plugins loaded into Node `worker_threads` through napi-rs.
+- **Tier 2 (TS):** user plugins authored via [`@cofferdam/check-sdk`](packages/check-sdk/) (`defineCheck`, AstView/LineView, Pattern A/B/C surfaces). The cofferdam binary spawns a Node host as a subprocess, hands it parsed line views and a flat AST wire, and merges plugin findings into the engine's stream. Type-aware checks via `ts-morph` are still on the roadmap.
 
 Findings are bucketed into five categories — **Consistency**, **Design**, **Readability**, **Refactor**, **Warning** — and priority-sorted within each.
 
@@ -166,9 +166,9 @@ See [`docs/ignore.md`](docs/ignore.md) for full syntax and precedence rules.
 
 ## Status
 
-**Phase 1, in progress.** The Rust engine, all five categories of built-in checks, the CLI, JSON/compact output formats, baseline diffing, and PR-only mode (`--since`) all work today.
+**Phase 4, in progress.** The Rust engine, all five categories of built-in checks (incl. cross-file project-graph rules — `Design.OrphanExport`, `ImportCycle`, `LayerViolation`, `Refactor.DeadExport`), the CLI with text/JSON/compact/SARIF formats, baseline diffing, PR-only mode (`--since`), two-pass consistency mode, suppression directives (Biome + ESLint syntaxes), `cofferdam.invariants.toml` architectural specs, autofix POC, and the `@cofferdam/check-sdk` plugin SDK with Node-host subprocess loader all work today.
 
-What's coming: two-pass consistency mode, the `--since`-based baseline adoption workflow, napi-rs FFI and JS plugin host (`@cofferdam/check-sdk`), type-aware checks via `ts-morph`, and LSP server with SARIF output. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.
+What's coming: type-aware checks via `ts-morph`, an LSP server, MCP tool surface (`cofferdam-mcp`), and `cofferdam advise --diff` for pre-flight validation. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.
 
 ## Licence
 

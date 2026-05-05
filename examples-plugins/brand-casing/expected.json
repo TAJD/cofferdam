@@ -1,7 +1,34 @@
 {
-  "findings": [],
+  "findings": [
+    {
+      "id": "Warning.BrandCasing",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 13,
+      "column": 24,
+      "start_byte": 611,
+      "end_byte": 619,
+      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+    },
+    {
+      "id": "Warning.BrandCasing",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 17,
+      "column": 24,
+      "start_byte": 689,
+      "end_byte": 697,
+      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+    }
+  ],
   "summary": {
-    "total": 0,
-    "by_category": {}
+    "total": 2,
+    "by_category": {
+      "warning": 2
+    }
   }
 }

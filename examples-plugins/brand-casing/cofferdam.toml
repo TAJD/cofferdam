@@ -1,0 +1,15 @@
+# cofferdam.toml — local config for the brand-casing e2e fixture (cd-7e4).
+#
+# Lives next to the fixture rather than at the repo root so the e2e run
+# is self-contained: `cofferdam check examples-plugins/brand-casing/fixture.ts`
+# auto-discovers this file via the engine's walk-up search and loads the
+# plugin from a directory-relative path.
+#
+# `plugins = [...]` paths resolve relative to the directory containing
+# this file. The plugin entry point is `dist/index.js` per the plugin's
+# `package.json#main` — Node's import-resolution looks at that field.
+
+plugins = ["./"]
+
+[checks."BrandCasing"]
+allowedAliases = ["RovikoreClient", "RovikoreCdn"]

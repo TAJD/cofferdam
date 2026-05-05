@@ -1,0 +1,79 @@
+# cd-7e4 — end-to-end plugin SDK fixture run.
+#
+# Builds the brand-casing plugin, runs cofferdam against its fixture,
+# diffs the JSON output against the committed `expected.json`, and
+# round-trips the spans against the source bytes. Negative-fixture step
+# pins type tightness (cd-81a.2): `tsc -p tsconfig.fail.json` must
+# succeed (every `@ts-expect-error` directive still fires); if any
+# directive becomes unused (SDK types loosened), tsc fails the build.
+#
+# Skipping the matrix today: this is a single-host smoke run on
+# ubuntu-latest. Fan out across OSes once the postinstall plugin
+# resolution path matters in CI.
+
+name: plugin-sdk-e2e
+
+on:
+  push:
+    branches: [main, cd-7e4-plugin-sdk-e2e]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build cofferdam binary
+        run: cargo build --release -p cofferdam-cli
+
+      - name: Install + build SDK package
+        working-directory: packages/check-sdk
+        run: |
+          pnpm install --frozen-lockfile=false --ignore-scripts
+          pnpm build
+
+      - name: Bundle SDK into the plugin's local node_modules
+        # The plugin declares `@cofferdam/check-sdk: "*"` but the SDK
+        # isn't published to npm yet; copy the built dist into the
+        # plugin's node_modules so the host script's `import` resolves.
+        run: |
+          mkdir -p examples-plugins/brand-casing/node_modules/@cofferdam/check-sdk
+          cp -r packages/check-sdk/package.json packages/check-sdk/dist \
+            examples-plugins/brand-casing/node_modules/@cofferdam/check-sdk/
+
+      - name: Build brand-casing plugin (TS → dist)
+        working-directory: examples-plugins/brand-casing
+        run: |
+          # tsc resolves via the SDK's own node_modules.
+          ../../packages/check-sdk/node_modules/.bin/tsc -p .
+
+      - name: Run cofferdam against fixture, diff against golden
+        run: node scripts/check-plugin-fixtures.mjs
+
+      - name: Round-trip span check
+        # The reported span byte-ranges, sliced from the source, must
+        # equal the literal `Rovikore` string. Catches off-by-one /
+        # encoding bugs in the host's `lineStart + charStart` arithmetic.
+        run: |
+          ./target/release/cofferdam check examples-plugins/brand-casing/fixture.ts \
+            --format json --pretty \
+            --config examples-plugins/brand-casing/cofferdam.toml > actual.json || true
+          node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
+
+      - name: Negative fixture pins SDK type strictness (cd-81a.2)
+        working-directory: examples-plugins/brand-casing
+        run: ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json

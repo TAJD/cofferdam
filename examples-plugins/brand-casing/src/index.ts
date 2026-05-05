@@ -43,11 +43,21 @@ export default defineCheck({
 
     for (const ln of lines) {
       if (ignoredNext.has(ln.lineNo)) continue;
-      if (ln.isComment || ln.isDocComment || ln.isPragma) continue;
+      // Skip lines whose meaningful content is just a comment. A line
+      // with a trailing `// note` AND a string literal still ships
+      // user-facing copy — the comment-touch flag is set for both, so
+      // we gate on string/jsx presence instead.
       if (!ln.isStringLiteral && !ln.isJsxText) continue;
 
       const m = TRIGGER.exec(ln.text);
       if (!m) continue;
+
+      // Skip identifier-position matches: `import { Rovikore } from "./brand";`
+      // has a string literal (the module specifier) AND the trigger word
+      // appears in identifier position. Quote-count up to the match —
+      // odd = inside a quoted region (string/template), even = outside.
+      // Approximate (no escape handling) but sufficient for the fixture.
+      if (!isInsideStringRegion(ln.text, m.index)) continue;
 
       // Allowlist check — exact-substring match keeps the API minimal.
       if (opts.allowedAliases.some((a) => ln.text.includes(a))) continue;
@@ -59,3 +69,20 @@ export default defineCheck({
     }
   },
 });
+
+function isInsideStringRegion(text: string, matchIndex: number): boolean {
+  let single = 0;
+  let double = 0;
+  let backtick = 0;
+  for (let i = 0; i < matchIndex; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (c === "'") single++;
+    else if (c === '"') double++;
+    else if (c === "`") backtick++;
+  }
+  return single % 2 === 1 || double % 2 === 1 || backtick % 2 === 1;
+}

@@ -54,15 +54,20 @@ pub const FILE_NAME: &str = "cofferdam.toml";
 const META_KEYS: &[&str] = &["severity", "enabled"];
 
 /// Parsed project config: per-check raw option bags + per-check
-/// severity overrides. Unknown check IDs are stored verbatim and
-/// surfaced via `unknown_check_ids` so the CLI can warn without
-/// failing the build over a typo.
+/// severity overrides + plugin paths. Unknown check IDs are stored
+/// verbatim and surfaced via `unknown_check_ids` so the CLI can warn
+/// without failing the build over a typo.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectConfig {
     pub checks: BTreeMap<String, BTreeMap<String, RawOptionValue>>,
     /// Per-check severity overrides parsed from `[checks."X.Y"] severity = "..."`.
     /// Keyed by check_id. Engine consults this in its severity post-pass.
     pub severity_overrides: BTreeMap<String, Severity>,
+    /// Top-level `plugins = [...]` array — paths to plugin modules the
+    /// CLI loads via the Node-side plugin host (cd-81a.7). Each entry is
+    /// resolved relative to the directory containing `cofferdam.toml`.
+    /// Engine itself doesn't run plugins; the CLI shells out to Node.
+    pub plugins: Vec<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -117,6 +122,10 @@ pub enum ConfigError {
 struct TomlDoc {
     #[serde(default)]
     checks: BTreeMap<String, toml::Value>,
+    /// Top-level `plugins = ["./path/to/plugin", ...]`. Paths resolve
+    /// relative to the config file's directory.
+    #[serde(default)]
+    plugins: Vec<String>,
 }
 
 /// Walk up from `start` looking for `cofferdam.toml`. Stops at the
@@ -217,9 +226,24 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         checks.insert(check_id, options);
     }
 
+    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let plugins = doc
+        .plugins
+        .into_iter()
+        .map(|p| {
+            let candidate = PathBuf::from(&p);
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                config_dir.join(candidate)
+            }
+        })
+        .collect();
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
+        plugins,
     })
 }
 
@@ -390,6 +414,7 @@ severity = 5
         let project = ProjectConfig {
             checks,
             severity_overrides: BTreeMap::new(),
+            plugins: Vec::new(),
         };
 
         let opts = options_for(
@@ -419,6 +444,7 @@ severity = 5
         let project = ProjectConfig {
             checks,
             severity_overrides: BTreeMap::new(),
+            plugins: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -433,6 +459,7 @@ severity = 5
         let project = ProjectConfig {
             checks,
             severity_overrides: BTreeMap::new(),
+            plugins: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];

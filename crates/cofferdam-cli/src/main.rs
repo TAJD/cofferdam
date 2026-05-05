@@ -4,6 +4,7 @@ mod doctor;
 mod explain;
 mod gen_docs;
 mod init;
+mod plugins;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -498,7 +499,12 @@ fn run_check(args: CheckArgs) -> ExitCode {
     let registered: Vec<&str> = all_builtins().iter().map(|c| c.meta().id).collect();
     if let Some(cfg) = project_config.as_ref() {
         let unknown = cfg::unknown_check_ids(cfg, &registered);
-        if !unknown.is_empty() {
+        // Plugin-supplied check ids look "unknown" to the built-in list
+        // by construction. v0 trades typo detection for plugin support
+        // when plugins are configured; introspecting plugin ids
+        // requires a host roundtrip we'd rather not pay just for a
+        // warning.
+        if !unknown.is_empty() && cfg.plugins.is_empty() {
             eprintln!(
                 "warning: cofferdam.toml references unknown check id(s): {}",
                 unknown
@@ -511,13 +517,29 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     let engine = match (project_config.as_ref(), resolved_config_path.as_deref()) {
-        (Some(cfg), Some(path)) => match Engine::with_config(all_builtins(), cfg, path) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
+        (Some(cfg), Some(path)) => {
+            // When plugins are configured, strip plugin-side check IDs
+            // from the per-check options table before constructing the
+            // engine — the engine validates options against built-in
+            // schemas and would error on unknown IDs. Plugin options are
+            // forwarded separately via the manifest.
+            let cfg_for_engine = if cfg.plugins.is_empty() {
+                cfg.clone()
+            } else {
+                let mut filtered = cfg.clone();
+                filtered
+                    .checks
+                    .retain(|id, _| registered.contains(&id.as_str()));
+                filtered
+            };
+            match Engine::with_config(all_builtins(), &cfg_for_engine, path) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
             }
-        },
+        }
         _ => Engine::new(all_builtins()),
     };
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
@@ -598,6 +620,68 @@ fn run_check(args: CheckArgs) -> ExitCode {
     } else {
         match engine.analyze(&files) {
             Ok(mut issues) => {
+                // cd-7e4 / cd-81a.7: run plugins declared in cofferdam.toml
+                // and merge their reports into the engine's findings.
+                if let (Some(cfg), Some(cfg_path)) =
+                    (project_config.as_ref(), resolved_config_path.as_deref())
+                {
+                    if !cfg.plugins.is_empty() {
+                        let cfg_dir = cfg_path
+                            .parent()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                        let plugin_issues =
+                            plugins::run_plugins(&cfg.plugins, &files, &cfg_dir, &cfg.checks);
+                        // Apply per-file suppression directives to plugin
+                        // issues — the engine filters its own findings
+                        // inside `analyze_with_text`, but plugin issues
+                        // bypass that path. Match against both the
+                        // displayed `Category.Name` form (built-in
+                        // convention) and the trailing bare `Name`
+                        // (what plugin authors write in `defineCheck.id`
+                        // and what users naturally put in their
+                        // `// cofferdam-ignore: <id>` directives).
+                        let suppression_cache: HashMap<
+                            PathBuf,
+                            cofferdam_engine::suppress::Suppressions,
+                        > = files
+                            .iter()
+                            .filter_map(|p| {
+                                let text = std::fs::read_to_string(p).ok()?;
+                                Some((
+                                    p.clone(),
+                                    cofferdam_engine::suppress::Suppressions::parse(&text),
+                                ))
+                            })
+                            .collect();
+                        let filtered_plugin_issues: Vec<_> = plugin_issues
+                            .into_iter()
+                            .filter(|issue| {
+                                let Some(sup) = suppression_cache.get(&issue.file) else {
+                                    return true;
+                                };
+                                let bare =
+                                    issue.check_id.rsplit('.').next().unwrap_or(&issue.check_id);
+                                !sup.is_suppressed(issue.span.line, &issue.check_id)
+                                    && !sup.is_suppressed(issue.span.line, bare)
+                            })
+                            .collect();
+                        issues.extend(filtered_plugin_issues);
+                        // Re-sort: engine output is sorted by (priority desc,
+                        // check_id asc); plugin issues append at the end and
+                        // need to mix in by priority.
+                        issues.sort_by(|a, b| {
+                            b.priority
+                                .0
+                                .cmp(&a.priority.0)
+                                .then_with(|| a.check_id.cmp(&b.check_id))
+                                .then_with(|| a.file.cmp(&b.file))
+                                .then_with(|| a.span.line.cmp(&b.span.line))
+                                .then_with(|| a.span.column.cmp(&b.span.column))
+                        });
+                    }
+                }
+
                 // CI gate: any finding at or above `--fail-on` triggers
                 // exit 1. Computed from the full set BEFORE truncation
                 // so `--max-issues` cannot hide a failure.

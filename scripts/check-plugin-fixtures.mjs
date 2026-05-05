@@ -40,11 +40,19 @@ for (const name of readdirSync(FIXTURES_DIR)) {
   const expectedPath = join(dir, "expected.json");
   if (!existsSync(fixture) || !existsSync(expectedPath)) continue;
 
+  // Match regen-plugin-fixtures.mjs: per-fixture cofferdam.toml, if
+  // present, is passed via --config. Discovery starts from CWD (the
+  // repo root in CI), not from the fixture's directory, so explicit
+  // pointing is required.
+  const fixtureConfig = join(dir, "cofferdam.toml");
+  const args = ["check", fixture, "--format", "json", "--pretty"];
+  if (existsSync(fixtureConfig)) args.push("--config", fixtureConfig);
+
   let raw;
   try {
     raw = execFileSync(
       COFFERDAM_BIN,
-      ["check", fixture, "--format", "json", "--pretty"],
+      args,
       { encoding: "utf8" },
     );
   } catch (e) {

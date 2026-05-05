@@ -60,11 +60,20 @@ for (const name of readdirSync(FIXTURES_DIR)) {
   if (!existsSync(fixture)) continue;
   const expectedPath = join(dir, "expected.json");
 
+  // Per-fixture cofferdam.toml lives next to the fixture so each
+  // example is self-contained (plugin paths resolve relative to the
+  // config dir, no repo-root config pollution). Pass it explicitly —
+  // the engine's walk-up discovery starts from CWD, not the input
+  // file, and won't find a sibling-of-fixture config on its own.
+  const fixtureConfig = join(dir, "cofferdam.toml");
+  const args = ["check", fixture, "--format", "json", "--pretty"];
+  if (existsSync(fixtureConfig)) args.push("--config", fixtureConfig);
+
   let actual;
   try {
     const raw = execFileSync(
       COFFERDAM_BIN,
-      ["check", fixture, "--format", "json", "--pretty"],
+      args,
       { encoding: "utf8" },
     );
     actual = normalise(raw);

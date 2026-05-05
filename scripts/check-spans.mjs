@@ -7,11 +7,16 @@
 // mismatch.
 //
 // Usage:
-//   node scripts/check-spans.mjs <findings.json> <source.ts> <trigger>
+//   node scripts/check-spans.mjs <findings.json> <source.ts> <trigger> [check-id]
 //
 // <trigger> forms:
 //   - Literal:  Rovikore               (slice must equal exactly)
 //   - Regex:    /^https?:\/\//         (slice must match)
+//
+// [check-id] (optional): when present, only findings whose `id` exactly
+// matches are span-checked. Lets a fixture with one plugin's findings
+// coexist with built-in findings (OrphanExport, DeadExport, …) firing
+// on the same source — only the plugin's spans get verified.
 //
 // Schema: matches cofferdam-formatters/src/json.rs::RobotReport.
 // Document shape:
@@ -25,13 +30,14 @@ import { readFileSync } from "node:fs";
 import { argv, exit } from "node:process";
 
 function usage() {
-  console.error("Usage: check-spans.mjs <issues.json> <source.ts> <trigger>");
+  console.error("Usage: check-spans.mjs <issues.json> <source.ts> <trigger> [check-id]");
   console.error("  trigger: literal string, or /pattern/ for a regex");
+  console.error("  check-id (optional): only verify findings whose `id` matches");
   exit(2);
 }
 
-if (argv.length !== 5) usage();
-const [, , findingsPath, sourcePath, triggerArg] = argv;
+if (argv.length !== 5 && argv.length !== 6) usage();
+const [, , findingsPath, sourcePath, triggerArg, checkIdFilter] = argv;
 
 let doc;
 try {
@@ -80,6 +86,10 @@ let failures = 0;
 let checked = 0;
 
 for (const [i, finding] of findings.entries()) {
+  // Filter by check-id when requested — lets a plugin's spans be
+  // verified even when other built-in checks fire on the same fixture.
+  if (checkIdFilter && finding.id !== checkIdFilter) continue;
+
   // Filter by file when a finding references a different source — keep the
   // tool reusable for multi-file fixtures later.
   if (finding.file) {

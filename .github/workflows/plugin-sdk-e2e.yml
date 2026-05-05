@@ -74,7 +74,7 @@ jobs:
           ./target/release/cofferdam check examples-plugins/brand-casing/fixture.ts \
             --format json --pretty \
             --config examples-plugins/brand-casing/cofferdam.toml > actual.json || true
-          node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
+          node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore Warning.BrandCasing
 
       - name: Round-trip span check (AST wire — cd-svf, all fixtures)
         # Every wire-emitted AST node's (start_byte, end_byte) sliced from

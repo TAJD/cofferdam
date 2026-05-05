@@ -82,11 +82,15 @@ fn triple_equals_fix_round_trip() {
         }
     }
 
-    // The fixture has exactly 3 loose-equality operators: two `==` and one `!=`.
+    // Fixture has 10 loose-equality operators total:
+    // - 3 in the original block (2× ==, 1× !=) — all autofix
+    // - 5 with null on either side (cd-21d) — diagnostic fires, autofix declines
+    // - 2 trailing cases (`nullable == y`, `y == "null"`) — autofix
+    // Net autofix edits = 3 + 2 = 5.
     assert_eq!(
         edits.len(),
-        3,
-        "expected 3 autofix edits (2× == and 1× !=), got {}",
+        5,
+        "expected 5 autofix edits (3 original + 2 non-null new), got {}",
         edits.len()
     );
 
@@ -102,31 +106,43 @@ fn triple_equals_fix_round_trip() {
     // Read back and verify.
     let result = std::fs::read_to_string(&tmp_path).expect("read result");
 
-    // The fixed file must have grown by 3 bytes:
-    // - two `==` → `===` replacements (+1 byte each)
-    // - one `!=` → `!==` replacement (+1 byte)
+    // Each autofix grows the file by 1 byte (`==` → `===` or `!=` → `!==`).
+    // 5 edits → +5 bytes.
     assert_eq!(
         result.len(),
-        original_text.len() + 3,
+        original_text.len() + 5,
         "fixed file length mismatch: original={} fixed={}",
         original_text.len(),
         result.len()
     );
 
-    // Re-run the engine on the fixed file: it should produce zero
-    // Warning.TripleEquals findings, confirming all loose operators were fixed.
+    // Re-run the engine on the fixed file: every remaining TripleEquals
+    // finding must be a null-exempt one whose `autofix()` returns None.
+    // Confirms autofixable operators were all fixed; the un-fixable ones
+    // (the cd-21d exemptions) survive intentionally as diagnostics.
     let engine2 = Engine::new(all_builtins());
-    let (issues2, _) = engine2
+    let (issues2, texts2) = engine2
         .analyze_with_text(std::slice::from_ref(&tmp_path))
         .expect("re-analyze should succeed");
-    let triple_eq_issues: Vec<_> = issues2
+    let leftover_with_autofix: Vec<_> = issues2
         .iter()
         .filter(|i| i.check_id == "Warning.TripleEquals")
+        .filter(|issue| {
+            let Some(check) = check_map.get(issue.check_id.as_str()) else {
+                return false;
+            };
+            let Some(text) = texts2.get(&issue.file) else {
+                return false;
+            };
+            let source = SourceFile::new(issue.file.clone(), text.clone());
+            check.autofix(issue, &source).is_some()
+        })
         .collect();
     assert!(
-        triple_eq_issues.is_empty(),
-        "after fix, expected 0 TripleEquals findings, got {}:\n{result}",
-        triple_eq_issues.len()
+        leftover_with_autofix.is_empty(),
+        "after fix, expected no autofixable TripleEquals findings; \
+         got {} that still produce autofix edits:\n{result}",
+        leftover_with_autofix.len(),
     );
 }
 

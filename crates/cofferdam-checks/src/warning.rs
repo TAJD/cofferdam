@@ -59,6 +59,11 @@ impl Check for TripleEquals {
     /// We scan the source bytes within that span to locate just the operator
     /// token, taking care to skip `===`/`!==` and to handle `!=` before `==`
     /// so a `!=` sequence isn't misidentified as `=`.
+    ///
+    /// **Null exemption**: `== null` and `!= null` (either side) are intentional
+    /// — `== null` matches both `null` and `undefined`, which `=== null` does
+    /// not. Silently rewriting this changes semantics. We decline to fix those
+    /// cases and return `None` so the diagnostic stays but no edit is applied.
     fn autofix(&self, issue: &Issue, source: &SourceFile) -> Option<TextEdit> {
         let start = issue.span.start_byte as usize;
         let end = issue.span.end_byte as usize;
@@ -76,6 +81,10 @@ impl Check for TripleEquals {
                 // Make sure it's `!=` not `!==`.
                 let is_strict = i + 2 < len && bytes[i + 2] == b'=';
                 if !is_strict {
+                    // Exempt `!= null` on either side — changing semantics.
+                    if operand_is_null(bytes, 0, i) || operand_is_null(bytes, i + 2, len) {
+                        return None;
+                    }
                     let op_start = (start + i) as u32;
                     let op_end = op_start + 2;
                     let op_span = span_from_bytes(&source.text, op_start, op_end);
@@ -92,6 +101,10 @@ impl Check for TripleEquals {
             if i + 1 < len && bytes[i] == b'=' && bytes[i + 1] == b'=' {
                 let is_strict = i + 2 < len && bytes[i + 2] == b'=';
                 if !is_strict {
+                    // Exempt `== null` on either side — changing semantics.
+                    if operand_is_null(bytes, 0, i) || operand_is_null(bytes, i + 2, len) {
+                        return None;
+                    }
                     let op_start = (start + i) as u32;
                     let op_end = op_start + 2;
                     let op_span = span_from_bytes(&source.text, op_start, op_end);
@@ -501,6 +514,74 @@ impl Check for UnusedImport {
     }
 }
 
+/// Return `true` if the byte slice `bytes[from..to]`, after trimming ASCII
+/// whitespace and recursively stripping balanced outer parentheses, is exactly
+/// the token `null`.
+///
+/// This is intentionally a byte-level check, not a full re-parse. `null` is a
+/// reserved TypeScript keyword so it cannot appear bare inside a string literal
+/// or identifier without being the literal itself. The strip-parens step handles
+/// `(foo || bar) == null` where the non-null operand has outer parens.
+///
+/// Word-boundary correctness: we compare the *entire* trimmed/stripped slice to
+/// `b"null"`, so `nullable`, `"null"` (inside quotes), or `notNull` are not
+/// matched.
+/// Trim leading and trailing ASCII whitespace from a byte slice.
+/// Equivalent to `slice.trim_ascii()` (stable since 1.80), but hand-rolled
+/// so we stay within the workspace MSRV of 1.78.
+fn trim_ascii_whitespace(slice: &[u8]) -> &[u8] {
+    let start = slice
+        .iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .unwrap_or(slice.len());
+    let end = slice
+        .iter()
+        .rposition(|&b| !b.is_ascii_whitespace())
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    if start >= end {
+        &[]
+    } else {
+        &slice[start..end]
+    }
+}
+
+fn operand_is_null(bytes: &[u8], from: usize, to: usize) -> bool {
+    let mut slice = match bytes.get(from..to) {
+        Some(s) => s,
+        None => return false,
+    };
+    // Trim leading and trailing ASCII whitespace.
+    loop {
+        slice = trim_ascii_whitespace(slice);
+        // Strip one layer of balanced outer parens if present.
+        if slice.first() == Some(&b'(') && slice.last() == Some(&b')') {
+            // Verify the outer parens are actually a matched pair (not `(a) + (b)`).
+            let mut depth = 0i32;
+            let mut matched = false;
+            for (idx, &b) in slice.iter().enumerate() {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            matched = idx == slice.len() - 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if matched {
+                slice = &slice[1..slice.len() - 1];
+                continue; // re-trim after stripping
+            }
+        }
+        break;
+    }
+    slice == b"null"
+}
+
 fn path_key(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
@@ -574,5 +655,81 @@ mod tests {
         let src = "const r = a !== b;";
         let issues = run_triple_equals(src);
         assert!(issues.is_empty(), "`!==` should not be flagged");
+    }
+
+    // ── Null-exemption tests (cd-21d) ──────────────────────────────────────
+
+    /// `x == null` — autofix must be suppressed (semantics differ from `=== null`).
+    #[test]
+    fn autofix_skipped_for_null_rhs() {
+        let src = "const r = x == null;";
+        let issues = run_triple_equals(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "diagnostic should still fire for `== null`"
+        );
+        let edit =
+            TripleEquals.autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src));
+        assert!(
+            edit.is_none(),
+            "autofix must return None for `== null` (semantics change)"
+        );
+    }
+
+    /// `null != x` — null on the LHS must also suppress the autofix.
+    #[test]
+    fn autofix_skipped_for_null_lhs() {
+        let src = "const r = null != x;";
+        let issues = run_triple_equals(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "diagnostic should still fire for `null !=`"
+        );
+        let edit =
+            TripleEquals.autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src));
+        assert!(
+            edit.is_none(),
+            "autofix must return None for `null !=` (semantics change)"
+        );
+    }
+
+    /// `(a || b) == null` — null on RHS with parens on LHS must still suppress.
+    #[test]
+    fn autofix_skipped_for_null_with_parens() {
+        let src = "const r = (a || b) == null;";
+        let issues = run_triple_equals(src);
+        assert_eq!(issues.len(), 1, "diagnostic should still fire");
+        let edit =
+            TripleEquals.autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src));
+        assert!(
+            edit.is_none(),
+            "autofix must return None when RHS is null even with LHS parens"
+        );
+    }
+
+    /// `x == "null"` — string literal `"null"` is not the keyword; autofix proceeds.
+    #[test]
+    fn autofix_still_fixes_string_literal_null() {
+        let src = r#"const r = x == "null";"#;
+        let issues = run_triple_equals(src);
+        assert_eq!(issues.len(), 1);
+        let edit = TripleEquals
+            .autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src))
+            .expect("autofix should fire for string literal `\"null\"`");
+        assert_eq!(edit.replacement, "===");
+    }
+
+    /// `nullable == y` — identifier that contains "null" is not the keyword; autofix proceeds.
+    #[test]
+    fn autofix_still_fixes_identifier_starting_with_null() {
+        let src = "const r = nullable == y;";
+        let issues = run_triple_equals(src);
+        assert_eq!(issues.len(), 1);
+        let edit = TripleEquals
+            .autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src))
+            .expect("autofix should fire for identifier `nullable`");
+        assert_eq!(edit.replacement, "===");
     }
 }

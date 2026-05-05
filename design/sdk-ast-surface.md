@@ -110,29 +110,27 @@ parser-internal restructuring.
 
 ### Decision 3 — v0 node set: 5 strict + 4 borderline + 3 trim candidates
 
-**Status: proposed; needs review.**
+**Status: resolved 2026-05-04 (cd-717 trim) + 2026-05-05 (cd-4de Q4
+adds Program).** v0 set is **9 kinds** — 5 strict + 4 borderline.
+Trim candidates already cut from the SDK on `cd-7e4-plugin-sdk-e2e`.
 
-The SDK on `cd-7e4-plugin-sdk-e2e` ships 12 node kinds. Run against the bead's
-"justified by fixture pattern" rule:
-
-| Strict (named-fixture-justified) | Borderline (defensible by representative pattern) | Trim candidates |
+| Strict (named-fixture-justified) | Borderline (structural anchor / representative pattern) | Trim candidates (cut) |
 |---|---|---|
 | `CallExpression` | `Function` | `NewExpression` |
 | `ImportDeclaration` | `ArrowFunctionExpression` | `BinaryExpression` |
 | `MemberExpression` | `Class` | `StringLiteral` |
-| `IdentifierReference` | `ObjectExpression` (already strict — moved) | `NumericLiteral` |
+| `IdentifierReference` | `Program` (Q4 — types `view.root`) | `NumericLiteral` |
 | `ObjectExpression` | | |
 
-**Recommendation:** ship the 5 strict + 4 borderline (= 9) in v0; defer the
-3 trim candidates to follow-on beads with concrete plugin demand.
-
-The recommendation deviates from the bead's literal rule ("no fixture, no
-v0") in the borderline column because `Function` / `ArrowFunctionExpression`
-in particular are load-bearing for the *next* obvious tier of plugin checks
-(complexity, parameter shape, async/sync mismatch). Excluding them forces
-the first follow-on bead. The trim candidates have no such pressure —
-`NoFloatPrices` (Pattern B, hypothetical) needs `NumericLiteral`, but that
-fixture isn't on the board yet.
+The 4 trim candidates have no fixture pressure and no structural-anchor
+role (no other node points at them). The borderlines are kept because
+`Function` / `ArrowFunctionExpression` are load-bearing for the *next*
+obvious tier of plugin checks (complexity, parameter shape, async/sync
+mismatch), `Class` gives plugins a typed handle for class-level checks
+before deeper structure ships, and `Program` is required to type
+`view.root` once the AST wire format ships (see
+`design/sdk-ast-wire.md`'s Q4 — without it, `root` narrows to `never`
+on any TypeScript switch).
 
 ## v0 surface — the table
 

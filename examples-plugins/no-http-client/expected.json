@@ -1,0 +1,58 @@
+{
+  "findings": [
+    {
+      "id": "Warning.NoHttpClient",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/no-http-client/fixture.ts",
+      "line": 15,
+      "column": 1,
+      "start_byte": 636,
+      "end_byte": 662,
+      "message": "Import of \"axios\" is banned — route HTTP through the internal wrapper."
+    },
+    {
+      "id": "Warning.NoHttpClient",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/no-http-client/fixture.ts",
+      "line": 16,
+      "column": 1,
+      "start_byte": 706,
+      "end_byte": 752,
+      "message": "Import of \"node-fetch\" is banned — route HTTP through the internal wrapper."
+    },
+    {
+      "id": "Warning.NoHttpClient",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/no-http-client/fixture.ts",
+      "line": 26,
+      "column": 19,
+      "start_byte": 1236,
+      "end_byte": 1261,
+      "message": "Call site uses banned HTTP client \"axios\" — route through the internal wrapper."
+    },
+    {
+      "id": "Warning.NoHttpClient",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/no-http-client/fixture.ts",
+      "line": 27,
+      "column": 19,
+      "start_byte": 1306,
+      "end_byte": 1324,
+      "message": "Call site uses banned HTTP client \"node-fetch\" — route through the internal wrapper."
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "by_category": {
+      "warning": 4
+    }
+  }
+}

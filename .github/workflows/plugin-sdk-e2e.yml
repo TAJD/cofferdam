@@ -46,25 +46,27 @@ jobs:
           pnpm install --frozen-lockfile=false --ignore-scripts
           pnpm build
 
-      - name: Bundle SDK into the plugin's local node_modules
-        # The plugin declares `@cofferdam/check-sdk: "*"` but the SDK
-        # isn't published to npm yet; copy the built dist into the
+      - name: Bundle SDK into each plugin's local node_modules
+        # The plugins declare `@cofferdam/check-sdk: "*"` but the SDK
+        # isn't published to npm yet; copy the built dist into each
         # plugin's node_modules so the host script's `import` resolves.
         run: |
-          mkdir -p examples-plugins/brand-casing/node_modules/@cofferdam/check-sdk
-          cp -r packages/check-sdk/package.json packages/check-sdk/dist \
-            examples-plugins/brand-casing/node_modules/@cofferdam/check-sdk/
+          for plugin in brand-casing no-http-client; do
+            mkdir -p examples-plugins/$plugin/node_modules/@cofferdam/check-sdk
+            cp -r packages/check-sdk/package.json packages/check-sdk/dist \
+              examples-plugins/$plugin/node_modules/@cofferdam/check-sdk/
+          done
 
-      - name: Build brand-casing plugin (TS → dist)
-        working-directory: examples-plugins/brand-casing
+      - name: Build plugins (TS → dist)
         run: |
-          # tsc resolves via the SDK's own node_modules.
-          ../../packages/check-sdk/node_modules/.bin/tsc -p .
+          for plugin in brand-casing no-http-client; do
+            (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p .)
+          done
 
-      - name: Run cofferdam against fixture, diff against golden
+      - name: Run cofferdam against every fixture, diff against goldens
         run: node scripts/check-plugin-fixtures.mjs
 
-      - name: Round-trip span check (plugin reports)
+      - name: Round-trip span check (plugin reports — brand-casing)
         # The reported span byte-ranges, sliced from the source, must
         # equal the literal `Rovikore` string. Catches off-by-one /
         # encoding bugs in the host's `lineStart + charStart` arithmetic.
@@ -74,13 +76,17 @@ jobs:
             --config examples-plugins/brand-casing/cofferdam.toml > actual.json || true
           node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
 
-      - name: Round-trip span check (AST wire — cd-svf)
+      - name: Round-trip span check (AST wire — cd-svf, all fixtures)
         # Every wire-emitted AST node's (start_byte, end_byte) sliced from
         # source must produce non-empty bytes that pass per-kind sanity
         # rules. Catches off-by-one bugs in the Rust serializer + UTF-8
         # boundary issues in the host's reconstruction.
-        run: node scripts/check-ast-spans.mjs
+        run: |
+          node scripts/check-ast-spans.mjs examples-plugins/brand-casing/fixture.ts examples-plugins/brand-casing/cofferdam.toml
+          node scripts/check-ast-spans.mjs examples-plugins/no-http-client/fixture.ts examples-plugins/no-http-client/cofferdam.toml
 
-      - name: Negative fixture pins SDK type strictness (cd-81a.2)
-        working-directory: examples-plugins/brand-casing
-        run: ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json
+      - name: Negative fixtures pin SDK type strictness (cd-81a.2 / cd-svf)
+        run: |
+          for plugin in brand-casing no-http-client; do
+            (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json)
+          done

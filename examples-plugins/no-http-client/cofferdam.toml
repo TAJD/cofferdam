@@ -1,0 +1,12 @@
+# cofferdam.toml — local config for the no-http-client e2e fixture (cd-b5h).
+#
+# Self-contained next to the fixture so `cofferdam check fixture.ts
+# --config ./cofferdam.toml` is reproducible without polluting the
+# repo-root config.
+
+plugins = ["./"]
+
+[checks."NoHttpClient"]
+# Project-internal HTTP wrapper module — imports starting with this
+# prefix are exempt regardless of what they re-export.
+allowedSourcePrefixes = ["@org/http"]

@@ -55,6 +55,13 @@ pub const FILE_NAME: &str = "cofferdam.toml";
 /// placeholder (no behaviour wired yet).
 const META_KEYS: &[&str] = &["severity", "enabled"];
 
+/// Top-level `cofferdam.toml` keys that users sometimes accidentally nest
+/// under a `[checks."X.Y"]` table because TOML's lexical scoping assigns
+/// all keys after a table header to that table. When one of these appears
+/// as an unknown option, we emit a directive error instead of the generic
+/// "check does not declare option '...'" message.
+const MISPLACED_TOP_LEVEL_KEYS: &[&str] = &["plugins", "extends", "include"];
+
 /// Parsed project config: per-check raw option bags + per-check
 /// severity overrides. Unknown check IDs are stored verbatim and
 /// surfaced via `unknown_check_ids` so the CLI can warn without
@@ -128,6 +135,18 @@ pub enum ConfigError {
         check_id: String,
         #[source]
         source: OptionsError,
+    },
+    #[error(
+        "config {path}: `{intended_key}` looks like a top-level cofferdam.toml key, \
+but it appears nested under [checks.\"{nested_under}\"] because TOML treats keys after a \
+table header as belonging to that table. \
+Move `{intended_key} = ...` ABOVE the first [checks.\"...\"] table (or to the top of the \
+file) and re-run."
+    )]
+    MisplacedTopLevelKey {
+        path: PathBuf,
+        intended_key: String,
+        nested_under: String,
     },
     #[error(transparent)]
     Invariants(#[from] InvariantsError),
@@ -550,10 +569,29 @@ pub fn options_for(
 ) -> Result<CheckOptions, ConfigError> {
     match project.checks.get(check_id) {
         Some(raw) => {
-            validate_options(check_id, schema, raw).map_err(|source| ConfigError::Validate {
-                path: config_path.to_path_buf(),
-                check_id: check_id.to_string(),
-                source,
+            validate_options(check_id, schema, raw).map_err(|source| {
+                // When `validate_options` rejects a key that looks like a
+                // well-known top-level cofferdam.toml key (plugins, extends,
+                // include), the real cause is TOML lexical scoping — the user
+                // wrote the key after a `[checks."X"]` header and TOML
+                // silently nested it there. Emit a directive error so they
+                // know to move it to the top of the file, rather than
+                // presenting a confusing "check does not declare option '...'"
+                // message.
+                if let OptionsError::UnknownKey { ref key, .. } = source {
+                    if MISPLACED_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+                        return ConfigError::MisplacedTopLevelKey {
+                            path: config_path.to_path_buf(),
+                            intended_key: key.clone(),
+                            nested_under: check_id.to_string(),
+                        };
+                    }
+                }
+                ConfigError::Validate {
+                    path: config_path.to_path_buf(),
+                    check_id: check_id.to_string(),
+                    source,
+                }
             })
         }
         None => Ok(CheckOptions::defaults_from(schema)),
@@ -780,6 +818,108 @@ severity = 5
         assert_eq!(
             std::fs::canonicalize(&found).unwrap(),
             std::fs::canonicalize(&cfg_path).unwrap()
+        );
+    }
+
+    // --- MisplacedTopLevelKey detection tests ---
+
+    /// Helper: build a ProjectConfig that has `key` as an unknown option
+    /// nested under the given check_id, then call options_for with an
+    /// empty schema (so every key is unknown).
+    fn options_for_with_raw_key(check_id: &str, key: &str, val: RawOptionValue) -> ConfigError {
+        let mut bag = BTreeMap::new();
+        bag.insert(key.to_string(), val);
+        let mut checks = BTreeMap::new();
+        checks.insert(check_id.to_string(), bag);
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+            layers: None,
+            plugins: Vec::new(),
+            invariants: None,
+            layers_double_declaration: false,
+        };
+        // Empty schema → every key is unknown to validate_options.
+        options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()
+    }
+
+    #[test]
+    fn misplaced_plugins_after_checks_table_emits_directive_error() {
+        // Simulates:
+        //   [checks."Readability.MaxLineLength"]
+        //   limit = 120
+        //   plugins = ["./my-plugin.mjs"]
+        //
+        // The parse() step strips `limit` into the raw bag before
+        // reaching options_for, but `plugins` (an array) would be kept
+        // as-is if it weren't in META_KEYS — so we test options_for
+        // directly with `plugins` in the raw bag.
+        let err = options_for_with_raw_key(
+            "Readability.MaxLineLength",
+            "plugins",
+            RawOptionValue::List(vec![RawOptionValue::String("./my-plugin.mjs".into())]),
+        );
+
+        assert!(
+            matches!(
+                &err,
+                ConfigError::MisplacedTopLevelKey {
+                    ref intended_key,
+                    ref nested_under,
+                    ..
+                } if intended_key == "plugins" && nested_under == "Readability.MaxLineLength"
+            ),
+            "expected MisplacedTopLevelKey, got: {err:?}"
+        );
+
+        // Display must mention the key and the directive word "Move".
+        let msg = err.to_string();
+        assert!(msg.contains("plugins"), "missing key name: {msg}");
+        assert!(
+            msg.contains("Move") || msg.contains("move"),
+            "missing directive: {msg}"
+        );
+        assert!(msg.contains("[checks."), "missing table hint: {msg}");
+    }
+
+    #[test]
+    fn misplaced_extends_emits_directive_error() {
+        let err = options_for_with_raw_key(
+            "Refactor.CyclomaticComplexity",
+            "extends",
+            RawOptionValue::String("./base.toml".into()),
+        );
+        assert!(
+            matches!(&err, ConfigError::MisplacedTopLevelKey { ref intended_key, .. } if intended_key == "extends"),
+            "expected MisplacedTopLevelKey for extends, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn misplaced_include_emits_directive_error() {
+        let err = options_for_with_raw_key(
+            "Design.MaxParameters",
+            "include",
+            RawOptionValue::List(vec![RawOptionValue::String("src/**".into())]),
+        );
+        assert!(
+            matches!(&err, ConfigError::MisplacedTopLevelKey { ref intended_key, .. } if intended_key == "include"),
+            "expected MisplacedTopLevelKey for include, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_check_option_typo_still_errors_normally() {
+        // Regression: a genuine typo in a checks table option (limitt = 120)
+        // must still produce ConfigError::Validate, not MisplacedTopLevelKey.
+        let err = options_for_with_raw_key(
+            "Readability.MaxLineLength",
+            "limitt",
+            RawOptionValue::Int(120),
+        );
+        assert!(
+            matches!(err, ConfigError::Validate { .. }),
+            "expected Validate for a typo'd option key, got: {err:?}"
         );
     }
 }

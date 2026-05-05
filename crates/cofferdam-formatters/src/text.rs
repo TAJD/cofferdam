@@ -19,6 +19,12 @@ pub struct TextRenderOpts {
     /// Findings themselves still print. Pairs with the CLI `--quiet`
     /// flag.
     pub quiet: bool,
+    /// When true, drop baselined findings from the rendered list. The
+    /// `(N new, M baselined)` summary line still reports them so the
+    /// user can see the gate count is intact. Has no effect when no
+    /// baseline is active. Pairs with the CLI `--hide-baselined` flag
+    /// (cd-k23 / gh #11). JSON output is intentionally unaffected.
+    pub hide_baselined: bool,
 }
 
 pub struct TextFormatter;
@@ -72,8 +78,31 @@ impl TextFormatter {
             return out;
         }
 
+        // `--hide-baselined` filters the rendered stream but keeps the
+        // pre-filter `total` and `counts` so the summary line still
+        // reports the full picture.
+        let renderable: Vec<(&Issue, bool)> = if opts.hide_baselined {
+            collected.iter().filter(|(_, b)| !*b).copied().collect()
+        } else {
+            collected.clone()
+        };
+
+        // If hiding baselined entries left nothing to render but the
+        // run did produce findings, emit a one-line note instead of a
+        // bare summary so the terminal does not look empty.
+        if renderable.is_empty() && !opts.quiet {
+            if let Some(c) = counts {
+                let _ = writeln!(
+                    out,
+                    "\n{} finding(s) ({} new, {} baselined — hidden)",
+                    total, c.new, c.baselined
+                );
+                return out;
+            }
+        }
+
         for category in Category::ALL {
-            let bucket: Vec<(&Issue, bool)> = collected
+            let bucket: Vec<(&Issue, bool)> = renderable
                 .iter()
                 .filter(|(i, _)| category_of(&i.check_id) == Some(category))
                 .copied()
@@ -118,10 +147,15 @@ impl TextFormatter {
         if !opts.quiet {
             match counts {
                 Some(c) => {
+                    let suffix = if opts.hide_baselined {
+                        " — hidden"
+                    } else {
+                        ""
+                    };
                     let _ = writeln!(
                         out,
-                        "\n{} finding(s) ({} new, {} baselined)",
-                        total, c.new, c.baselined
+                        "\n{} finding(s) ({} new, {} baselined{})",
+                        total, c.new, c.baselined, suffix
                     );
                 }
                 None => {
@@ -206,7 +240,13 @@ mod tests {
     #[test]
     fn text_formatter_quiet_suppresses_trailing_summary() {
         let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
-        let output = TextFormatter::render_with_opts(&[issue], TextRenderOpts { quiet: true });
+        let output = TextFormatter::render_with_opts(
+            &[issue],
+            TextRenderOpts {
+                quiet: true,
+                ..Default::default()
+            },
+        );
         assert!(output.contains("Warning.Test"), "findings still print");
         assert!(
             !output.contains("finding(s)"),
@@ -216,7 +256,13 @@ mod tests {
 
     #[test]
     fn text_formatter_quiet_suppresses_no_findings_line() {
-        let output = TextFormatter::render_with_opts(&[], TextRenderOpts { quiet: true });
+        let output = TextFormatter::render_with_opts(
+            &[],
+            TextRenderOpts {
+                quiet: true,
+                ..Default::default()
+            },
+        );
         assert!(
             !output.contains("no findings"),
             "empty-result message should be suppressed under --quiet, got:\n{output}"
@@ -228,12 +274,81 @@ mod tests {
         let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
         let output = TextFormatter::render_with_baseline_opts(
             &[(issue, false)],
-            TextRenderOpts { quiet: true },
+            TextRenderOpts {
+                quiet: true,
+                ..Default::default()
+            },
         );
         assert!(output.contains("Warning.Test"));
         assert!(
             !output.contains("finding(s)"),
             "trailing summary should be suppressed, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn hide_baselined_drops_baselined_findings_keeps_summary() {
+        // One baselined, one new. With --hide-baselined the rendered
+        // body must omit the baselined finding but the summary line
+        // must still report counts in full (cd-k23 / gh #11).
+        let baselined = make_issue(PathBuf::from("src/old.ts"), "Warning.Test");
+        let new = make_issue(PathBuf::from("src/new.ts"), "Refactor.Test");
+        let output = TextFormatter::render_with_baseline_opts(
+            &[(baselined, true), (new, false)],
+            TextRenderOpts {
+                hide_baselined: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            !output.contains("src/old.ts"),
+            "baselined finding should be hidden, got:\n{output}"
+        );
+        assert!(
+            !output.contains("[baselined]"),
+            "the [baselined] tag should not appear when hidden, got:\n{output}"
+        );
+        assert!(
+            output.contains("src/new.ts"),
+            "new finding should still render, got:\n{output}"
+        );
+        assert!(
+            output.contains("2 finding(s) (1 new, 1 baselined"),
+            "summary must still report the full count, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn hide_baselined_with_no_baselined_is_a_no_op() {
+        let new = make_issue(PathBuf::from("src/new.ts"), "Refactor.Test");
+        let output = TextFormatter::render_with_baseline_opts(
+            &[(new, false)],
+            TextRenderOpts {
+                hide_baselined: true,
+                ..Default::default()
+            },
+        );
+        assert!(output.contains("src/new.ts"));
+        assert!(output.contains("1 finding(s) (1 new, 0 baselined"));
+    }
+
+    #[test]
+    fn hide_baselined_when_all_findings_baselined_emits_short_note() {
+        let only = make_issue(PathBuf::from("src/old.ts"), "Warning.Test");
+        let output = TextFormatter::render_with_baseline_opts(
+            &[(only, true)],
+            TextRenderOpts {
+                hide_baselined: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            !output.contains("src/old.ts"),
+            "no findings should render when all are baselined and hidden, got:\n{output}"
+        );
+        assert!(
+            output.contains("1 finding(s) (0 new, 1 baselined"),
+            "summary must still print, got:\n{output}"
         );
     }
 }

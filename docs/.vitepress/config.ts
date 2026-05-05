@@ -45,6 +45,7 @@ export default defineConfig({
           { text: 'Output formats', link: '/output-formats' },
           { text: 'CI recipes', link: '/ci-recipes' },
           { text: 'Doctor', link: '/doctor' },
+          { text: 'Agent advisory (advise)', link: '/reference/advise' },
         ],
       },
       {

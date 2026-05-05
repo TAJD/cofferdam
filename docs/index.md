@@ -21,4 +21,6 @@ features:
     details: Adopt on a legacy codebase without drowning in noise — default mode shows only new findings. Capture the current state with `cofferdam init --baseline`, then tighten over time.
   - title: CI-friendly by design
     details: SARIF output, `--since main` for PR-only mode, GitHub annotations, and a `--robot` flag for machine-readable compact output that AI agents can consume directly.
+  - title: Agent-aware
+    details: '`cofferdam advise` emits the rules that apply to a file before any edit, so an LLM agent can plan against your layering and complexity limits instead of reverse-engineering them from violations. <a href="/cofferdam/reference/advise">Agent advisory →</a>'
 ---

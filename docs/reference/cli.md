@@ -94,6 +94,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 
   Default value: `0`
 * `--quiet` — Suppress informational output: the trailing `N finding(s)` summary line, "no TypeScript files found" hints, and the "(showing N of M)" truncation note. Findings, warnings, and errors still print. Has no effect on JSON output (which is already terse)
+* `--hide-baselined` — Hide baselined findings from text output. The summary line still reports `(N new, M baselined)` counts so the CI gate remains visible. Has no effect on `--format=json` (which always includes the per-finding `baselined` flag) or on the `--fail-on` gate (which already ignores baselined findings). Useful for routine local runs against repos with substantial baselines (cd-k23 / gh #11)
 
 
 

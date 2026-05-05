@@ -164,6 +164,15 @@ enum Cmd {
         /// already terse).
         #[arg(long)]
         quiet: bool,
+        /// Hide baselined findings from text output. The summary line
+        /// still reports `(N new, M baselined)` counts so the CI gate
+        /// remains visible. Has no effect on `--format=json` (which
+        /// always includes the per-finding `baselined` flag) or on the
+        /// `--fail-on` gate (which already ignores baselined findings).
+        /// Useful for routine local runs against repos with substantial
+        /// baselines (cd-k23 / gh #11).
+        #[arg(long)]
+        hide_baselined: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -359,6 +368,7 @@ fn main() -> ExitCode {
             fail_on,
             max_issues,
             quiet,
+            hide_baselined,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -378,6 +388,7 @@ fn main() -> ExitCode {
             fail_on: fail_on.into(),
             max_issues,
             quiet,
+            hide_baselined,
         }),
         Cmd::Explain {
             check_id,
@@ -468,6 +479,7 @@ struct CheckArgs {
     fail_on: Severity,
     max_issues: usize,
     quiet: bool,
+    hide_baselined: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -486,6 +498,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         fail_on,
         max_issues,
         quiet,
+        hide_baselined,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -676,7 +689,10 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
         match format {
             OutputFormat::Text => {
-                let opts = TextRenderOpts { quiet };
+                let opts = TextRenderOpts {
+                    quiet,
+                    hide_baselined,
+                };
                 print!(
                     "{}",
                     TextFormatter::render_with_baseline_opts(&tagged, opts)
@@ -794,7 +810,13 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
                 match format {
                     OutputFormat::Text => {
-                        let opts = TextRenderOpts { quiet };
+                        // No-baseline path: --hide-baselined is a no-op
+                        // here because nothing is baselined; preserve
+                        // historical output verbatim.
+                        let opts = TextRenderOpts {
+                            quiet,
+                            ..Default::default()
+                        };
                         print!("{}", TextFormatter::render_with_opts(&issues, opts));
                     }
                     OutputFormat::Json => {

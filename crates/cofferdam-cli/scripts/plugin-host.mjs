@@ -485,9 +485,11 @@ function fileMatchesScope(absFilePath, scope) {
     const lower = absFilePath.toLowerCase();
     if (!exts.some((e) => lower.endsWith("." + String(e).toLowerCase()))) return false;
   }
-  // pathPattern / excludePatterns — treated as always-match in this
-  // host. The Rust engine already pre-filters via cd-81a.5's matcher;
-  // adding glob matching here would just duplicate work. If a future
-  // bead pushes scope filtering into the host, pull globset/picomatch.
+  // pathPattern (singular, deprecated) / pathPatterns (plural) /
+  // excludePatterns — treated as always-match in this host. The Rust
+  // engine already pre-filters via cd-81a.5's matcher; adding glob
+  // matching here would just duplicate work. If a future bead pushes
+  // scope filtering into the host, pull globset/picomatch — and treat
+  // the include set as `pathPattern OR any(pathPatterns)`.
   return true;
 }

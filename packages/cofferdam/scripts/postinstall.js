@@ -31,6 +31,21 @@ if (process.env.COFFERDAM_SKIP_DOWNLOAD === '1') {
   process.exit(0);
 }
 
+// pnpm v10+ silently blocks postinstall scripts unless the package is in
+// `pnpm.onlyBuiltDependencies` — when the user runs `pnpm add -D cofferdam`
+// without that allowlist, this script never executes and the binary
+// never lands. By the time we DO run (typically `pnpm rebuild cofferdam`
+// after the user notices the missing binary), surface a one-line hint
+// pointing at the durable fix so they don't hit the same trap on
+// subsequent fresh installs (cd-iui / gh #9).
+if (/^pnpm\//.test(process.env.npm_config_user_agent || '')) {
+  console.log(
+    '[cofferdam] pnpm detected. To make future installs work without `pnpm rebuild`,\n' +
+      '            add this to your package.json:\n' +
+      '              { "pnpm": { "onlyBuiltDependencies": ["cofferdam"] } }'
+  );
+}
+
 if (process.env.COFFERDAM_BINARY_PATH) {
   const src = process.env.COFFERDAM_BINARY_PATH;
   if (!fs.existsSync(src)) {

@@ -17,6 +17,19 @@ The package downloads a pre-built binary for your platform on install
 (Linux x64/arm64 gnu+musl, macOS x64/arm64, Windows x64) and runs it
 through a tiny JS shim.
 
+> **pnpm users:** pnpm v10's default sandbox blocks postinstall scripts
+> unless the package is on the allowlist. `pnpm add -D cofferdam` will
+> "succeed" without ever downloading the binary. Add this to your
+> `package.json` so the binary install actually runs:
+>
+> ```json
+> { "pnpm": { "onlyBuiltDependencies": ["cofferdam"] } }
+> ```
+>
+> Then re-run `pnpm install` (or `pnpm rebuild cofferdam` for an existing
+> install). Verified you're hit by this if `pnpm exec cofferdam --version`
+> errors with "binary not found".
+
 ## First run
 
 ```bash

@@ -232,6 +232,25 @@ jobs:
           fi
           echo "CHANGELOG.md OK for $version"
 
+      - name: Verify cofferdam tarball includes bin/cofferdam.js
+        # Guard against a successful-but-empty publish (cd-iye / gh #10).
+        # `npm pack --dry-run --json` reports the exact file list that
+        # would land in the tarball; if the entry-point shim is missing
+        # the install will appear to succeed but fail at the first
+        # `cofferdam` invocation. Cheap to gate.
+        working-directory: packages/cofferdam
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json \
+            | jq -e '.[0].files | map(.path) | index("bin/cofferdam.js")' > /dev/null \
+            || { echo "ERROR: cofferdam tarball is missing bin/cofferdam.js"; \
+                 echo "Listing what npm pack would include:"; \
+                 npm pack --dry-run --json | jq '.[0].files | map(.path)'; \
+                 exit 1; }
+          npm pack --dry-run --json \
+            | jq -e '.[0].files | map(.path) | index("scripts/postinstall.js")' > /dev/null \
+            || { echo "ERROR: cofferdam tarball is missing scripts/postinstall.js"; exit 1; }
+
       - name: Publish to npm via Trusted Publisher (OIDC)
         working-directory: packages/cofferdam
         run: |
@@ -278,6 +297,27 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run build
+
+      - name: Verify SDK tarball includes dist/index.js + dist/index.d.ts
+        # Guard against a successful-but-empty publish (cd-iye / gh #10).
+        # 0.2.0 and 0.2.1 both shipped without dist/ — package.json was
+        # correct, but the build step had been skipped before the
+        # publish, so the tarball that landed on npm carried only the
+        # README and LICENSE. Downstream consumers loaded `undefined`.
+        # `npm pack --dry-run --json` is the authoritative file list.
+        # `prepublishOnly` in package.json is the belt; this is the
+        # suspenders.
+        working-directory: packages/check-sdk
+        run: |
+          set -euo pipefail
+          for required in dist/index.js dist/index.d.ts; do
+            npm pack --dry-run --json \
+              | jq -e --arg p "$required" '.[0].files | map(.path) | index($p)' > /dev/null \
+              || { echo "ERROR: @cofferdam/check-sdk tarball is missing $required"; \
+                   echo "Listing what npm pack would include:"; \
+                   npm pack --dry-run --json | jq '.[0].files | map(.path)'; \
+                   exit 1; }
+          done
 
       - name: Publish @cofferdam/check-sdk via Trusted Publisher (OIDC)
         working-directory: packages/check-sdk

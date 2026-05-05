@@ -22,11 +22,26 @@ export interface FileScope {
   /**
    * Optional include glob (gitignore syntax via globset). When set,
    * the file path must match.
+   *
+   * @deprecated Prefer {@link FileScope.pathPatterns} (plural) for new
+   *   code — it accepts an array, matching the shape of `excludePatterns`
+   *   and avoiding brace expansion in a single string. `pathPattern`
+   *   remains functional through the 0.2.x line and is scheduled for
+   *   removal in 0.3.0. When both forms are present, a file matches the
+   *   include set if it matches `pathPattern` OR any `pathPatterns`
+   *   entry.
    */
   readonly pathPattern?: string;
   /**
+   * Optional include globs (gitignore syntax via globset). When set,
+   * the file path must match at least one entry. Plural counterpart to
+   * the deprecated singular {@link FileScope.pathPattern}; when both are
+   * present, a file is in scope if it matches either form.
+   */
+  readonly pathPatterns?: readonly string[];
+  /**
    * Exclude globs. Paths matching any of these are skipped, even if
-   * `pathPattern` matched.
+   * `pathPattern` / `pathPatterns` matched.
    */
   readonly excludePatterns?: readonly string[];
 }

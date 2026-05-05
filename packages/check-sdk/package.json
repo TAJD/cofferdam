@@ -33,7 +33,8 @@
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "test:types": "tsc -p tests"
+    "test:types": "tsc -p tests",
+    "prepublishOnly": "tsc -p ."
   },
   "engines": {
     "node": ">=16"

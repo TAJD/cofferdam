@@ -125,3 +125,50 @@ expectType<typeof optsRoundTrip.options>(optsRoundTrip.options);
 expectType<"bar">(optsRoundTrip.options.foo.default);
 expectType<10>(optsRoundTrip.options.limit.default);
 expectType<true>(optsRoundTrip.options.enabled.default);
+
+// --- cd-l4c: FileScope accepts both pathPattern (deprecated singular)
+//             and pathPatterns (plural). Authors can use either form,
+//             or both, while the singular is being phased out.
+
+const scopedSingular = defineCheck({
+  id: "Scoped.Singular",
+  category: Category.Warning,
+  basePriority: 5,
+  explanation: "x",
+  files: {
+    extensions: ["ts", "tsx"],
+    pathPattern: "src/**/*",
+    excludePatterns: ["**/__tests__/**"],
+  },
+  run() {},
+});
+expectType<Check>(scopedSingular);
+
+const scopedPlural = defineCheck({
+  id: "Scoped.Plural",
+  category: Category.Warning,
+  basePriority: 5,
+  explanation: "x",
+  files: {
+    extensions: ["ts", "tsx"],
+    pathPatterns: ["src/api/**", "src/server/**", "lib/**/*.ts"],
+    excludePatterns: ["**/__tests__/**"],
+  },
+  run() {},
+});
+expectType<Check>(scopedPlural);
+
+// Both forms together — semantics: file matches if it matches the
+// singular OR any plural entry. Type system accepts the combination.
+const scopedBoth = defineCheck({
+  id: "Scoped.Both",
+  category: Category.Warning,
+  basePriority: 5,
+  explanation: "x",
+  files: {
+    pathPattern: "legacy/**",
+    pathPatterns: ["src/**", "lib/**"],
+  },
+  run() {},
+});
+expectType<Check>(scopedBoth);

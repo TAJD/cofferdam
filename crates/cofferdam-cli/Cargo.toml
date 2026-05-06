@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "fix"
 path = "tests/fix.rs"
 
+[[test]]
+name = "explain_plugin"
+path = "tests/explain_plugin.rs"
+
 [dependencies]
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }

@@ -160,14 +160,29 @@ pub struct PluginFileScope {
     pub exclude_patterns: Vec<String>,
 }
 
+/// One option entry returned by the plugin host's metadata mode.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginOptionMeta {
+    pub name: String,
+    pub kind: String,
+    pub default: serde_json::Value,
+    pub doc: String,
+}
+
 /// Lightweight metadata about a plugin check — returned by
-/// `query_plugin_metadata` for the advise subcommand.
+/// `query_plugin_metadata` for the advise and explain subcommands.
 #[derive(Debug, Clone)]
 pub struct PluginCheckMeta {
     pub id: String,
     pub category: String,
+    pub base_priority: i64,
     pub explanation: String,
     pub default_severity: String,
+    /// Long-form markdown body (from `defineCheck({ body: "..." })`).
+    /// `None` when the plugin didn't ship a body.
+    pub body: Option<String>,
+    pub requires_types: bool,
+    pub options: Vec<PluginOptionMeta>,
     /// `None` means "applies to every file".
     pub files: Option<PluginFileScope>,
 }
@@ -185,10 +200,19 @@ struct MetadataCheckEntry {
     id: String,
     #[serde(default)]
     category: String,
+    #[serde(rename = "basePriority", default)]
+    base_priority: i64,
     #[serde(default)]
     explanation: String,
     #[serde(rename = "defaultSeverity", default)]
     default_severity: String,
+    /// `None` when the check did not ship a body.
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(rename = "requiresTypes", default)]
+    requires_types: bool,
+    #[serde(default)]
+    options: Vec<PluginOptionMeta>,
     /// `None` when the check has no file-scope filter.
     files: Option<PluginFileScope>,
 }
@@ -294,8 +318,12 @@ pub fn query_plugin_metadata(
         .map(|e| PluginCheckMeta {
             id: e.id,
             category: e.category,
+            base_priority: e.base_priority,
             explanation: e.explanation,
             default_severity: e.default_severity,
+            body: e.body,
+            requires_types: e.requires_types,
+            options: e.options,
             files: e.files,
         })
         .collect()

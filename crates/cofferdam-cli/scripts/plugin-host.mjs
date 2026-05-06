@@ -119,14 +119,32 @@ for (const pluginPath of manifest.plugins) {
 
 // Metadata mode: return check metadata without processing any files.
 // Manifest shape: { "mode": "metadata", "cwd": "...", "plugins": [...] }
-// Output shape:   { "checks": [{ id, category, explanation, defaultSeverity, files }], "errors": [...] }
+// Output shape:   {
+//   "checks": [{
+//     id, category, basePriority, defaultSeverity, explanation, body,
+//     requiresTypes, files,
+//     options: [{ name, kind, default, doc }]
+//   }],
+//   "errors": [...]
+// }
 if (manifest.mode === "metadata") {
   const checks = loadedPlugins.map(({ check }) => ({
     id: check.id,
     category: check.category ?? "warning",
-    explanation: check.explanation ?? "",
+    basePriority: check.basePriority ?? 0,
     defaultSeverity: check.defaultSeverity ?? "medium",
+    explanation: check.explanation ?? "",
+    body: check.body ?? null,
+    requiresTypes: check.requiresTypes ?? false,
     files: check.files ?? null,
+    options: check.options
+      ? Object.entries(check.options).map(([name, spec]) => ({
+          name,
+          kind: spec.kind ?? "string",
+          default: spec.default ?? null,
+          doc: spec.doc ?? "",
+        }))
+      : [],
   }));
   process.stdout.write(JSON.stringify({ checks, errors }) + "\n");
   process.exit(0);
@@ -536,23 +554,23 @@ function fileMatchesScope(absFilePath, scope) {
   return true;
 }
 
-/**
- * Gitignore-style glob matching. Supports:
- *   **   — matches any number of path segments (including zero)
- *   *    — matches any chars within a single segment (no `/`)
- *   ?    — matches any single char (no `/`)
- *   [..] — character class
- *   {a,b}— brace expansion (non-nested, top-level only)
- *
- * `path` must already be normalised to forward slashes.
- *
- * Anchoring semantics (gitignore-compatible): patterns that do not start
- * with `/` or `**\/` are automatically tried with a `**\/` prefix so they
- * match anywhere in the path tree, not just at the root. For example,
- * `lib/foo.ts` matches `/abs/project/lib/foo.ts` because we also test
- * `**\/lib/foo.ts`. (The backslashes in this comment escape what would
- * otherwise close the JSDoc block — they aren't part of the patterns.)
- */
+// Gitignore-style glob matching. Supports:
+//   **   — matches any number of path segments (including zero)
+//   *    — matches any chars within a single segment (no `/`)
+//   ?    — matches any single char (no `/`)
+//   [..] — character class
+//   {a,b}— brace expansion (non-nested, top-level only)
+//
+// `path` must already be normalised to forward slashes.
+//
+// Anchoring semantics (gitignore-compatible): patterns that do not start
+// with `/` or `**/` are automatically tried with a `**/` prefix so they
+// match anywhere in the path tree, not just at the root. For example,
+// `lib/foo.ts` matches `/abs/project/lib/foo.ts` because we also test
+// `**\/lib/foo.ts`.
+//
+// (Note: `**/` must not appear inside a JSDoc block comment — it terminates
+// the block — so this function uses line comments instead.)
 function globMatch(pattern, path) {
   // Expand top-level brace alternatives `{a,b,c}` first. Only the first
   // pair of outermost braces is expanded — nested braces are rare in

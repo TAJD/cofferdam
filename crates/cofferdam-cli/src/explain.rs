@@ -5,19 +5,30 @@
 //! `CheckMeta::body` (extracted from `crates/cofferdam-checks/docs/`).
 //! The frontmatter block (`---…---`) is stripped before terminal output.
 //! In `--robot` mode the body is included as a `body` JSON field.
+//!
+//! When the requested ID is not found in the built-in catalog, the
+//! subcommand resolves `cofferdam.toml` and queries any declared plugins
+//! via the plugin host's metadata mode. Plugin checks are rendered the
+//! same way as built-ins (human + robot output paths).
 
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use cofferdam_checks::all_builtins;
 use cofferdam_core::{Category, CheckMeta, OptionDefault, OptionSpec};
+use cofferdam_engine::config::{self as cfg};
 use serde::Serialize;
+
+use crate::plugins::{self, PluginCheckMeta};
 
 pub struct ExplainArgs {
     pub check_id: String,
     pub robot: bool,
     pub pretty: bool,
     pub full: bool,
+    pub config_path: Option<PathBuf>,
+    pub no_config: bool,
 }
 
 pub fn run(args: ExplainArgs) -> ExitCode {
@@ -26,15 +37,47 @@ pub fn run(args: ExplainArgs) -> ExitCode {
         robot,
         pretty,
         full,
+        config_path,
+        no_config,
     } = args;
 
     // `Vec<&'static CheckMeta>`: cheap, the metas are static.
     let metas: Vec<&'static CheckMeta> = all_builtins().iter().map(|c| c.meta()).collect();
 
-    let Some(meta) = metas.iter().find(|m| m.id == check_id).copied() else {
-        return not_found(&check_id, &metas, robot);
+    if let Some(meta) = metas.iter().find(|m| m.id == check_id).copied() {
+        return render_builtin(meta, robot, pretty, full);
+    }
+
+    // Not in built-ins — try plugin-declared checks from cofferdam.toml.
+    let (project_config, config_path_resolved) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+
+    let plugin_metas = if let Some(cfg) = project_config.as_ref() {
+        if !cfg.plugins.is_empty() {
+            let cfg_dir = config_path_resolved
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
     };
 
+    if let Some(pm) = plugin_metas.iter().find(|pm| pm.id == check_id) {
+        return render_plugin(pm, robot, pretty, full);
+    }
+
+    not_found(&check_id, &metas, &plugin_metas, robot)
+}
+
+fn render_builtin(meta: &'static CheckMeta, robot: bool, pretty: bool, full: bool) -> ExitCode {
     if robot {
         let report = build_report(meta, full);
         let s = if pretty {
@@ -54,22 +97,55 @@ pub fn run(args: ExplainArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn render_plugin(pm: &PluginCheckMeta, robot: bool, pretty: bool, full: bool) -> ExitCode {
+    if robot {
+        let report = build_plugin_report(pm, full);
+        let s = if pretty {
+            serde_json::to_string_pretty(&report)
+        } else {
+            serde_json::to_string(&report)
+        }
+        .expect("PluginExplainReport serializes infallibly");
+        println!("{}", s);
+    } else {
+        print!("{}", render_plugin_text(pm));
+        if full {
+            match &pm.body {
+                Some(body) if !body.is_empty() => {
+                    println!("\n---\n");
+                    print!("{body}");
+                }
+                _ => {
+                    println!();
+                    println!("  (this plugin check does not ship a long-form body)");
+                }
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 /// Print "no such check" plus a short shortlist of close-ish IDs (or
 /// the full list if no near match). Exit 2 — same convention used
 /// elsewhere in the CLI for usage / "input was wrong" failures.
-fn not_found(query: &str, metas: &[&'static CheckMeta], robot: bool) -> ExitCode {
+fn not_found(
+    query: &str,
+    metas: &[&'static CheckMeta],
+    plugin_metas: &[PluginCheckMeta],
+    robot: bool,
+) -> ExitCode {
     if robot {
         // Schema-stable error shape: `{ "error": "...", "suggestions": [...] }`.
         // Agents can branch on `error` without parsing prose.
         #[derive(Serialize)]
-        struct ErrReport<'a> {
+        struct ErrReport {
             error: String,
-            suggestions: Vec<&'a str>,
+            suggestions: Vec<String>,
         }
-        let suggestions = suggestions_for(query, metas);
+        let suggestions = suggestions_for(query, metas, plugin_metas);
         let report = ErrReport {
             error: format!("no such check: {query}"),
-            suggestions: suggestions.iter().map(|m| m.id).collect(),
+            suggestions,
         };
         let s = serde_json::to_string(&report).expect("ErrReport serializes infallibly");
         // Errors go to stderr; the `--robot` JSON contract is stdout-
@@ -79,17 +155,18 @@ fn not_found(query: &str, metas: &[&'static CheckMeta], robot: bool) -> ExitCode
     }
 
     eprintln!("error: no such check: {query}");
-    let suggestions = suggestions_for(query, metas);
+    let suggestions = suggestions_for(query, metas, plugin_metas);
     if !suggestions.is_empty() {
         eprintln!();
         eprintln!("did you mean:");
-        for m in &suggestions {
-            eprintln!("  {}", m.id);
+        for id in &suggestions {
+            eprintln!("  {id}");
         }
     } else {
         eprintln!();
         eprintln!("available check IDs:");
-        let mut ids: Vec<&str> = metas.iter().map(|m| m.id).collect();
+        let mut ids: Vec<String> = metas.iter().map(|m| m.id.to_string()).collect();
+        ids.extend(plugin_metas.iter().map(|pm| pm.id.clone()));
         ids.sort_unstable();
         for id in ids {
             eprintln!("  {id}");
@@ -98,20 +175,28 @@ fn not_found(query: &str, metas: &[&'static CheckMeta], robot: bool) -> ExitCode
     ExitCode::from(2)
 }
 
-/// Return up to 5 IDs that look related to `query`. Match strategy is
+/// Return up to 5 IDs that look related to `query` — drawn from both the
+/// built-in catalog and any loaded plugin checks. Match strategy is
 /// deliberately simple: case-insensitive substring on the dotted ID.
-/// Anything fancier (Levenshtein, prefix scoring) is overkill for a
-/// catalog of <50 entries.
-fn suggestions_for<'a>(
+fn suggestions_for(
     query: &str,
-    metas: &'a [&'static CheckMeta],
-) -> Vec<&'a &'static CheckMeta> {
+    metas: &[&'static CheckMeta],
+    plugin_metas: &[PluginCheckMeta],
+) -> Vec<String> {
     let needle = query.to_ascii_lowercase();
-    let mut matches: Vec<&&CheckMeta> = metas
+    let mut matches: Vec<String> = metas
         .iter()
         .filter(|m| m.id.to_ascii_lowercase().contains(&needle))
+        .map(|m| m.id.to_string())
+        .chain(
+            plugin_metas
+                .iter()
+                .filter(|pm| pm.id.to_ascii_lowercase().contains(&needle))
+                .map(|pm| pm.id.clone()),
+        )
         .collect();
-    matches.sort_by_key(|m| m.id);
+    matches.sort_unstable();
+    matches.dedup();
     matches.truncate(5);
     matches
 }
@@ -124,6 +209,7 @@ struct ExplainReport<'a> {
     base_priority: i8,
     requires_types: bool,
     consistency: bool,
+    autofix: bool,
     options: Vec<ExplainOption<'a>>,
     explanation: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,6 +242,7 @@ fn build_report(meta: &'static CheckMeta, full: bool) -> ExplainReport<'static> 
         base_priority: meta.base_priority,
         requires_types: meta.requires_types,
         consistency: meta.consistency,
+        autofix: meta.autofix,
         options: meta.options.iter().map(map_option).collect(),
         explanation: meta.explanation,
         body: if full {
@@ -237,6 +324,11 @@ fn render_text(meta: &'static CheckMeta) -> String {
         "  Consistency: {}",
         if meta.consistency { "yes" } else { "no" }
     );
+    let _ = writeln!(
+        out,
+        "  Autofix:     {}",
+        if meta.autofix { "yes" } else { "no" }
+    );
 
     if meta.options.is_empty() {
         let _ = writeln!(out, "  Options:     none");
@@ -275,6 +367,102 @@ fn format_default(d: &OptionDefault) -> String {
     }
 }
 
+// ---- plugin check rendering ----
+
+#[derive(Serialize)]
+struct PluginExplainReport {
+    id: String,
+    category: String,
+    default_severity: String,
+    base_priority: i64,
+    requires_types: bool,
+    options: Vec<PluginExplainOption>,
+    explanation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PluginExplainOption {
+    name: String,
+    kind: String,
+    default: serde_json::Value,
+    doc: String,
+}
+
+fn build_plugin_report(pm: &PluginCheckMeta, full: bool) -> PluginExplainReport {
+    PluginExplainReport {
+        id: pm.id.clone(),
+        category: pm.category.clone(),
+        default_severity: pm.default_severity.clone(),
+        base_priority: pm.base_priority,
+        requires_types: pm.requires_types,
+        options: pm
+            .options
+            .iter()
+            .map(|o| PluginExplainOption {
+                name: o.name.clone(),
+                kind: o.kind.clone(),
+                default: o.default.clone(),
+                doc: o.doc.clone(),
+            })
+            .collect(),
+        explanation: pm.explanation.clone(),
+        body: if full { pm.body.clone() } else { None },
+    }
+}
+
+fn render_plugin_text(pm: &PluginCheckMeta) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{} (plugin)", pm.id);
+    let _ = writeln!(out, "  Category:    {}", pm.category);
+    let _ = writeln!(out, "  Severity:    {} (default)", pm.default_severity);
+    let _ = writeln!(out, "  Priority:    {} (base)", pm.base_priority);
+    let _ = writeln!(
+        out,
+        "  Type-aware:  {}",
+        if pm.requires_types { "yes" } else { "no" }
+    );
+
+    if pm.options.is_empty() {
+        let _ = writeln!(out, "  Options:     none");
+    } else {
+        let _ = writeln!(out, "  Options:");
+        for opt in &pm.options {
+            let _ = writeln!(
+                out,
+                "    {} ({}, default: {}) — {}",
+                opt.name, opt.kind, opt.default, opt.doc,
+            );
+        }
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  {}", pm.explanation);
+    out
+}
+
+/// Resolve the `cofferdam.toml` config from the given explicit path or by
+/// walking up from CWD. Mirrors the same helper in `main.rs`.
+fn resolve_and_load_config(
+    explicit: Option<&Path>,
+    no_config: bool,
+) -> Result<(Option<cofferdam_engine::ProjectConfig>, Option<PathBuf>), ()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match cfg::resolve_with_invariants(explicit, &cwd, no_config) {
+        Ok((config, path, diags)) => {
+            for w in &diags.warnings {
+                eprintln!("warning: {w}");
+            }
+            Ok((config, path))
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Err(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +478,7 @@ mod tests {
         requires_types: false,
         consistency: false,
         options: &[],
+        autofix: false,
     };
 
     const WITH_OPTS_META: CheckMeta = CheckMeta {
@@ -307,6 +496,7 @@ mod tests {
             default: OptionDefault::Int(120),
             doc: "max columns per line",
         }],
+        autofix: false,
     };
 
     #[test]
@@ -326,6 +516,38 @@ mod tests {
     }
 
     #[test]
+    fn render_text_autofix_no_shows_for_non_autofix_check() {
+        let out = render_text(&WITH_OPTS_META);
+        // WITH_OPTS_META has autofix: false
+        assert!(
+            out.contains("Autofix:     no"),
+            "expected 'Autofix:     no' in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_text_autofix_yes_shows_for_autofix_check() {
+        // Build a meta with autofix: true to verify the yes branch.
+        const AUTOFIX_META: CheckMeta = CheckMeta {
+            id: "Warning.TripleEqualsTest",
+            category: Category::Warning,
+            base_priority: 15,
+            default_severity: Severity::High,
+            explanation: "test",
+            body: "",
+            requires_types: false,
+            consistency: false,
+            options: &[],
+            autofix: true,
+        };
+        let out = render_text(&AUTOFIX_META);
+        assert!(
+            out.contains("Autofix:     yes"),
+            "expected 'Autofix:     yes' in:\n{out}"
+        );
+    }
+
+    #[test]
     fn build_report_round_trips_metadata() {
         let report = build_report(&WITH_OPTS_META, false);
         let s = serde_json::to_string(&report).expect("valid JSON");
@@ -339,12 +561,80 @@ mod tests {
     }
 
     #[test]
+    fn build_report_includes_autofix_field() {
+        let report = build_report(&NO_OPTS_META, false);
+        let s = serde_json::to_string(&report).expect("valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
+        // NO_OPTS_META has autofix: false
+        assert_eq!(parsed["autofix"], false);
+    }
+
+    #[test]
+    fn explain_triple_equals_autofix_true() {
+        use cofferdam_checks::all_builtins;
+        let builtins = all_builtins();
+        let metas: Vec<&'static CheckMeta> = builtins.iter().map(|c| c.meta()).collect();
+        let meta = metas
+            .iter()
+            .find(|m| m.id == "Warning.TripleEquals")
+            .copied()
+            .expect("Warning.TripleEquals must exist");
+        let out = render_text(meta);
+        assert!(
+            out.contains("Autofix:     yes"),
+            "expected yes for Warning.TripleEquals:\n{out}"
+        );
+        let report = build_report(meta, false);
+        let s = serde_json::to_string(&report).expect("valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
+        assert_eq!(parsed["autofix"], true);
+    }
+
+    #[test]
+    fn explain_max_line_length_autofix_false() {
+        use cofferdam_checks::all_builtins;
+        let builtins = all_builtins();
+        let metas: Vec<&'static CheckMeta> = builtins.iter().map(|c| c.meta()).collect();
+        let meta = metas
+            .iter()
+            .find(|m| m.id == "Readability.MaxLineLength")
+            .copied()
+            .expect("Readability.MaxLineLength must exist");
+        let out = render_text(meta);
+        assert!(
+            out.contains("Autofix:     no"),
+            "expected no for Readability.MaxLineLength:\n{out}"
+        );
+        let report = build_report(meta, false);
+        let s = serde_json::to_string(&report).expect("valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
+        assert_eq!(parsed["autofix"], false);
+    }
+
+    #[test]
     fn suggestions_substring_match_is_case_insensitive() {
         let metas = vec![&NO_OPTS_META, &WITH_OPTS_META];
-        let hits = suggestions_for("max", &metas);
-        let ids: Vec<&str> = hits.iter().map(|m| m.id).collect();
-        assert!(ids.contains(&"Readability.MaxLineLength"));
-        assert!(!ids.contains(&"Warning.Test"));
+        let hits = suggestions_for("max", &metas, &[]);
+        assert!(hits.iter().any(|id| id == "Readability.MaxLineLength"));
+        assert!(!hits.iter().any(|id| id == "Warning.Test"));
+    }
+
+    #[test]
+    fn suggestions_includes_plugin_ids() {
+        let metas = vec![&NO_OPTS_META];
+        let plugin_metas = vec![crate::plugins::PluginCheckMeta {
+            id: "Warning.MaxFoo".to_string(),
+            category: "warning".to_string(),
+            base_priority: 5,
+            explanation: "foo check".to_string(),
+            default_severity: "medium".to_string(),
+            body: None,
+            requires_types: false,
+            options: Vec::new(),
+            files: None,
+        }];
+        let hits = suggestions_for("foo", &metas, &plugin_metas);
+        assert!(hits.iter().any(|id| id == "Warning.MaxFoo"));
     }
 
     #[test]

@@ -648,6 +648,7 @@ mod tests {
         consistency: false,
         options: LIMIT_OPTS,
         autofix: false,
+        observes_findings: false,
     };
 
     fn fixture_layers() -> LayersConfig {
@@ -706,6 +707,7 @@ mod tests {
             consistency: false,
             options: &[],
             autofix: false,
+            observes_findings: false,
         };
         let opts = CheckOptions::default();
         let c = build_constraint(
@@ -758,6 +760,7 @@ mod tests {
             consistency: false,
             options: OE_OPTIONS,
             autofix: false,
+            observes_findings: false,
         };
         let _ = test_patterns;
         let _ = framework_patterns;

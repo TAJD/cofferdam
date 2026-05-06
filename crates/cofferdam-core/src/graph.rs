@@ -189,12 +189,17 @@ pub static INVARIANTS: CorpusKey<Option<InvariantsRuntime>> =
 
 /// Pre-suppression-filter findings indexed by file path.
 ///
-/// The engine writes this slot AFTER all `check.run()` and `pass2()` calls
-/// complete and BEFORE the finalize loop. Each entry is a list of
-/// `(check_id, 1-based-line)` pairs for the findings that `run()` emitted
-/// for that file. Findings emitted from `finalize()` (cross-file checks)
-/// are NOT included — by the time `finalize` runs, cross-file findings are
-/// not yet in the slot.
+/// The engine writes this slot in two phases (cd-wqc). First, all
+/// `check.run()` and `pass2()` calls complete. Then Phase A of `finalize`
+/// runs for every check whose `meta().observes_findings == false` (cross-file
+/// emitters such as `Warning.UnusedImport`, `Design.OrphanExport`, and
+/// `Design.DeadExport`). After Phase A, the slot is snapshotted with the
+/// union of run/pass2 AND Phase A finalize findings so that Phase B observer
+/// checks (today: only `Consistency.UnusedSuppression`) see a complete
+/// picture.
+///
+/// Each entry is a list of `(check_id, 1-based-line)` pairs. The snapshot
+/// includes finalize-stage findings from Phase A non-observer checks.
 ///
 /// `Consistency.UnusedSuppression` reads this in its `finalize()` to
 /// compare per-file inline suppressions against actual findings and flag

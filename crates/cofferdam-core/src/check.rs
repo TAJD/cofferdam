@@ -97,6 +97,15 @@ pub struct CheckMeta {
     /// --dry-run` to predict which findings would be modified and by the
     /// doc catalog / `explain` to surface support to users.
     pub autofix: bool,
+    /// When `true`, this check's `finalize()` is deferred until after all
+    /// other checks' `finalize()` has completed and the `ALL_PRE_FILTER_FINDINGS`
+    /// corpus slot has been re-snapshotted to include finalize-stage findings
+    /// from non-observer checks. This ensures the observer sees a complete
+    /// picture of all emitted findings — including those from cross-file /
+    /// finalize-only emitters like `Warning.UnusedImport`, `Design.OrphanExport`,
+    /// and `Design.DeadExport` — before deciding which suppression directives
+    /// are stale. Today only `Consistency.UnusedSuppression` sets this to `true`.
+    pub observes_findings: bool,
 }
 
 /// Mutable per-file scratch passed to `Check::run`. Carries the

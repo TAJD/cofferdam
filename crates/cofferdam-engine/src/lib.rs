@@ -289,12 +289,25 @@ impl Engine {
             }
         }
 
-        // Pre-finalize: publish all run-phase findings into the corpus so
-        // `Consistency.UnusedSuppression` can compare them against inline
-        // directives in its `finalize()`. We snapshot here — after run/pass2
-        // but before finalize — so the slot contains per-file findings only;
-        // finalize-emitted (cross-file) findings are intentionally excluded,
-        // as no per-file suppression directive would target them.
+        // Two-phase finalize (cd-wqc):
+        //
+        // Phase A — run finalize on every check that does NOT observe the
+        // pre-filter findings snapshot (`observes_findings == false`).
+        // These are the cross-file emitters: OrphanExport, UnusedImport,
+        // DuplicateExportName, DeadExport, ImportCycle, LayerViolation, etc.
+        for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+            if !check.meta().observes_findings {
+                let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
+                issues.extend(check.finalize(&mut finalize_ctx));
+            }
+        }
+
+        // Snapshot: re-build ALL_PRE_FILTER_FINDINGS from the union of
+        // run/pass2 findings AND Phase A finalize findings. This gives
+        // observer checks (Consistency.UnusedSuppression) a complete view
+        // that includes finalize-only emitters like Warning.UnusedImport
+        // and Design.OrphanExport, so they don't falsely flag live
+        // suppression directives as stale.
         {
             let mut map: std::collections::HashMap<std::path::PathBuf, Vec<(String, u32)>> =
                 std::collections::HashMap::new();
@@ -306,13 +319,15 @@ impl Engine {
             corpus.with_slot(&ALL_PRE_FILTER_FINDINGS, |slot| *slot = map);
         }
 
-        // Per-check options flow into `finalize` the same way they do
-        // into `run` (cd-3uj). Each check sees its own slot of the
-        // engine's resolved-options vector — no more reaching into
-        // static schema defaults from finalize-stage checks.
+        // Phase B — run finalize on every check that observes the snapshot
+        // (`observes_findings == true`). Today only
+        // `Consistency.UnusedSuppression` sets this flag. Per-check options
+        // flow in the same way as Phase A (cd-3uj).
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-            let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
-            issues.extend(check.finalize(&mut finalize_ctx));
+            if check.meta().observes_findings {
+                let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
+                issues.extend(check.finalize(&mut finalize_ctx));
+            }
         }
 
         // Post-collection filter (cd-5t7): suppress findings based on inline directives.

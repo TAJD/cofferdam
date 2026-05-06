@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_by": "cofferdam gen-docs",
-  "cofferdam_version": "0.2.2",
+  "cofferdam_version": "0.3.1",
   "checks": [
     {
       "id": "Consistency.BroadSuppression",
@@ -382,12 +382,21 @@
       "category": "Warning",
       "base_priority": -10,
       "default_severity": "Low",
-      "explanation": "`console.X(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.",
-      "body": "---\nid: Warning.NoConsoleLog\ncategory: Warning\nbase_priority: -10\ndefault_severity: Low\noptions: []\n---\n\n`console.X(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI. The check matches every method on `console` (`log`, `info`, `warn`, `error`, `debug`, `trace`, …) so projects can suppress per-call if they genuinely route errors via `console.error`. Bare-identifier match only — aliased calls (`const c = console; c.log(...)`) escape detection until the type-aware pass.\n\n```ts\n// flagged\nconsole.log(\"debug:\", value);\nconsole.error(\"failed:\", err);\n```\n\n```ts\n// fix: route through a logger that strips in production\nimport { logger } from \"./logger\";\nlogger.debug(\"debug:\", value);\nlogger.error(\"failed:\", err);\n```\n\n```toml\n# Demote to info-only if you genuinely use console.error in error paths.\n[checks.\"Warning.NoConsoleLog\"]\nseverity = \"info\"\n```\n",
+      "explanation": "`console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.",
+      "body": "---\nid: Warning.NoConsoleLog\ncategory: Warning\nbase_priority: -10\ndefault_severity: Low\noptions:\n  - name: methods\n    type: string[]\n    default: [\"log\"]\n---\n\n`console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.\n\nBy default only `console.log` is flagged. `console.warn` and `console.error` are **not** flagged by default — error logging in catch blocks is legitimate and should not produce false positives.\n\nBare-identifier match only — aliased calls (`const c = console; c.log(...)`) escape detection until the type-aware pass.\n\n```ts\n// flagged by default\nconsole.log(\"debug:\", value);\n```\n\n```ts\n// NOT flagged by default — intentional error logging\ntry {\n  riskyOp();\n} catch (err) {\n  console.error(\"operation failed:\", err);\n}\n```\n\n```ts\n// fix: route through a logger that strips in production\nimport { logger } from \"./logger\";\nlogger.debug(\"debug:\", value);\nlogger.error(\"failed:\", err);\n```\n\n## Options\n\n### `methods` (string[], default: `[\"log\"]`)\n\nThe list of `console` methods to flag. Defaults to `[\"log\"]` only.\n\nTo restore the broad pre-v0.4 behaviour and flag `console.log`, `console.warn`, and `console.error`:\n\n```toml\n[checks.\"Warning.NoConsoleLog\"]\nmethods = [\"log\", \"warn\", \"error\"]\n```\n\nTo flag only error-level calls:\n\n```toml\n[checks.\"Warning.NoConsoleLog\"]\nmethods = [\"error\"]\n```\n\nTo disable the check entirely without touching `enabled`, set an empty list:\n\n```toml\n[checks.\"Warning.NoConsoleLog\"]\nmethods = []\n```\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [
+        {
+          "id": "methods",
+          "kind": "string[]",
+          "doc": "console methods to flag. Defaults to [\"log\"]. Set to [\"log\", \"warn\", \"error\"] to restore the broad pre-v0.4 behaviour.",
+          "default": [
+            "log"
+          ]
+        }
+      ]
     },
     {
       "id": "Warning.NoDebugger",
@@ -419,7 +428,7 @@
       "base_priority": 15,
       "default_severity": "High",
       "explanation": "`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.",
-      "body": "---\nid: Warning.TripleEquals\ncategory: Warning\nbase_priority: 15\ndefault_severity: High\noptions: []\n---\n\n`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. Walks every `BinaryExpression` and flags the equality operators.\n\n```ts\n// flagged\nif (a == b) return true;\nif (a != b) return false;\n```\n\n```ts\n// fix\nif (a === b) return true;\nif (a !== b) return false;\n```\n\n```ts\n// not relevant — relational operators don't coerce in the same way\nif (a < b) return true;\nif (a >= b) return false;\n```\n\n```toml\n# The default (high) gates CI — explicit override only useful to demote.\n[checks.\"Warning.TripleEquals\"]\nseverity = \"medium\"\n```\n",
+      "body": "---\nid: Warning.TripleEquals\ncategory: Warning\nbase_priority: 15\ndefault_severity: High\noptions: []\n---\n\n`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. Walks every `BinaryExpression` and flags the equality operators.\n\n**Null exemption** (`eqeqeq: always-except-null` semantics): `x == null`, `x != null`, `null == x`, and `null != x` are intentionally exempt. The `== null` pattern is idiomatic JavaScript/TypeScript shorthand for \"value is `null` or `undefined`\" — replacing it with `=== null` changes runtime behaviour. All four shapes produce no diagnostic.\n\n```ts\n// flagged\nif (a == b) return true;\nif (a != b) return false;\nif (y == \"null\") return true;   // string literal, not the keyword\n```\n\n```ts\n// fix\nif (a === b) return true;\nif (a !== b) return false;\n```\n\n```ts\n// not flagged — null-operand exemption\nif (val == null) return \"null or undefined\";\nif (val != null) return \"defined\";\nif (null == other) return \"null or undefined\";\nif (null != other) return \"defined\";\n```\n\n```ts\n// not relevant — relational operators don't coerce in the same way\nif (a < b) return true;\nif (a >= b) return false;\n```\n\n```toml\n# The default (high) gates CI — explicit override only useful to demote.\n[checks.\"Warning.TripleEquals\"]\nseverity = \"medium\"\n```\n",
       "requires_types": false,
       "consistency": false,
       "autofix": true,

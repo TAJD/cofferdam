@@ -154,7 +154,7 @@ export default defineCheck({
 
       ctx.report({
         message: `Brand name must be "${opts.brand}", not "${m[0]}".`,
-        severity: Severity.Warning,
+        severity: Severity.Medium,
         span: ln.spanFor(m.index, m.index + m[0].length), // byte offsets, not chars
       });
     }
@@ -271,7 +271,7 @@ like:
       "id": "BrandCasing",
       "category": "warning",
       "priority": 15,
-      "severity": "warning",
+      "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
       "line": 11,
       "column": 13,
@@ -283,7 +283,7 @@ like:
       "id": "BrandCasing",
       "category": "warning",
       "priority": 15,
-      "severity": "warning",
+      "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
       "line": 14,
       "column": 25,

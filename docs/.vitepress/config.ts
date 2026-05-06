@@ -49,6 +49,13 @@ export default defineConfig({
         ],
       },
       {
+        text: 'Plugin SDK',
+        items: [
+          { text: 'Author guide', link: '/plugin-sdk-guide' },
+          { text: 'End-to-end fixture contract', link: '/plugin-sdk-e2e' },
+        ],
+      },
+      {
         text: 'About',
         items: [
           {

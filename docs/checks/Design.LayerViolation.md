@@ -13,7 +13,7 @@ options: []
 # Design.LayerViolation
 
 Enforces architectural layering rules declared in
-`cofferdam.invariants.toml` (see [docs/invariants.md](../../../docs/invariants.md)
+`cofferdam.invariants.toml` (see [the invariants reference](../invariants.md)
 for the canonical config location and field reference). Each file is
 mapped to a layer via gitignore-style globs, and every import edge is
 checked against an explicit allow-list of cross-layer dependencies.

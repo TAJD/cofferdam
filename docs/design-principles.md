@@ -219,7 +219,67 @@ The transferable pattern, in one sentence: **a typed parsed corpus over a projec
 
 ---
 
-## 4. Reading guide for new contributors
+## 4. Generic separation: logic versus language
+
+The substitution tables in §3 describe *what* changes when you carry the pattern to a new domain. This section is about the *architecture* that makes those substitutions clean rather than ad hoc — what turns a domain swap into a configuration change rather than a fork.
+
+The single load-bearing idea: **pick a canonical abstraction both sides target, and refuse to let either side bypass it.** For cofferdam that abstraction is the project graph — today realised as flat tables in two well-known corpus slots (`crates/cofferdam-core/src/graph.rs::IMPORTS`, `EXPORTS`); forward, a first-class queryable subsystem the rule layer targets directly. The genericity comes from the abstraction; the discipline comes from policing the contracts on either side of it.
+
+### 4.1 The two contracts
+
+**Adapter contract.** The only place language- or format-specific code lives.
+
+- Input: source artifacts (TS files, SQL migrations, IaC manifests, schema docs).
+- Output: typed nodes and edges in the canonical graph.
+- Allowed: extending the schema with domain-specific node and edge types (`sql.column`, `iac.resource`, `gql.field`), declared upfront and registered with the engine.
+- Not allowed: seeing rules, knowing about findings, calling user code.
+
+**Rule contract.** The only place logic lives.
+
+- Input: graph queries, options, file handle if a rule must dip into source.
+- Output: `Issue`s.
+- Allowed: domain-specific predicates expressed against domain-extended node types from registered adapters.
+- Not allowed: source-language ASTs, parser-specific node shapes, adapter internals.
+
+The two contracts cannot leak into each other. An adapter that emits a finding has bypassed the rule layer. A rule that reaches for an oxc AST node has bypassed the canonical graph. Either case turns a generic engine into a domain-specific tool with extension hooks.
+
+### 4.2 The seam where genericity breaks
+
+The temptation that breaks the model is rule authors peeking at AST shapes — *"just give me the `ImportDeclaration` node, I want to check its `assertions` clause."* That is the seam where domain-specific knowledge leaks back into the logic layer. The defence: **anything a rule could need from the source must be expressible as a graph node or edge attribute.** If it isn't, that's a missing schema element to add to the canonical layer, not an escape hatch to give the rule.
+
+This is the same discipline that keeps a database engine queryable instead of forcing every consumer to walk the storage format. Cofferdam's storage format is the canonical graph; the rule layer's only legal API is queries against it.
+
+### 4.3 The shared-rule test
+
+A practical test for whether the separation is real: **can two parallel domains share a rule?**
+
+*"No public-internet exposure from a `prod-*` module"* should be one rule that applies to both Terraform and Pulumi, because both adapters produce `iac.resource` nodes with a `public_ip` attribute. If you write it once, your separation is real. If you write `terraform_no_public_ip` and `pulumi_no_public_ip`, you have built a plugin system, not a generic engine.
+
+The test extrapolates: *"all public exports must originate from a documented entry point"* applies to both TypeScript modules and GraphQL schemas if both adapters produce `export` edges and the spec declares `entry_point` nodes. The rule cares only about graph shape; the adapter cares only about translating its source into that shape.
+
+### 4.4 Three leaks the design must manage
+
+The architecture is generic in principle; three honest asymmetries complicate it in practice.
+
+- **Span.** `Span` is byte-offset-based today (`crates/cofferdam-core/src/span_util.rs`). Fine for text source. For binary, generated, or upstream-referenced artifacts you need a more flexible `Location { uri, range }`. The generalisation is cheap now and expensive later — `Span` flows through `Issue`, `RelatedSpan`, suppression directives, baseline files, and SARIF output.
+- **Identity.** Suppression, baselines, and incremental analysis all need stable identity for findings. Today identity is `(check_id, file, span_hash)`. Each adapter needs its own stable-ID story: SQL migrations want `(rule, migration_file, statement_index)`; schema-IDL wants `(rule, schema_file, type_name)`. The engine has to ask the adapter for an identity scheme rather than assuming text spans hash.
+- **Taxonomy.** The five categories are TS-tuned. A schema validator wants `Breaking | NonBreaking | Convention`; a SQL-migration domain wants `Reversible | Irreversible | DataLoss`. The configurable-taxonomy work (`cd-9hp.3`) is therefore a prerequisite for non-TS domains, not just a doc fix — adapters must register their own taxonomies, the engine must display them coherently, and `cofferdam.toml` has to accept domain-aware severity overrides.
+
+These are forcing functions on the canonical schema and on the engine's identity, output, and configuration surfaces — not blockers, but they have to be solved before a second domain ships.
+
+### 4.5 Where the substrate lives, and where it is heading
+
+The substrate today is `CorpusIndex` — a flat namespace of typed slots, with the project graph living as two well-known slots (`IMPORTS`, `EXPORTS`). Graph queries are written by hand in each check's `finalize` body, joining those tables.
+
+The forward direction the predicate-DSL bead (`cd-9hp.1`) sketches: **promote the project graph to a first-class queryable subsystem** — likely a small in-memory store with Datalog- or Cypher-flavoured query semantics, indexed for transitive-closure queries. The DSL targets the graph; built-in checks migrate over time; `IMPORTS`/`EXPORTS` slots stay populated for backward compatibility.
+
+The convergence: cofferdam keeps its TS-first identity, but the engine's *layers* are factored so a future schema-cofferdam or iac-cofferdam is a different adapter plus a different ruleset, not a different binary. The shared substrate is the graph plus the DSL plus the output. That's the win the §3 substitution tables describe; the contracts in §4.1 and the discipline in §4.2–§4.4 are what make it real.
+
+Cofferdam is likely to end up at an in-memory knowledge graph somewhere along this path. The current bead set — DSL (`cd-9hp.1`), configurable taxonomy (`cd-9hp.3`), plugin corpus access (`cd-9hp.6`), corpus error-handling (`cd-9hp.7`), spec contract suite (`cd-9hp.8`) — is approximately the right path toward that landing spot, even if we do not sequence them as one project.
+
+---
+
+## 5. Reading guide for new contributors
 
 If you're new to the codebase and want to internalise the design:
 

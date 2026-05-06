@@ -547,10 +547,11 @@ function fileMatchesScope(absFilePath, scope) {
  * `path` must already be normalised to forward slashes.
  *
  * Anchoring semantics (gitignore-compatible): patterns that do not start
- * with `/` or `**/` are automatically tried with a `**/` prefix so they
+ * with `/` or `**\/` are automatically tried with a `**\/` prefix so they
  * match anywhere in the path tree, not just at the root. For example,
  * `lib/foo.ts` matches `/abs/project/lib/foo.ts` because we also test
- * `**/lib/foo.ts`.
+ * `**\/lib/foo.ts`. (The backslashes in this comment escape what would
+ * otherwise close the JSDoc block — they aren't part of the patterns.)
  */
 function globMatch(pattern, path) {
   // Expand top-level brace alternatives `{a,b,c}` first. Only the first

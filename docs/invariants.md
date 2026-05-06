@@ -48,9 +48,25 @@ deprecation hint pointing at `cofferdam.toml`. Read by
 `exports` is a list of "entry-point sentinels". Each entry is either:
 
 * a relative path to a TS/JS file (`src/index.ts`) — every export from
-  that file is exempt from `Design.OrphanExport`, or
+  that file is exempt from `Design.OrphanExport`,
+* a glob pattern (`components/ui/**/*.tsx`) — every file whose
+  project-root-relative path matches the pattern is exempt. Useful for
+  vendored UI directories (shadcn/ui, etc.) where a single line covers
+  many files. Standard glob metacharacters `*`, `**`, `?`, `[…]`, and
+  `{…,…}` are supported; an invalid pattern is silently skipped (the
+  check still runs, the pattern just exempts nothing), or
 * a `package.json:<key>` pointer (`package.json:exports`) — schema
   accepts it; resolution lands in a follow-up bead.
+
+**Example — exempt a vendored UI directory:**
+
+```toml
+[public_api]
+exports = [
+  "src/index.ts",
+  "components/ui/**/*.tsx",
+]
+```
 
 Read by `Design.OrphanExport`.
 

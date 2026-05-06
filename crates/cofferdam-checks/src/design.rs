@@ -4,6 +4,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+
 use crate::framework_paths::FRAMEWORK_ENTRY_PATTERNS;
 use cofferdam_core::graph::{
     ExportKind, ExportRecord, ImportKind, ImportRecord, InvariantsRuntime, LayersConfig,
@@ -353,22 +355,95 @@ impl Check for OrphanExport {
         // framework_entry_patterns) is the only filter.
         let runtime: Option<InvariantsRuntime> =
             ctx.corpus.with_slot(&GRAPH_INVARIANTS, |slot| slot.clone());
-        let public_api_files = runtime
+        let public_api = runtime
             .as_ref()
             .map(|r| resolve_public_api(&r.public_api.exports, &r.project_root))
             .unwrap_or_default();
 
-        compute_orphans(&imports, &exports, &opts, &public_api_files)
+        compute_orphans(&imports, &exports, &opts, &public_api)
     }
 }
 
-/// Convert `[public_api].exports` entries into a set of normalised file
-/// keys for fast lookup. Today only direct file paths are honoured —
-/// `package.json:<key>` entries parse but are no-ops (follow-up bead
-/// will resolve them via the package's exports map). Empty input yields
-/// an empty set; OrphanExport's caller treats that as "no allowlist".
-fn resolve_public_api(entries: &[String], project_root: &Path) -> HashSet<String> {
-    let mut out = HashSet::new();
+/// Resolved public-API allowlist.
+///
+/// Entries in `[public_api].exports` that contain no glob metacharacters
+/// (`* ? [ {`) are stored in `exact` for O(1) lookup. Entries that do
+/// contain metacharacters are compiled into `globs` (a `GlobSet`). A file
+/// key matches if it appears in `exact` OR if `globs.is_match` returns true
+/// when tested against the project-root-relative, forward-slash form.
+///
+/// `package.json:<key>` entries are deferred (follow-up bead); they are
+/// accepted by the TOML schema but dropped here.
+struct PublicApi {
+    exact: HashSet<String>,
+    globs: GlobSet,
+    /// Normalised absolute root prefix (`path_key(project_root)`) used to
+    /// strip the leading segment before glob matching.
+    root_key: String,
+}
+
+impl PublicApi {
+    /// Test whether `file_key` (a forward-slash, normalised path — may be
+    /// absolute or relative) is covered by this allowlist.
+    fn is_match(&self, file_key: &str) -> bool {
+        if self.exact.contains(file_key) {
+            return true;
+        }
+        // Derive a project-relative path for glob matching.
+        //
+        // Strategy (in preference order):
+        // 1. Strip the absolute root prefix `<root_key>/` if file_key is absolute.
+        // 2. Strip a leading `./` from relative paths (engine sometimes emits
+        //    `./src/foo.ts` when invoked against a relative target directory).
+        // 3. Fall back to the raw file_key — glob authors using an absolute-path
+        //    pattern will still match.
+        let rel = {
+            let with_slash = if self.root_key.ends_with('/') {
+                self.root_key.as_str().to_string()
+            } else {
+                format!("{}/", self.root_key)
+            };
+            if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
+                stripped
+            } else if let Some(stripped) = file_key.strip_prefix(&self.root_key) {
+                stripped.trim_start_matches('/')
+            } else {
+                // Relative path (possibly `./src/…`). Strip the leading `./`
+                // so patterns like `src/legacy/**/*.ts` match without needing
+                // a leading `./` in the pattern.
+                file_key.trim_start_matches("./")
+            }
+        };
+        self.globs.is_match(rel)
+    }
+}
+
+impl Default for PublicApi {
+    fn default() -> Self {
+        PublicApi {
+            exact: HashSet::new(),
+            globs: GlobSet::empty(),
+            root_key: String::new(),
+        }
+    }
+}
+
+/// Returns true when `entry` contains at least one glob metacharacter.
+fn is_glob_pattern(entry: &str) -> bool {
+    entry.contains('*') || entry.contains('?') || entry.contains('[') || entry.contains('{')
+}
+
+/// Convert `[public_api].exports` entries into a `PublicApi` for fast
+/// lookup. Exact paths are normalised as absolute file keys (same
+/// canonicalisation as the rest of the check). Glob patterns are kept
+/// project-root-relative in forward-slash form so `GlobSet::is_match`
+/// receives the same relative key that the orphan loop computes.
+/// Empty input yields a default `PublicApi` (no matches).
+fn resolve_public_api(entries: &[String], project_root: &Path) -> PublicApi {
+    let mut exact = HashSet::new();
+    let mut glob_builder = GlobSetBuilder::new();
+    let mut has_globs = false;
+
     for entry in entries {
         if entry.starts_with("package.json:") {
             // Resolution deferred — see follow-up bead. Listed here so
@@ -376,10 +451,40 @@ fn resolve_public_api(entries: &[String], project_root: &Path) -> HashSet<String
             continue;
         }
         let trimmed = entry.trim_start_matches("./");
-        let abs = project_root.join(trimmed);
-        out.insert(path_key(&abs));
+        if is_glob_pattern(trimmed) {
+            // Normalise to forward slashes before compiling so authors can
+            // write `"components/ui/**/*.tsx"` without platform concerns.
+            let normalised = trimmed.replace('\\', "/");
+            match GlobBuilder::new(&normalised)
+                .literal_separator(true)
+                .build()
+            {
+                Ok(g) => {
+                    glob_builder.add(g);
+                    has_globs = true;
+                }
+                Err(_) => {
+                    // Invalid glob syntax — skip silently. A bad pattern
+                    // exempts nothing; it doesn't crash the run.
+                }
+            }
+        } else {
+            let abs = project_root.join(trimmed);
+            exact.insert(path_key(&abs));
+        }
     }
-    out
+
+    let globs = if has_globs {
+        glob_builder.build().unwrap_or_default()
+    } else {
+        GlobSet::empty()
+    };
+
+    PublicApi {
+        exact,
+        globs,
+        root_key: path_key(project_root),
+    }
 }
 
 fn matches_substring(path: &Path, patterns: &[String]) -> bool {
@@ -405,7 +510,7 @@ fn compute_orphans(
     imports: &[ImportRecord],
     exports: &[ExportRecord],
     opts: &OrphanOptions,
-    public_api_files: &HashSet<String>,
+    public_api: &PublicApi,
 ) -> Vec<Issue> {
     // Set of (resolved_path_key, source_name) tuples: every named touch.
     let mut touched: HashSet<(String, String)> = HashSet::new();
@@ -459,7 +564,7 @@ fn compute_orphans(
         let file_path = sorted[0].file.clone();
         if matches_substring(&file_path, &opts.test_patterns)
             || matches_substring(&file_path, &opts.framework_entry_patterns)
-            || public_api_files.contains(&file_key)
+            || public_api.is_match(&file_key)
         {
             continue;
         }
@@ -1226,4 +1331,148 @@ fn matches_any_prefix(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    // Helper: build a PublicApi from a slice of entry strings using
+    // `project_root` as the resolved root, exercising `resolve_public_api`.
+    fn make_public_api(entries: &[&str], project_root: &Path) -> PublicApi {
+        let owned: Vec<String> = entries.iter().map(|s| s.to_string()).collect();
+        resolve_public_api(&owned, project_root)
+    }
+
+    // Helper: normalise an absolute path the same way the rest of the check
+    // does — forward slashes, lower-case on Windows.
+    fn key(p: &Path) -> String {
+        path_key(p)
+    }
+
+    #[test]
+    fn exact_path_matches() {
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["src/index.ts"], &root);
+        let file_key = key(&root.join("src/index.ts"));
+        assert!(api.is_match(&file_key), "exact path should match");
+    }
+
+    #[test]
+    fn exact_path_no_spurious_match() {
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["src/index.ts"], &root);
+        let other = key(&root.join("src/other.ts"));
+        assert!(
+            !api.is_match(&other),
+            "unrelated file should not match exact entry"
+        );
+    }
+
+    #[test]
+    fn dot_slash_prefix_stripped() {
+        // "./src/index.ts" must resolve the same as "src/index.ts".
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["./src/index.ts"], &root);
+        let file_key = key(&root.join("src/index.ts"));
+        assert!(
+            api.is_match(&file_key),
+            "./src/index.ts should strip ./ and match"
+        );
+    }
+
+    #[test]
+    fn glob_matches_multiple_files() {
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["components/ui/**/*.tsx"], &root);
+
+        let button = key(&root.join("components/ui/button.tsx"));
+        let nested = key(&root.join("components/ui/forms/input.tsx"));
+        let outside = key(&root.join("components/other/widget.tsx"));
+
+        assert!(
+            api.is_match(&button),
+            "glob should match direct child *.tsx"
+        );
+        assert!(api.is_match(&nested), "glob should match nested *.tsx");
+        assert!(
+            !api.is_match(&outside),
+            "glob should not match outside the tree"
+        );
+    }
+
+    #[test]
+    fn glob_star_single_level() {
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["src/*.ts"], &root);
+
+        let direct = key(&root.join("src/index.ts"));
+        let nested = key(&root.join("src/sub/other.ts"));
+
+        assert!(
+            api.is_match(&direct),
+            "single-level glob should match direct child"
+        );
+        assert!(
+            !api.is_match(&nested),
+            "single-level glob should not match nested path"
+        );
+    }
+
+    #[test]
+    fn empty_entries_matches_nothing() {
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&[], &root);
+        let key = path_key(&root.join("src/anything.ts"));
+        assert!(!api.is_match(&key), "empty allowlist should not match");
+    }
+
+    #[test]
+    fn package_json_entry_is_ignored() {
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["package.json:exports"], &root);
+        // No file key should match — the entry is silently dropped.
+        let key = path_key(&root.join("src/index.ts"));
+        assert!(!api.is_match(&key));
+    }
+
+    #[test]
+    fn invalid_glob_does_not_panic() {
+        // An unclosed bracket `[` is an invalid glob. resolve_public_api
+        // must skip it rather than panicking.
+        let root = PathBuf::from("/project");
+        let api = make_public_api(&["src/[invalid"], &root);
+        // Nothing should match, but also no panic.
+        let key = path_key(&root.join("src/anything.ts"));
+        assert!(!api.is_match(&key));
+    }
+
+    #[test]
+    fn exact_and_glob_coexist() {
+        let root = PathBuf::from("/project");
+        // Mix: one exact path + one glob.
+        let api = make_public_api(&["src/index.ts", "components/ui/**/*.tsx"], &root);
+
+        let exact_key = key(&root.join("src/index.ts"));
+        let glob_key = key(&root.join("components/ui/button.tsx"));
+        let miss = key(&root.join("src/other.ts"));
+
+        assert!(
+            api.is_match(&exact_key),
+            "exact entry should still match when globs present"
+        );
+        assert!(api.is_match(&glob_key), "glob entry should match");
+        assert!(!api.is_match(&miss), "unrelated file should not match");
+    }
+
+    #[test]
+    fn is_glob_pattern_detects_metacharacters() {
+        assert!(is_glob_pattern("**/*.tsx"));
+        assert!(is_glob_pattern("src/*.ts"));
+        assert!(is_glob_pattern("src/[abc].ts"));
+        assert!(is_glob_pattern("{a,b}.ts"));
+        assert!(!is_glob_pattern("src/index.ts"));
+        assert!(!is_glob_pattern("./src/index.ts"));
+    }
 }

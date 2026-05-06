@@ -865,8 +865,13 @@ fn run_check(args: CheckArgs) -> ExitCode {
                             .and_then(Path::parent)
                             .map(Path::to_path_buf)
                             .unwrap_or_else(|| PathBuf::from("."));
-                        let plugin_issues =
-                            plugins::run_plugins(&cfg.plugins, &files, &cfg_dir, &cfg.checks);
+                        let plugin_issues = plugins::run_plugins(
+                            &cfg.plugins,
+                            &files,
+                            &cfg_dir,
+                            &cfg.checks,
+                            cfg.layers.as_ref(),
+                        );
                         let suppression_cache: HashMap<
                             PathBuf,
                             cofferdam_engine::suppress::Suppressions,

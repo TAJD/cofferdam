@@ -155,6 +155,60 @@ test("cd-xlv: schema defaults survive round-trip into run()", async () => {
   });
 });
 
+test("cd-5tz: layer field propagates into file.layer when input has layer set", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  /** @type {string | null | undefined} */
+  let capturedLayer;
+  const check = defineCheck({
+    id: "LayerCapture",
+    category: Category.Warning,
+    basePriority: 5,
+    explanation: "capture layer for test",
+    run(file, _ctx) {
+      capturedLayer = file.layer;
+    },
+  });
+
+  runPlugin(check, {
+    path: "src/ui/button.ts",
+    text: "export const x = 1;",
+    lineViews: [{ lineNo: 1, text: "export const x = 1;", isComment: false, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 0 }],
+    layer: "ui",
+  });
+
+  assert.equal(capturedLayer, "ui");
+});
+
+test("cd-5tz: layer field is null when input layer is null", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  /** @type {string | null | undefined} */
+  let capturedLayer;
+  const check = defineCheck({
+    id: "LayerCaptureNull",
+    category: Category.Warning,
+    basePriority: 5,
+    explanation: "capture null layer for test",
+    run(file, _ctx) {
+      capturedLayer = file.layer;
+    },
+  });
+
+  runPlugin(check, {
+    path: "scripts/build.ts",
+    text: "const x = 1;",
+    lineViews: [{ lineNo: 1, text: "const x = 1;", isComment: false, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 0 }],
+    layer: null,
+  });
+
+  assert.equal(capturedLayer, null);
+});
+
 test("plugin magic comments filter inside run(); engine suppression filters at the engine boundary", async () => {
   const { defineCheck, Category, runPlugin } = await import(
     `file://${PKG.replace(/\\/g, "/")}/dist/index.js`

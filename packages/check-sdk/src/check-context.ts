@@ -14,6 +14,11 @@ export interface SourceFile {
   readonly path: string;
   /** Full text of the file, UTF-8. Byte offsets in spans index into this. */
   readonly text: string;
+  /**
+   * Layer name from `cofferdam.invariants.toml` `[layers]`.
+   * `null` when the file is not a member of any declared layer.
+   */
+  readonly layer: string | null;
 
   /**
    * Iterate every line in the file with classification flags drawn

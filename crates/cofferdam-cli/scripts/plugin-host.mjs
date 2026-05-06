@@ -329,6 +329,7 @@ function buildSourceFile(file) {
   return {
     path: file.path,
     text: file.text,
+    layer: file.layer ?? null,
     lines() {
       let i = 0;
       const it = {

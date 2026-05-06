@@ -30,6 +30,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use cofferdam_core::layers::{self, LayerMatcher};
 use cofferdam_core::lines::Lines;
 use cofferdam_core::{
     parse_into, Allocator, Issue, Priority, RawOptionValue, Severity, SourceFile, Span,
@@ -56,6 +57,10 @@ struct ManifestFile<'a> {
     text: &'a str,
     #[serde(rename = "lineViews")]
     line_views: Vec<ManifestLineView>,
+    /// Layer name from `cofferdam.invariants.toml` `[layers]`. `None`
+    /// (serialised as JSON `null`) when no layer config is present or the
+    /// file is not a member of any declared layer.
+    layer: Option<String>,
     /// Flat-array AST per `design/sdk-ast-wire.md` (cd-svf). `None` when
     /// the file failed to parse — host treats that as `ast: null` and
     /// the engine has already emitted `Warning.ParseError` for the file.
@@ -332,11 +337,18 @@ pub fn query_plugin_metadata(
 /// Run every plugin in `plugins` over every file in `files` via the
 /// Node-side host. Returns engine-shape `Issue`s, including synthetic
 /// `Warning.Plugin*` findings for any host-side failure.
+///
+/// `layers_cfg` is the project's layer configuration (from
+/// `cofferdam.toml` `[layers]` or `cofferdam.invariants.toml` `[layers]`).
+/// When `Some`, each file's layer membership is computed once and injected
+/// into the JSON payload as the `layer` field; plugins read it from
+/// `file.layer`. `None` (no config) serialises to JSON `null`.
 pub fn run_plugins(
     plugin_paths: &[PathBuf],
     files: &[PathBuf],
     project_root: &Path,
     check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
+    layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
 ) -> Vec<Issue> {
     if plugin_paths.is_empty() {
         return Vec::new();
@@ -346,6 +358,11 @@ pub fn run_plugins(
         Ok(p) => p,
         Err(e) => return vec![host_unavailable_issue(&format!("host script: {e}"))],
     };
+
+    // Build layer matchers once — shared across all files. `None` when no
+    // layer config is present; layer field serialises to JSON `null`.
+    let layer_matchers: Vec<LayerMatcher> =
+        layers_cfg.map(layers::build_matchers).unwrap_or_default();
 
     // Build per-file payloads. We re-read every file (cheap; the engine
     // already cached them in `analyze_with_text` but the CLI doesn't
@@ -376,6 +393,9 @@ pub fn run_plugins(
                 line_start: lv.line_start,
             })
             .collect();
+        // Resolve layer membership for this file. `None` → JSON `null`.
+        let layer: Option<String> =
+            layers_cfg.and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
         // Build the flat-array AST wire (cd-svf). One Visit pass per file;
         // re-uses the parse already done for line views.
         let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
@@ -383,6 +403,7 @@ pub fn run_plugins(
             path: forward_slash(path),
             text,
             line_views,
+            layer,
             ast: Some(ast),
         });
     }

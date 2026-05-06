@@ -54,6 +54,8 @@ export interface PluginRunInput {
   readonly path: string;
   readonly text: string;
   readonly lineViews: readonly NativeLineView[];
+  /** Layer name from `cofferdam.invariants.toml` `[layers]`. `null` when not in any layer. */
+  readonly layer: string | null;
 }
 
 // ---- runtime construction --------------------------------------------
@@ -89,6 +91,7 @@ export function buildSourceFile(input: PluginRunInput) {
   return {
     path: input.path,
     text: input.text,
+    layer: input.layer,
     lines(): IterableIterator<LineView> {
       let i = 0;
       const it: IterableIterator<LineView> = {

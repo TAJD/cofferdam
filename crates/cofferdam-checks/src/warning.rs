@@ -135,28 +135,36 @@ impl<'a> Visit<'a> for Collector<'a> {
             node.operator,
             BinaryOperator::Equality | BinaryOperator::Inequality
         ) {
-            let preferred = match node.operator {
-                BinaryOperator::Equality => "===",
-                BinaryOperator::Inequality => "!==",
-                _ => unreachable!(),
-            };
-            let actual = match node.operator {
-                BinaryOperator::Equality => "==",
-                BinaryOperator::Inequality => "!=",
-                _ => unreachable!(),
-            };
-            // Point at the whole expression. A more precise span on the
-            // operator token itself is a cd-81a.6 (autofix) follow-up.
-            let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
-            self.issues.push(Issue {
-                check_id: META.id.to_string(),
-                message: format!("use `{}` instead of `{}`", preferred, actual),
-                file: self.file.path.clone(),
-                span,
-                priority: Priority(META.base_priority),
-                severity: Severity::Medium,
-                related: Vec::new(),
-            });
+            // Exempt `x == null`, `null == x`, `x != null`, `null != x`.
+            // This is the ESLint "eqeqeq: always-except-null" semantics: the
+            // `== null` pattern is idiomatic JS/TS shorthand for "is null OR
+            // undefined", and replacing it with `=== null` changes behaviour.
+            let either_side_is_null = matches!(node.left, Expression::NullLiteral(_))
+                || matches!(node.right, Expression::NullLiteral(_));
+            if !either_side_is_null {
+                let preferred = match node.operator {
+                    BinaryOperator::Equality => "===",
+                    BinaryOperator::Inequality => "!==",
+                    _ => unreachable!(),
+                };
+                let actual = match node.operator {
+                    BinaryOperator::Equality => "==",
+                    BinaryOperator::Inequality => "!=",
+                    _ => unreachable!(),
+                };
+                // Point at the whole expression. A more precise span on the
+                // operator token itself is a cd-81a.6 (autofix) follow-up.
+                let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+                self.issues.push(Issue {
+                    check_id: META.id.to_string(),
+                    message: format!("use `{}` instead of `{}`", preferred, actual),
+                    file: self.file.path.clone(),
+                    span,
+                    priority: Priority(META.base_priority),
+                    severity: Severity::Medium,
+                    related: Vec::new(),
+                });
+            }
         }
         // Walk into children — `==` can appear inside other binary ops
         // (e.g. `a && b == c`).
@@ -662,55 +670,88 @@ mod tests {
         assert!(issues.is_empty(), "`!==` should not be flagged");
     }
 
-    // ── Null-exemption tests (cd-21d) ──────────────────────────────────────
+    // ── Null-exemption tests (cd-w9i) ─────────────────────────────────────
+    //
+    // ESLint "eqeqeq: always-except-null" semantics: the four null-operand
+    // shapes are idiomatic JS/TS shorthand ("x is null OR undefined") and
+    // must not fire at all — no diagnostic, no autofix.
 
-    /// `x == null` — autofix must be suppressed (semantics differ from `=== null`).
+    /// `x == null` — no diagnostic (null on RHS).
     #[test]
-    fn autofix_skipped_for_null_rhs() {
+    fn null_rhs_eq_no_diagnostic() {
         let src = "const r = x == null;";
         let issues = run_triple_equals(src);
-        assert_eq!(
-            issues.len(),
-            1,
-            "diagnostic should still fire for `== null`"
-        );
-        let edit =
-            TripleEquals.autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src));
         assert!(
-            edit.is_none(),
-            "autofix must return None for `== null` (semantics change)"
+            issues.is_empty(),
+            "`x == null` must not fire — idiom for null-or-undefined check"
         );
     }
 
-    /// `null != x` — null on the LHS must also suppress the autofix.
+    /// `x != null` — no diagnostic (null on RHS, inequality).
     #[test]
-    fn autofix_skipped_for_null_lhs() {
+    fn null_rhs_neq_no_diagnostic() {
+        let src = "const r = x != null;";
+        let issues = run_triple_equals(src);
+        assert!(
+            issues.is_empty(),
+            "`x != null` must not fire — idiom for null-or-undefined check"
+        );
+    }
+
+    /// `null == x` — no diagnostic (null on LHS).
+    #[test]
+    fn null_lhs_eq_no_diagnostic() {
+        let src = "const r = null == x;";
+        let issues = run_triple_equals(src);
+        assert!(
+            issues.is_empty(),
+            "`null == x` must not fire — null-operand exemption applies to LHS too"
+        );
+    }
+
+    /// `null != x` — no diagnostic (null on LHS, inequality).
+    #[test]
+    fn null_lhs_neq_no_diagnostic() {
         let src = "const r = null != x;";
         let issues = run_triple_equals(src);
-        assert_eq!(
-            issues.len(),
-            1,
-            "diagnostic should still fire for `null !=`"
-        );
-        let edit =
-            TripleEquals.autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src));
         assert!(
-            edit.is_none(),
-            "autofix must return None for `null !=` (semantics change)"
+            issues.is_empty(),
+            "`null != x` must not fire — null-operand exemption applies to LHS too"
         );
     }
 
-    /// `(a || b) == null` — null on RHS with parens on LHS must still suppress.
+    /// `(a || b) == null` — parenthesised non-null side; null on RHS still exempts.
     #[test]
-    fn autofix_skipped_for_null_with_parens() {
+    fn null_rhs_with_parens_no_diagnostic() {
         let src = "const r = (a || b) == null;";
         let issues = run_triple_equals(src);
-        assert_eq!(issues.len(), 1, "diagnostic should still fire");
-        let edit =
-            TripleEquals.autofix(&issues[0], &SourceFile::new(PathBuf::from("test.ts"), src));
         assert!(
-            edit.is_none(),
-            "autofix must return None when RHS is null even with LHS parens"
+            issues.is_empty(),
+            "`(a || b) == null` must not fire — RHS is null literal"
+        );
+    }
+
+    /// `a == b` — regression: non-null operands must still fire.
+    #[test]
+    fn non_null_operands_still_fire() {
+        let src = "const r = a == b;";
+        let issues = run_triple_equals(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "`a == b` must still fire — neither operand is null"
+        );
+    }
+
+    /// `x != 0` — regression: non-null operands must still fire.
+    #[test]
+    fn non_null_numeric_still_fires() {
+        let src = "const r = x != 0;";
+        let issues = run_triple_equals(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "`x != 0` must still fire — 0 is not a null literal"
         );
     }
 

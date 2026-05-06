@@ -20,23 +20,24 @@ export function nested(x: unknown, y: unknown, z: unknown) {
   return x === y && z == "foo";   // flag: == in second clause
 }
 
-// cd-21d: null-operand cases — diagnostic fires but autofix is suppressed
-// because `== null` matches both null and undefined, unlike `=== null`.
+// cd-w9i: null-operand cases — ESLint "eqeqeq: always-except-null" semantics.
+// `x == null` / `x != null` are idiomatic JS/TS for "null OR undefined".
+// Replacing with `=== null` changes behaviour, so all four shapes are exempt.
 export function nullChecks(val: unknown, other: unknown) {
-  if (val == null) return "null or undefined";   // flag: ==, NO autofix
-  if (val != null) return "defined";             // flag: !=, NO autofix
-  if (null == other) return "null or undefined"; // flag: ==, NO autofix (null on LHS)
-  if (null != other) return "defined";           // flag: !=, NO autofix (null on LHS)
+  if (val == null) return "null or undefined";   // OK — null-operand exemption
+  if (val != null) return "defined";             // OK — null-operand exemption
+  if (null == other) return "null or undefined"; // OK — null on LHS
+  if (null != other) return "defined";           // OK — null on LHS
   return null;
 }
 
-// Parens around non-null side must not fool the null-detection.
+// Parens around non-null side: null on RHS is still detected.
 export function nullWithParens(a: boolean, b: boolean, val: unknown) {
-  return (a || b) == null;                       // flag: ==, NO autofix
+  return (a || b) == null;                       // OK — null-operand exemption
 }
 
-// These SHOULD autofix — null appears only as part of an identifier or string.
+// These SHOULD fire — null appears only as part of an identifier or string.
 export function nonNullKeyword(nullable: unknown, y: unknown) {
-  if (nullable == y) return true;                // flag: ==, autofix OK (identifier)
-  if (y == "null") return true;                  // flag: ==, autofix OK (string literal)
+  if (nullable == y) return true;                // flag: == (identifier, not keyword)
+  if (y == "null") return true;                  // flag: == (string literal, not keyword)
 }

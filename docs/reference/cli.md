@@ -132,7 +132,9 @@ Run the analyzer and write the current set of findings to the baseline file. Sub
 
 ## `cofferdam explain`
 
-Print the metadata and prose explanation for one built-in check. Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog
+Print the metadata and prose explanation for one built-in check. Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog.
+
+Plugin checks: `explain` is currently built-in only — `cofferdam explain Test.PluginCheck` will report unknown-check even if the plugin is declared in `cofferdam.toml`. Plugin authors should include a help message in the check's `explanation` field that users can read directly, or ship a per-check README. Tracking: gh #18 / cd-xda.
 
 **Usage:** `cofferdam explain [OPTIONS] <CHECK_ID>`
 

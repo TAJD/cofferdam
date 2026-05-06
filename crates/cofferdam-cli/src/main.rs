@@ -187,6 +187,13 @@ enum Cmd {
     /// any relevant flags without leaving the terminal. Add `--full` to
     /// also render the companion markdown body (motivation, examples,
     /// config snippets) sourced from the check catalog.
+    ///
+    /// Plugin checks: `explain` is currently built-in only —
+    /// `cofferdam explain Test.PluginCheck` will report unknown-check
+    /// even if the plugin is declared in `cofferdam.toml`. Plugin authors
+    /// should include a help message in the check's `explanation` field
+    /// that users can read directly, or ship a per-check README.
+    /// Tracking: gh #18 / cd-xda.
     Explain {
         /// Dotted check ID, e.g. `Warning.TripleEquals`. If unknown,
         /// the CLI prints the closest matches (substring on the ID) or

@@ -94,3 +94,11 @@ jobs:
 
       - name: Plugin host rejects incompatible SDK major (cd-b1q)
         run: node scripts/test-plugin-sdk-major.mjs
+
+      - name: Plugin findings appear in advise --diff (cd-s7f)
+        # Sets up a temp git repo with a clean baseline of the
+        # no-http-client fixture, drops the violating fixture into the
+        # working tree, runs `cofferdam advise --diff HEAD`, and
+        # asserts Warning.NoHttpClient appears in would_fire.
+        # Inverse direction (clearing edit) is also validated.
+        run: node scripts/check-plugin-diff.mjs

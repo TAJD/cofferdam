@@ -325,13 +325,13 @@ enum Cmd {
         /// Disable `.gitignore` / `.cofferdamignore` filtering.
         #[arg(long)]
         no_ignore: bool,
-        /// Diff mode — run the engine against the working tree AND the
-        /// state at `<git-ref>`, then report rules that WOULD fire if
-        /// the change were committed (`would_fire`) plus rules that
-        /// currently fire on `<git-ref>` but are cleared by the change
-        /// (`would_clear`). Output is always JSON when this flag is
-        /// set; `--format` is ignored. Built-in checks only on both
-        /// passes; plugin findings are not yet diffed.
+        /// Diff mode — run the engine and any configured plugins
+        /// against the working tree AND the state at `<git-ref>`, then
+        /// report rules that WOULD fire if the change were committed
+        /// (`would_fire`) plus rules that currently fire on
+        /// `<git-ref>` but are cleared by the change (`would_clear`).
+        /// Output is always JSON when this flag is set; `--format` is
+        /// ignored.
         #[arg(long, value_name = "GIT-REF")]
         diff: Option<String>,
         /// Severity gate for `--diff` mode. When set, the process

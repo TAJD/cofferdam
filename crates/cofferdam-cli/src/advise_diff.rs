@@ -13,9 +13,12 @@
 //! is justified by the agent-UX framing: this is the call an agent
 //! makes BEFORE committing.
 //!
-//! V0 limitations (filed as follow-ups):
-//! - Built-in checks only on both passes; plugin findings are not
-//!   considered for `would_fire` / `would_clear`.
+//! Built-in checks AND plugin findings flow through the same set-diff
+//! (cd-s7f). Plugin host runs twice — once on the materialised pre
+//! source and once on the working-tree post source — and its issues
+//! are merged with engine issues before the diff is computed.
+//!
+//! V0 limitations:
 //! - Single-ref form only — no `--diff a..b`. Renames counted as
 //!   add+delete via `--diff-filter=AMR`.
 
@@ -218,8 +221,45 @@ pub fn run(args: DiffArgs) -> ExitCode {
         None => return ExitCode::from(2),
     };
 
-    let (pre_issues, pre_texts) = pre_engine.analyze_with_sources(pre_sources);
-    let (post_issues, post_texts) = post_engine.analyze_with_sources(post_sources);
+    // Clone sources before the engine consumes them — plugin host
+    // needs the same `(path, text)` set on each side so its findings
+    // diff against the same baseline as engine findings (cd-s7f).
+    let pre_for_plugins = pre_sources.clone();
+    let post_for_plugins = post_sources.clone();
+
+    let (mut pre_issues, pre_texts) = pre_engine.analyze_with_sources(pre_sources);
+    let (mut post_issues, post_texts) = post_engine.analyze_with_sources(post_sources);
+
+    // Plugin host runs on both sides so plugin findings flow through
+    // the same set-diff as engine findings. Same `(plugin_paths,
+    // check_options, layers_cfg)` on both invocations — only the
+    // source set differs. Empty plugin list short-circuits the host
+    // call inside `run_plugins_with_sources`.
+    if let Some(cfg) = project_config.as_ref() {
+        if !cfg.plugins.is_empty() {
+            let cfg_dir = resolved_config_path
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let pre_plugin_issues = crate::plugins::run_plugins_with_sources(
+                &cfg.plugins,
+                &pre_for_plugins,
+                &cfg_dir,
+                &cfg.checks,
+                cfg.layers.as_ref(),
+            );
+            let post_plugin_issues = crate::plugins::run_plugins_with_sources(
+                &cfg.plugins,
+                &post_for_plugins,
+                &cfg_dir,
+                &cfg.checks,
+                cfg.layers.as_ref(),
+            );
+            pre_issues.extend(pre_plugin_issues);
+            post_issues.extend(post_plugin_issues);
+        }
+    }
 
     // Build keyed maps for set-diff. Key = (normalized file path,
     // check_id, rule_signature). Path is normalized to forward-slash

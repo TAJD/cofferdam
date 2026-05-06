@@ -224,11 +224,8 @@ The file set is the working-tree-vs-`<ref>` diff, filtered to TypeScript
 extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`) and any
 explicit `[paths]...` arg. Renames are counted as add+delete in v0.
 
-### Limitations (v0)
+### Limitations
 
-- **Built-in checks only.** Plugin findings are not yet diffed; an edit
-  that introduces or clears a plugin-emitted finding will not appear in
-  `would_fire` / `would_clear`. Tracked as cd-s7f.
 - **Single ref.** No `--diff a..b` form yet; the comparison is always
   "working tree vs `<ref>`."
 

@@ -355,6 +355,42 @@ pub fn run_plugins(
     check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
     layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
 ) -> Vec<Issue> {
+    // Disk-read entry: hydrate `(path, text)` from the working tree,
+    // then delegate to the source-driven entry point. Files that fail
+    // to read are silently dropped; the engine emits its own Warning
+    // for that case via the parallel pipeline.
+    let mut sources = Vec::with_capacity(files.len());
+    for path in files {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            sources.push((path.clone(), text));
+        }
+    }
+    run_plugins_with_sources(
+        plugin_paths,
+        &sources,
+        project_root,
+        check_options,
+        layers_cfg,
+    )
+}
+
+/// Source-driven counterpart to `run_plugins` — accepts pre-loaded
+/// `(path, text)` pairs instead of reading from disk. Required for
+/// `cofferdam advise --diff <ref>`, which materialises pre-diff source
+/// from `git show <ref>:<path>` and must run plugins against it (not
+/// the working tree) for the would_clear half of the diff to be
+/// honest.
+///
+/// All other behaviour is identical to `run_plugins`. The scoped file
+/// set, layer membership, options bag, and host timeout all flow
+/// through unchanged.
+pub fn run_plugins_with_sources(
+    plugin_paths: &[PathBuf],
+    sources: &[(PathBuf, String)],
+    project_root: &Path,
+    check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
+    layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
+) -> Vec<Issue> {
     if plugin_paths.is_empty() {
         return Vec::new();
     }
@@ -369,20 +405,8 @@ pub fn run_plugins(
     let layer_matchers: Vec<LayerMatcher> =
         layers_cfg.map(layers::build_matchers).unwrap_or_default();
 
-    // Build per-file payloads. We re-read every file (cheap; the engine
-    // already cached them in `analyze_with_text` but the CLI doesn't
-    // currently surface that cache to this path — small duplication is
-    // OK for v0).
-    let mut manifest_files = Vec::with_capacity(files.len());
-    let mut texts = Vec::with_capacity(files.len());
-    for path in files {
-        let text = match std::fs::read_to_string(path) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        texts.push((path.clone(), text));
-    }
-    for (path, text) in &texts {
+    let mut manifest_files = Vec::with_capacity(sources.len());
+    for (path, text) in sources {
         let file = SourceFile::new(path.clone(), text.clone());
         let allocator = Allocator::default();
         let parsed = parse_into(&allocator, &file);
@@ -530,7 +554,7 @@ pub fn run_plugins(
     };
 
     let mut issues = Vec::with_capacity(response.reports.len() + response.errors.len());
-    let text_index: BTreeMap<&Path, &str> = texts
+    let text_index: BTreeMap<&Path, &str> = sources
         .iter()
         .map(|(p, t)| (p.as_path(), t.as_str()))
         .collect();

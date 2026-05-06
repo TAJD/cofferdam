@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-06
+
+### Added
+- Glob support in `[public_api].exports` (cd-no7 / partial gh #27). Entries containing `*`, `?`, `[`, or `{` compile into a `globset::GlobSet`; exact paths keep their existing semantics. A single `"components/ui/**/*.tsx"` now exempts every shadcn primitive without listing each file. The deeper "follow re-export edges in `Design.OrphanExport` reachability" fix is tracked separately as cd-klp.
+- `Warning.NoConsoleLog` gains a `methods` option (default `["log"]`). Set `[checks."Warning.NoConsoleLog"] methods = ["log", "warn", "error"]` to opt back into the broad scope.
+
+### Changed
+- `Warning.NoConsoleLog` default scope narrowed to `console.log` only (cd-xin / gh #30). Previously fired on every `console.X` call regardless of the rule id; the broad scope was a high-false-positive trap on real codebases (legitimate `console.error` in catch blocks, recoverable `console.warn`). Rule id unchanged — existing baselines and suppressions keep working. Use the new `methods` option to restore prior behavior.
+
+### Fixed
+- `Warning.TripleEquals` no longer fires on idiomatic `x == null` / `x != null` (cd-w9i / gh #28). All four operand shapes (`x == null`, `x != null`, `null == x`, `null != x`) are exempt — matches ESLint's `eqeqeq: "smart"`. Bare `==` / `!=` against any non-null operand still flagged.
+- `Consistency.UnusedSuppression` no longer flags active directives that suppress findings emitted by finalize-stage checks (cd-wqc / gh #29). Previously, directives targeting `Warning.UnusedImport`, `Design.OrphanExport`, `Design.DeadExport`, or any other check that emits from `finalize()` were misreported as stale because the pre-filter findings snapshot was taken before finalize ran. The engine now runs finalize in two phases: non-observers first, snapshot rebuild, then observers (`Consistency.UnusedSuppression`). Internal: `CheckMeta` gains an `observes_findings: bool` field; only `Consistency.UnusedSuppression` sets it.
+
 ## [0.3.0] - 2026-05-06
 
 ### Added

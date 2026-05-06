@@ -1,11 +1,14 @@
 // Fixture for Warning.NoConsoleLog.
+//
+// Default config: only console.log is flagged.
+// console.warn / console.error are NOT flagged by default (see methods option).
 
 export function leak(x: unknown) {
-  console.log("debug:", x);          // flag
-  console.warn("warn:", x);          // flag
-  console.error("err:", x);          // flag
-  console.info("info:", x);          // flag
-  console.debug("debug:", x);        // flag
+  console.log("debug:", x);          // flag (default: log in methods)
+  console.warn("warn:", x);          // OK  (not in default methods list)
+  console.error("err:", x);          // OK  (not in default methods list)
+  console.info("info:", x);          // OK  (not in default methods list)
+  console.debug("debug:", x);        // OK  (not in default methods list)
   return x;
 }
 

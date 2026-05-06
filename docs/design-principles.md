@@ -293,6 +293,48 @@ After that, the engine's orchestration loop in `crates/cofferdam-engine/src/lib.
 
 ---
 
+## 6. Further reading
+
+External literature on the four traditions §3 and §4 draw from. Linked PDFs go straight to author-hosted or open-access copies; commercial titles note where to find them.
+
+### 6.1 Knowledge graphs over code (the substrate idea)
+
+- Yamaguchi, Golde, Arzt, Rieck — *Modeling and Discovering Vulnerabilities with Code Property Graphs* (IEEE S&P 2014). [PDF](https://comsecuris.com/papers/06956589.pdf). Original CPG paper. **Start here if you read one thing.**
+- Joern documentation — [joern.io](https://joern.io). Open-source CPG implementation; the tutorial is a fast practical intro.
+- Meta — *Indexing code at scale with Glean* (engineering blog, December 2024). [engineering.fb.com](https://engineering.fb.com/2024/12/19/developer-tools/glean-open-source-code-indexing/). Production knowledge-graph-over-code at scale; project at [glean.software](https://glean.software/).
+- Kythe — [kythe.io](https://kythe.io). Google's earlier system in this space; the schema-design notes are worth reading even if you never use Kythe itself.
+
+### 6.2 Declarative rule languages over code
+
+- Avgustinov, de Moor, Peyton Jones, Schäfer — *QL: Object-oriented Queries on Relational Data* (ECOOP 2016). [PDF](https://drops.dagstuhl.de/storage/00lipics/lipics-vol056-ecoop2016/LIPIcs.ECOOP.2016.2/LIPIcs.ECOOP.2016.2.pdf). The CodeQL query language — closest commercial analogue to what `cd-9hp.1` is reaching for.
+- Bravenboer, Smaragdakis — *Strictly Declarative Specification of Sophisticated Points-to Analyses* (OOPSLA 2009). [PDF](https://courses.cs.washington.edu/courses/cse503/10wi/readings/p243-bravenboer.pdf). The Doop framework; classic treatment of "Datalog for static analysis."
+- Padioleau, Lawall, Muller, Hansen — *Documenting and Automating Collateral Evolutions in Linux Device Drivers* (EuroSys 2008). [PDF](https://who.paris.inria.fr/Julia.Lawall/eurosys08.pdf). Coccinelle's semantic-patches paper; influential precedent for declarative rewrites over an AST.
+- Semgrep — [semgrep.dev](https://semgrep.dev). Pragmatic; less expressive than Datalog but exactly the surface a user of the predicate DSL would expect.
+
+### 6.3 Architectural conformance and fitness functions
+
+- Murphy, Notkin, Sullivan — *Software Reflexion Models* (FSE 1995). [PDF](https://www.cs.ubc.ca/~murphy/papers/rm/reflexion_model_fse95.pdf). Original formalism for "declared architecture vs actual code dependencies, computed automatically." Cofferdam's `[layers]` + `Design.LayerViolation` is a direct descendant — most of the architectural-rule literature traces back here.
+- Sangal, Jordan, Sinha, Jackson — *Using Dependency Models to Manage Complex Software Architecture* (OOPSLA 2005). [PDF](https://groups.csail.mit.edu/sdg/pubs/2005/oopsla05-dsm.pdf). Dependency Structure Matrix; same problem space, different visualisation.
+- Ford, Parsons, Kua — *Building Evolutionary Architectures* (O'Reilly, 2nd ed 2022). Practitioner book; coined "architectural fitness functions." Not free; available through O'Reilly or a library.
+- ArchUnit — [archunit.org](https://archunit.org). Library for writing architectural rules in JUnit. Compare its fluent-API style against cofferdam's spec-in-config style.
+
+### 6.4 The lineage cofferdam already lives in
+
+- Credo — [github.com/rrrene/credo](https://github.com/rrrene/credo). Cited in the README. Read the source; the five-category taxonomy and the priority/severity split are direct inheritances.
+- ESLint custom rules — [eslint.org/docs/latest/extend/custom-rules](https://eslint.org/docs/latest/extend/custom-rules). The per-file AST visitor pattern; shows what cofferdam's `run` phase looks like without a `finalize` or shared spec.
+- Clippy — Rust's lint library. Existence proof that a mature lint can survive without an architectural-rules story.
+
+### 6.5 Theory worth knowing for the DSL design
+
+- Cousot, Cousot — *Abstract Interpretation: A Unified Lattice Model for Static Analysis of Programs by Construction or Approximation of Fixpoints* (POPL 1977). [PDF](https://www.di.ens.fr/~cousot/publications.www/CousotCousot-POPL-77-ACM-p238--252-1977.pdf). Heavy reading; relevant only if cofferdam ever extends toward soundness guarantees rather than best-effort heuristics.
+- Maier, Tekle, Warren — *Datalog and Logic Databases* (Morgan & Claypool, 2018). Modern Datalog textbook. Not free; understanding bottom-up evaluation and stratified negation before designing the DSL surface saves redesigns.
+
+### 6.6 If you read one thing first
+
+The Yamaguchi Code Property Graphs paper plus a couple of hours with the Joern docs. It is the most direct precedent for the "graph as substrate for rule queries" architecture cofferdam is moving toward, and the gap between what they did and what cofferdam needs makes the design problem concrete fast. After that: the Murphy reflexion-models paper, for the architectural-conformance heritage cofferdam already inherits; then the Glean blog post, for what a production knowledge-graph-over-code looks like at scale.
+
+---
+
 ## Glossary
 
 Terms used in this document and across the codebase, sorted alphabetically. Code anchors point to definitions.

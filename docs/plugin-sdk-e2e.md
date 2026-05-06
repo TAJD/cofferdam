@@ -401,7 +401,11 @@ ApiFirst (Phoenix contracts, no clean TS analogue). If a Pattern B/C signal
 turns up later that's worth a fixture, file a fresh bead — don't force a
 literal port from rovikore.
 
-## 7. Open questions for the SDK epic
+## 7. ts-morph routing status (0.2.x)
+
+`DefineCheckInput.requiresTypes` (and the matching `Check.requiresTypes` field) is accepted by the type system and propagated through `defineCheck`, but **type-aware routing via ts-morph is not wired in the 0.2.x line**. A plugin that sets `requiresTypes: true` will still run — its `run()` callback fires per file exactly as it would for any other check — but no type information is injected and the engine does not invoke ts-morph before or after the call. To avoid silent surprises, the plugin host emits a one-time warning to stderr at load time when it encounters a plugin with `requiresTypes: true`: `[cofferdam] plugin "<id>" sets requiresTypes:true — type-aware routing (ts-morph) is not yet wired in 0.2.x; the check will run without type information. Track cd-l58 / gh #16 for status.` Plugin authors should treat the field as a declaration of intent and not depend on type data being present until the wiring lands. Track cd-l58 / [gh #16](https://github.com/TAJD/cofferdam/issues/16) for status.
+
+## 8. Open questions for the SDK epic
 
 These are decisions the SDK epic owners need to make; logging here so they
 don't get lost when cd-7e4 starts.

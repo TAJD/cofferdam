@@ -169,6 +169,193 @@ test("findAll + walk round-trip through wire format", () => {
   }
 });
 
+// cd-5kc: MemberExpression.computed coverage.
+// Verifies the four (computed, property) cases the Rust wire builder
+// emits for member-access expressions:
+//
+//   const a = Math.random();         // computed=false, property="random"
+//   const b = Math["random"]();      // computed=true,  property="random"
+//   const c = process["env"]["FOO"]; // computed=true,  property="env" (inner)
+//                                    // computed=true,  property="FOO" (outer)
+//   const k = "random";
+//   const d = Math[k]();             // computed=true,  property=undefined
+//
+// The Rust serializer (ast_wire.rs::visit_member_expression) resolves
+// `property` for ComputedMemberExpression only when the index expression
+// is a StringLiteral; dynamic expressions stay undefined. StaticMember
+// (dot-form) always resolves. This test exercises the hand-built wire
+// format directly so it runs without the Rust binary.
+test("MemberExpression.computed coverage — static, string-literal, chained, dynamic", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "cofferdam-member-test-"));
+  try {
+    const sdkUrl = new URL("../dist/index.js", import.meta.url).href;
+    const pluginDir = mkdtempSync(join(tmp, "member-plugin-"));
+    const pluginFile = join(pluginDir, "index.mjs");
+
+    // Plugin collects every MemberExpression's (computed, property) tuple
+    // and reports it as a JSON string so the test can assert the exact
+    // values without depending on the reporting span format.
+    writeFileSync(
+      pluginFile,
+      `
+import { defineCheck, Category, Severity } from ${JSON.stringify(sdkUrl)};
+
+export default defineCheck({
+  id: "MemberCoverage",
+  category: Category.Warning,
+  basePriority: 0,
+  defaultSeverity: Severity.Low,
+  explanation: "Collects MemberExpression tuples for test assertions.",
+  run(file, ctx) {
+    if (!file.ast) return;
+    for (const m of file.ast.findAll("MemberExpression")) {
+      ctx.report({
+        message: JSON.stringify({ computed: m.computed, property: m.property ?? null }),
+        span: m.span,
+      });
+    }
+  },
+});
+`,
+    );
+    writeFileSync(
+      join(pluginDir, "package.json"),
+      JSON.stringify({ type: "module", main: "index.mjs" }),
+    );
+
+    // Hand-built wire matching the Rust serializer output for:
+    //
+    //   const a = Math.random();         // node 1 (static)
+    //   const b = Math["random"]();      // node 2 (computed, string)
+    //   const c = process["env"]["FOO"]; // node 3 outer, node 4 inner (chained)
+    //   const d = Math[k]();             // node 5 (computed, dynamic)
+    //
+    // Spans are placeholders (line 1, col 1, byte 0–1) — the test only
+    // inspects the member-shape extras, not the span coordinates.
+    const S = { line: 1, column: 1, start_byte: 0, end_byte: 1 };
+    const manifest = {
+      cwd: tmp,
+      plugins: [pluginDir],
+      files: [
+        {
+          path: join(tmp, "member.ts"),
+          text: "x",
+          lineViews: [],
+          ast: {
+            rootIdx: 0,
+            nodes: [
+              // 0: Program
+              { kind: "Program", span: S, firstChild: 1, nextSibling: -1 },
+              // 1: Math.random — static (computed=false, property="random")
+              {
+                kind: "MemberExpression",
+                span: S,
+                firstChild: 6,
+                nextSibling: 2,
+                objectIdx: 6,
+                property: "random",
+                computed: false,
+              },
+              // 2: Math["random"] — computed, string literal (computed=true, property="random")
+              {
+                kind: "MemberExpression",
+                span: S,
+                firstChild: 7,
+                nextSibling: 3,
+                objectIdx: 7,
+                property: "random",
+                computed: true,
+              },
+              // 3: process["env"]["FOO"] outer — (computed=true, property="FOO")
+              {
+                kind: "MemberExpression",
+                span: S,
+                firstChild: 4,
+                nextSibling: 5,
+                objectIdx: 4,
+                property: "FOO",
+                computed: true,
+              },
+              // 4: process["env"] inner — (computed=true, property="env")
+              {
+                kind: "MemberExpression",
+                span: S,
+                firstChild: 8,
+                nextSibling: -1,
+                objectIdx: 8,
+                property: "env",
+                computed: true,
+              },
+              // 5: Math[k] — computed, dynamic (computed=true, property=undefined→null on wire)
+              {
+                kind: "MemberExpression",
+                span: S,
+                firstChild: 9,
+                nextSibling: -1,
+                objectIdx: 9,
+                property: null,
+                computed: true,
+              },
+              // 6: IdentifierReference "Math" (object of node 1)
+              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
+              // 7: IdentifierReference "Math" (object of node 2)
+              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
+              // 8: IdentifierReference "process" (object of node 4)
+              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "process" },
+              // 9: IdentifierReference "Math" (object of node 5)
+              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
+            ],
+          },
+        },
+      ],
+      options: {},
+    };
+
+    const { reports, errors } = runHost(manifest);
+    assert.equal(errors.length, 0, `expected no host errors, got: ${JSON.stringify(errors)}`);
+
+    // Parse the reported tuples (reported in document order = node index order).
+    const tuples = reports.map((r) => JSON.parse(r.message));
+    assert.equal(tuples.length, 5, "expected 5 MemberExpression reports");
+
+    // Case 1: Math.random — dot-form (static), always resolves.
+    assert.deepEqual(
+      tuples[0],
+      { computed: false, property: "random" },
+      "Math.random: computed=false, property='random'",
+    );
+
+    // Case 2: Math["random"] — computed, string-literal index, resolves to "random".
+    assert.deepEqual(
+      tuples[1],
+      { computed: true, property: "random" },
+      "Math['random']: computed=true, property='random'",
+    );
+
+    // Cases 3a/3b: process["env"]["FOO"] — outer first (node 3 precedes node 4
+    // in the flat array document order used by findAll).
+    assert.deepEqual(
+      tuples[2],
+      { computed: true, property: "FOO" },
+      "process['env']['FOO'] outer: computed=true, property='FOO'",
+    );
+    assert.deepEqual(
+      tuples[3],
+      { computed: true, property: "env" },
+      "process['env'] inner: computed=true, property='env'",
+    );
+
+    // Case 4: Math[k] — computed, runtime variable, stays undefined (null on wire).
+    assert.deepEqual(
+      tuples[4],
+      { computed: true, property: null },
+      "Math[k]: computed=true, property=null (dynamic — not statically determinable)",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("walk honours Walk.Skip", () => {
   const tmp = mkdtempSync(join(tmpdir(), "cofferdam-walk-test-"));
   try {

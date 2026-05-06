@@ -63,7 +63,18 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
   readonly explanation: string;
   /** Optional long-form catalog body used by `cofferdam explain --full`. */
   readonly body: string | undefined;
-  /** Whether the check needs full type-aware analysis (routes through ts-morph). */
+  /**
+   * Whether the check needs full type-aware analysis (routes through ts-morph).
+   *
+   * **Status (0.2.x): not yet implemented.** Setting this to `true` is
+   * accepted by the type system and recorded on the `Check` object, but the
+   * engine does **not** route the check through ts-morph and no type
+   * information is made available inside `run()`. The field is reserved for
+   * future use; type-aware routing via ts-morph is on the roadmap (tracked
+   * as cd-l58 / gh #16). Until that work lands, treat `requiresTypes: true`
+   * as a declaration of intent only — the check will still run, but without
+   * type data.
+   */
   readonly requiresTypes: boolean;
   /** Two-pass consistency mode. */
   readonly consistency: boolean;
@@ -86,6 +97,19 @@ export interface DefineCheckInput<S extends OptionsSchema> {
   readonly defaultSeverity?: Severity;
   readonly explanation: string;
   readonly body?: string;
+  /**
+   * Whether the check needs full type-aware analysis (routes through ts-morph).
+   *
+   * **Status (0.2.x): not yet implemented.** Setting this to `true` is
+   * accepted by the type system and recorded on the `Check` object, but the
+   * engine does **not** route the check through ts-morph and no type
+   * information is made available inside `run()`. The field is reserved for
+   * future use; type-aware routing via ts-morph is on the roadmap (tracked
+   * as cd-l58 / gh #16). Until that work lands, treat `requiresTypes: true`
+   * as a declaration of intent only — the check will still run, but without
+   * type data. The plugin host will emit a one-time warning to stderr at
+   * load time when this is `true`.
+   */
   readonly requiresTypes?: boolean;
   readonly consistency?: boolean;
   /** Schema; defaults to `{}`. Inferred at the call site. */

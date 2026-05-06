@@ -93,6 +93,31 @@ import type {
 
 Everything in this list is part of the stability contract; new exports are additive. Removing or renaming an export is a breaking change.
 
+## MemberExpression property resolution
+
+`MemberExpressionNode` exposes two fields: `computed: boolean` and `property: string | undefined`.
+
+- **Dot-form** (`obj.foo`, `computed=false`): `property` is always the identifier name — e.g. `"foo"`.
+- **String-literal-indexed** (`obj["foo"]`, `computed=true`): `property` resolves to the literal value — e.g. `"foo"`. The resolver only applies when the index is a bare string literal; template literals and concatenation are treated as dynamic.
+- **Dynamic-indexed** (`obj[runtimeVar]`, `computed=true`): `property` is `undefined`. The index is not statically determinable. Use `file.text.slice(node.span.start_byte, node.span.end_byte)` if you need the surface form.
+
+In short: **`property` is always set for dot-form, and set for string-literal bracket-form. It is `undefined` only when the index is truly dynamic.**
+
+```ts
+for (const m of file.ast.findAll("MemberExpression")) {
+  if (m.property === "fetch") {
+    // Catches both obj.fetch and obj["fetch"]
+    ctx.report({ message: "...", span: m.span });
+  }
+}
+```
+
+## ts-morph routing status (0.2.x)
+
+`DefineCheckInput` exposes a `requiresTypes?: boolean` field for checks that need full type-aware analysis (resolved types, inferred generics, call signatures). **This field is reserved for future use in 0.2.x and is not yet wired.** Setting `requiresTypes: true` today is accepted by the type system and recorded on the `Check` object, but the engine does not route the check through ts-morph and no type information is available inside `run()`. The plugin host emits a one-time warning to stderr at load time when it encounters a plugin with `requiresTypes: true` so authors are not left wondering why type data is absent.
+
+Type-aware routing via ts-morph is on the roadmap. Track cd-l58 / [gh #16](https://github.com/TAJD/cofferdam/issues/16) for status.
+
 ## Versioning
 
 The SDK ships in lockstep with the cofferdam binary. `@cofferdam/check-sdk@X.Y.Z` is built and tested against `cofferdam@X.Y.Z`; the cofferdam plugin host enforces a major-version compatibility check at load time and refuses to run plugins whose vendored SDK is from a different major.

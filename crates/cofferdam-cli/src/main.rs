@@ -791,13 +791,26 @@ fn run_check(args: CheckArgs) -> ExitCode {
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
 
     if baseline_active {
-        let signed = match engine.analyze_with_signatures(&files) {
+        let mut signed = match engine.analyze_with_signatures(&files) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("error: {e}");
                 return ExitCode::from(2);
             }
         };
+        // Plugin host invocation (cd-1c7). Plugin findings flow through
+        // the baseline pipeline as first-class peers: signatures are
+        // computed against the same source text, so existing tech debt
+        // can be baselined and only NEW plugin findings trigger the
+        // gate. Plugin issues bypass the engine's suppression filter,
+        // so the helper re-applies it.
+        if let Some(cfg) = project_config.as_ref() {
+            signed.extend(run_plugins_filtered_with_signatures(
+                cfg,
+                resolved_config_path.as_deref(),
+                &files,
+            ));
+        }
         let lookup: HashSet<&BaselineEntry> = baseline_loaded
             .as_ref()
             .map(Baseline::lookup_set)
@@ -814,6 +827,15 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 (issue, baselined)
             })
             .collect();
+        // Re-sort because plugin issues were appended after the engine's
+        // own priority/check_id/file ordering.
+        tagged.sort_by(|(a, _), (b, _)| {
+            b.priority
+                .0
+                .cmp(&a.priority.0)
+                .then_with(|| a.check_id.cmp(&b.check_id))
+                .then_with(|| a.file.cmp(&b.file))
+        });
 
         // CI gate: only NEW (un-baselined) findings at or above
         // `--fail-on` trigger exit 1. Computed from the full set BEFORE
@@ -889,52 +911,16 @@ fn run_check(args: CheckArgs) -> ExitCode {
     } else {
         match engine.analyze(&files) {
             Ok(mut issues) => {
-                // Plugin host invocation (cd-7e4 / cd-81a.7). Runs Node-side
-                // plugins declared in `cofferdam.toml`'s `plugins = [...]`
-                // array against the same file set, merges resulting
-                // findings into the engine's stream. Plugin issues bypass
-                // the engine's suppression filter, so we re-run the
-                // suppression directives parser against them here.
+                // Plugin host invocation (cd-7e4 / cd-81a.7 / cd-1c7).
+                // Runs Node-side plugins declared in `cofferdam.toml`'s
+                // `plugins = [...]` array against the same file set,
+                // merges resulting findings into the engine's stream so
+                // they participate in the `--fail-on` gate.
                 if let Some(cfg) = project_config.as_ref() {
-                    if !cfg.plugins.is_empty() {
-                        let cfg_dir = resolved_config_path
-                            .as_deref()
-                            .and_then(Path::parent)
-                            .map(Path::to_path_buf)
-                            .unwrap_or_else(|| PathBuf::from("."));
-                        let plugin_issues = plugins::run_plugins(
-                            &cfg.plugins,
-                            &files,
-                            &cfg_dir,
-                            &cfg.checks,
-                            cfg.layers.as_ref(),
-                        );
-                        let suppression_cache: HashMap<
-                            PathBuf,
-                            cofferdam_engine::suppress::Suppressions,
-                        > = files
-                            .iter()
-                            .filter_map(|p| {
-                                let text = std::fs::read_to_string(p).ok()?;
-                                Some((
-                                    p.clone(),
-                                    cofferdam_engine::suppress::Suppressions::parse(&text),
-                                ))
-                            })
-                            .collect();
-                        let filtered: Vec<_> = plugin_issues
-                            .into_iter()
-                            .filter(|issue| {
-                                let Some(sup) = suppression_cache.get(&issue.file) else {
-                                    return true;
-                                };
-                                let bare =
-                                    issue.check_id.rsplit('.').next().unwrap_or(&issue.check_id);
-                                !sup.is_suppressed(issue.span.line, &issue.check_id)
-                                    && !sup.is_suppressed(issue.span.line, bare)
-                            })
-                            .collect();
-                        issues.extend(filtered);
+                    let plugin_filtered =
+                        run_plugins_filtered(cfg, resolved_config_path.as_deref(), &files);
+                    if !plugin_filtered.is_empty() {
+                        issues.extend(plugin_filtered);
                         issues.sort_by(|a, b| {
                             b.priority
                                 .0
@@ -1002,6 +988,83 @@ fn run_check(args: CheckArgs) -> ExitCode {
             }
         }
     }
+}
+
+/// Run Node-side plugins declared in `cofferdam.toml`, then re-apply the
+/// suppression directive parser to plugin findings (plugins bypass the
+/// engine's built-in suppression pass since they emit out-of-band).
+///
+/// Returns `Vec::new()` when no plugins are configured. Errors loading
+/// or running plugins surface as synthetic `Warning.Plugin*` findings
+/// inside the returned vec — same shape as built-in findings — so they
+/// flow through baselining, suppression, and the `--fail-on` gate.
+fn run_plugins_filtered(
+    cfg: &ProjectConfig,
+    resolved_config_path: Option<&Path>,
+    files: &[PathBuf],
+) -> Vec<cofferdam_core::Issue> {
+    if cfg.plugins.is_empty() {
+        return Vec::new();
+    }
+    let cfg_dir = resolved_config_path
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let plugin_issues = plugins::run_plugins(
+        &cfg.plugins,
+        files,
+        &cfg_dir,
+        &cfg.checks,
+        cfg.layers.as_ref(),
+    );
+    let suppression_cache: HashMap<PathBuf, cofferdam_engine::suppress::Suppressions> = files
+        .iter()
+        .filter_map(|p| {
+            let text = std::fs::read_to_string(p).ok()?;
+            Some((
+                p.clone(),
+                cofferdam_engine::suppress::Suppressions::parse(&text),
+            ))
+        })
+        .collect();
+    plugin_issues
+        .into_iter()
+        .filter(|issue| {
+            let Some(sup) = suppression_cache.get(&issue.file) else {
+                return true;
+            };
+            let bare = issue.check_id.rsplit('.').next().unwrap_or(&issue.check_id);
+            !sup.is_suppressed(issue.span.line, &issue.check_id)
+                && !sup.is_suppressed(issue.span.line, bare)
+        })
+        .collect()
+}
+
+/// Sister of `run_plugins_filtered` that pairs each surviving plugin
+/// finding with its baseline signature. Used by the baseline-aware
+/// `cofferdam check` path and by `cofferdam baseline write` so plugin
+/// findings can be tagged-against / written-into `.cofferdam/baseline.json`
+/// the same way engine findings are.
+fn run_plugins_filtered_with_signatures(
+    cfg: &ProjectConfig,
+    resolved_config_path: Option<&Path>,
+    files: &[PathBuf],
+) -> Vec<(cofferdam_core::Issue, String)> {
+    let issues = run_plugins_filtered(cfg, resolved_config_path, files);
+    if issues.is_empty() {
+        return Vec::new();
+    }
+    let mut texts: HashMap<PathBuf, String> = HashMap::new();
+    issues
+        .into_iter()
+        .map(|issue| {
+            let text = texts
+                .entry(issue.file.clone())
+                .or_insert_with(|| std::fs::read_to_string(&issue.file).unwrap_or_default());
+            let sig = baseline::signature_for_span(text, &issue.span);
+            (issue, sig)
+        })
+        .collect()
 }
 
 /// Truncate `issues` to the first `max` entries (engine output is
@@ -1133,13 +1196,22 @@ fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
         }
         None => Engine::new(all_builtins()),
     };
-    let signed = match engine.analyze_with_signatures(&files) {
+    let mut signed = match engine.analyze_with_signatures(&files) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(2);
         }
     };
+    // Include plugin findings in the baseline so existing plugin-flagged
+    // tech debt can be acknowledged and gradually paid down (cd-1c7).
+    if let Some(cfg) = project_config.as_ref() {
+        signed.extend(run_plugins_filtered_with_signatures(
+            cfg,
+            resolved_config_path.as_deref(),
+            &files,
+        ));
+    }
 
     let project_root = project_root_for_baseline(Some(&target));
     let entries: Vec<BaselineEntry> = signed

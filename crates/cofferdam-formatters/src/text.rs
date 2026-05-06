@@ -113,34 +113,24 @@ impl TextFormatter {
 
             let _ = writeln!(out, "\n── {:?} ───────────────", category);
             for (issue, baselined) in bucket {
-                let tag = if baselined { " [baselined]" } else { "" };
-                let _ = writeln!(
-                    out,
-                    "  [{:>3}] [{:>8}] {}:{}:{}  {}  ({}){}",
-                    issue.priority.0,
-                    issue.severity.as_str(),
-                    normalize_path(&issue.file),
-                    issue.span.line,
-                    issue.span.column,
-                    issue.message,
-                    issue.check_id,
-                    tag,
-                );
-                if !issue.related.is_empty() {
-                    let locations: Vec<String> = issue
-                        .related
-                        .iter()
-                        .map(|r| {
-                            format!(
-                                "{}:{}:{}",
-                                normalize_path(&r.file),
-                                r.span.line,
-                                r.span.column
-                            )
-                        })
-                        .collect();
-                    let _ = writeln!(out, "        also at: {}", locations.join(", "));
-                }
+                render_row(&mut out, issue, baselined);
+            }
+        }
+
+        // Plugin findings whose IDs don't begin with a built-in category
+        // prefix (e.g. `Project.X`, `Test.Y`) would otherwise be counted
+        // in the summary but never rendered — silently dropping them
+        // from the human view is exactly the failure mode of cd-1c7.
+        // Surface them under an `Other` heading.
+        let other_bucket: Vec<(&Issue, bool)> = renderable
+            .iter()
+            .filter(|(i, _)| category_of(&i.check_id).is_none())
+            .copied()
+            .collect();
+        if !other_bucket.is_empty() {
+            let _ = writeln!(out, "\n── Other ───────────────");
+            for (issue, baselined) in other_bucket {
+                render_row(&mut out, issue, baselined);
             }
         }
 
@@ -164,6 +154,40 @@ impl TextFormatter {
             }
         }
         out
+    }
+}
+
+/// Render one finding row. Shared between the per-category buckets and
+/// the trailing `Other` bucket so plugin findings render identically to
+/// built-ins.
+fn render_row(out: &mut String, issue: &Issue, baselined: bool) {
+    let tag = if baselined { " [baselined]" } else { "" };
+    let _ = writeln!(
+        out,
+        "  [{:>3}] [{:>8}] {}:{}:{}  {}  ({}){}",
+        issue.priority.0,
+        issue.severity.as_str(),
+        normalize_path(&issue.file),
+        issue.span.line,
+        issue.span.column,
+        issue.message,
+        issue.check_id,
+        tag,
+    );
+    if !issue.related.is_empty() {
+        let locations: Vec<String> = issue
+            .related
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{}:{}",
+                    normalize_path(&r.file),
+                    r.span.line,
+                    r.span.column
+                )
+            })
+            .collect();
+        let _ = writeln!(out, "        also at: {}", locations.join(", "));
     }
 }
 
@@ -330,6 +354,22 @@ mod tests {
         );
         assert!(output.contains("src/new.ts"));
         assert!(output.contains("1 finding(s) (1 new, 0 baselined"));
+    }
+
+    #[test]
+    fn unknown_category_renders_under_other_bucket() {
+        // Plugin findings whose check_id prefix isn't one of the five
+        // built-in categories must still render in human output (cd-1c7).
+        let plugin = make_issue(PathBuf::from("src/foo.ts"), "Project.UseHelper");
+        let output = TextFormatter::render(&[plugin]);
+        assert!(
+            output.contains("── Other"),
+            "uncategorized findings must render under the Other heading; got:\n{output}"
+        );
+        assert!(
+            output.contains("Project.UseHelper"),
+            "the plugin check id must appear in the rendered row; got:\n{output}"
+        );
     }
 
     #[test]

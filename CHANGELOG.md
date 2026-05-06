@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-06
+
+### Added
+- `cofferdam advise --diff <git-ref>` — pre-flight validation for proposed changes (cd-ugh). Runs the full check pipeline against `git show <ref>:<path>` source AND the working tree, then reports `would_fire` (rules introduced by the change) and `would_clear` (rules cleared by the change). Findings are keyed by `(file, check_id, rule_signature)` reusing the baseline subsystem's SHA-256-of-trimmed-span scheme, so reformats and line shifts don't show up as spurious entries. `--fail-on=<level>` gates only on `would_fire`. Output is JSON regardless of `--format`.
+- `cofferdam advise --diff` includes plugin findings in `would_fire` / `would_clear` (cd-s7f). The plugin host runs on both the materialised pre-diff source and the working-tree post-diff source; plugin issues merge into the same set-diff as engine issues.
+
+### Changed
+- `cofferdam_engine::Engine::analyze_with_text` now delegates to a new `analyze_with_sources(sources)` entry that takes pre-loaded `(PathBuf, String)` pairs without touching the filesystem. Public API is additive — existing callers are unaffected.
+- `cofferdam-cli`'s plugin host gains a sibling `run_plugins_with_sources` that mirrors `run_plugins` but accepts pre-loaded sources. Internal API; the disk-read entry remains the default.
+
+### Fixed
+- `scripts/smoke-install.{sh,ps1}` now look for the binary under `node_modules/@cofferdam/cofferdam/bin/` (the scoped path post-0.2.3 rename). Both scripts asserted the unscoped path, failing CI on every push.
+- `docs/plugin-sdk-guide.md` — reference to `@cofferdam/check-sdk` README now points at the npmjs.com listing instead of the in-repo path. VitePress can't resolve files outside the docs tree, so the dead-link checker was failing the build even though the file exists.
+
 ## [0.2.3] - 2026-05-06
 
 ### Changed

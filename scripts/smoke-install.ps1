@@ -62,10 +62,10 @@ try {
         Remove-Item Env:COFFERDAM_BINARY_PATH -ErrorAction SilentlyContinue
       }
 
-      $InstalledBin = Join-Path $WorkDir "node_modules\cofferdam\bin\$BinName"
+      $InstalledBin = Join-Path $WorkDir "node_modules\@cofferdam\cofferdam\bin\$BinName"
       if (-not (Test-Path -LiteralPath $InstalledBin)) {
         Write-Error "FAIL: binary not at $InstalledBin"
-        Get-ChildItem (Join-Path $WorkDir "node_modules\cofferdam\bin") -ErrorAction SilentlyContinue | Format-Table | Out-String | Write-Host
+        Get-ChildItem (Join-Path $WorkDir "node_modules\@cofferdam\cofferdam\bin") -ErrorAction SilentlyContinue | Format-Table | Out-String | Write-Host
         exit 1
       }
       Write-Host "OK: binary present at $InstalledBin"

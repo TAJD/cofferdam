@@ -13,7 +13,7 @@
 #      at target/release/cofferdam[.exe]
 #   3. npx cofferdam check examples/triple_equals.ts --format json
 #   4. assert exit code (0 or 1 — findings produce exit 1), JSON contains
-#      a Warning.TripleEquals issue, and node_modules/cofferdam/bin/<bin>
+#      a Warning.TripleEquals issue, and node_modules/@cofferdam/cofferdam/bin/<bin>
 #      exists.
 #
 # Local repro:
@@ -70,10 +70,16 @@ echo "==> npm install (COFFERDAM_BINARY_PATH=$BINARY)"
 COFFERDAM_BINARY_PATH="$BINARY" \
   npm install --no-audit --no-fund --foreground-scripts "$TARBALL_ABS"
 
-INSTALLED_BIN="$WORKDIR/node_modules/cofferdam/bin/$BIN_NAME"
+INSTALLED_BIN="$WORKDIR/node_modules/@cofferdam/cofferdam/bin/$BIN_NAME"
 if [[ ! -f "$INSTALLED_BIN" ]]; then
   echo "FAIL: binary not at $INSTALLED_BIN" >&2
-  ls -la "$WORKDIR/node_modules/cofferdam/bin/" >&2 || true
+  ls -la "$WORKDIR/node_modules/@cofferdam/cofferdam/bin/" >&2 || true
+  exit 1
+fi
+# `bin/cofferdam.js` is the package's bin entry; postinstall drops the
+# native binary alongside it. Both must be present.
+if [[ ! -f "$WORKDIR/node_modules/@cofferdam/cofferdam/bin/cofferdam.js" ]]; then
+  echo "FAIL: bin/cofferdam.js missing — package contents incomplete" >&2
   exit 1
 fi
 echo "OK: binary present at $INSTALLED_BIN"

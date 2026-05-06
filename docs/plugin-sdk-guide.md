@@ -4,7 +4,7 @@ This guide walks you from "I want to enforce this rule in my repo" to a
 published, tested plugin. It is the narrative on-ramp; for the acceptance
 contract and golden-file CI shape see
 [`docs/plugin-sdk-e2e.md`](./plugin-sdk-e2e.md). For the full API surface see
-the [`@cofferdam/check-sdk` README](../packages/check-sdk/README.md).
+the [`@cofferdam/check-sdk` README on npm](https://www.npmjs.com/package/@cofferdam/check-sdk).
 
 ## 1. What a cofferdam plugin is
 

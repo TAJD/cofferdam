@@ -273,6 +273,11 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
 * `--no-config` — Disable config-file discovery entirely
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
+* `--diff <GIT-REF>` — Diff mode — run the engine against the working tree AND the state at `<git-ref>`, then report rules that WOULD fire if the change were committed (`would_fire`) plus rules that currently fire on `<git-ref>` but are cleared by the change (`would_clear`). Output is always JSON when this flag is set; `--format` is ignored. Built-in checks only on both passes; plugin findings are not yet diffed
+* `--fail-on <LEVEL>` — Severity gate for `--diff` mode. When set, the process exits 1 if any `would_fire` entry is at or above this level. `would_clear` never gates. No effect without `--diff`
+
+  Possible values: `info`, `low`, `medium`, `high`, `critical`
+
 
 
 

@@ -20,6 +20,10 @@ path = "tests/fix.rs"
 name = "explain_plugin"
 path = "tests/explain_plugin.rs"
 
+[[test]]
+name = "advise_diff"
+path = "tests/advise_diff.rs"
+
 [dependencies]
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }

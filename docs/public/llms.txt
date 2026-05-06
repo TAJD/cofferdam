@@ -4,7 +4,7 @@
 
 ## Install
 
-`npm install --save-dev @cofferdam/cofferdam`
+`npm install --save-dev cofferdam`
 
 ## Catalog
 

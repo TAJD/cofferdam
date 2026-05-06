@@ -1,6 +1,7 @@
 //! Cofferdam CLI entry point.
 
 mod advise;
+mod advise_diff;
 mod ast_wire;
 mod baseline_diff;
 mod baseline_lint;
@@ -324,6 +325,21 @@ enum Cmd {
         /// Disable `.gitignore` / `.cofferdamignore` filtering.
         #[arg(long)]
         no_ignore: bool,
+        /// Diff mode — run the engine against the working tree AND the
+        /// state at `<git-ref>`, then report rules that WOULD fire if
+        /// the change were committed (`would_fire`) plus rules that
+        /// currently fire on `<git-ref>` but are cleared by the change
+        /// (`would_clear`). Output is always JSON when this flag is
+        /// set; `--format` is ignored. Built-in checks only on both
+        /// passes; plugin findings are not yet diffed.
+        #[arg(long, value_name = "GIT-REF")]
+        diff: Option<String>,
+        /// Severity gate for `--diff` mode. When set, the process
+        /// exits 1 if any `would_fire` entry is at or above this
+        /// level. `would_clear` never gates. No effect without
+        /// `--diff`.
+        #[arg(long, value_enum, value_name = "LEVEL")]
+        fail_on: Option<FailOnLevel>,
     },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
@@ -543,6 +559,25 @@ fn main() -> ExitCode {
         }),
         Cmd::Advise {
             paths,
+            format: _,
+            robot: _,
+            pretty,
+            config,
+            no_config,
+            hidden: _,
+            no_ignore: _,
+            diff,
+            fail_on,
+        } if diff.is_some() => advise_diff::run(advise_diff::DiffArgs {
+            diff_ref: diff.expect("checked by guard"),
+            paths,
+            fail_on: fail_on.map(Severity::from),
+            config_path: config,
+            no_config,
+            pretty,
+        }),
+        Cmd::Advise {
+            paths,
             format,
             robot,
             pretty,
@@ -550,6 +585,8 @@ fn main() -> ExitCode {
             no_config,
             hidden,
             no_ignore,
+            diff: _,
+            fail_on: _,
         } => advise::run(advise::AdviseArgs {
             paths,
             format: match format.unwrap_or(if robot {

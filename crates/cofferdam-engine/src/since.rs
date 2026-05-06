@@ -74,6 +74,87 @@ pub fn changed_files_since(repo_root: &Path, git_ref: &str) -> Result<Vec<PathBu
     Ok(paths)
 }
 
+/// List the files changed in the working tree relative to `git_ref`
+/// (added, modified, or renamed). Unlike [`changed_files_since`], this
+/// includes uncommitted edits — both staged and unstaged — in addition
+/// to commits ahead of `git_ref`. The semantics match `git diff <ref>`
+/// (no `...HEAD`) which is "everything in the working tree that differs
+/// from `<ref>`."
+///
+/// Used by `cofferdam advise --diff <ref>` to determine the set of
+/// files whose state has diverged from `<ref>`. Same `--diff-filter=AMR`
+/// rationale applies — deletions have no post-diff source to analyse.
+pub fn working_tree_changed_files(
+    repo_root: &Path,
+    git_ref: &str,
+) -> Result<Vec<PathBuf>, SinceError> {
+    let out = Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=AMR", git_ref])
+        .current_dir(repo_root)
+        .output()
+        .map_err(SinceError::Spawn)?;
+    if !out.status.success() {
+        return Err(SinceError::DiffFailed {
+            code: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    }
+    let raw = std::str::from_utf8(&out.stdout).map_err(|_| SinceError::NonUtf8Output)?;
+    let mut paths = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        paths.push(repo_root.join(trimmed));
+    }
+    Ok(paths)
+}
+
+/// Read the contents of `path` as it existed at `git_ref`. Uses
+/// `git show <ref>:<repo-relative-path>`.
+///
+/// Returns `Ok(None)` when the file did not exist at `<ref>` (added file
+/// in the diff), differentiated from genuine errors. The pre-diff source
+/// for an added file is the empty set — caller treats this as "no
+/// findings to compare against."
+///
+/// `path` may be absolute or relative; if absolute it must be under
+/// `repo_root`. We strip the prefix because git wants repo-relative
+/// paths in `<ref>:<path>` syntax.
+pub fn read_at_ref(
+    repo_root: &Path,
+    git_ref: &str,
+    path: &Path,
+) -> Result<Option<String>, SinceError> {
+    let rel: PathBuf = if path.is_absolute() {
+        match path.strip_prefix(repo_root) {
+            Ok(r) => r.to_path_buf(),
+            Err(_) => return Ok(None), // outside repo — treat as nonexistent at ref
+        }
+    } else {
+        path.to_path_buf()
+    };
+    // Git wants forward slashes regardless of host OS in the `<ref>:<path>` syntax.
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    let spec = format!("{}:{}", git_ref, rel_str);
+    let out = Command::new("git")
+        .args(["show", &spec])
+        .current_dir(repo_root)
+        .output()
+        .map_err(SinceError::Spawn)?;
+    if !out.status.success() {
+        // Most common failure: file did not exist at <ref> (added in diff).
+        // git emits "fatal: path '<path>' does not exist in '<ref>'" or
+        // similar. Treat any non-zero as "absent at ref" rather than an
+        // error — the caller's mental model is "compare WT to ref," and
+        // a missing pre-source is just an empty pre-state.
+        return Ok(None);
+    }
+    let text = String::from_utf8(out.stdout).map_err(|_| SinceError::NonUtf8Output)?;
+    Ok(Some(text))
+}
+
 /// Filter `discovered` to the subset that also appears in `changed`.
 /// Comparison is canonicalised so paths from different sources
 /// (relative discovery output vs git's repo-relative output) line up.

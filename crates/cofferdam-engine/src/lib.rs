@@ -142,8 +142,36 @@ impl Engine {
         &self,
         paths: &[P],
     ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
+        // Read each path from disk and delegate to the source-driven
+        // entry point. Any I/O error short-circuits with `EngineError::ReadFile`.
+        let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(paths.len());
+        for path in paths {
+            let path = path.as_ref();
+            let text = std::fs::read_to_string(path).map_err(|source| EngineError::ReadFile {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            sources.push((path.to_path_buf(), text));
+        }
+        Ok(self.analyze_with_sources(sources))
+    }
+
+    /// Run analysis against pre-loaded `(path, text)` pairs without
+    /// touching the filesystem. Required for callers that materialise
+    /// source from somewhere other than the working tree — `cofferdam
+    /// advise --diff <ref>` is the load-bearing consumer; it resolves
+    /// pre-diff source via `git show <ref>:<path>` and runs the full
+    /// engine on it to compute baseline findings.
+    ///
+    /// Behaviour matches `analyze_with_text` byte-for-byte aside from
+    /// the source. Returns the same `(issues, texts)` shape so callers
+    /// can run baseline-signature computation on the result.
+    pub fn analyze_with_sources(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         let mut issues = Vec::new();
-        let mut texts: HashMap<PathBuf, String> = HashMap::with_capacity(paths.len());
+        let mut texts: HashMap<PathBuf, String> = HashMap::with_capacity(sources.len());
         // One corpus per analysis run: shared by every per-file CheckContext
         // and the post-pass FinalizeContext below. Cross-file checks (DRY,
         // export-graph rules) collect into it during run() and read it back
@@ -186,14 +214,9 @@ impl Engine {
             }
         }
 
-        for path in paths {
-            let path = path.as_ref();
-            let text = std::fs::read_to_string(path).map_err(|source| EngineError::ReadFile {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            let file = SourceFile::new(path.to_path_buf(), text.clone());
-            texts.insert(path.to_path_buf(), text);
+        for (path, text) in &sources {
+            let file = SourceFile::new(path.clone(), text.clone());
+            texts.insert(path.clone(), text.clone());
 
             // Per-file allocator. Lives until the file's checks finish,
             // then drops with the AST it owns. Bumpalo allocation makes
@@ -241,13 +264,12 @@ impl Engine {
             .collect();
 
         if !consistency_checks.is_empty() {
-            for path in paths {
-                let path = path.as_ref();
+            for (path, _) in &sources {
                 let text = match texts.get(path) {
                     Some(t) => t,
                     None => continue, // file failed to parse in pass 1 — skip
                 };
-                let file = SourceFile::new(path.to_path_buf(), text.clone());
+                let file = SourceFile::new(path.clone(), text.clone());
                 let allocator = Allocator::default();
                 let parsed_return = parse_into(&allocator, &file);
                 if parse_fatal(&parsed_return) {
@@ -329,7 +351,7 @@ impl Engine {
                 .then_with(|| a.span.line.cmp(&b.span.line))
         });
 
-        Ok((issues, texts))
+        (issues, texts)
     }
 
     /// Run analysis and emit each issue paired with its baseline

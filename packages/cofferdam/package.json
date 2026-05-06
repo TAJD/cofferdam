@@ -1,8 +1,11 @@
 {
-  "name": "cofferdam",
-  "version": "0.2.2",
+  "name": "@cofferdam/cofferdam",
+  "version": "0.2.3",
   "description": "TypeScript code-quality analyzer — Rust core + JS plugin layer, inspired by Elixir's Credo",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TAJD/cofferdam.git",

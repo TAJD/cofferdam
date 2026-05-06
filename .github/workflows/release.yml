@@ -196,9 +196,9 @@ jobs:
         with:
           node-version: "24"
           # No registry-url + no auth token: this job authenticates to npm via
-          # OIDC (Trusted Publisher configured at npmjs.com/package/cofferdam/access).
-          # `id-token: write` permission at the workflow level is what makes
-          # it work.
+          # OIDC (Trusted Publisher configured at
+          # npmjs.com/package/@cofferdam/cofferdam/access). `id-token: write`
+          # permission at the workflow level is what makes it work.
 
       - name: Pin npm to 11.x (OIDC publishing requires npm 11.5.1+)
         # Node 24 already ships with npm 11.x. We still re-install to a pinned
@@ -356,14 +356,14 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           for attempt in $(seq 1 12); do
-            if npm view "cofferdam@$version" version > /dev/null 2>&1; then
-              echo "cofferdam@$version visible on npm (attempt $attempt)"
+            if npm view "@cofferdam/cofferdam@$version" version > /dev/null 2>&1; then
+              echo "@cofferdam/cofferdam@$version visible on npm (attempt $attempt)"
               exit 0
             fi
-            echo "waiting for cofferdam@$version on npm... ($attempt/12)"
+            echo "waiting for @cofferdam/cofferdam@$version on npm... ($attempt/12)"
             sleep 10
           done
-          echo "ERROR: cofferdam@$version still not visible after 2 minutes"
+          echo "ERROR: @cofferdam/cofferdam@$version still not visible after 2 minutes"
           exit 1
 
       - name: Run npm install smoke test

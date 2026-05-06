@@ -32,17 +32,17 @@ if (process.env.COFFERDAM_SKIP_DOWNLOAD === '1') {
 }
 
 // pnpm v10+ silently blocks postinstall scripts unless the package is in
-// `pnpm.onlyBuiltDependencies` — when the user runs `pnpm add -D cofferdam`
-// without that allowlist, this script never executes and the binary
-// never lands. By the time we DO run (typically `pnpm rebuild cofferdam`
-// after the user notices the missing binary), surface a one-line hint
-// pointing at the durable fix so they don't hit the same trap on
-// subsequent fresh installs (cd-iui / gh #9).
+// `pnpm.onlyBuiltDependencies` — when the user runs
+// `pnpm add -D @cofferdam/cofferdam` without that allowlist, this script
+// never executes and the binary never lands. By the time we DO run
+// (typically `pnpm rebuild @cofferdam/cofferdam` after the user notices the
+// missing binary), surface a one-line hint pointing at the durable fix so
+// they don't hit the same trap on subsequent fresh installs (cd-iui / gh #9).
 if (/^pnpm\//.test(process.env.npm_config_user_agent || '')) {
   console.log(
     '[cofferdam] pnpm detected. To make future installs work without `pnpm rebuild`,\n' +
       '            add this to your package.json:\n' +
-      '              { "pnpm": { "onlyBuiltDependencies": ["cofferdam"] } }'
+      '              { "pnpm": { "onlyBuiltDependencies": ["@cofferdam/cofferdam"] } }'
   );
 }
 
@@ -66,7 +66,7 @@ main().catch((err) => {
   console.error('Manual install fallback:');
   console.error(`  1. Download from https://github.com/${REPO}/releases/tag/v${VERSION}`);
   console.error(`  2. Extract the archive for your platform`);
-  console.error(`  3. Set COFFERDAM_BINARY_PATH to the extracted binary and run \`npm rebuild cofferdam\``);
+  console.error(`  3. Set COFFERDAM_BINARY_PATH to the extracted binary and run \`npm rebuild @cofferdam/cofferdam\``);
   process.exit(1);
 });
 

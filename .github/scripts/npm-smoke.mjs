@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// End-to-end npm install smoke test for the `cofferdam` package.
+// End-to-end npm install smoke test for the `@cofferdam/cofferdam` package.
 //
 // Spawned by .github/workflows/release.yml's `npm-smoke` job after
 // `publish-npm` lands a new version. Verifies, on a fresh machine,
 // that the user-facing install story actually works:
 //
-//   1. `npm install -D cofferdam@<version>` puts a working binary
-//      under node_modules/cofferdam/bin (postinstall ran).
+//   1. `npm install -D @cofferdam/cofferdam@<version>` puts a working
+//      binary under node_modules/@cofferdam/cofferdam/bin (postinstall ran).
 //   2. `npx cofferdam check src --robot` exits 1 and the JSON report
 //      includes a `Warning.TripleEquals` finding (proves the binary
 //      runs end-to-end on this OS+arch).
@@ -62,14 +62,14 @@ const init = run('npm init -y (happy)', 'npm', ['init', '-y'], { cwd: happy });
 if (init.status !== 0) fail(`npm init exited ${init.status}`);
 
 const install = run(
-  'npm install -D cofferdam',
+  'npm install -D @cofferdam/cofferdam',
   'npm',
-  ['install', '-D', `cofferdam@${version}`],
+  ['install', '-D', `@cofferdam/cofferdam@${version}`],
   { cwd: happy },
 );
 if (install.status !== 0) fail(`npm install exited ${install.status}`);
 
-const binPath = join(happy, 'node_modules', 'cofferdam', 'bin', binName);
+const binPath = join(happy, 'node_modules', '@cofferdam', 'cofferdam', 'bin', binName);
 if (!existsSync(binPath)) fail(`binary not at ${binPath} after postinstall`);
 console.log(`OK: binary present at ${binPath}`);
 
@@ -120,12 +120,12 @@ if (initNs.status !== 0) fail(`npm init exited ${initNs.status}`);
 const installNs = run(
   'npm install -D --ignore-scripts',
   'npm',
-  ['install', '-D', '--ignore-scripts', `cofferdam@${version}`],
+  ['install', '-D', '--ignore-scripts', `@cofferdam/cofferdam@${version}`],
   { cwd: noScripts },
 );
 if (installNs.status !== 0) fail(`npm install --ignore-scripts exited ${installNs.status}`);
 
-const noScriptsBin = join(noScripts, 'node_modules', 'cofferdam', 'bin', binName);
+const noScriptsBin = join(noScripts, 'node_modules', '@cofferdam', 'cofferdam', 'bin', binName);
 if (existsSync(noScriptsBin)) {
   fail(`--ignore-scripts should NOT have placed binary at ${noScriptsBin}`);
 }

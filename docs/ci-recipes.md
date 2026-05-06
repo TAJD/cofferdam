@@ -50,10 +50,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npx --yes cofferdam check
+      - run: npx --yes @cofferdam/cofferdam check
 ```
 
-`npx --yes cofferdam check` walks the current directory and exits 1 on any finding at `medium` severity or higher. No config required. Baselined findings (if `.cofferdam/baseline.json` is committed) never trigger the gate.
+`npx --yes @cofferdam/cofferdam check` walks the current directory and exits 1 on any finding at `medium` severity or higher. No config required. Baselined findings (if `.cofferdam/baseline.json` is committed) never trigger the gate.
 
 ### 2. PR-only mode with `--since`
 
@@ -70,9 +70,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npx --yes cofferdam check --since=origin/${{ github.base_ref }}
+      - run: npx --yes @cofferdam/cofferdam check --since=origin/${{ github.base_ref }}
         if: github.event_name == 'pull_request'
-      - run: npx --yes cofferdam check
+      - run: npx --yes @cofferdam/cofferdam check
         if: github.event_name == 'push'
 ```
 
@@ -85,7 +85,7 @@ For repos adopting cofferdam without a clean rewrite. Capture once, commit, then
 **One-time setup** (locally):
 
 ```bash
-npx cofferdam init --baseline   # writes cofferdam.toml + .cofferdam/baseline.json
+npx @cofferdam/cofferdam init --baseline   # writes cofferdam.toml + .cofferdam/baseline.json
 git add cofferdam.toml .cofferdam/baseline.json
 git commit -m "chore: adopt cofferdam with baseline"
 ```
@@ -93,13 +93,13 @@ git commit -m "chore: adopt cofferdam with baseline"
 **CI workflow** is unchanged from §1 — `cofferdam check` auto-detects `.cofferdam/baseline.json` and treats baselined findings as non-gating. Pass `--fail-on-new` if you want to make the intent explicit in CI logs:
 
 ```yaml
-      - run: npx --yes cofferdam check --fail-on-new
+      - run: npx --yes @cofferdam/cofferdam check --fail-on-new
 ```
 
 When you fix a baselined finding, regenerate:
 
 ```bash
-npx cofferdam baseline write
+npx @cofferdam/cofferdam baseline write
 git commit -am "chore(cofferdam): refresh baseline after fixing X"
 ```
 
@@ -111,7 +111,7 @@ Pipe `--robot --format=compact` output into an AI review step. Compact format is
       - name: Run cofferdam (compact)
         id: cofferdam
         run: |
-          npx --yes cofferdam check --robot --format=compact > findings.txt
+          npx --yes @cofferdam/cofferdam check --robot --format=compact > findings.txt
           echo "count=$(tail -n +2 findings.txt | wc -l)" >> "$GITHUB_OUTPUT"
         continue-on-error: true
       - name: Render to step summary
@@ -134,7 +134,7 @@ Pipe `--robot --format=compact` output into an AI review step. Compact format is
 For full-fidelity JSON (with baseline tags, related spans, truncation metadata):
 
 ```yaml
-      - run: npx --yes cofferdam check --robot --format=json > findings.json
+      - run: npx --yes @cofferdam/cofferdam check --robot --format=json > findings.json
 ```
 
 ### 5. Caching
@@ -175,7 +175,7 @@ jobs:
         with:
           node-version: 20
       - name: Run cofferdam (SARIF)
-        run: npx --yes cofferdam check --format=sarif > cofferdam.sarif
+        run: npx --yes @cofferdam/cofferdam check --format=sarif > cofferdam.sarif
         continue-on-error: true        # don't block the upload on a non-zero exit
       - uses: github/codeql-action/upload-sarif@v3
         with:
@@ -204,7 +204,7 @@ If you want the gate exit code to also fail the workflow (in addition to driving
 cofferdam:
   image: node:20
   script:
-    - npx --yes cofferdam check
+    - npx --yes @cofferdam/cofferdam check
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       variables:
@@ -224,7 +224,7 @@ PR-only mode:
 
 ```yaml
   script:
-    - npx --yes cofferdam check --since=$CI_MERGE_REQUEST_DIFF_BASE_SHA
+    - npx --yes @cofferdam/cofferdam check --since=$CI_MERGE_REQUEST_DIFF_BASE_SHA
 ```
 
 GitLab gives you the merge-request base SHA in `$CI_MERGE_REQUEST_DIFF_BASE_SHA`. Outside MR pipelines (push to default branch), drop the flag to scan the full repo.
@@ -246,7 +246,7 @@ jobs:
           keys:
             - cofferdam-v1-{{ checksum "package-lock.json" }}
       - run: npm ci
-      - run: npx cofferdam check
+      - run: npx @cofferdam/cofferdam check
       - save_cache:
           key: cofferdam-v1-{{ checksum "package-lock.json" }}
           paths:
@@ -258,7 +258,7 @@ workflows:
       - cofferdam
 ```
 
-PR-only: replace `npx cofferdam check` with `npx cofferdam check --since=origin/main` (or `origin/$CIRCLE_BRANCH` when you have it).
+PR-only: replace `npx @cofferdam/cofferdam check` with `npx @cofferdam/cofferdam check --since=origin/main` (or `origin/$CIRCLE_BRANCH` when you have it).
 
 ## Drone / Woodpecker / generic
 
@@ -270,7 +270,7 @@ steps:
   cofferdam:
     image: node:20
     commands:
-      - npx --yes cofferdam check
+      - npx --yes @cofferdam/cofferdam check
 ```
 
 ## Pre-commit hook
@@ -298,7 +298,7 @@ Run cofferdam locally before each commit. Two options:
 set -e
 files=$(git diff --cached --name-only --diff-filter=AMR -- '*.ts' '*.tsx' '*.mts' '*.cts')
 [ -z "$files" ] && exit 0
-echo "$files" | xargs npx cofferdam check --no-baseline --quiet --max-issues=20
+echo "$files" | xargs npx @cofferdam/cofferdam check --no-baseline --quiet --max-issues=20
 ```
 
 `--max-issues=20` caps the displayed list so a noisy commit doesn't flood the terminal. The gate still considers the full set.
@@ -319,7 +319,7 @@ Before wiring up a new CI pipeline, run [`cofferdam doctor --robot`](doctor.md) 
 
 ```yaml
       - name: Pre-flight
-        run: npx --yes cofferdam doctor --robot
+        run: npx --yes @cofferdam/cofferdam doctor --robot
 ```
 
 `doctor` exits 0 on warns (so a missing baseline or unknown config key doesn't break CI) and exits 1 only when a hard failure is detected (missing git, corrupt baseline, binary version mismatch).

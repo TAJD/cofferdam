@@ -19,9 +19,9 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 ## Install
 
 ```sh
-npm install --save-dev cofferdam
-pnpm add -D cofferdam
-yarn add --dev cofferdam
+npm install --save-dev @cofferdam/cofferdam
+pnpm add -D @cofferdam/cofferdam
+yarn add --dev @cofferdam/cofferdam
 ```
 
 The `postinstall` script downloads the matching prebuilt binary for your platform (Linux x64/arm64 glibc + musl, macOS x64/arm64, Windows x64). Node 16+ required.
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: npx --yes cofferdam check
+      - run: npx --yes @cofferdam/cofferdam check
 ```
 
 For PR-only mode, baselines, and other CI integrations: see **[`docs/ci-recipes.md`](docs/ci-recipes.md)**.

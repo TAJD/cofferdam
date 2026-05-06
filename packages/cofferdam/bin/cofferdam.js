@@ -14,9 +14,9 @@ const binaryPath = path.join(__dirname, binaryName);
 if (!fs.existsSync(binaryPath)) {
   // Tailor the recovery hint to the package manager. pnpm v10's default
   // sandbox silently blocks postinstall unless the package is in
-  // `pnpm.onlyBuiltDependencies`, so a `pnpm add -D cofferdam` 'succeeds'
-  // with no binary on disk. Recommending `npm rebuild` to those users is
-  // wrong — they need pnpm syntax + the allowlist edit (cd-iui / gh #9).
+  // `pnpm.onlyBuiltDependencies`, so a `pnpm add -D @cofferdam/cofferdam`
+  // 'succeeds' with no binary on disk. Recommending `npm rebuild` to those
+  // users is wrong — they need pnpm syntax + the allowlist edit (cd-iui / gh #9).
   const pkgManager = detectPackageManager();
   let recovery;
   if (pkgManager === 'pnpm') {
@@ -24,14 +24,14 @@ if (!fs.existsSync(binaryPath)) {
       "Looks like a pnpm install. pnpm v10 blocks postinstall scripts unless\n" +
       "the package is in `pnpm.onlyBuiltDependencies`. To fix:\n\n" +
       '  1. Add to your package.json:\n' +
-      '       { "pnpm": { "onlyBuiltDependencies": ["cofferdam"] } }\n' +
-      '  2. Then run:  pnpm rebuild cofferdam\n';
+      '       { "pnpm": { "onlyBuiltDependencies": ["@cofferdam/cofferdam"] } }\n' +
+      '  2. Then run:  pnpm rebuild @cofferdam/cofferdam\n';
   } else if (pkgManager === 'yarn') {
     recovery =
       'Looks like a yarn install. Run:\n' +
-      '  yarn rebuild cofferdam\n';
+      '  yarn rebuild @cofferdam/cofferdam\n';
   } else {
-    recovery = 'Run:\n  npm rebuild cofferdam\n';
+    recovery = 'Run:\n  npm rebuild @cofferdam/cofferdam\n';
   }
 
   console.error(

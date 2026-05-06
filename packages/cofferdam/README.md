@@ -8,9 +8,9 @@ Inspired by Elixir's [Credo](https://github.com/rrrene/credo).
 ## Install
 
 ```bash
-pnpm add -D cofferdam        # pnpm
-npm install -D cofferdam     # npm
-yarn add -D cofferdam        # yarn
+pnpm add -D @cofferdam/cofferdam        # pnpm
+npm install -D @cofferdam/cofferdam     # npm
+yarn add -D @cofferdam/cofferdam        # yarn
 ```
 
 The package downloads a pre-built binary for your platform on install
@@ -18,17 +18,17 @@ The package downloads a pre-built binary for your platform on install
 through a tiny JS shim.
 
 > **pnpm users:** pnpm v10's default sandbox blocks postinstall scripts
-> unless the package is on the allowlist. `pnpm add -D cofferdam` will
-> "succeed" without ever downloading the binary. Add this to your
+> unless the package is on the allowlist. `pnpm add -D @cofferdam/cofferdam`
+> will "succeed" without ever downloading the binary. Add this to your
 > `package.json` so the binary install actually runs:
 >
 > ```json
-> { "pnpm": { "onlyBuiltDependencies": ["cofferdam"] } }
+> { "pnpm": { "onlyBuiltDependencies": ["@cofferdam/cofferdam"] } }
 > ```
 >
-> Then re-run `pnpm install` (or `pnpm rebuild cofferdam` for an existing
-> install). Verified you're hit by this if `pnpm exec cofferdam --version`
-> errors with "binary not found".
+> Then re-run `pnpm install` (or `pnpm rebuild @cofferdam/cofferdam` for
+> an existing install). Verified you're hit by this if
+> `pnpm exec cofferdam --version` errors with "binary not found".
 
 ## First run
 
@@ -172,24 +172,24 @@ downloaded. Two recovery paths:
 1. **Manual binary** — download the release archive from
    [GitHub Releases](https://github.com/TAJD/cofferdam/releases),
    extract it, set `COFFERDAM_BINARY_PATH` to the binary, then
-   `npm rebuild cofferdam`.
+   `npm rebuild @cofferdam/cofferdam`.
 2. **Pre-baked image** — set `COFFERDAM_SKIP_DOWNLOAD=1` if the
-   binary is already at `node_modules/cofferdam/bin/cofferdam`
+   binary is already at `node_modules/@cofferdam/cofferdam/bin/cofferdam`
    (or `cofferdam.exe` on Windows).
 
 > **Windows + npm 6:** bare `npx cofferdam` falls back to `npm run` and
-> fails with `Missing script: 'cofferdam'`. Use `npx -p cofferdam cofferdam`,
-> `pnpm exec cofferdam`, or `.\node_modules\.bin\cofferdam.cmd`, or
-> upgrade to npm ≥ 7.
+> fails with `Missing script: 'cofferdam'`. Use
+> `npx -p @cofferdam/cofferdam cofferdam`, `pnpm exec cofferdam`, or
+> `.\node_modules\.bin\cofferdam.cmd`, or upgrade to npm ≥ 7.
 
 ## Versioning
 
 The npm package version tracks the cofferdam release version.
-`cofferdam@0.1.0` downloads the binary from the `v0.1.0` GitHub
-Release. Lockfile-pinned installs are deterministic. The Rust
-workspace and the `cofferdam` + `@cofferdam/check-sdk` npm packages
-are released in lockstep — a `cofferdam@X.Y.Z` install always pairs
-with an SDK at the same `X.Y.Z`.
+`@cofferdam/cofferdam@0.2.3` downloads the binary from the `v0.2.3`
+GitHub Release. Lockfile-pinned installs are deterministic. The Rust
+workspace and the `@cofferdam/cofferdam` + `@cofferdam/check-sdk` npm
+packages are released in lockstep — an `@cofferdam/cofferdam@X.Y.Z`
+install always pairs with an SDK at the same `X.Y.Z`.
 
 ## License
 

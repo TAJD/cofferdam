@@ -31,16 +31,16 @@ Linux and macOS pick up their native host triple and need no override. Never edi
 
 ## Binary overrides (npm postinstall)
 
-The `cofferdam` npm package downloads a prebuilt binary on `postinstall`. Two escape hatches:
+The `@cofferdam/cofferdam` npm package downloads a prebuilt binary on `postinstall`. Two escape hatches:
 
 - `COFFERDAM_BINARY_PATH=/abs/path` — skip the download and use this binary instead (useful for testing a local build).
 - `COFFERDAM_SKIP_DOWNLOAD=1` — skip postinstall entirely (CI / Docker layers where you supply the binary another way).
 
-For air-gapped runners: download the archive for your platform from the GitHub Release, extract it, then point `COFFERDAM_BINARY_PATH` at the extracted binary and run `npm rebuild cofferdam`.
+For air-gapped runners: download the archive for your platform from the GitHub Release, extract it, then point `COFFERDAM_BINARY_PATH` at the extracted binary and run `npm rebuild @cofferdam/cofferdam`.
 
 ## Cutting a release
 
-The Rust workspace, the `cofferdam` npm package, and `@cofferdam/check-sdk` ship in lockstep — every `vX.Y.Z` tag publishes all three at the same version. `release.yml` enforces this on the CI side; locally, use the helper so the bump diff is reviewable in one go.
+The Rust workspace, the `@cofferdam/cofferdam` npm package, and `@cofferdam/check-sdk` ship in lockstep — every `vX.Y.Z` tag publishes all three at the same version. `release.yml` enforces this on the CI side; locally, use the helper so the bump diff is reviewable in one go.
 
 ```bash
 # Install once per machine
@@ -67,21 +67,21 @@ Builds a Windows binary, tags, pushes, and creates a GitHub Release with that si
 
 ## npm org & ownership
 
-Both npm packages are published to and owned by the `@cofferdam` organisation on npmjs.com:
+Both released npm packages live under the `@cofferdam` organisation on npmjs.com:
 
-- `cofferdam` (unscoped binary wrapper) — <https://www.npmjs.com/package/cofferdam>
+- `@cofferdam/cofferdam` (binary wrapper) — <https://www.npmjs.com/package/@cofferdam/cofferdam>
 - `@cofferdam/check-sdk` (plugin author SDK) — <https://www.npmjs.com/package/@cofferdam/check-sdk>
 
-The unscoped name `cofferdam` is intentional — it matches the binary, every existing `npm install` line in the wild, and is more discoverable than a scoped alias. Don't rename it.
+Both packages publish via OIDC Trusted Publisher pinned to `TAJD/cofferdam` → `release.yml`. If the org's package list ever shows only one of the two, or a publish 401s, the Trusted Publisher config has likely been reset on a transfer — re-confirm the publisher at `npmjs.com/package/<name>/access` points at this exact workflow file before the next release.
 
-Both packages publish via OIDC Trusted Publisher pinned to `TAJD/cofferdam` → `release.yml`. If the org's package list ever shows only the SDK, the Trusted Publisher config has likely been reset on a transfer — re-confirm the publisher at `npmjs.com/package/<name>/access` points at this exact workflow file before the next release.
+The unscoped legacy name `cofferdam` (binary wrapper, owned by user `tajdickson`) was used through 0.2.2 and is now deprecated. New work goes only to the scoped name. The legacy name is kept reserved (npm doesn't release names) so nobody else can squat it; it should not be republished. Migration message users see when they `npm install -D cofferdam` is set with `npm deprecate cofferdam "..."` — see issue cd-gzm for the canonical message.
 
 ## Phased build
 
 1. Rust engine + `Issue` + priority + report formatter + built-in checks across all 5 categories
 2. Two-pass consistency mode with `Consistency.QuoteStyle` as the canary
 3. Baseline + severity-axis + `--since` — biggest adoption-unlock
-4. napi-rs FFI + JS plugin host, ship `@cofferdam/check-sdk` and `@cofferdam/recommended`
+4. napi-rs FFI + JS plugin host, ship `@cofferdam/cofferdam`, `@cofferdam/check-sdk`, and `@cofferdam/recommended`
 5. `@cofferdam/types-aware` package with `ts-morph` checks
 6. LSP server + SARIF + GitHub Code Scanning
 

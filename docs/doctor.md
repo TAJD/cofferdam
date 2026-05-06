@@ -28,7 +28,7 @@ Verifies that the running binary's compiled-in version (`env!("CARGO_PKG_VERSION
 | Pass | Versions match |
 | Fail | Versions differ, or the executable cannot exec itself |
 
-Remediation: `re-install cofferdam`
+Remediation: `re-install @cofferdam/cofferdam`
 
 ---
 
@@ -116,7 +116,7 @@ If no `packages/cofferdam/package.json` is found, the check is skipped — it do
 | Warn | npm package and binary version differ |
 | Skipped | Not an npm install |
 
-Remediation for Warn: `re-run npm install cofferdam` (for npm users). Version drift in a source-tree checkout is intentional pre-1.0 behaviour.
+Remediation for Warn: `re-run npm install @cofferdam/cofferdam` (for npm users). Version drift in a source-tree checkout is intentional pre-1.0 behaviour.
 
 ---
 

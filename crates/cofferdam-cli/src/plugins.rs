@@ -143,6 +143,164 @@ struct HostError {
     message: String,
 }
 
+/// File-scope filter from a plugin's `defineCheck({ files: ... })`.
+/// Fields mirror the SDK's `FileScope` interface; `None` means
+/// "any file". Used by `advise` to decide whether a plugin check
+/// applies to a given path.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginFileScope {
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub path_pattern: Option<String>,
+    #[serde(default)]
+    pub path_patterns: Vec<String>,
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+}
+
+/// Lightweight metadata about a plugin check — returned by
+/// `query_plugin_metadata` for the advise subcommand.
+#[derive(Debug, Clone)]
+pub struct PluginCheckMeta {
+    pub id: String,
+    pub category: String,
+    pub explanation: String,
+    pub default_severity: String,
+    /// `None` means "applies to every file".
+    pub files: Option<PluginFileScope>,
+}
+
+#[derive(Deserialize)]
+struct MetadataHostResponse {
+    #[serde(default)]
+    checks: Vec<MetadataCheckEntry>,
+    #[serde(default)]
+    errors: Vec<HostError>,
+}
+
+#[derive(Deserialize)]
+struct MetadataCheckEntry {
+    id: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    explanation: String,
+    #[serde(rename = "defaultSeverity", default)]
+    default_severity: String,
+    /// `None` when the check has no file-scope filter.
+    files: Option<PluginFileScope>,
+}
+
+#[derive(Serialize)]
+struct MetadataManifest<'a> {
+    mode: &'static str,
+    cwd: String,
+    plugins: &'a [String],
+}
+
+/// Run the plugin host in metadata-only mode. Returns one
+/// `PluginCheckMeta` per successfully loaded plugin. Load errors are
+/// silently dropped (they'd be surfaced again in `run_plugins` anyway).
+pub fn query_plugin_metadata(
+    plugin_paths: &[PathBuf],
+    project_root: &Path,
+) -> Vec<PluginCheckMeta> {
+    if plugin_paths.is_empty() {
+        return Vec::new();
+    }
+
+    let host_script = match materialise_host_script() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+
+    let plugin_paths_str: Vec<String> = plugin_paths
+        .iter()
+        .map(|p| {
+            let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+            let s = abs.to_string_lossy().replace('\\', "/");
+            s.trim_start_matches("//?/").to_string()
+        })
+        .collect();
+
+    let manifest = MetadataManifest {
+        mode: "metadata",
+        cwd: forward_slash(project_root),
+        plugins: &plugin_paths_str,
+    };
+    let manifest_json = match serde_json::to_string(&manifest) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut child = match Command::new("node")
+        .arg(&host_script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(manifest_json.as_bytes()).is_err() {
+            return Vec::new();
+        }
+    }
+
+    let timeout = host_timeout();
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Vec::new();
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => return Vec::new(),
+        }
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let response: MetadataHostResponse = match serde_json::from_str(&stdout) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    // Errors from load_failed in metadata mode are silently ignored —
+    // they'll be surfaced again when `run_plugins` is called.
+    let _ = response.errors;
+
+    response
+        .checks
+        .into_iter()
+        .map(|e| PluginCheckMeta {
+            id: e.id,
+            category: e.category,
+            explanation: e.explanation,
+            default_severity: e.default_severity,
+            files: e.files,
+        })
+        .collect()
+}
+
 /// Run every plugin in `plugins` over every file in `files` via the
 /// Node-side host. Returns engine-shape `Issue`s, including synthetic
 /// `Warning.Plugin*` findings for any host-side failure.

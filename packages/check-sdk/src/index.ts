@@ -16,7 +16,7 @@ export { defineCheck } from "./define-check.js";
 
 // Loader runtime (cd-81a.7). Plugin authors import only the surfaces
 // above; cofferdam's own JS wrapper is the consumer of these.
-export { runPlugin, buildSourceFile } from "./plugin-host.js";
+export { runPlugin, buildSourceFile, fileMatchesScope } from "./plugin-host.js";
 export { loadPlugins, runPlugins } from "./loader.js";
 export type {
   PluginReport,

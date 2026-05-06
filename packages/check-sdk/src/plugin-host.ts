@@ -12,7 +12,7 @@
 // at the cost of postMessage serialisation per file (cheap relative to
 // parsing).
 
-import type { Check } from "./define-check.js";
+import type { Check, FileScope } from "./define-check.js";
 import type { CheckContext, Fix, ReportArgs } from "./check-context.js";
 import type { LineView } from "./line-view.js";
 import type { Span } from "./span.js";
@@ -115,6 +115,97 @@ export function buildSourceFile(input: PluginRunInput) {
 // ---- runPlugin -------------------------------------------------------
 
 /**
+ * Return true when `path` (normalised to forward slashes) is in scope
+ * for the given `FileScope` filter. Mirrors the `fileMatchesScope`
+ * logic in `plugin-host.mjs` — both must be kept in sync.
+ *
+ * `undefined` scope = every file is in scope.
+ */
+export function fileMatchesScope(path: string, scope: FileScope | undefined): boolean {
+  if (!scope) return true;
+
+  const fwd = path.replace(/\\/g, "/");
+
+  const { extensions } = scope;
+  if (Array.isArray(extensions) && extensions.length > 0) {
+    const lower = fwd.toLowerCase();
+    if (!extensions.some((e: string) => lower.endsWith("." + String(e).toLowerCase()))) {
+      return false;
+    }
+  }
+
+  const includes: string[] = [];
+  if (typeof scope.pathPattern === "string" && scope.pathPattern) {
+    includes.push(scope.pathPattern);
+  }
+  if (Array.isArray(scope.pathPatterns)) {
+    for (const p of scope.pathPatterns) {
+      if (typeof p === "string" && p) includes.push(p);
+    }
+  }
+
+  if (includes.length > 0 && !includes.some((pat) => globMatch(pat, fwd))) return false;
+
+  const { excludePatterns } = scope;
+  if (Array.isArray(excludePatterns) && excludePatterns.length > 0) {
+    if (excludePatterns.some((pat: string) => typeof pat === "string" && globMatch(pat, fwd))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function globMatch(pattern: string, path: string): boolean {
+  const braceMatch = pattern.match(/^(.*?)\{([^{}]+)\}(.*)$/);
+  if (braceMatch) {
+    const [, pre, inner, post] = braceMatch;
+    return (inner as string).split(",").some((alt) => globMatch((pre as string) + alt + (post as string), path));
+  }
+  // For relative patterns (no leading `/` or `**/`), also try `**/pattern`.
+  if (!pattern.startsWith("/") && !pattern.startsWith("**/")) {
+    if (globMatchSingle("**/" + pattern, path)) return true;
+  }
+  return globMatchSingle(pattern, path);
+}
+
+function globMatchSingle(pattern: string, path: string): boolean {
+  let re = "^";
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i]!;
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        i += 2;
+        if (pattern[i] === "/") i++;
+        re += "(?:.+/)?";
+        continue;
+      }
+      re += "[^/]*";
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end === -1) {
+        re += "\\[";
+      } else {
+        re += pattern.slice(i, end + 1);
+        i = end;
+      }
+    } else {
+      re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+    }
+    i++;
+  }
+  re += "$";
+  try {
+    return new RegExp(re).test(path);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Execute a single plugin against a single file. Collects `ctx.report`
  * calls into a `PluginReport[]` the loader can hand to native
  * `mergePluginFindings`.
@@ -122,8 +213,14 @@ export function buildSourceFile(input: PluginRunInput) {
  * This is the function a worker_thread invokes. The host process never
  * touches plugin code directly — crash containment is the worker's
  * boundary.
+ *
+ * FileScope filtering is applied here: if the check declares a `files`
+ * scope and the input path does not match, the function returns an empty
+ * array immediately without calling `run()`.
  */
 export function runPlugin(check: Check, input: PluginRunInput): PluginReport[] {
+  if (!fileMatchesScope(input.path, check.files)) return [];
+
   const reports: PluginReport[] = [];
   const ctx: CheckContext = {
     report(args: ReportArgs): void {

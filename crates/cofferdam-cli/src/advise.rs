@@ -22,6 +22,8 @@ use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::{discover, DiscoveryOptions, ProjectConfig};
 use serde::Serialize;
 
+use crate::plugins::{self, PluginCheckMeta, PluginFileScope};
+
 pub struct AdviseArgs {
     pub paths: Vec<PathBuf>,
     pub format: AdviseFormat,
@@ -107,7 +109,7 @@ pub fn run(args: AdviseArgs) -> ExitCode {
     files.sort();
     files.dedup();
 
-    let (project_config, _config_path) =
+    let (project_config, config_path_resolved) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
             Ok(pair) => pair,
             Err(()) => return ExitCode::from(2),
@@ -138,9 +140,26 @@ pub fn run(args: AdviseArgs) -> ExitCode {
     let layer_matchers: Vec<LayerMatcher> =
         layers_cfg.map(layers::build_matchers).unwrap_or_default();
 
+    // Load plugin check metadata so advise can include plugin-specific
+    // constraints alongside built-in ones. Metadata-mode host invocation
+    // is fail-soft: if node isn't available or the host errors, plugin
+    // constraints are simply omitted from the advisory output.
+    let plugin_metas: Vec<PluginCheckMeta> = project_config
+        .as_ref()
+        .filter(|cfg| !cfg.plugins.is_empty())
+        .map(|cfg| {
+            let cfg_dir = config_path_resolved
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir)
+        })
+        .unwrap_or_default();
+
     let advisories: Vec<FileAdvisory> = files
         .iter()
-        .map(|file| build_advisory(file, &resolved, layers_cfg, &layer_matchers))
+        .map(|file| build_advisory(file, &resolved, layers_cfg, &layer_matchers, &plugin_metas))
         .collect();
 
     match format {
@@ -156,6 +175,7 @@ fn build_advisory(
     resolved: &[(CheckMeta, CheckOptions, Severity)],
     layers_cfg: Option<&cofferdam_core::LayersConfig>,
     layer_matchers: &[LayerMatcher],
+    plugin_metas: &[PluginCheckMeta],
 ) -> FileAdvisory {
     let layer =
         layers_cfg.and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, file));
@@ -164,18 +184,125 @@ fn build_advisory(
     // will populate the allowlist; until then no file is on it.
     let public_api = false;
 
-    let constraints: Vec<Constraint> = resolved
+    let mut constraints: Vec<Constraint> = resolved
         .iter()
         .map(|(meta, options, severity)| {
             build_constraint(file, meta, options, *severity, layer.as_deref(), layers_cfg)
         })
         .collect();
 
+    // Append plugin check constraints for plugin checks whose FileScope
+    // matches this file. Plugin checks that don't declare a `files` scope
+    // apply to every file; those with a scope are filtered here using the
+    // same semantics as `fileMatchesScope` in the plugin host script.
+    let fwd_path = file.to_string_lossy().replace('\\', "/");
+    for pm in plugin_metas {
+        if !plugin_file_matches_scope(&fwd_path, pm.files.as_ref()) {
+            continue;
+        }
+        let severity_str = pm.default_severity.as_str();
+        let (category_s, severity_s) = (pm.category.clone(), severity_str.to_string());
+        constraints.push(Constraint {
+            rule: pm.id.clone(),
+            category: category_s,
+            severity: severity_s,
+            applies: pm.explanation.clone(),
+            rationale: pm.explanation.clone(),
+            parameters: None,
+            allowed: None,
+            forbidden: None,
+            exempt: None,
+            exempt_reason: None,
+        });
+    }
+
     FileAdvisory {
-        path: file.to_string_lossy().replace('\\', "/"),
+        path: fwd_path,
         layer,
         public_api,
         constraints,
+    }
+}
+
+/// Return `true` when `fwd_path` (forward-slash normalised) is in scope
+/// for the given `PluginFileScope`. Mirrors the JS `fileMatchesScope`
+/// logic in plugin-host.mjs — the two must stay in sync.
+fn plugin_file_matches_scope(fwd_path: &str, scope: Option<&PluginFileScope>) -> bool {
+    let Some(scope) = scope else { return true };
+
+    if !scope.extensions.is_empty() {
+        let lower = fwd_path.to_lowercase();
+        if !scope
+            .extensions
+            .iter()
+            .any(|e| lower.ends_with(&format!(".{}", e.to_lowercase())))
+        {
+            return false;
+        }
+    }
+
+    let mut includes: Vec<&str> = Vec::new();
+    if let Some(pp) = scope.path_pattern.as_deref() {
+        if !pp.is_empty() {
+            includes.push(pp);
+        }
+    }
+    for pp in &scope.path_patterns {
+        if !pp.is_empty() {
+            includes.push(pp.as_str());
+        }
+    }
+
+    if !includes.is_empty() && !includes.iter().any(|pat| glob_match(pat, fwd_path)) {
+        return false;
+    }
+
+    if !scope.exclude_patterns.is_empty()
+        && scope
+            .exclude_patterns
+            .iter()
+            .any(|pat| glob_match(pat, fwd_path))
+    {
+        return false;
+    }
+
+    true
+}
+
+/// Gitignore-style glob matching (Rust mirror of `globMatch` in plugin-host.mjs).
+/// Supports `**`, `*`, `?`, `[...]`, and `{a,b}` brace expansion.
+/// Uses `globset` (already a workspace dep) for the per-alternative match.
+///
+/// Anchoring: patterns without a leading `/` or `**/` are also tried with
+/// `**/` prepended so they can match anywhere in the path tree.
+fn glob_match(pattern: &str, path: &str) -> bool {
+    // Brace expansion: split at the first top-level `{...}`.
+    if let Some((pre, rest)) = pattern.split_once('{') {
+        if let Some((inner, post)) = rest.split_once('}') {
+            return inner
+                .split(',')
+                .any(|alt| glob_match(&format!("{}{}{}", pre, alt, post), path));
+        }
+    }
+
+    // For relative patterns (no leading `/` or `**/`), also try the
+    // `**/pattern` form so it matches any suffix of the absolute path.
+    if !pattern.starts_with('/') && !pattern.starts_with("**/") {
+        let rooted = format!("**/{}", pattern);
+        if glob_match_globset(&rooted, path) {
+            return true;
+        }
+    }
+    glob_match_globset(pattern, path)
+}
+
+fn glob_match_globset(pattern: &str, path: &str) -> bool {
+    let gs = globset::GlobBuilder::new(pattern)
+        .build()
+        .and_then(|g| globset::GlobSet::builder().add(g).build());
+    match gs {
+        Ok(gs) => gs.is_match(path),
+        Err(_) => false,
     }
 }
 
@@ -192,7 +319,7 @@ fn build_constraint(
     let mut allowed: Option<Vec<String>> = None;
     let mut forbidden: Option<Vec<String>> = None;
     let mut exempt: Option<bool> = None;
-    let mut exempt_reason: Option<&'static str> = None;
+    let mut exempt_reason: Option<String> = None;
 
     let applies = match meta.id {
         "Design.LayerViolation" => match (layer, layers_cfg) {
@@ -230,10 +357,10 @@ fn build_constraint(
                 .unwrap_or_default();
             if matches_substring(file, &framework_patterns) {
                 exempt = Some(true);
-                exempt_reason = Some("framework entry point");
+                exempt_reason = Some("framework entry point".to_string());
             } else if matches_substring(file, &test_patterns) {
                 exempt = Some(true);
-                exempt_reason = Some("test file");
+                exempt_reason = Some("test file".to_string());
             } else {
                 exempt = Some(false);
             }
@@ -243,11 +370,11 @@ fn build_constraint(
     };
 
     Constraint {
-        rule: meta.id,
-        category: category_str(meta.category),
-        severity: severity.as_str(),
+        rule: meta.id.to_string(),
+        category: category_str(meta.category).to_string(),
+        severity: severity.as_str().to_string(),
         applies,
-        rationale: meta.explanation,
+        rationale: meta.explanation.to_string(),
         parameters,
         allowed,
         forbidden,
@@ -380,11 +507,11 @@ struct FileAdvisory {
 
 #[derive(Serialize)]
 struct Constraint {
-    rule: &'static str,
-    category: &'static str,
-    severity: &'static str,
+    rule: String,
+    category: String,
+    severity: String,
     applies: String,
-    rationale: &'static str,
+    rationale: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     parameters: Option<BTreeMap<String, ParamValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -394,7 +521,7 @@ struct Constraint {
     #[serde(skip_serializing_if = "Option::is_none")]
     exempt: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    exempt_reason: Option<&'static str>,
+    exempt_reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -446,7 +573,8 @@ fn emit_text(advisories: &[FileAdvisory]) {
                     c.rule, c.category, c.severity, c.applies
                 );
                 if let Some(true) = c.exempt {
-                    let _ = writeln!(out, "      exempt: {}", c.exempt_reason.unwrap_or("yes"));
+                    let reason = c.exempt_reason.as_deref().unwrap_or("yes");
+                    let _ = writeln!(out, "      exempt: {}", reason);
                 }
                 if let Some(forbidden) = &c.forbidden {
                     if !forbidden.is_empty() {
@@ -628,7 +756,10 @@ mod tests {
             None,
         );
         assert_eq!(c_framework.exempt, Some(true));
-        assert_eq!(c_framework.exempt_reason, Some("framework entry point"));
+        assert_eq!(
+            c_framework.exempt_reason,
+            Some("framework entry point".to_string())
+        );
 
         let c_test = build_constraint(
             Path::new("/repo/src/foo.test.ts"),
@@ -639,7 +770,7 @@ mod tests {
             None,
         );
         assert_eq!(c_test.exempt, Some(true));
-        assert_eq!(c_test.exempt_reason, Some("test file"));
+        assert_eq!(c_test.exempt_reason, Some("test file".to_string()));
 
         let c_normal = build_constraint(
             Path::new("/repo/src/domain/user.ts"),

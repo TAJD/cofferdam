@@ -99,6 +99,13 @@ for (const pluginPath of manifest.plugins) {
         }`,
       );
     }
+    if (check.requiresTypes === true) {
+      process.stderr.write(
+        `[cofferdam] plugin "${check.id}" sets requiresTypes:true — type-aware routing` +
+          ` (ts-morph) is not yet wired in 0.2.x; the check will run without type information.` +
+          ` Track cd-l58 / gh #16 for status.\n`,
+      );
+    }
     loadedPlugins.push({ pluginPath, check });
   } catch (err) {
     errors.push({
@@ -108,6 +115,21 @@ for (const pluginPath of manifest.plugins) {
       message: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+// Metadata mode: return check metadata without processing any files.
+// Manifest shape: { "mode": "metadata", "cwd": "...", "plugins": [...] }
+// Output shape:   { "checks": [{ id, category, explanation, defaultSeverity, files }], "errors": [...] }
+if (manifest.mode === "metadata") {
+  const checks = loadedPlugins.map(({ check }) => ({
+    id: check.id,
+    category: check.category ?? "warning",
+    explanation: check.explanation ?? "",
+    defaultSeverity: check.defaultSeverity ?? "medium",
+    files: check.files ?? null,
+  }));
+  process.stdout.write(JSON.stringify({ checks, errors }) + "\n");
+  process.exit(0);
 }
 
 if (process.env.COFFERDAM_PLUGIN_HOST_DEBUG) {
@@ -480,16 +502,116 @@ function resolveOptions(check, perCheckOverrides) {
 
 function fileMatchesScope(absFilePath, scope) {
   if (!scope) return true;
+
+  // Normalise to forward slashes for consistent matching on all platforms.
+  const fwd = absFilePath.replace(/\\/g, "/");
+
   const exts = scope.extensions;
   if (Array.isArray(exts) && exts.length > 0) {
-    const lower = absFilePath.toLowerCase();
+    const lower = fwd.toLowerCase();
     if (!exts.some((e) => lower.endsWith("." + String(e).toLowerCase()))) return false;
   }
-  // pathPattern (singular, deprecated) / pathPatterns (plural) /
-  // excludePatterns — treated as always-match in this host. The Rust
-  // engine already pre-filters via cd-81a.5's matcher; adding glob
-  // matching here would just duplicate work. If a future bead pushes
-  // scope filtering into the host, pull globset/picomatch — and treat
-  // the include set as `pathPattern OR any(pathPatterns)`.
+
+  // Build the combined include set from pathPattern (singular, deprecated)
+  // and pathPatterns (plural). A file is in-scope when the include set is
+  // empty OR the file matches at least one include pattern.
+  const includes = [];
+  if (typeof scope.pathPattern === "string" && scope.pathPattern) {
+    includes.push(scope.pathPattern);
+  }
+  if (Array.isArray(scope.pathPatterns)) {
+    for (const p of scope.pathPatterns) {
+      if (typeof p === "string" && p) includes.push(p);
+    }
+  }
+
+  if (includes.length > 0 && !includes.some((pat) => globMatch(pat, fwd))) return false;
+
+  // excludePatterns: if any matches, skip the file regardless of includes.
+  const excludes = scope.excludePatterns;
+  if (Array.isArray(excludes) && excludes.length > 0) {
+    if (excludes.some((pat) => typeof pat === "string" && globMatch(pat, fwd))) return false;
+  }
+
   return true;
+}
+
+/**
+ * Gitignore-style glob matching. Supports:
+ *   **   — matches any number of path segments (including zero)
+ *   *    — matches any chars within a single segment (no `/`)
+ *   ?    — matches any single char (no `/`)
+ *   [..] — character class
+ *   {a,b}— brace expansion (non-nested, top-level only)
+ *
+ * `path` must already be normalised to forward slashes.
+ *
+ * Anchoring semantics (gitignore-compatible): patterns that do not start
+ * with `/` or `**/` are automatically tried with a `**/` prefix so they
+ * match anywhere in the path tree, not just at the root. For example,
+ * `lib/foo.ts` matches `/abs/project/lib/foo.ts` because we also test
+ * `**/lib/foo.ts`.
+ */
+function globMatch(pattern, path) {
+  // Expand top-level brace alternatives `{a,b,c}` first. Only the first
+  // pair of outermost braces is expanded — nested braces are rare in
+  // practice and left to the literal matcher (they won't accidentally
+  // crash it, they just won't match).
+  const braceMatch = pattern.match(/^(.*?)\{([^{}]+)\}(.*)$/);
+  if (braceMatch) {
+    const [, pre, inner, post] = braceMatch;
+    return inner.split(",").some((alt) => globMatch(pre + alt + post, path));
+  }
+  // For patterns that are relative (no leading `/` or `**/`), also test
+  // with `**/` prepended so the pattern can match any suffix of the path.
+  if (!pattern.startsWith("/") && !pattern.startsWith("**/")) {
+    if (globMatchSingle("**/" + pattern, path)) return true;
+  }
+  return globMatchSingle(pattern, path);
+}
+
+function globMatchSingle(pattern, path) {
+  // Convert the glob pattern to a RegExp.
+  let re = "^";
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        // `**` — match any path segment sequence, including empty.
+        // Adjacent slashes around `**` are collapsed by trimming the
+        // surrounding `/` so `a/**/b` matches `a/b` as well as `a/x/b`.
+        i += 2;
+        if (pattern[i] === "/") i++; // consume trailing slash
+        re += "(?:.+/)?"; // zero or more segments with trailing slash
+        continue;
+      }
+      // Single `*` — match anything except `/`.
+      re += "[^/]*";
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if (c === "[") {
+      // Character class — copy through until `]`.
+      const end = pattern.indexOf("]", i + 1);
+      if (end === -1) {
+        // Unmatched `[` — treat as literal.
+        re += "\\[";
+      } else {
+        re += pattern.slice(i, end + 1);
+        i = end;
+      }
+    } else {
+      // Escape regex metacharacters.
+      re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+    }
+    i++;
+  }
+  re += "$";
+
+  try {
+    return new RegExp(re).test(path);
+  } catch {
+    // Malformed pattern — fail safe (no match).
+    return false;
+  }
 }

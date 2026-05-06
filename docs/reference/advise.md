@@ -160,6 +160,78 @@ Per constraint:
 | `exempt` | bool \| omitted | `Design.OrphanExport` only — `true` when the file matches a framework-entry or test pattern. |
 | `exempt_reason` | string \| omitted | Set when `exempt: true`. |
 
+## Diff mode — `--diff <git-ref>`
+
+`cofferdam advise --diff <git-ref>` flips the question from
+"what does my next edit need to respect?" to
+**"what would *this* in-progress edit do?"** It runs the full check
+engine twice — once against the source as it existed at `<git-ref>`
+(materialised via `git show <ref>:<path>`), once against the working
+tree — and reports two sets:
+
+- `would_fire` — rules that fire on the proposed change but not on the
+  baseline. The new violations the diff introduces.
+- `would_clear` — rules that fire on the baseline but not on the
+  proposed change. Regressions the edit cleans up.
+
+For agentic edit loops this collapses
+"write → check → fix → repeat" to "advise --diff → done" whenever the
+draft is rule-compliant on the first pass.
+
+```bash
+# Did my working-tree changes vs main introduce any new findings?
+cofferdam advise --diff main
+
+# CI gate — exit 1 if any would_fire entry is medium or above.
+cofferdam advise --diff main --fail-on medium
+```
+
+Output is always JSON in diff mode (`--format` is ignored). Findings
+are keyed by `(file, check_id, rule_signature)` where `rule_signature`
+is the same SHA-256-of-trimmed-span used by the baseline subsystem, so
+reformats and line shifts do **not** show up as spurious entries.
+
+```json
+{
+  "ref": "main",
+  "would_fire": [
+    {
+      "file": "src/api/route.ts",
+      "check_id": "Warning.TripleEquals",
+      "severity": "medium",
+      "line": 42,
+      "column": 11,
+      "message": "use === instead of ==; == performs type coercion"
+    }
+  ],
+  "would_clear": [],
+  "summary": { "would_fire": 1, "would_clear": 0 }
+}
+```
+
+### Exit codes
+
+| Mode | Exit |
+|---|---|
+| Default (no `--fail-on`) | `0` regardless of findings — the verdict is in the JSON. |
+| `--fail-on=<level>` and any `would_fire` entry is at or above `<level>` | `1` |
+| `--fail-on=<level>` and no `would_fire` entry is at or above `<level>` | `0` |
+| `--fail-on` only inspects `would_fire` — `would_clear` never gates. | |
+
+### Scope
+
+The file set is the working-tree-vs-`<ref>` diff, filtered to TypeScript
+extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`) and any
+explicit `[paths]...` arg. Renames are counted as add+delete in v0.
+
+### Limitations (v0)
+
+- **Built-in checks only.** Plugin findings are not yet diffed; an edit
+  that introduces or clears a plugin-emitted finding will not appear in
+  `would_fire` / `would_clear`. Tracked as cd-s7f.
+- **Single ref.** No `--diff a..b` form yet; the comparison is always
+  "working tree vs `<ref>`."
+
 ## Why a separate command (vs. `check`)
 
 `cofferdam check` answers "what's wrong with the code in this file?"

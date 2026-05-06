@@ -26,6 +26,17 @@
       "options": []
     },
     {
+      "id": "Consistency.UnusedSuppression",
+      "category": "Consistency",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A `cofferdam-ignore` directive (next-line, range, or file-wide) targets a check ID that has no current finding in scope. The underlying issue was likely fixed or the code was deleted — the directive is now dead weight.",
+      "body": "---\nid: Consistency.UnusedSuppression\ncategory: Consistency\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `cofferdam-ignore` suppression directive names a check ID but no current finding for that check exists in the scope the directive covers. The underlying issue was likely fixed, the code was deleted, or the check was renamed — the directive is now dead weight.\n\nThree forms are checked:\n\n- **Next-line** — `// cofferdam-ignore: <CheckId>[: reason]` where the next non-blank line has no matching finding.\n- **Range** — `// cofferdam-ignore-start: <CheckId>` … `// cofferdam-ignore-end` where the covered lines have no matching finding.\n- **File-wide** — `// cofferdam-ignore-file: <CheckId>` where the file has no matching finding anywhere.\n\nBroad-form directives (no check id, e.g. `// cofferdam-ignore`) are not flagged here — that's `Consistency.BroadSuppression`'s territory. Directives targeting a check ID not installed in the current engine run are also skipped — those are `Consistency.UnknownCheckId`'s territory.\n\n**Stale (flag):**\n\n```ts\n// cofferdam-ignore: Warning.TripleEquals: legacy comparator\nconst x = 1 + 1; // no == / != here — suppression is stale\n```\n\n**Stale range (flag):**\n\n```ts\n// cofferdam-ignore-start: Refactor.CyclomaticComplexity\nfunction simple() {\n  return 42;\n}\n// cofferdam-ignore-end\n```\n\n**Still valid (no finding):**\n\n```ts\n// cofferdam-ignore: Warning.TripleEquals: intentional loose comparison\nif (value == null) { /* ... */ }\n```\n\nRemove stale directives to keep the suppression list auditable and reviewable. A suppression with no finding is noise that erodes trust in suppressions that are still load-bearing.\n",
+      "requires_types": false,
+      "consistency": false,
+      "options": []
+    },
+    {
       "id": "Design.BoundaryFrozen",
       "category": "Design",
       "base_priority": 0,

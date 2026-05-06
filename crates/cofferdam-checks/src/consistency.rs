@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, Issue, Priority, Severity, SourceFile,
-    Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Priority,
+    Severity, SourceFile, Span, ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
 };
 use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use oxc_ast_visit::Visit;
@@ -300,6 +300,349 @@ fn find_broad_suppression(line: &str) -> Option<usize> {
     Some(leading_ws + comment_marker_len + directive_offset_in_inner)
 }
 
+// ─── Consistency.UnusedSuppression ─────────────────────────────────────────
+
+/// Kind of suppression directive, carrying the line range it targets.
+#[derive(Debug, Clone)]
+enum DirectiveKind {
+    /// `// cofferdam-ignore: <id>` — silences the next non-blank line.
+    NextLine { target_line: u32 },
+    /// `// cofferdam-ignore-start: <id>` … `// cofferdam-ignore-end` — silences a range.
+    Range { start_line: u32, end_line: u32 },
+    /// `// cofferdam-ignore-file: <id>` — silences the whole file.
+    File,
+}
+
+/// One parsed suppression directive with its location in the file.
+#[derive(Debug, Clone)]
+struct PerFileDirective {
+    check_id: String,
+    kind: DirectiveKind,
+    /// 1-based line of the directive itself (where the issue will point).
+    directive_line: u32,
+    start_byte: u32,
+    end_byte: u32,
+}
+
+/// Corpus slot: per-file parsed directives collected during pass 1 (`run`).
+/// The slot is populated by `UnusedSuppression::run` and consumed in `finalize`.
+static SUPPRESSION_DIRECTIVES: CorpusKey<HashMap<PathBuf, Vec<PerFileDirective>>> =
+    CorpusKey::new("Consistency.UnusedSuppression.directives");
+
+pub struct UnusedSuppression;
+
+const US_META: CheckMeta = CheckMeta {
+    id: "Consistency.UnusedSuppression",
+    category: Category::Consistency,
+    base_priority: -5,
+    default_severity: Severity::Low,
+    explanation: "A `cofferdam-ignore` directive (next-line, range, or file-wide) targets a check ID that has no current finding in scope. The underlying issue was likely fixed or the code was deleted — the directive is now dead weight.",
+    body: include_str!("../docs/Consistency.UnusedSuppression.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+};
+
+impl Check for UnusedSuppression {
+    fn meta(&self) -> &'static CheckMeta {
+        &US_META
+    }
+
+    /// Pass 1: scan the file text for scoped suppression directives and
+    /// store them into the corpus so `finalize` can compare against findings.
+    /// Broad-form directives (no check id) are skipped — that's
+    /// `Consistency.BroadSuppression`'s territory.
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let directives = parse_scoped_directives(&file.text);
+        ctx.corpus.with_slot(&SUPPRESSION_DIRECTIVES, |slot| {
+            slot.insert(file.path.clone(), directives);
+        });
+        Vec::new()
+    }
+
+    /// Post-run: read pre-filter findings + per-file directives; emit one
+    /// finding per directive that covers zero matching findings.
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        // Read the set of known check IDs. A directive targeting an unknown
+        // check ID is `Consistency.UnknownCheckId`'s territory — skip it.
+        let known_ids = ctx
+            .corpus
+            .with_slot(&REGISTERED_CHECK_IDS, |ids| ids.clone());
+
+        // Read the pre-filter findings map.
+        let findings_by_file = ctx
+            .corpus
+            .with_slot(&ALL_PRE_FILTER_FINDINGS, |m| m.clone());
+
+        // Read the suppression directives collected during run().
+        let directives_by_file = ctx.corpus.with_slot(&SUPPRESSION_DIRECTIVES, |m| m.clone());
+
+        let mut out = Vec::new();
+
+        for (file_path, directives) in &directives_by_file {
+            // findings for this file: list of (check_id, line) pairs
+            let empty = Vec::new();
+            let findings = findings_by_file.get(file_path).unwrap_or(&empty);
+
+            for directive in directives {
+                // Skip if the targeted check ID is not registered — unknown
+                // check id linting is a separate concern.
+                if !known_ids.contains(&directive.check_id) {
+                    continue;
+                }
+
+                let has_match = match &directive.kind {
+                    DirectiveKind::NextLine { target_line } => findings
+                        .iter()
+                        .any(|(id, line)| id == &directive.check_id && line == target_line),
+                    DirectiveKind::Range {
+                        start_line,
+                        end_line,
+                    } => findings.iter().any(|(id, line)| {
+                        id == &directive.check_id && line >= start_line && line <= end_line
+                    }),
+                    DirectiveKind::File => findings.iter().any(|(id, _)| id == &directive.check_id),
+                };
+
+                if !has_match {
+                    let span = Span {
+                        start_byte: directive.start_byte,
+                        end_byte: directive.end_byte,
+                        line: directive.directive_line,
+                        column: 1,
+                    };
+                    out.push(Issue {
+                        check_id: US_META.id.to_string(),
+                        message: format!(
+                            "suppression directive for `{}` covers no findings — the directive is stale",
+                            directive.check_id,
+                        ),
+                        file: file_path.clone(),
+                        span,
+                        priority: Priority(US_META.base_priority),
+                        severity: US_META.default_severity,
+                        related: Vec::new(),
+                    });
+                }
+            }
+        }
+
+        out
+    }
+}
+
+/// Parse all scoped (named) suppression directives from `text`.
+/// Returns one `PerFileDirective` per directive that names a check ID.
+/// Broad-form directives and ESLint-style `disable`/`enable` blocks are
+/// intentionally excluded — they are `Consistency.BroadSuppression`'s
+/// territory or future work.
+fn parse_scoped_directives(text: &str) -> Vec<PerFileDirective> {
+    let mut out: Vec<PerFileDirective> = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+
+    /// Active block: (check_id, 1-based start line of the -ignore-start directive, start_byte, end_byte)
+    struct ActiveBlock {
+        check_id: String,
+        start_line: u32,
+        start_byte: u32,
+        end_byte: u32,
+    }
+    let mut active_blocks: Vec<ActiveBlock> = Vec::new();
+
+    let mut byte_offset: u32 = 0;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let line_num = (idx + 1) as u32;
+        let trimmed = line.trim();
+        let line_start = byte_offset;
+        let line_end = byte_offset + line.len() as u32;
+        byte_offset = byte_offset.saturating_add(line.len() as u32 + 1); // +1 for \n
+
+        // ── cofferdam-ignore-file: <id> ──────────────────────────────────────
+        if let Some(id) = extract_file_directive(trimmed) {
+            if !id.is_empty() {
+                out.push(PerFileDirective {
+                    check_id: id,
+                    kind: DirectiveKind::File,
+                    directive_line: line_num,
+                    start_byte: line_start,
+                    end_byte: line_end,
+                });
+            }
+            continue;
+        }
+
+        // ── cofferdam-ignore-end ──────────────────────────────────────────────
+        if is_block_end(trimmed) {
+            // Close and record the most recent matching open block (any id since
+            // -ignore-end has no id in the Biome grammar).
+            if let Some(block) = active_blocks.pop() {
+                out.push(PerFileDirective {
+                    check_id: block.check_id,
+                    kind: DirectiveKind::Range {
+                        start_line: block.start_line,
+                        end_line: line_num.saturating_sub(1), // up to the line before -end
+                    },
+                    directive_line: block.start_line,
+                    start_byte: block.start_byte,
+                    end_byte: block.end_byte,
+                });
+            }
+            continue;
+        }
+
+        // ── cofferdam-ignore-start: <id> ─────────────────────────────────────
+        if let Some(id) = extract_block_start(trimmed) {
+            if !id.is_empty() {
+                active_blocks.push(ActiveBlock {
+                    check_id: id,
+                    start_line: line_num,
+                    start_byte: line_start,
+                    end_byte: line_end,
+                });
+            }
+            continue;
+        }
+
+        // ── cofferdam-ignore: <id> (next-line form) ──────────────────────────
+        if let Some(id) = extract_next_line_directive(trimmed) {
+            if !id.is_empty() {
+                // Find next non-blank line number. If there is no next
+                // non-blank line the directive targets nothing — use a
+                // sentinel that will never match a finding so it is
+                // correctly flagged as stale.
+                let target = find_next_non_blank(idx, &lines).unwrap_or(u32::MAX);
+                out.push(PerFileDirective {
+                    check_id: id,
+                    kind: DirectiveKind::NextLine {
+                        target_line: target,
+                    },
+                    directive_line: line_num,
+                    start_byte: line_start,
+                    end_byte: line_end,
+                });
+            }
+        }
+    }
+
+    // Any still-open blocks (missing -ignore-end) are treated as ranging to EOF.
+    let total_lines = lines.len() as u32;
+    for block in active_blocks {
+        out.push(PerFileDirective {
+            check_id: block.check_id,
+            kind: DirectiveKind::Range {
+                start_line: block.start_line,
+                end_line: total_lines,
+            },
+            directive_line: block.start_line,
+            start_byte: block.start_byte,
+            end_byte: block.end_byte,
+        });
+    }
+
+    out
+}
+
+/// If `trimmed` is a `cofferdam-ignore-file: <id>` directive, return the id.
+/// Returns `Some("")` for the broad file form (no id) so the caller can skip it.
+/// Returns `None` if not a file directive at all.
+fn extract_file_directive(trimmed: &str) -> Option<String> {
+    let needle = "cofferdam-ignore-file";
+    let idx = trimmed.find(needle)?;
+    let after = &trimmed[idx + needle.len()..];
+    let after = after.trim_start();
+    // Broad file form — no colon or colon with no id.
+    if !after.starts_with(':') {
+        return Some(String::new()); // broad form → skip
+    }
+    let payload = after[1..].trim().trim_end_matches("*/").trim();
+    if payload.is_empty() {
+        return Some(String::new()); // broad form
+    }
+    let id = match payload.split_once(':') {
+        Some((id, _)) => id.trim(),
+        None => payload,
+    };
+    if id.is_empty() {
+        Some(String::new())
+    } else {
+        Some(id.to_string())
+    }
+}
+
+/// True if `trimmed` is a `cofferdam-ignore-end` line (Biome range closer).
+fn is_block_end(trimmed: &str) -> bool {
+    trimmed.contains("cofferdam-ignore-end")
+}
+
+/// If `trimmed` opens a Biome range block (`cofferdam-ignore-start: <id>`),
+/// return the check id. Returns `Some("")` for the broad block form.
+fn extract_block_start(trimmed: &str) -> Option<String> {
+    let needle = "cofferdam-ignore-start";
+    let idx = trimmed.find(needle)?;
+    let after = &trimmed[idx + needle.len()..];
+    let after = after.trim_start();
+    if !after.starts_with(':') {
+        return Some(String::new()); // broad block — skip
+    }
+    let payload = after[1..].trim().trim_end_matches("*/").trim();
+    if payload.is_empty() {
+        return Some(String::new());
+    }
+    let id = match payload.split_once(':') {
+        Some((id, _)) => id.trim(),
+        None => payload,
+    };
+    if id.is_empty() {
+        Some(String::new())
+    } else {
+        Some(id.to_string())
+    }
+}
+
+/// If `trimmed` is a Biome next-line form (`cofferdam-ignore: <id>`), return
+/// the check id. Returns `Some("")` for the broad form (no id). Returns
+/// `None` for lines that aren't a next-line directive.
+fn extract_next_line_directive(trimmed: &str) -> Option<String> {
+    let needle = "cofferdam-ignore";
+    let idx = trimmed.find(needle)?;
+    let after = &trimmed[idx + needle.len()..];
+
+    // Reject multi-form variants handled elsewhere.
+    if after.starts_with("-start") || after.starts_with("-end") || after.starts_with("-file") {
+        return None;
+    }
+    let after_trim = after.trim_start();
+    if !after_trim.starts_with(':') {
+        // Broad next-line form — skip (BroadSuppression's territory).
+        return Some(String::new());
+    }
+    let payload = after_trim[1..].trim().trim_end_matches("*/").trim();
+    if payload.is_empty() {
+        return Some(String::new()); // broad form with colon but no id
+    }
+    let id = match payload.split_once(':') {
+        Some((id, _)) => id.trim(),
+        None => payload,
+    };
+    if id.is_empty() {
+        Some(String::new())
+    } else {
+        Some(id.to_string())
+    }
+}
+
+/// Return the 1-based line number of the first non-blank line after `from_idx`.
+/// `from_idx` is 0-based (the index of the directive line in `lines`).
+fn find_next_non_blank(from_idx: usize, lines: &[&str]) -> Option<u32> {
+    for (offset, line) in lines.iter().skip(from_idx + 1).enumerate() {
+        if !line.trim().is_empty() {
+            return Some((from_idx + offset + 2) as u32);
+        }
+    }
+    None
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -468,6 +811,160 @@ const el = <Foo className="ignored" />;
             issues.len(),
             1,
             "only the non-JSX double-quoted string should be flagged; got: {:?}",
+            issues
+        );
+    }
+
+    // ── UnusedSuppression tests ──────────────────────────────────────────────
+
+    /// Helper: run UnusedSuppression's `run()` pass for `src` and then call
+    /// `finalize()` with a corpus that has been seeded with the given pre-filter
+    /// findings `[(check_id, line_1based)]` for the test file path, plus the
+    /// given set of known check IDs.
+    fn run_unused_suppression(
+        src: &str,
+        pre_filter_findings: &[(&str, u32)],
+        known_check_ids: &[&str],
+    ) -> Vec<Issue> {
+        let path = PathBuf::from("test.ts");
+        let file = SourceFile::new(path.clone(), src);
+        let corpus = CorpusIndex::new();
+        let check = UnusedSuppression;
+
+        // Seed REGISTERED_CHECK_IDS.
+        {
+            let ids: std::collections::HashSet<String> =
+                known_check_ids.iter().map(|s| s.to_string()).collect();
+            corpus.with_slot(&REGISTERED_CHECK_IDS, |slot| *slot = ids);
+        }
+
+        // Seed ALL_PRE_FILTER_FINDINGS.
+        {
+            let mut map: std::collections::HashMap<std::path::PathBuf, Vec<(String, u32)>> =
+                std::collections::HashMap::new();
+            map.insert(
+                path.clone(),
+                pre_filter_findings
+                    .iter()
+                    .map(|(id, line)| (id.to_string(), *line))
+                    .collect(),
+            );
+            corpus.with_slot(&ALL_PRE_FILTER_FINDINGS, |slot| *slot = map);
+        }
+
+        // Run pass 1 (populates SUPPRESSION_DIRECTIVES corpus slot).
+        {
+            let mut ctx = CheckContext::new(&file).with_corpus(&corpus);
+            let pass1 = check.run(&file, &mut ctx);
+            assert!(pass1.is_empty(), "run() must always return empty");
+        }
+
+        // Run finalize.
+        {
+            let mut finalize_ctx = cofferdam_core::FinalizeContext::new(&corpus);
+            check.finalize(&mut finalize_ctx)
+        }
+    }
+
+    #[test]
+    fn flags_unused_next_line_directive() {
+        // `// cofferdam-ignore: Warning.NoConsoleLog` on a line that has no
+        // finding for that check → stale directive.
+        let src = "// cofferdam-ignore: Warning.NoConsoleLog: suppressed\nconst x = 1;";
+        // pre-filter findings: no NoConsoleLog finding on line 2.
+        let issues = run_unused_suppression(src, &[], &["Warning.NoConsoleLog"]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "should flag the stale next-line directive; got: {:?}",
+            issues
+        );
+        assert_eq!(issues[0].check_id, "Consistency.UnusedSuppression");
+        assert!(
+            issues[0].message.contains("Warning.NoConsoleLog"),
+            "message should name the targeted check; got: {}",
+            issues[0].message
+        );
+        assert_eq!(
+            issues[0].span.line, 1,
+            "issue should point at the directive line"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_when_finding_present() {
+        // Same directive but with a matching pre-filter finding on line 2.
+        let src = "// cofferdam-ignore: Warning.NoConsoleLog: reason\nconsole.log('hi');";
+        let issues = run_unused_suppression(
+            src,
+            &[("Warning.NoConsoleLog", 2)],
+            &["Warning.NoConsoleLog"],
+        );
+        assert!(
+            issues.is_empty(),
+            "should NOT flag when a matching finding is present; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn flags_unused_range_with_no_findings_inside() {
+        // `cofferdam-ignore-start: Warning.NoEval` .. `cofferdam-ignore-end`
+        // with no eval inside → stale range directive.
+        let src =
+            "// cofferdam-ignore-start: Warning.NoEval\nconst safe = 1;\n// cofferdam-ignore-end\n";
+        let issues = run_unused_suppression(src, &[], &["Warning.NoEval"]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "should flag the stale range directive; got: {:?}",
+            issues
+        );
+        assert_eq!(
+            issues[0].span.line, 1,
+            "issue should point at the -start line"
+        );
+        assert!(issues[0].message.contains("Warning.NoEval"));
+    }
+
+    #[test]
+    fn flags_unused_file_directive() {
+        // `cofferdam-ignore-file: Warning.TripleEquals` in a file with no == / !=.
+        let src = "// cofferdam-ignore-file: Warning.TripleEquals\nconst x = 1;\n";
+        let issues = run_unused_suppression(src, &[], &["Warning.TripleEquals"]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "should flag the stale file directive; got: {:?}",
+            issues
+        );
+        assert_eq!(issues[0].span.line, 1);
+        assert!(issues[0].message.contains("Warning.TripleEquals"));
+    }
+
+    #[test]
+    fn silent_when_check_id_unknown_to_engine() {
+        // `cofferdam-ignore: Custom.NotARealCheck` — check not registered.
+        // Must NOT emit a finding (that's Consistency.UnknownCheckId's job).
+        let src = "// cofferdam-ignore: Custom.NotARealCheck: reason\nconst x = 1;";
+        // known_check_ids does NOT include Custom.NotARealCheck.
+        let issues = run_unused_suppression(src, &[], &["Warning.NoConsoleLog"]);
+        assert!(
+            issues.is_empty(),
+            "must not flag directives targeting unknown check IDs; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn silent_for_broad_suppression() {
+        // `// cofferdam-ignore` (no check id) — broad form.
+        // UnusedSuppression must NOT emit a finding for these.
+        let src = "// cofferdam-ignore\nconst x = 1;";
+        let issues = run_unused_suppression(src, &[], &["Warning.NoConsoleLog"]);
+        assert!(
+            issues.is_empty(),
+            "broad-form directive must not be flagged by UnusedSuppression; got: {:?}",
             issues
         );
     }

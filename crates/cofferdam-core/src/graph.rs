@@ -186,3 +186,29 @@ impl InvariantsRuntime {
 /// when no invariants spec was loaded — dependent checks become no-ops.
 pub static INVARIANTS: CorpusKey<Option<InvariantsRuntime>> =
     CorpusKey::new("__cofferdam.graph.invariants");
+
+/// Pre-suppression-filter findings indexed by file path.
+///
+/// The engine writes this slot AFTER all `check.run()` and `pass2()` calls
+/// complete and BEFORE the finalize loop. Each entry is a list of
+/// `(check_id, 1-based-line)` pairs for the findings that `run()` emitted
+/// for that file. Findings emitted from `finalize()` (cross-file checks)
+/// are NOT included — by the time `finalize` runs, cross-file findings are
+/// not yet in the slot.
+///
+/// `Consistency.UnusedSuppression` reads this in its `finalize()` to
+/// compare per-file inline suppressions against actual findings and flag
+/// directives that suppressed nothing.
+pub static ALL_PRE_FILTER_FINDINGS: CorpusKey<
+    std::collections::HashMap<PathBuf, Vec<(String, u32)>>,
+> = CorpusKey::new("__cofferdam.suppress.pre_filter_findings");
+
+/// Set of check IDs registered in the current engine run.
+///
+/// The engine writes this at the start of each analysis run so that
+/// `Consistency.UnusedSuppression` can distinguish stale-by-cause
+/// suppressions (the finding was fixed — flag it) from stale-by-config
+/// suppressions (the check isn't installed — don't flag it; that's
+/// `Consistency.UnknownCheckId`'s territory).
+pub static REGISTERED_CHECK_IDS: CorpusKey<std::collections::HashSet<String>> =
+    CorpusKey::new("__cofferdam.suppress.registered_check_ids");

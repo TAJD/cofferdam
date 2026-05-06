@@ -24,7 +24,8 @@ pub use corpus::{CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use graph::{
     ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, InvariantsRuntime,
-    LayersConfig, EXPORTS, IMPORTS, INVARIANTS, LAYERS,
+    LayersConfig, ALL_PRE_FILTER_FINDINGS, EXPORTS, IMPORTS, INVARIANTS, LAYERS,
+    REGISTERED_CHECK_IDS,
 };
 pub use invariants::{BoundarySpec, InvariantSpec, InvariantsSpec, PublicApiSpec};
 pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};

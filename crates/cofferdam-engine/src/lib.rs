@@ -23,7 +23,8 @@ use std::collections::BTreeMap;
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
-    InvariantsSpec, Issue, LayersConfig, Priority, Severity, SourceFile, Span, INVARIANTS, LAYERS,
+    InvariantsSpec, Issue, LayersConfig, Priority, Severity, SourceFile, Span,
+    ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -149,6 +150,19 @@ impl Engine {
         // in finalize(). Per-check checks ignore it.
         let corpus = CorpusIndex::new();
         let graph_builder = graph::GraphBuilder::new();
+        // Publish the set of registered check IDs so that
+        // `Consistency.UnusedSuppression` can distinguish stale-by-cause
+        // suppressions from stale-by-config ones (unknown check IDs are
+        // `Consistency.UnknownCheckId`'s territory, not ours).
+        {
+            let ids: std::collections::HashSet<String> = self
+                .checks
+                .iter()
+                .map(|c| c.meta().id.to_string())
+                .collect();
+            corpus.with_slot(&REGISTERED_CHECK_IDS, |slot| *slot = ids);
+        }
+
         // Publish the layers config (if any) so finalize-stage checks
         // see it through the same corpus channel as the import/export
         // tables. Done before any check sees a file.
@@ -251,6 +265,23 @@ impl Engine {
                     issues.extend(check.pass2(&file, &mut ctx));
                 }
             }
+        }
+
+        // Pre-finalize: publish all run-phase findings into the corpus so
+        // `Consistency.UnusedSuppression` can compare them against inline
+        // directives in its `finalize()`. We snapshot here — after run/pass2
+        // but before finalize — so the slot contains per-file findings only;
+        // finalize-emitted (cross-file) findings are intentionally excluded,
+        // as no per-file suppression directive would target them.
+        {
+            let mut map: std::collections::HashMap<std::path::PathBuf, Vec<(String, u32)>> =
+                std::collections::HashMap::new();
+            for issue in &issues {
+                map.entry(issue.file.clone())
+                    .or_default()
+                    .push((issue.check_id.clone(), issue.span.line));
+            }
+            corpus.with_slot(&ALL_PRE_FILTER_FINDINGS, |slot| *slot = map);
         }
 
         // Per-check options flow into `finalize` the same way they do

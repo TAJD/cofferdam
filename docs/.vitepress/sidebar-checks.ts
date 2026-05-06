@@ -13,6 +13,7 @@ export const checksItems = [
     items: [
       { text: 'BroadSuppression', link: '/checks/Consistency.BroadSuppression' },
       { text: 'QuoteStyle', link: '/checks/Consistency.QuoteStyle' },
+      { text: 'UnusedSuppression', link: '/checks/Consistency.UnusedSuppression' },
     ],
   },
   {

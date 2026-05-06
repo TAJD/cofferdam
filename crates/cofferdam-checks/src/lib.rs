@@ -59,6 +59,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(readability::MaxFunctionLength::new(50)),
         Box::new(consistency::QuoteStyle),
         Box::new(consistency::BroadSuppression),
+        Box::new(consistency::UnusedSuppression),
         Box::new(design::MaxParameters::new(5)),
         Box::new(design::DuplicateExportName),
         Box::new(design::OrphanExport),

@@ -634,6 +634,7 @@ mod tests {
         requires_types: false,
         consistency: false,
         options: LIMIT_OPTS,
+        autofix: false,
     };
 
     fn fixture_layers() -> LayersConfig {
@@ -691,6 +692,7 @@ mod tests {
             requires_types: false,
             consistency: false,
             options: &[],
+            autofix: false,
         };
         let opts = CheckOptions::default();
         let c = build_constraint(
@@ -742,6 +744,7 @@ mod tests {
             requires_types: false,
             consistency: false,
             options: OE_OPTIONS,
+            autofix: false,
         };
         let _ = test_patterns;
         let _ = framework_patterns;

@@ -45,5 +45,5 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Warning.NoConsoleLog`](Warning.NoConsoleLog.md) — `console.X(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.
 - [`Warning.NoDebugger`](Warning.NoDebugger.md) — `debugger` statements halt execution under attached devtools. Remove before shipping.
 - [`Warning.NoEval`](Warning.NoEval.md) — `eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.
-- [`Warning.TripleEquals`](Warning.TripleEquals.md) — `==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.
+- [`Warning.TripleEquals`](Warning.TripleEquals.md) — `==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. · autofix
 - [`Warning.UnusedImport`](Warning.UnusedImport.md) — Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.

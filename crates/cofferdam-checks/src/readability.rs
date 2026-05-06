@@ -39,6 +39,7 @@ const MLL_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: MLL_OPTIONS,
+    autofix: false,
 };
 
 impl MaxLineLength {
@@ -124,6 +125,7 @@ const MFL_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: MFL_OPTIONS,
+    autofix: false,
 };
 
 impl MaxFunctionLength {

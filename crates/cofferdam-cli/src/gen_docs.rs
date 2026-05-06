@@ -136,6 +136,7 @@ struct CheckEntry {
     body: &'static str,
     requires_types: bool,
     consistency: bool,
+    autofix: bool,
     options: Vec<OptionEntry>,
 }
 
@@ -159,6 +160,7 @@ fn build_checks_json(metas: &[&'static CheckMeta]) -> String {
             body: m.body,
             requires_types: m.requires_types,
             consistency: m.consistency,
+            autofix: m.autofix,
             options: m.options.iter().map(map_option_entry).collect(),
         })
         .collect();
@@ -240,6 +242,7 @@ fn build_check_md(meta: &'static CheckMeta) -> String {
         severity_pascal(meta.default_severity)
     ));
     out.push_str(&format!("options: {}\n", options_yaml));
+    out.push_str(&format!("autofix: {}\n", meta.autofix));
     out.push_str("---\n");
     out.push('\n');
     out.push_str(
@@ -286,9 +289,10 @@ fn build_index_md(metas: &[&'static CheckMeta]) -> String {
         // Checks in this category. `metas` is already globally sorted by id,
         // so the per-category order is sorted-by-id too.
         for meta in metas.iter().filter(|m| m.category == cat) {
+            let autofix_badge = if meta.autofix { " · autofix" } else { "" };
             out.push_str(&format!(
-                "- [`{}`]({}.md) — {}\n",
-                meta.id, meta.id, meta.explanation
+                "- [`{}`]({}.md) — {}{}\n",
+                meta.id, meta.id, meta.explanation, autofix_badge
             ));
         }
     }

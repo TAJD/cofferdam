@@ -48,6 +48,7 @@ const META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: MP_OPTIONS,
+    autofix: false,
 };
 
 impl MaxParameters {
@@ -168,6 +169,7 @@ const DEN_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    autofix: false,
 };
 
 impl Check for DuplicateExportName {
@@ -306,6 +308,7 @@ const OE_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: OE_OPTIONS,
+    autofix: false,
 };
 
 pub struct OrphanExport;
@@ -588,6 +591,7 @@ const IC_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: IC_OPTIONS,
+    autofix: false,
 };
 
 pub struct ImportCycle;
@@ -784,6 +788,7 @@ const LV_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    autofix: false,
 };
 
 pub struct LayerViolation;
@@ -972,6 +977,7 @@ const BF_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    autofix: false,
 };
 
 pub struct BoundaryFrozen;
@@ -1063,6 +1069,7 @@ const IV_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    autofix: false,
 };
 
 pub struct InvariantViolation;

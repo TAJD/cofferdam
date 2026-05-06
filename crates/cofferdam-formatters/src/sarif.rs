@@ -366,6 +366,7 @@ mod tests {
             requires_types: false,
             consistency: false,
             options: &[],
+            autofix: false,
         }
     }
 

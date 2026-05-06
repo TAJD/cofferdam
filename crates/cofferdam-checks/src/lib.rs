@@ -89,6 +89,33 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
 
+    /// `Warning.TripleEquals` is the only builtin with a real `autofix`
+    /// implementation today. Confirm it is the sole check with
+    /// `meta().autofix == true`, and that every other check is `false`.
+    #[test]
+    fn meta_autofix_field_is_populated() {
+        let builtins = all_builtins();
+        let autofix_true: Vec<&str> = builtins
+            .iter()
+            .filter(|c| c.meta().autofix)
+            .map(|c| c.meta().id)
+            .collect();
+        assert_eq!(
+            autofix_true,
+            vec!["Warning.TripleEquals"],
+            "unexpected set of checks with autofix=true: {:?}",
+            autofix_true
+        );
+
+        // All remaining checks must be false.
+        let autofix_false_count = builtins.iter().filter(|c| !c.meta().autofix).count();
+        assert_eq!(
+            autofix_false_count,
+            builtins.len() - 1,
+            "expected all checks except Warning.TripleEquals to have autofix=false"
+        );
+    }
+
     /// Every file in `docs/` must correspond to a registered builtin's id.
     /// `include_str!` already enforces the reverse direction (each builtin's
     /// `META.body` references an existing file at compile time).

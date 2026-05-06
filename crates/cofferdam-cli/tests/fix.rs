@@ -182,3 +182,54 @@ fn fix_on_already_strict_file_produces_no_edits() {
         edits.len()
     );
 }
+
+/// Dry-run: verify that collecting edits (without applying them) leaves
+/// the file on disk completely unchanged and that we do identify at least
+/// one autofix edit for a file with `==`.
+#[test]
+fn dry_run_does_not_modify_file() {
+    let tmp = TempDir::new().expect("temp dir");
+    let path = tmp.path().join("demo.ts");
+    let original_content = "const a = x == 5;\nconst b = y != null;\n";
+    std::fs::write(&path, original_content).expect("write fixture");
+
+    let engine = Engine::new(all_builtins());
+    let (issues, texts) = engine
+        .analyze_with_text(std::slice::from_ref(&path))
+        .expect("analyze should succeed");
+
+    let checks = all_builtins();
+    let check_map: HashMap<&str, &dyn Check> =
+        checks.iter().map(|c| (c.meta().id, c.as_ref())).collect();
+
+    // Collect edits (dry-run: do NOT apply them).
+    let mut dry_edits: Vec<TextEdit> = Vec::new();
+    for issue in &issues {
+        if issue.check_id != "Warning.TripleEquals" {
+            continue;
+        }
+        let Some(check) = check_map.get(issue.check_id.as_str()) else {
+            continue;
+        };
+        let Some(text) = texts.get(&issue.file) else {
+            continue;
+        };
+        let source = SourceFile::new(issue.file.clone(), text.clone());
+        if let Some(edit) = check.autofix(issue, &source) {
+            dry_edits.push(edit);
+        }
+    }
+
+    // There should be at least one edit to apply (== 5 is fixable; == null is not).
+    assert!(
+        !dry_edits.is_empty(),
+        "expected at least one autofix edit for file with `==`"
+    );
+
+    // The file on disk must be UNCHANGED — dry-run never writes.
+    let on_disk = std::fs::read_to_string(&path).expect("read file after dry-run");
+    assert_eq!(
+        on_disk, original_content,
+        "dry-run must not modify the source file"
+    );
+}

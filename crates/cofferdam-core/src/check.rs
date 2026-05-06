@@ -90,6 +90,13 @@ pub struct CheckMeta {
     /// this and lends the resolved values to `CheckContext::options`
     /// for every file. `&[]` means the check takes no options.
     pub options: &'static [OptionSpec],
+    /// Whether this check supports mechanical autofix via `Check::autofix`.
+    /// Set to `true` when the check's `autofix` override returns `Some(_)`
+    /// for at least one class of finding. Defaults to `false` for forward-
+    /// compatibility — new checks opt in explicitly. Used by `cofferdam fix
+    /// --dry-run` to predict which findings would be modified and by the
+    /// doc catalog / `explain` to surface support to users.
+    pub autofix: bool,
 }
 
 /// Mutable per-file scratch passed to `Check::run`. Carries the

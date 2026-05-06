@@ -42,6 +42,7 @@ const META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: true,
     options: &[],
+    autofix: false,
 };
 
 impl Check for QuoteStyle {
@@ -228,6 +229,7 @@ const BS_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    autofix: false,
 };
 
 impl Check for BroadSuppression {
@@ -341,6 +343,7 @@ const US_META: CheckMeta = CheckMeta {
     requires_types: false,
     consistency: false,
     options: &[],
+    autofix: false,
 };
 
 impl Check for UnusedSuppression {

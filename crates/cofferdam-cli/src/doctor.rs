@@ -1,9 +1,10 @@
 //! `cofferdam doctor` — diagnose install and configuration issues.
 //!
-//! Runs 7 checks covering binary integrity, config, baseline, git,
-//! discovery, suppression directives, and npm wrapper version. Reports
-//! every check in one pass (no early exit); returns `ExitCode::FAILURE`
-//! if any check has `Status::Fail`, `ExitCode::SUCCESS` otherwise.
+//! Runs 9 checks covering binary integrity, config, baseline, baseline
+//! suppression overlap, git, discovery, suppression directives, and npm
+//! wrapper version. Reports every check in one pass (no early exit);
+//! returns `ExitCode::FAILURE` if any check has `Status::Fail`,
+//! `ExitCode::SUCCESS` otherwise (warns alone do not cause non-zero exit).
 //!
 //! This command is **diagnostic only** — it never modifies files.
 
@@ -17,6 +18,8 @@ use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::suppress;
 use cofferdam_engine::{discover, DiscoveryOptions};
 use serde::Serialize;
+
+use crate::baseline_lint;
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
@@ -122,6 +125,7 @@ pub fn run(robot: bool, pretty: bool) -> ExitCode {
         check_config(),
         check_invariants_layers(),
         check_baseline(),
+        check_baseline_suppression(),
         check_git(),
         check_discovery(),
         check_suppression_directives(),
@@ -456,7 +460,46 @@ fn stale_baseline_files(bl: &Baseline, baseline_path: &Path) -> Vec<String> {
     missing
 }
 
-// ── Check 5 — git ────────────────────────────────────────────────────────────
+// ── Check 5 — baseline-suppression ───────────────────────────────────────────
+
+fn check_baseline_suppression() -> CheckResult {
+    const NAME: &str = "baseline-suppression";
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return CheckResult::fail(
+                NAME,
+                format!("could not determine current directory: {e}"),
+                "check your working directory",
+            );
+        }
+    };
+    check_baseline_suppression_at(&cwd)
+}
+
+/// Test-friendly variant: takes the directory to search from.
+pub fn check_baseline_suppression_at(start: &Path) -> CheckResult {
+    const NAME: &str = "baseline-suppression";
+
+    match baseline_lint::count_dual_state_at(start) {
+        Ok(0) => CheckResult::pass(
+            NAME,
+            "no dual-state entries (baseline ∩ inline suppressions = ∅)",
+        ),
+        Ok(n) => CheckResult::warn(
+            NAME,
+            format!("{n} baseline entr(ies) also have inline suppressions"),
+            "run `cofferdam baseline lint` for the full list",
+        ),
+        Err(e) => CheckResult::warn(
+            NAME,
+            format!("could not check baseline suppression overlap: {e}"),
+            "ensure the baseline file is readable",
+        ),
+    }
+}
+
+// ── Check 6 (was 5) — git ─────────────────────────────────────────────────────
 
 fn check_git() -> CheckResult {
     const NAME: &str = "git";
@@ -798,6 +841,72 @@ mod tests {
         assert!(
             r.message.contains("empty") || r.message.contains("will not fire"),
             "message should mention empty/will not fire: {}",
+            r.message
+        );
+    }
+
+    // ── check_baseline_suppression tests ──────────────────────────────────────
+
+    fn write_baseline(
+        dir: &std::path::Path,
+        entries: Vec<cofferdam_engine::baseline::BaselineEntry>,
+    ) {
+        let bl = cofferdam_engine::baseline::Baseline::new(entries);
+        let target = dir.join(".cofferdam/baseline.json");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        cofferdam_engine::baseline::write(&target, &bl).unwrap();
+    }
+
+    #[test]
+    fn baseline_suppression_passes_when_no_baseline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let r = check_baseline_suppression_at(dir.path());
+        assert_eq!(r.status, Status::Pass, "no baseline → pass: {}", r.message);
+        assert_eq!(r.name, "baseline-suppression");
+    }
+
+    #[test]
+    fn baseline_suppression_passes_when_no_overlap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("a.ts"), "console.log(\"hi\");\n").unwrap();
+        write_baseline(
+            dir.path(),
+            vec![cofferdam_engine::baseline::BaselineEntry {
+                file: "src/a.ts".into(),
+                check_id: "Warning.NoConsoleLog".into(),
+                rule_signature: "sig".into(),
+            }],
+        );
+        let r = check_baseline_suppression_at(dir.path());
+        assert_eq!(r.status, Status::Pass, "no overlap → pass: {}", r.message);
+    }
+
+    #[test]
+    fn baseline_suppression_warns_when_overlap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(
+            src_dir.join("a.ts"),
+            "// cofferdam-ignore: Warning.NoConsoleLog: legacy\nconsole.log(\"hi\");\n",
+        )
+        .unwrap();
+        write_baseline(
+            dir.path(),
+            vec![cofferdam_engine::baseline::BaselineEntry {
+                file: "src/a.ts".into(),
+                check_id: "Warning.NoConsoleLog".into(),
+                rule_signature: "sig".into(),
+            }],
+        );
+        let r = check_baseline_suppression_at(dir.path());
+        assert_eq!(r.status, Status::Warn, "overlap → warn: {}", r.message);
+        assert!(r.remediation.is_some());
+        assert!(
+            r.message.contains("dual-state") || r.message.contains("also have"),
+            "message should mention dual-state: {}",
             r.message
         );
     }

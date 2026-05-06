@@ -2,6 +2,8 @@
 
 mod advise;
 mod ast_wire;
+mod baseline_diff;
+mod baseline_lint;
 mod doctor;
 mod explain;
 mod gen_docs;
@@ -181,19 +183,18 @@ enum Cmd {
         #[command(subcommand)]
         action: BaselineAction,
     },
-    /// Print the metadata and prose explanation for one built-in check.
-    /// Use this when a finding's check ID isn't self-explanatory and you
-    /// want the rationale, default severity, configurable options, and
-    /// any relevant flags without leaving the terminal. Add `--full` to
-    /// also render the companion markdown body (motivation, examples,
-    /// config snippets) sourced from the check catalog.
+    /// Print the metadata and prose explanation for one check (built-in or
+    /// plugin). Use this when a finding's check ID isn't self-explanatory and
+    /// you want the rationale, default severity, configurable options, and any
+    /// relevant flags without leaving the terminal. Add `--full` to also render
+    /// the companion markdown body (motivation, examples, config snippets)
+    /// sourced from the check catalog.
     ///
-    /// Plugin checks: `explain` is currently built-in only —
-    /// `cofferdam explain Test.PluginCheck` will report unknown-check
-    /// even if the plugin is declared in `cofferdam.toml`. Plugin authors
-    /// should include a help message in the check's `explanation` field
-    /// that users can read directly, or ship a per-check README.
-    /// Tracking: gh #18 / cd-xda.
+    /// Plugin checks: `explain` discovers plugin-declared checks from
+    /// `cofferdam.toml`'s `plugins = [...]` and renders their `explanation`
+    /// (and `body` for `--full`) the same way as built-ins. Plugins must be
+    /// loadable from the current working directory; otherwise the unknown-check
+    /// fallback prints suggestions only from built-ins.
     Explain {
         /// Dotted check ID, e.g. `Warning.TripleEquals`. If unknown,
         /// the CLI prints the closest matches (substring on the ID) or
@@ -211,6 +212,15 @@ enum Cmd {
         /// JSON output. Frontmatter is stripped before display.
         #[arg(long)]
         full: bool,
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the current directory until one is found or a `.git`
+        /// directory is reached. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely. Plugin checks won't
+        /// be resolved.
+        #[arg(long)]
+        no_config: bool,
     },
     /// Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore
     /// entries so a new project has a working `cofferdam check` after
@@ -262,6 +272,19 @@ enum Cmd {
         /// Disable `.gitignore` / `.cofferdamignore` filtering.
         #[arg(long)]
         no_ignore: bool,
+        /// Preview mode — discover all fixable findings and print what
+        /// WOULD be changed, but do not modify any file. Exits 0. Use
+        /// this to audit autofix coverage before committing to a write.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable JSON output. Emits a structured report
+        /// instead of human-readable lines. With `--dry-run`, no files
+        /// are written; the JSON describes what would change.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
     },
     /// JIT architectural advisory for agents — emit the rules that apply
     /// to a given file or directory, INDEPENDENT of whether any current
@@ -348,6 +371,45 @@ enum BaselineAction {
         /// Disable config-file discovery entirely.
         #[arg(long)]
         no_config: bool,
+        /// Machine-readable JSON output. Emits a `delta` block when a
+        /// prior baseline existed; omitted on first run.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Report baseline entries that are also suppressed inline.
+    ///
+    /// A "dual-state" entry is silenced twice — once by the baseline and
+    /// once by an inline directive — which wastes signal and obscures the
+    /// true technical-debt posture.  Exit 0 if none found, 1 if any (so
+    /// it is wireable into CI for teams that want to enforce hygiene).
+    Lint {
+        /// Machine-readable JSON. Schema: `{ dual_state: [...], summary: { count } }`.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Compute delta between two baselines.
+    ///
+    /// With two explicit paths: compares them directly.
+    /// Useful for triage and PR review outside the `baseline write` path.
+    Diff {
+        /// First baseline path.
+        #[arg(value_name = "BASELINE_A")]
+        a: Option<PathBuf>,
+        /// Second baseline path.
+        #[arg(value_name = "BASELINE_B")]
+        b: Option<PathBuf>,
+        /// Machine-readable JSON.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
     },
 }
 
@@ -402,11 +464,15 @@ fn main() -> ExitCode {
             robot,
             pretty,
             full,
+            config,
+            no_config,
         } => explain::run(explain::ExplainArgs {
             check_id,
             robot,
             pretty,
             full,
+            config_path: config,
+            no_config,
         }),
         Cmd::Baseline { action } => match action {
             BaselineAction::Write {
@@ -416,7 +482,30 @@ fn main() -> ExitCode {
                 output,
                 config,
                 no_config,
-            } => run_baseline_write(paths, hidden, no_ignore, output, config, no_config),
+                robot,
+                pretty,
+            } => run_baseline_write(BaselineWriteArgs {
+                paths,
+                hidden,
+                no_ignore,
+                output,
+                config_path: config,
+                no_config,
+                robot,
+                pretty,
+            }),
+            BaselineAction::Lint { robot, pretty } => baseline_lint::run(robot, pretty),
+            BaselineAction::Diff {
+                a,
+                b,
+                robot,
+                pretty,
+            } => baseline_diff::run(baseline_diff::DiffArgs {
+                a,
+                b,
+                robot,
+                pretty,
+            }),
         },
         Cmd::Init {
             path,
@@ -441,7 +530,17 @@ fn main() -> ExitCode {
             paths,
             hidden,
             no_ignore,
-        } => run_fix(paths, hidden, no_ignore),
+            dry_run,
+            robot,
+            pretty,
+        } => run_fix(FixArgs {
+            paths,
+            hidden,
+            no_ignore,
+            dry_run,
+            robot,
+            pretty,
+        }),
         Cmd::Advise {
             paths,
             format,
@@ -888,20 +987,42 @@ fn apply_max_issues_tagged(
     Some(original)
 }
 
-fn run_baseline_write(
+struct BaselineWriteArgs {
     paths: Vec<PathBuf>,
     hidden: bool,
     no_ignore: bool,
     output: Option<PathBuf>,
     config_path: Option<PathBuf>,
     no_config: bool,
-) -> ExitCode {
+    robot: bool,
+    pretty: bool,
+}
+
+fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
+    let BaselineWriteArgs {
+        paths,
+        hidden,
+        no_ignore,
+        output,
+        config_path,
+        no_config,
+        robot,
+        pretty,
+    } = args;
+
     let roots: Vec<PathBuf> = if paths.is_empty() {
         vec![PathBuf::from(".")]
     } else {
         paths
     };
     let target = output.unwrap_or_else(|| PathBuf::from(baseline::DEFAULT_PATH));
+
+    // Read the prior baseline before overwriting (for delta computation).
+    let prior_baseline: Option<baseline::Baseline> = if target.is_file() {
+        baseline::read(&target).ok() // Unreadable prior — treat as first run.
+    } else {
+        None
+    };
 
     let (project_config, resolved_config_path) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
@@ -988,11 +1109,51 @@ fn run_baseline_write(
         eprintln!("error: {e}");
         return ExitCode::from(2);
     }
-    eprintln!(
-        "wrote {} finding(s) → {}",
-        baseline.findings.len(),
-        target.display()
-    );
+
+    let count = baseline.findings.len();
+
+    // Compute delta when a prior baseline was read.
+    let delta = prior_baseline
+        .as_ref()
+        .map(|prior| baseline::compute_delta(prior, &baseline));
+
+    if robot {
+        // Machine-readable JSON output.
+        let mut obj = serde_json::json!({
+            "path": target.display().to_string(),
+            "count": count,
+        });
+        if let Some(ref d) = delta {
+            let by_check: serde_json::Map<String, serde_json::Value> = d
+                .by_check
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        serde_json::Value::Number(serde_json::Number::from(*v)),
+                    )
+                })
+                .collect();
+            obj["delta"] = serde_json::json!({
+                "added": d.added,
+                "removed": d.removed,
+                "by_check": by_check,
+            });
+        }
+        let s = if pretty {
+            serde_json::to_string_pretty(&obj)
+        } else {
+            serde_json::to_string(&obj)
+        }
+        .expect("serializes infallibly");
+        println!("{s}");
+    } else {
+        eprintln!("✓ wrote {} ({} finding(s))", target.display(), count);
+        if let Some(ref d) = delta {
+            baseline_diff::render_delta_text(d);
+        }
+    }
+
     ExitCode::SUCCESS
 }
 
@@ -1081,7 +1242,25 @@ fn resolve_and_load_config(
     }
 }
 
-fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
+struct FixArgs {
+    paths: Vec<PathBuf>,
+    hidden: bool,
+    no_ignore: bool,
+    dry_run: bool,
+    robot: bool,
+    pretty: bool,
+}
+
+fn run_fix(args: FixArgs) -> ExitCode {
+    let FixArgs {
+        paths,
+        hidden,
+        no_ignore,
+        dry_run,
+        robot,
+        pretty,
+    } = args;
+
     let roots: Vec<PathBuf> = if paths.is_empty() {
         vec![PathBuf::from(".")]
     } else {
@@ -1122,8 +1301,9 @@ fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
     };
 
     // Collect edits per file.
-    // edits_by_file: canonical path → Vec<TextEdit>
-    let mut edits_by_file: HashMap<PathBuf, Vec<cofferdam_core::TextEdit>> = HashMap::new();
+    // edits_by_file: canonical path → Vec<(check_id, TextEdit)>
+    let mut edits_by_file: HashMap<PathBuf, Vec<(String, cofferdam_core::TextEdit)>> =
+        HashMap::new();
 
     for issue in &issues {
         let Some(check) = check_map.get(issue.check_id.as_str()) else {
@@ -1139,12 +1319,30 @@ fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
             edits_by_file
                 .entry(issue.file.clone())
                 .or_default()
-                .push(edit);
+                .push((issue.check_id.clone(), edit));
         }
     }
 
+    if dry_run {
+        return run_fix_dry_run(&edits_by_file, robot, pretty);
+    }
+
     if edits_by_file.is_empty() {
-        eprintln!("Applied 0 fix(es) across 0 file(s).");
+        if robot {
+            let summary = serde_json::json!({
+                "files": [],
+                "summary": { "files": 0, "edits": 0 }
+            });
+            let s = if pretty {
+                serde_json::to_string_pretty(&summary)
+            } else {
+                serde_json::to_string(&summary)
+            }
+            .expect("summary serializes infallibly");
+            println!("{s}");
+        } else {
+            eprintln!("Applied 0 fix(es) across 0 file(s).");
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -1152,18 +1350,20 @@ fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
     let mut total_files: usize = 0;
     let mut had_error = false;
 
-    for (path, mut file_edits) in edits_by_file {
+    for (path, file_edits) in edits_by_file {
         let Some(original_text) = texts.get(&path) else {
             continue;
         };
 
         // Sort edits in REVERSE byte-offset order so applying one edit
         // doesn't shift the byte positions of earlier edits.
-        file_edits.sort_by_key(|e| std::cmp::Reverse(e.span.start_byte));
+        let mut sorted_edits: Vec<cofferdam_core::TextEdit> =
+            file_edits.into_iter().map(|(_, e)| e).collect();
+        sorted_edits.sort_by_key(|e| std::cmp::Reverse(e.span.start_byte));
 
         let mut text = original_text.clone();
         let mut applied = 0usize;
-        for edit in &file_edits {
+        for edit in &sorted_edits {
             let start = edit.span.start_byte as usize;
             let end = edit.span.end_byte as usize;
             if start > text.len() || end > text.len() || start > end {
@@ -1197,11 +1397,103 @@ fn run_fix(paths: Vec<PathBuf>, hidden: bool, no_ignore: bool) -> ExitCode {
         total_files += 1;
     }
 
-    eprintln!("Applied {total_fixes} fix(es) across {total_files} file(s).");
+    if robot {
+        let summary = serde_json::json!({
+            "summary": { "files": total_files, "edits": total_fixes }
+        });
+        let s = if pretty {
+            serde_json::to_string_pretty(&summary)
+        } else {
+            serde_json::to_string(&summary)
+        }
+        .expect("summary serializes infallibly");
+        println!("{s}");
+    } else {
+        eprintln!("Applied {total_fixes} fix(es) across {total_files} file(s).");
+    }
 
     if had_error {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Dry-run path: report what would be fixed without writing anything.
+fn run_fix_dry_run(
+    edits_by_file: &HashMap<PathBuf, Vec<(String, cofferdam_core::TextEdit)>>,
+    robot: bool,
+    pretty: bool,
+) -> ExitCode {
+    let total_files = edits_by_file.len();
+    let total_edits: usize = edits_by_file
+        .values()
+        .map(|v| v.len())
+        .collect::<Vec<_>>()
+        .iter()
+        .sum();
+
+    if robot {
+        // Build structured JSON output.
+        let files: Vec<serde_json::Value> = {
+            let mut sorted_paths: Vec<&PathBuf> = edits_by_file.keys().collect();
+            sorted_paths.sort();
+            sorted_paths
+                .iter()
+                .map(|path| {
+                    let entries = &edits_by_file[*path];
+                    // Count edits per check_id.
+                    let mut by_check: std::collections::BTreeMap<&str, usize> =
+                        std::collections::BTreeMap::new();
+                    for (check_id, _) in entries {
+                        *by_check.entry(check_id.as_str()).or_default() += 1;
+                    }
+                    serde_json::json!({
+                        "path": path.display().to_string(),
+                        "by_check": by_check,
+                        "edits": entries.len(),
+                    })
+                })
+                .collect()
+        };
+        let report = serde_json::json!({
+            "files": files,
+            "summary": { "files": total_files, "edits": total_edits },
+        });
+        let s = if pretty {
+            serde_json::to_string_pretty(&report)
+        } else {
+            serde_json::to_string(&report)
+        }
+        .expect("dry-run report serializes infallibly");
+        println!("{s}");
+    } else {
+        // Human-readable dry-run output.
+        if edits_by_file.is_empty() {
+            println!("would touch 0 file(s), 0 autofix edit(s).");
+        } else {
+            let mut sorted_paths: Vec<&PathBuf> = edits_by_file.keys().collect();
+            sorted_paths.sort();
+            for path in &sorted_paths {
+                let entries = &edits_by_file[*path];
+                // Build a summary of check_id → count.
+                let mut by_check: std::collections::BTreeMap<&str, usize> =
+                    std::collections::BTreeMap::new();
+                for (check_id, _) in entries {
+                    *by_check.entry(check_id.as_str()).or_default() += 1;
+                }
+                let breakdown: Vec<String> = by_check
+                    .iter()
+                    .map(|(id, count)| format!("{id} × {count}"))
+                    .collect();
+                println!("would fix: {} ({})", path.display(), breakdown.join(", "));
+            }
+            println!(
+                "would touch {} file(s), {} autofix edit(s).",
+                total_files, total_edits
+            );
+        }
+    }
+
+    ExitCode::SUCCESS
 }

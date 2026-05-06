@@ -15,6 +15,8 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam check`↴](#cofferdam-check)
 * [`cofferdam baseline`↴](#cofferdam-baseline)
 * [`cofferdam baseline write`↴](#cofferdam-baseline-write)
+* [`cofferdam baseline lint`↴](#cofferdam-baseline-lint)
+* [`cofferdam baseline diff`↴](#cofferdam-baseline-diff)
 * [`cofferdam explain`↴](#cofferdam-explain)
 * [`cofferdam init`↴](#cofferdam-init)
 * [`cofferdam doctor`↴](#cofferdam-doctor)
@@ -33,7 +35,7 @@ TypeScript code-quality analyzer
 * `hello` — Print the project banner
 * `check` — Run all checks against files or directories. With no arguments, walks the current directory
 * `baseline` — Manage the baseline of accepted findings. The baseline lets you drop cofferdam into an existing project without immediately failing CI on every pre-existing finding
-* `explain` — Print the metadata and prose explanation for one built-in check. Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog
+* `explain` — Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog
 * `init` — Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries so a new project has a working `cofferdam check` after one command. Refuses to overwrite an existing cofferdam.toml without `--force`
 * `doctor` — Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗ with a one-line remediation hint on failure. Exit 0 on all-pass, 1 if any check fails. Diagnostic only — never modifies files
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
@@ -107,6 +109,8 @@ Manage the baseline of accepted findings. The baseline lets you drop cofferdam i
 ###### **Subcommands:**
 
 * `write` — Run the analyzer and write the current set of findings to the baseline file. Subsequent `cofferdam check` runs ignore these findings for CI-gating purposes; they still print as `[baselined]` so the team can chip away at them
+* `lint` — Report baseline entries that are also suppressed inline
+* `diff` — Compute delta between two baselines
 
 
 
@@ -127,14 +131,51 @@ Run the analyzer and write the current set of findings to the baseline file. Sub
 * `--output <PATH>` — Where to write the baseline. Defaults to `.cofferdam/baseline.json` in the current directory
 * `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
+* `--robot` — Machine-readable JSON output. Emits a `delta` block when a prior baseline existed; omitted on first run
+* `--pretty` — Pretty-print JSON output. No effect without `--robot`
+
+
+
+## `cofferdam baseline lint`
+
+Report baseline entries that are also suppressed inline.
+
+A "dual-state" entry is silenced twice — once by the baseline and once by an inline directive — which wastes signal and obscures the true technical-debt posture.  Exit 0 if none found, 1 if any (so it is wireable into CI for teams that want to enforce hygiene).
+
+**Usage:** `cofferdam baseline lint [OPTIONS]`
+
+###### **Options:**
+
+* `--robot` — Machine-readable JSON. Schema: `{ dual_state: [...], summary: { count } }`
+* `--pretty` — Pretty-print JSON output. No effect without `--robot`
+
+
+
+## `cofferdam baseline diff`
+
+Compute delta between two baselines.
+
+With two explicit paths: compares them directly. Useful for triage and PR review outside the `baseline write` path.
+
+**Usage:** `cofferdam baseline diff [OPTIONS] [BASELINE_A] [BASELINE_B]`
+
+###### **Arguments:**
+
+* `<BASELINE_A>` — First baseline path
+* `<BASELINE_B>` — Second baseline path
+
+###### **Options:**
+
+* `--robot` — Machine-readable JSON
+* `--pretty` — Pretty-print JSON output. No effect without `--robot`
 
 
 
 ## `cofferdam explain`
 
-Print the metadata and prose explanation for one built-in check. Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog.
+Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog.
 
-Plugin checks: `explain` is currently built-in only — `cofferdam explain Test.PluginCheck` will report unknown-check even if the plugin is declared in `cofferdam.toml`. Plugin authors should include a help message in the check's `explanation` field that users can read directly, or ship a per-check README. Tracking: gh #18 / cd-xda.
+Plugin checks: `explain` discovers plugin-declared checks from `cofferdam.toml`'s `plugins = [...]` and renders their `explanation` (and `body` for `--full`) the same way as built-ins. Plugins must be loadable from the current working directory; otherwise the unknown-check fallback prints suggestions only from built-ins.
 
 **Usage:** `cofferdam explain [OPTIONS] <CHECK_ID>`
 
@@ -147,6 +188,8 @@ Plugin checks: `explain` is currently built-in only — `cofferdam explain Test.
 * `--robot` — Machine-readable JSON. Schema mirrors `CheckMeta` fields
 * `--pretty` — Pretty-print JSON output. No effect without `--robot`
 * `--full` — Print the full companion markdown body after the metadata summary. In `--robot` mode, includes a `body` field in the JSON output. Frontmatter is stripped before display
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--no-config` — Disable config-file discovery entirely. Plugin checks won't be resolved
 
 
 
@@ -198,6 +241,9 @@ Apply mechanical autofixes for supported checks. Runs the engine against the giv
 
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
+* `--dry-run` — Preview mode — discover all fixable findings and print what WOULD be changed, but do not modify any file. Exits 0. Use this to audit autofix coverage before committing to a write
+* `--robot` — Machine-readable JSON output. Emits a structured report instead of human-readable lines. With `--dry-run`, no files are written; the JSON describes what would change
+* `--pretty` — Pretty-print JSON output. No effect without `--robot`
 
 
 

@@ -43,7 +43,7 @@
 //! Schema is additive — new fields are fine, renames/type changes break
 //! existing baselines.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -183,6 +183,82 @@ pub fn normalize_path(path: &Path, root: Option<&Path>) -> String {
         .filter(|c| !matches!(c, Component::CurDir))
         .collect();
     cleaned.to_string_lossy().replace('\\', "/")
+}
+
+/// Net change between two baselines.
+///
+/// "Same finding" is defined by `rule_signature` matching within the same
+/// `(file, check_id)` pair. Because `rule_signature` is a SHA-256 of the
+/// trimmed span text it is stable across line moves (reformats), so a
+/// finding that shifted lines but wasn't changed in content contributes 0
+/// to the delta.
+#[derive(Debug, Default)]
+pub struct Delta {
+    /// Number of findings present in `current` but absent from `prior`.
+    pub added: usize,
+    /// Number of findings present in `prior` but absent from `current`.
+    pub removed: usize,
+    /// Net change per check id: positive = net added, negative = net removed.
+    pub by_check: BTreeMap<String, i64>,
+}
+
+/// Compute the delta between `prior` and `current` baselines.
+///
+/// Comparison key: `rule_signature`. Two entries with the same signature
+/// (but potentially different line numbers) are considered the same finding.
+/// A finding with no matching signature in the other baseline counts as
+/// added or removed.
+pub fn compute_delta(prior: &Baseline, current: &Baseline) -> Delta {
+    // Build multisets (signature → count) from each baseline.
+    // We key by (check_id, rule_signature) so that identical spans in
+    // different checks are treated as distinct findings.
+    let mut prior_map: std::collections::HashMap<(&str, &str), usize> =
+        std::collections::HashMap::new();
+    for e in &prior.findings {
+        *prior_map
+            .entry((e.check_id.as_str(), e.rule_signature.as_str()))
+            .or_default() += 1;
+    }
+
+    let mut current_map: std::collections::HashMap<(&str, &str), usize> =
+        std::collections::HashMap::new();
+    for e in &current.findings {
+        *current_map
+            .entry((e.check_id.as_str(), e.rule_signature.as_str()))
+            .or_default() += 1;
+    }
+
+    let mut added: usize = 0;
+    let mut removed: usize = 0;
+    let mut by_check: BTreeMap<String, i64> = BTreeMap::new();
+
+    // Findings in current not in prior → added.
+    for (e, &cur_count) in &current_map {
+        let (check_id, _sig) = e;
+        let pri_count = prior_map.get(e).copied().unwrap_or(0);
+        if cur_count > pri_count {
+            let delta = (cur_count - pri_count) as i64;
+            added += delta as usize;
+            *by_check.entry(check_id.to_string()).or_default() += delta;
+        }
+    }
+
+    // Findings in prior not in current → removed.
+    for (e, &pri_count) in &prior_map {
+        let (check_id, _sig) = e;
+        let cur_count = current_map.get(e).copied().unwrap_or(0);
+        if pri_count > cur_count {
+            let delta = (pri_count - cur_count) as i64;
+            removed += delta as usize;
+            *by_check.entry(check_id.to_string()).or_default() -= delta;
+        }
+    }
+
+    Delta {
+        added,
+        removed,
+        by_check,
+    }
 }
 
 fn sort_entries(entries: &mut [BaselineEntry]) {
@@ -376,5 +452,100 @@ mod tests {
             rule_signature: "different".into(),
         };
         assert!(!set.contains(&other));
+    }
+
+    // ── compute_delta tests ───────────────────────────────────────────────────
+
+    fn make_entry(check_id: &str, sig: &str) -> BaselineEntry {
+        BaselineEntry {
+            file: "src/a.ts".into(),
+            check_id: check_id.into(),
+            rule_signature: sig.into(),
+        }
+    }
+
+    #[test]
+    fn delta_identical_baselines_is_zero() {
+        let entry = make_entry("Warning.TripleEquals", "abc123");
+        let b1 = Baseline::new(vec![entry.clone()]);
+        let b2 = Baseline::new(vec![entry]);
+        let d = compute_delta(&b1, &b2);
+        assert_eq!(d.added, 0);
+        assert_eq!(d.removed, 0);
+        assert!(d.by_check.is_empty());
+    }
+
+    #[test]
+    fn delta_one_finding_added() {
+        let prior = Baseline::new(vec![]);
+        let current = Baseline::new(vec![make_entry("Warning.TripleEquals", "abc123")]);
+        let d = compute_delta(&prior, &current);
+        assert_eq!(d.added, 1);
+        assert_eq!(d.removed, 0);
+        assert_eq!(d.by_check.get("Warning.TripleEquals").copied(), Some(1));
+    }
+
+    #[test]
+    fn delta_one_finding_removed() {
+        let prior = Baseline::new(vec![make_entry("Warning.TripleEquals", "abc123")]);
+        let current = Baseline::new(vec![]);
+        let d = compute_delta(&prior, &current);
+        assert_eq!(d.added, 0);
+        assert_eq!(d.removed, 1);
+        assert_eq!(d.by_check.get("Warning.TripleEquals").copied(), Some(-1));
+    }
+
+    #[test]
+    fn delta_mixed_three_added_five_removed() {
+        let prior = Baseline::new(vec![
+            make_entry("Warning.TripleEquals", "sig1"),
+            make_entry("Warning.TripleEquals", "sig2"),
+            make_entry("Refactor.CyclomaticComplexity", "sig3"),
+            make_entry("Refactor.CyclomaticComplexity", "sig4"),
+            make_entry("Refactor.CyclomaticComplexity", "sig5"),
+        ]);
+        let current = Baseline::new(vec![
+            make_entry("Warning.TripleEquals", "sig1"),
+            make_entry("Warning.TripleEquals", "sig6"), // new
+            make_entry("Warning.TripleEquals", "sig7"), // new
+            make_entry("Warning.TripleEquals", "sig8"), // new
+        ]);
+        let d = compute_delta(&prior, &current);
+        assert_eq!(d.added, 3, "added");
+        assert_eq!(d.removed, 4, "removed"); // sig2 + sig3,sig4,sig5
+                                             // by_check: TripleEquals: net +2, Refactor: net -3
+        assert_eq!(
+            d.by_check.get("Warning.TripleEquals").copied(),
+            Some(2),
+            "TripleEquals net"
+        );
+        assert_eq!(
+            d.by_check.get("Refactor.CyclomaticComplexity").copied(),
+            Some(-3),
+            "Cyclomatic net"
+        );
+    }
+
+    #[test]
+    fn delta_renamed_file_stable_signature_zero_net() {
+        // Signature is the same even though the file name changed.
+        // compute_delta keys by (check_id, signature) only, not file name.
+        let prior = Baseline::new(vec![BaselineEntry {
+            file: "src/old.ts".into(),
+            check_id: "Warning.TripleEquals".into(),
+            rule_signature: "stablehash".into(),
+        }]);
+        let current = Baseline::new(vec![BaselineEntry {
+            file: "src/new.ts".into(),
+            check_id: "Warning.TripleEquals".into(),
+            rule_signature: "stablehash".into(),
+        }]);
+        let d = compute_delta(&prior, &current);
+        assert_eq!(d.added, 0, "signature stable across rename → zero added");
+        assert_eq!(
+            d.removed, 0,
+            "signature stable across rename → zero removed"
+        );
+        assert!(d.by_check.is_empty());
     }
 }

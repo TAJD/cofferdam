@@ -340,6 +340,137 @@ fn parse_enable_block_end(line: &str) -> Option<Vec<String>> {
     }
 }
 
+/// The form of a suppression directive that covers a given line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuppressionForm {
+    /// `// cofferdam-ignore: <Id>` or `// cofferdam-disable-next-line <Id>` —
+    /// suppresses the next non-blank line.
+    NextLine,
+    /// `// cofferdam-ignore-start: <Id>` … `// cofferdam-ignore-end` or
+    /// `/* cofferdam-disable <Id> */` … `/* cofferdam-enable <Id> */` block.
+    Range,
+    /// `// cofferdam-ignore-file: <Id>` or `// cofferdam-disable-file <Id>` —
+    /// whole-file suppression.
+    File,
+}
+
+/// An individual suppression entry with its form for audit purposes.
+#[derive(Debug, Clone)]
+pub struct SuppressionEntry {
+    /// The check ID that is suppressed.
+    pub check_id: String,
+    /// The 1-based line number on which the finding is suppressed (for
+    /// next-line and range forms: the covered code line; for file-wide: 0).
+    pub line: u32,
+    /// How the suppression was declared.
+    pub form: SuppressionForm,
+    /// The raw directive text (trimmed).
+    pub directive_text: String,
+}
+
+/// Parse all suppression entries from a file's text, returning one
+/// `SuppressionEntry` per (check_id, covered_line) pair.  Used by
+/// `cofferdam baseline lint` to intersect against the baseline.
+///
+/// The "covered line" for next-line directives is the first non-blank
+/// line after the directive; for range directives it is every line in the
+/// range; for file directives it is every line in the file (represented
+/// as 0 here for brevity — callers should treat 0 as "covers all lines").
+pub fn parse_suppression_entries(text: &str) -> Vec<SuppressionEntry> {
+    let mut out: Vec<SuppressionEntry> = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut active_blocks: Vec<(String, String)> = Vec::new(); // (check_id, directive_text)
+
+    for (idx, line) in lines.iter().enumerate() {
+        let line_num = (idx + 1) as u32;
+        let trimmed = line.trim();
+
+        // ---- File-wide directives ----
+        if let Some(ids) = parse_file_directive(trimmed) {
+            if ids.is_empty() {
+                // Suppress all — we don't enumerate all check IDs here;
+                // callers handle this by treating an empty check_id as "all".
+                out.push(SuppressionEntry {
+                    check_id: String::new(),
+                    line: 0,
+                    form: SuppressionForm::File,
+                    directive_text: trimmed.to_string(),
+                });
+            } else {
+                for id in ids {
+                    out.push(SuppressionEntry {
+                        check_id: id,
+                        line: 0,
+                        form: SuppressionForm::File,
+                        directive_text: trimmed.to_string(),
+                    });
+                }
+            }
+            continue;
+        }
+
+        // ---- Block start ----
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
+            if let Some(ids) = parse_block_start(trimmed) {
+                for id in &ids {
+                    active_blocks.push((id.clone(), trimmed.to_string()));
+                }
+                if ids.is_empty() {
+                    active_blocks.push((String::new(), trimmed.to_string()));
+                }
+            } else if let Some(ids) = parse_block_end(trimmed) {
+                if ids.is_empty() {
+                    active_blocks.clear();
+                } else {
+                    for id in &ids {
+                        if let Some(pos) = active_blocks
+                            .iter()
+                            .rposition(|(bid, _)| bid.is_empty() || bid == id)
+                        {
+                            active_blocks.remove(pos);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Emit range entries for active blocks on this line.
+        for (check_id, directive_text) in &active_blocks {
+            out.push(SuppressionEntry {
+                check_id: check_id.clone(),
+                line: line_num,
+                form: SuppressionForm::Range,
+                directive_text: directive_text.clone(),
+            });
+        }
+
+        // ---- Next-line directives ----
+        if let Some(check_ids) = parse_next_line_directive(trimmed) {
+            if let Some(next_line_num) = find_next_non_blank_line(&lines, idx) {
+                if check_ids.is_empty() {
+                    out.push(SuppressionEntry {
+                        check_id: String::new(),
+                        line: next_line_num,
+                        form: SuppressionForm::NextLine,
+                        directive_text: trimmed.to_string(),
+                    });
+                } else {
+                    for id in check_ids {
+                        out.push(SuppressionEntry {
+                            check_id: id,
+                            line: next_line_num,
+                            form: SuppressionForm::NextLine,
+                            directive_text: trimmed.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
 /// Extract all named check IDs referenced by suppression directives in `text`.
 ///
 /// Returns a list of `(check_id, 1-based_line_number)` pairs. Only directives

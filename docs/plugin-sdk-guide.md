@@ -149,7 +149,9 @@ Key points:
   issue location.
 - `files: { extensions: ["ts", "tsx"] }` is a `FileScope` filter. The engine
   applies it before calling `run()` — no per-file extension guard needed inside
-  the check.
+  the check. The same shape also accepts `layers: ["ui", "app"]` to scope a
+  check to specific layers from `cofferdam.invariants.toml` without writing
+  `if (file.layer !== "ui") return;` inside `run()`.
 - For `CallExpression` patterns (e.g. detecting direct `fetch(...)` calls),
   replace `findAll("ImportDeclaration")` with `findAll("CallExpression")` and
   inspect `node.callee`.

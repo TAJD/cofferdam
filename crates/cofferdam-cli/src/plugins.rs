@@ -157,6 +157,11 @@ struct HostError {
 pub struct PluginFileScope {
     #[serde(default)]
     pub extensions: Vec<String>,
+    /// Layer allowlist — when non-empty, only files whose resolved
+    /// layer is in this set match. Files outside every declared layer
+    /// (`layer == None`) never match a non-empty `layers` filter.
+    #[serde(default)]
+    pub layers: Vec<String>,
     #[serde(default)]
     pub path_pattern: Option<String>,
     #[serde(default)]

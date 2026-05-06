@@ -178,7 +178,7 @@ if (process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE) {
 
 for (const file of manifest.files) {
   for (const { pluginPath, check } of loadedPlugins) {
-    if (!fileMatchesScope(file.path, check.files)) continue;
+    if (!fileMatchesScope(file.path, check.files, file.layer ?? null)) continue;
 
     const opts = resolveOptions(check, manifest.options ?? {});
     const sourceFile = buildSourceFile(file);
@@ -519,7 +519,7 @@ function resolveOptions(check, perCheckOverrides) {
   return out;
 }
 
-function fileMatchesScope(absFilePath, scope) {
+function fileMatchesScope(absFilePath, scope, layer = null) {
   if (!scope) return true;
 
   // Normalise to forward slashes for consistent matching on all platforms.
@@ -529,6 +529,14 @@ function fileMatchesScope(absFilePath, scope) {
   if (Array.isArray(exts) && exts.length > 0) {
     const lower = fwd.toLowerCase();
     if (!exts.some((e) => lower.endsWith("." + String(e).toLowerCase()))) return false;
+  }
+
+  // Layer pre-filter (cd-4if): if `scope.layers` is non-empty, the file's
+  // resolved layer must be in the set. Files outside every declared layer
+  // (layer === null) never match a non-empty `layers` filter.
+  const layers = scope.layers;
+  if (Array.isArray(layers) && layers.length > 0) {
+    if (layer === null || !layers.includes(layer)) return false;
   }
 
   // Build the combined include set from pathPattern (singular, deprecated)

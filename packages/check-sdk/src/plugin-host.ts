@@ -122,9 +122,15 @@ export function buildSourceFile(input: PluginRunInput) {
  * for the given `FileScope` filter. Mirrors the `fileMatchesScope`
  * logic in `plugin-host.mjs` — both must be kept in sync.
  *
- * `undefined` scope = every file is in scope.
+ * `undefined` scope = every file is in scope. `layer` is the file's
+ * resolved layer (or `null` when the file is outside every declared
+ * layer); used to filter against `scope.layers` when present.
  */
-export function fileMatchesScope(path: string, scope: FileScope | undefined): boolean {
+export function fileMatchesScope(
+  path: string,
+  scope: FileScope | undefined,
+  layer: string | null = null,
+): boolean {
   if (!scope) return true;
 
   const fwd = path.replace(/\\/g, "/");
@@ -135,6 +141,11 @@ export function fileMatchesScope(path: string, scope: FileScope | undefined): bo
     if (!extensions.some((e: string) => lower.endsWith("." + String(e).toLowerCase()))) {
       return false;
     }
+  }
+
+  const { layers } = scope;
+  if (Array.isArray(layers) && layers.length > 0) {
+    if (layer === null || !layers.includes(layer)) return false;
   }
 
   const includes: string[] = [];
@@ -222,7 +233,7 @@ function globMatchSingle(pattern: string, path: string): boolean {
  * array immediately without calling `run()`.
  */
 export function runPlugin(check: Check, input: PluginRunInput): PluginReport[] {
-  if (!fileMatchesScope(input.path, check.files)) return [];
+  if (!fileMatchesScope(input.path, check.files, input.layer)) return [];
 
   const reports: PluginReport[] = [];
   const ctx: CheckContext = {

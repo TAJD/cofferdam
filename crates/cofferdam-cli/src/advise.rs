@@ -197,7 +197,7 @@ fn build_advisory(
     // same semantics as `fileMatchesScope` in the plugin host script.
     let fwd_path = file.to_string_lossy().replace('\\', "/");
     for pm in plugin_metas {
-        if !plugin_file_matches_scope(&fwd_path, pm.files.as_ref()) {
+        if !plugin_file_matches_scope(&fwd_path, pm.files.as_ref(), layer.as_deref()) {
             continue;
         }
         let severity_str = pm.default_severity.as_str();
@@ -226,8 +226,14 @@ fn build_advisory(
 
 /// Return `true` when `fwd_path` (forward-slash normalised) is in scope
 /// for the given `PluginFileScope`. Mirrors the JS `fileMatchesScope`
-/// logic in plugin-host.mjs — the two must stay in sync.
-fn plugin_file_matches_scope(fwd_path: &str, scope: Option<&PluginFileScope>) -> bool {
+/// logic in plugin-host.mjs — the three (this, the .mjs, the SDK's
+/// plugin-host.ts) must stay in sync. `layer` is the file's resolved
+/// layer (or `None` when outside every declared layer).
+fn plugin_file_matches_scope(
+    fwd_path: &str,
+    scope: Option<&PluginFileScope>,
+    layer: Option<&str>,
+) -> bool {
     let Some(scope) = scope else { return true };
 
     if !scope.extensions.is_empty() {
@@ -238,6 +244,13 @@ fn plugin_file_matches_scope(fwd_path: &str, scope: Option<&PluginFileScope>) ->
             .any(|e| lower.ends_with(&format!(".{}", e.to_lowercase())))
         {
             return false;
+        }
+    }
+
+    if !scope.layers.is_empty() {
+        match layer {
+            Some(l) if scope.layers.iter().any(|s| s == l) => {}
+            _ => return false,
         }
     }
 

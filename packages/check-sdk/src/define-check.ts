@@ -20,6 +20,17 @@ export interface FileScope {
   /** File extensions (without leading dot). Empty/omitted = any. */
   readonly extensions?: readonly string[];
   /**
+   * Optional layer allowlist. When set, the file's layer (resolved from
+   * `cofferdam.invariants.toml` / `cofferdam.toml` `[layers]`) must be in
+   * this set. Files outside any declared layer (`file.layer === null`)
+   * never match a non-empty `layers` filter — declare a layer for them
+   * if you need them in scope.
+   *
+   * Empty/omitted = no layer filter (any layer or no layer matches).
+   * Reuses the same `file.layer` field plugins can read imperatively.
+   */
+  readonly layers?: readonly string[];
+  /**
    * Optional include glob (gitignore syntax via globset). When set,
    * the file path must match.
    *

@@ -209,6 +209,97 @@ test("cd-5tz: layer field is null when input layer is null", async () => {
   assert.equal(capturedLayer, null);
 });
 
+test("cd-4if: FileScope.layers pre-filters before run() is invoked", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  let runCalls = 0;
+  const check = defineCheck({
+    id: "UiOnly",
+    category: Category.Warning,
+    basePriority: 5,
+    explanation: "ui layer only",
+    files: { layers: ["ui"] },
+    run(_file, ctx) {
+      runCalls++;
+      ctx.report({
+        message: "x",
+        span: { line: 1, column: 1, start_byte: 0, end_byte: 1 },
+      });
+    },
+  });
+
+  const baseInput = (layer) => ({
+    path: "src/anywhere/file.ts",
+    text: "x",
+    lineViews: [
+      {
+        lineNo: 1,
+        text: "x",
+        isComment: false,
+        isDocComment: false,
+        isStringLiteral: false,
+        isJsxText: false,
+        isPragma: false,
+        lineStart: 0,
+      },
+    ],
+    layer,
+  });
+
+  // In-layer: run() fires, one report.
+  assert.equal(runPlugin(check, baseInput("ui")).length, 1);
+  // Wrong layer: pre-filter blocks run() entirely.
+  assert.equal(runPlugin(check, baseInput("lib")).length, 0);
+  // No layer: file outside every declared layer is excluded by a non-empty `layers` filter.
+  assert.equal(runPlugin(check, baseInput(null)).length, 0);
+  // run() should have fired exactly once across the three calls (the in-layer one).
+  assert.equal(runCalls, 1);
+});
+
+test("cd-4if: FileScope.layers omitted/empty applies no layer filter", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  const check = defineCheck({
+    id: "AnyLayer",
+    category: Category.Warning,
+    basePriority: 5,
+    explanation: "no layer filter",
+    files: { extensions: ["ts"] },
+    run(_file, ctx) {
+      ctx.report({
+        message: "x",
+        span: { line: 1, column: 1, start_byte: 0, end_byte: 1 },
+      });
+    },
+  });
+
+  const input = (layer) => ({
+    path: "src/anywhere/file.ts",
+    text: "x",
+    lineViews: [
+      {
+        lineNo: 1,
+        text: "x",
+        isComment: false,
+        isDocComment: false,
+        isStringLiteral: false,
+        isJsxText: false,
+        isPragma: false,
+        lineStart: 0,
+      },
+    ],
+    layer,
+  });
+
+  assert.equal(runPlugin(check, input("ui")).length, 1);
+  assert.equal(runPlugin(check, input("lib")).length, 1);
+  assert.equal(runPlugin(check, input(null)).length, 1);
+});
+
 test("plugin magic comments filter inside run(); engine suppression filters at the engine boundary", async () => {
   const { defineCheck, Category, runPlugin } = await import(
     `file://${PKG.replace(/\\/g, "/")}/dist/index.js`

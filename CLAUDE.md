@@ -48,6 +48,7 @@ Almost every new check is one file in `cofferdam-checks/src/<category>.rs`, one 
 | AST visitor (function-shape) | `design.rs::MaxParameters` | Walk `Function` + `ArrowFunctionExpression` |
 | Per-function score stack | `refactor.rs::CyclomaticComplexity` | Push on function entry, walk + tally, pop, emit if over limit |
 | Cross-file (corpus API) | `design.rs::DuplicateExportName` | Per-file `run` writes into `ctx.corpus`; `finalize` reads back and emits one `Issue` per match with `related: Vec<RelatedSpan>` |
+| Configurable check | `warning.rs::NoConsoleLog` | Define a `&[OptionSpec]` constant, reference it from `CheckMeta.options`, read values via `ctx.options.get_string_list("...")` (or matching getter). User config lands in `[checks."Category.Name"]` in `cofferdam.invariants.toml`. |
 
 ### Required scaffolding for any AST check
 
@@ -64,6 +65,7 @@ const META: CheckMeta = CheckMeta {
     explanation: "...",
     requires_types: false,        // true → routes to ts-morph in phase 5
     consistency: false,           // true → engine runs in two-pass mode
+    observes_findings: false,     // true → deferred finalize phase that sees ALL findings via ALL_PRE_FILTER_FINDINGS. Today only Consistency.UnusedSuppression sets this.
 };
 
 impl Check for X {
@@ -150,7 +152,7 @@ Common failure modes, cheapest fixes first:
 - **Never amend a previously-pushed commit.** Add a new commit instead.
 - **You may close beads** once you've finished the work and the full verification block passes (build, test, clippy, fmt, fixture run). Use `bd close <id>` and include a short reason for non-trivial work. Do NOT close without verification, and do NOT close work that's still uncommitted — close after the commit so the issue lifecycle and git history align.
 - **Don't commit** when running as a subagent — leave staging + commit to the controller.
-- **Validate against real repos.** Test fixtures in `examples/` are necessary but not sufficient. Run against `C:/Users/tajdi/bestefforttools` (325 TS files), `C:/Users/tajdi/gistreact` (31), `C:/Users/tajdi/rovikore-landing-page` (4) — all known to parse cleanly with the current oxc setup.
+- **Validate against real repos.** Fixtures in `examples/` are necessary but not sufficient. See the "Real-repo validation" section below for the known-good repos.
 - **Do not add a check whose `meta().id` collides with an existing one.** Grep `crates/cofferdam-checks` for the proposed ID first.
 - **`println!`/`dbg!` in checks is forbidden.** Findings go through `Issue` only — anything else corrupts robot-mode JSON.
 
@@ -173,6 +175,8 @@ impl Check for MyCheck {
 ```
 
 Two checks share storage by referencing the same `CorpusKey<T>` constant (same name + same `T`); distinct keys (or a different `T`) get distinct slots. Findings spanning multiple locations use `Issue.related: Vec<RelatedSpan>` — formatters omit it when empty. The single-`Mutex<HashMap>` corpus serialises slot access; cd-6ad swaps in per-slot locks once per-file parallelism lands.
+
+**Engine finalize ordering (since cd-wqc).** Finalize runs in two phases. Phase A runs every check whose `meta().observes_findings` is `false` and appends issues; the engine then rebuilds the `ALL_PRE_FILTER_FINDINGS` snapshot from the union of run + pass2 + Phase A issues; Phase B runs the observer set. Today only `Consistency.UnusedSuppression` is an observer. If you write a new check that emits from `finalize()` AND needs to see other checks' findings, set `observes_findings: true`. Otherwise leave it `false` so YOUR findings are visible to the suppression-staleness check (the cd-wqc bug was finalize-only emitters being invisible to it).
 
 ## Parallel agent dispatch (when running multiple agents)
 
@@ -199,30 +203,6 @@ When dispatching for parallel check work:
 
 **Windows caveat:** the Agent tool's `isolation: "worktree"` has been observed to silently fall back to the main working tree on this host — agent edits show up directly in `git status` of the controller, with no per-agent branch to pull. When that happens, agents touching the same lines will overwrite each other with no merge step. Mitigations: only fan out when each agent's edits target disjoint methods/files (different `Check` structs, different `visit_X` methods on the same struct); have each agent run the full verification block before reporting back so the resulting tree is at least internally consistent; controller spot-checks `git status` after dispatch instead of trusting the worktree-list output.
 
-## Validated reference points
+## Real-repo validation
 
-Real-repo benchmarks captured during development; useful for sanity-checking that a change hasn't regressed. Numbers update as new checks land — the point is "did this PR cause an unexpected swing?", not "is this number forever correct".
-
-| Repo | Files | Findings | Release time |
-|---|---|---|---|
-| `C:/Users/tajdi/bestefforttools` | 325 | 398 | 269 ms |
-| `C:/Users/tajdi/gistreact` | 31 | 110 | 205 ms |
-
-`C:/Users/tajdi/rovikore-landing-page` was on the list earlier but no longer contains TS files at that path — dropped.
-
-Per-check breakdown on bestefforttools (captured 2026-05-02 after the full Refactor/Design check chain landed: cd-0ps, cd-qf3, cd-4cr, cd-vlq, cd-qnu, cd-jdq, cd-s2k, cd-39c, cd-u30, cd-2pu, cd-mti):
-
-| Check | Hits |
-|---|---|
-| `Readability.MaxLineLength` (limit 120) | dominant baseline |
-| `Readability.MaxFunctionLength` (limit 50) | dominant baseline |
-| `Warning.TripleEquals` | a handful, all real `==` / `!=` |
-| `Design.MaxParameters` (limit 5) | low |
-| `Design.DuplicateExportName` | 8 |
-| `Refactor.CyclomaticComplexity` (limit 10) | 20 |
-| `Refactor.CognitiveComplexity` (limit 15) | 9 (subset of cyclomatic) |
-| `Refactor.DuplicateBlock` (≥6 stmts, ≥80 chars, AST-canonical) | 13 |
-
-Spot-checked: zero false positives in the top-10 of each new cross-file/complexity check — duplicate exports are real barrel collisions, duplicate blocks are real test-setup copy-paste, complexity hits are real deeply-nested reducers / handlers. Limits tuned by gut-feel from the spot-check; revisit if a refactor cluster makes the noise:signal ratio drop.
-
-Zero parse errors across both repos under oxc 0.128 / cofferdam main.
+Test fixtures in `examples/` are necessary but not sufficient. Run against `C:/Users/tajdi/bestefforttools` (325 TS files) and `C:/Users/tajdi/gistreact` (31) — both known to parse cleanly — to spot-check whether a change introduces unexpected false positives or parse errors. No baseline number is enshrined here; the point is qualitative ("did the top-10 findings shift in ways I can defend?"), not a numeric regression gate.

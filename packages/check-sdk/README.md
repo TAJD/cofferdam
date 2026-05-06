@@ -120,15 +120,15 @@ Type-aware routing via ts-morph is on the roadmap. Track cd-l58 / [gh #16](https
 
 ## Versioning
 
-The SDK ships in lockstep with the cofferdam binary. `@cofferdam/check-sdk@X.Y.Z` is built and tested against `cofferdam@X.Y.Z`; the cofferdam plugin host enforces a major-version compatibility check at load time and refuses to run plugins whose vendored SDK is from a different major.
+The SDK ships in lockstep with the cofferdam binary. `@cofferdam/check-sdk@X.Y.Z` is built and tested against `@cofferdam/cofferdam@X.Y.Z`; the cofferdam plugin host enforces a major-version compatibility check at load time and refuses to run plugins whose vendored SDK is from a different major.
 
 For 0.x: minor bumps may be breaking. Pin both packages to the same exact version until 1.0:
 
 ```jsonc
 {
   "devDependencies": {
-    "cofferdam": "0.2.2",
-    "@cofferdam/check-sdk": "0.2.2"
+    "@cofferdam/cofferdam": "0.2.3",
+    "@cofferdam/check-sdk": "0.2.3"
   }
 }
 ```

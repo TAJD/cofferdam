@@ -170,6 +170,28 @@ impl Engine {
         &self,
         sources: Vec<(PathBuf, String)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        // Promote every input path to its absolute form before anything
+        // downstream sees it. Two reasons (cd-q9f):
+        //
+        // 1. The graph builder's `oxc_resolver` runs `TsconfigDiscovery::Auto`
+        //    by walking up from the importing file's directory looking for
+        //    `tsconfig.json`. With a relative input like `./components/Bar.tsx`
+        //    that walk runs out before reaching the project root, so
+        //    `paths`/`baseUrl` aliases (`@/*`) silently fail to resolve and
+        //    every aliased export is reported orphan.
+        // 2. `Design.OrphanExport` keys imports by their resolved (absolute)
+        //    path against exports keyed by `SourceFile.path`. Mixing relative
+        //    inputs with absolute resolver outputs guarantees a key mismatch
+        //    even when resolution succeeds.
+        //
+        // `std::path::absolute` resolves against the process CWD without
+        // touching the filesystem (no canonicalization, no symlink follow,
+        // no Windows `\\?\` prefix surprises) — exactly the lightweight
+        // normalisation we want.
+        let sources: Vec<(PathBuf, String)> = sources
+            .into_iter()
+            .map(|(p, t)| (std::path::absolute(&p).unwrap_or(p), t))
+            .collect();
         let mut issues = Vec::new();
         let mut texts: HashMap<PathBuf, String> = HashMap::with_capacity(sources.len());
         // One corpus per analysis run: shared by every per-file CheckContext

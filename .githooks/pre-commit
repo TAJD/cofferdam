@@ -1,0 +1,34 @@
+#!/bin/sh
+# Cofferdam pre-commit hook.
+#
+# Runs the two CI checks that drift most often and finish in well under
+# a second on a warm cache:
+#
+#   1. `cargo fmt --all -- --check`              — formatting
+#   2. `cofferdam gen-docs --check`              — generated docs in sync
+#
+# Slower checks (clippy, full test suite) run in the pre-push hook so
+# they don't tax every commit. To install:
+#
+#     git config core.hooksPath .githooks
+#
+# To bypass once (rare; do not normalise this): `git commit --no-verify`.
+# The repo's CLAUDE.md forbids agents from using --no-verify.
+
+set -e
+
+# Skip on merge commits — git ships them through prepare-commit-msg/
+# commit-msg hooks separately and a half-applied merge isn't a
+# meaningful target for `gen-docs --check`.
+if [ -f .git/MERGE_HEAD ]; then
+    exit 0
+fi
+
+echo "pre-commit: cargo fmt --check"
+cargo fmt --all -- --check
+
+echo "pre-commit: cofferdam gen-docs --check"
+# `cargo run` incrementally compiles cofferdam-cli; sub-second on warm
+# cache. `--quiet` keeps Cargo's own chatter out of the hook output —
+# gen-docs itself prints the drift report on failure.
+cargo run -p cofferdam-cli --quiet -- gen-docs --check

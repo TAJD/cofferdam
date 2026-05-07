@@ -22,6 +22,16 @@ $env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu" # PowerShell
 
 CI runners pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI.
 
+## Git hooks (opt-in)
+
+Tracked hooks live in `.githooks/`. Mirror the cheapest `ci.yml` checks so drift is caught locally instead of on a red CI run. Install once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`pre-commit` runs `cargo fmt --check` + `cofferdam gen-docs --check` (sub-second on warm cache). `pre-push` runs `cargo clippy -D warnings` + `cargo test --workspace` (10s+ but only fires before publishing). See `.githooks/README.md` for details. Don't bypass with `--no-verify` — fix the underlying issue.
+
 ## Project structure
 
 ```

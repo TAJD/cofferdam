@@ -1,0 +1,24 @@
+#!/bin/sh
+# Cofferdam pre-push hook.
+#
+# Runs the slow CI checks that would otherwise turn `main` red:
+#
+#   1. `cargo clippy --workspace --all-targets -- -D warnings`
+#   2. `cargo test --workspace`
+#
+# These take 10s+ on a warm cache and longer on cold; running them
+# pre-commit would noticeably tax every commit, so we gate them
+# pre-push instead. The pre-commit hook handles `cargo fmt` and
+# `cofferdam gen-docs --check`.
+#
+# To install:
+#
+#     git config core.hooksPath .githooks
+
+set -e
+
+echo "pre-push: cargo clippy"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-push: cargo test"
+cargo test --workspace

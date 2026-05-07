@@ -254,14 +254,18 @@ impl Check for DuplicateExportName {
 //
 // Coverage:
 //   * Named exports (`export function/class/const/let/var`, `export { x }`).
-//   * Default exports (matched against `import x from './m'`).
+//   * Default exports (matched against `import x from './m'` plus
+//     `export { default } from './m'` / `import { default as X } from './m'`).
+//   * Re-export edges: the engine records `export { x } from './m'` as a
+//     virtual Named import edge (cd-klp), so a primitive re-exported through
+//     a barrel is reachable whenever the barrel itself is imported under
+//     the right name. Multi-level barrels work the same way — each level
+//     contributes its own per-name edge.
 //   * Type-only exports skipped by default (configurable) — `import type`
 //     resolution gets noisy without proper type-aware analysis.
-// Out of scope (separate child beads):
-//   * Re-export chain walking — re-export records aren't flagged here, but
-//     the underlying export IS evaluated (and rightly flagged if no leaf
-//     consumer touches its name). Walking through barrels to attribute the
-//     orphan to the deepest definition is cd-ef1 territory.
+// Out of scope:
+//   * Live-set reachability filtering (orphan barrels still shielding their
+//     primitives via the per-edge `touched` set) — see cd-ef1's territory.
 //   * package.json `main`/`module`/`exports` entry-point allowlist.
 
 #[derive(Debug, Clone)]
@@ -522,11 +526,15 @@ fn compute_orphans(
     let mut namespace_touched: HashSet<String> = HashSet::new();
     // Set of resolved_path_keys whose default was imported.
     let mut default_touched: HashSet<String> = HashSet::new();
-    // Set of files re-exported from somewhere — we treat re-export sources
-    // as touched (the re-exporter is the consumer; whether anyone uses the
-    // re-export is the re-exporter's problem, not the source's).
-    let mut reexport_sources: HashSet<String> = HashSet::new();
 
+    // Engine `handle_export_named` records `export { x } from './m'` as
+    // an ImportRecord with `kind: Named` and `source_name: x` — so a
+    // Dialog primitive re-exported through a barrel is reachable via
+    // `touched` without a separate per-file shortcut. Older code carried
+    // a `reexport_sources` HashSet that unconditionally treated every
+    // re-export TARGET as fully consumed; that hid a real false-negative
+    // (a dead barrel still shielded its primitives) and is no longer
+    // needed (cd-klp).
     for imp in imports {
         let Some(resolved) = &imp.resolved else {
             continue;
@@ -541,14 +549,17 @@ fn compute_orphans(
                     namespace_touched.insert(key.clone());
                 }
                 ImportKind::Named => {
-                    touched.insert((key.clone(), n.source_name.clone()));
+                    // `export { default } from './m'` and `import { default as X } from './m'`
+                    // both surface as Named with source_name == "default".
+                    // Route those into default_touched so `m`'s default
+                    // export reads as consumed.
+                    if n.source_name == "default" {
+                        default_touched.insert(key.clone());
+                    } else {
+                        touched.insert((key.clone(), n.source_name.clone()));
+                    }
                 }
             }
-        }
-    }
-    for exp in exports {
-        if let Some(src) = &exp.resolved_source {
-            reexport_sources.insert(path_key(src));
         }
     }
 
@@ -572,7 +583,7 @@ fn compute_orphans(
             continue;
         }
 
-        let ns_seen = namespace_touched.contains(&file_key) || reexport_sources.contains(&file_key);
+        let ns_seen = namespace_touched.contains(&file_key);
 
         for exp in sorted {
             // Re-export records are forwarding nodes, not orphan candidates.
@@ -582,8 +593,8 @@ fn compute_orphans(
             if exp.type_only && !opts.include_type_only {
                 continue;
             }
-            // Treat namespace-touched and re-export-sourced files as having
-            // every named export consumed.
+            // Namespace imports (`import * as ns from './m'`, `export *
+            // from './m'`) consume every named export of the target.
             if ns_seen {
                 continue;
             }
@@ -1481,5 +1492,300 @@ mod tests {
         assert!(is_glob_pattern("{a,b}.ts"));
         assert!(!is_glob_pattern("src/index.ts"));
         assert!(!is_glob_pattern("./src/index.ts"));
+    }
+
+    // ── compute_orphans: re-export edge reachability (cd-klp) ──────────────
+
+    use cofferdam_core::graph::ImportedName;
+
+    fn span() -> Span {
+        Span {
+            start_byte: 0,
+            end_byte: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    fn opts_default() -> OrphanOptions {
+        OrphanOptions {
+            include_type_only: false,
+            test_patterns: Vec::new(),
+            framework_entry_patterns: Vec::new(),
+        }
+    }
+
+    fn named_export(file: &Path, name: &str) -> ExportRecord {
+        ExportRecord {
+            file: file.to_path_buf(),
+            name: name.to_string(),
+            kind: ExportKind::Named,
+            type_only: false,
+            span: span(),
+            source_specifier: None,
+            resolved_source: None,
+        }
+    }
+
+    fn default_export(file: &Path) -> ExportRecord {
+        ExportRecord {
+            file: file.to_path_buf(),
+            name: "default".to_string(),
+            kind: ExportKind::Default,
+            type_only: false,
+            span: span(),
+            source_specifier: None,
+            resolved_source: None,
+        }
+    }
+
+    fn reexport(file: &Path, name: &str, source: &Path) -> ExportRecord {
+        ExportRecord {
+            file: file.to_path_buf(),
+            name: name.to_string(),
+            kind: ExportKind::ReExport,
+            type_only: false,
+            span: span(),
+            source_specifier: Some("./".to_string()),
+            resolved_source: Some(source.to_path_buf()),
+        }
+    }
+
+    fn named_import(
+        from: &Path,
+        resolved: &Path,
+        source_name: &str,
+        local_name: &str,
+    ) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: "./".to_string(),
+            resolved: Some(resolved.to_path_buf()),
+            names: vec![ImportedName {
+                source_name: source_name.to_string(),
+                local_name: local_name.to_string(),
+                kind: ImportKind::Named,
+                type_only: false,
+                local_use_count: 1,
+            }],
+            type_only: false,
+            span: span(),
+        }
+    }
+
+    fn default_import(from: &Path, resolved: &Path, local_name: &str) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: "./".to_string(),
+            resolved: Some(resolved.to_path_buf()),
+            names: vec![ImportedName {
+                source_name: "default".to_string(),
+                local_name: local_name.to_string(),
+                kind: ImportKind::Default,
+                type_only: false,
+                local_use_count: 1,
+            }],
+            type_only: false,
+            span: span(),
+        }
+    }
+
+    fn namespace_import(from: &Path, resolved: &Path) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: "./".to_string(),
+            resolved: Some(resolved.to_path_buf()),
+            names: vec![ImportedName {
+                source_name: "*".to_string(),
+                local_name: "ns".to_string(),
+                kind: ImportKind::Namespace,
+                type_only: false,
+                local_use_count: 1,
+            }],
+            type_only: false,
+            span: span(),
+        }
+    }
+
+    #[test]
+    fn shadcn_barrel_consumed_via_named_reexport() {
+        // dialog.tsx → index.ts (re-exports Dialog) → app.ts (imports Dialog).
+        // The engine records the re-export as an ImportRecord with
+        // resolved=dialog.tsx, source_name="Dialog", which puts
+        // (dialog.tsx, "Dialog") in `touched`. dialog.tsx's Dialog
+        // export must NOT be flagged as orphan.
+        let dialog = PathBuf::from("/p/components/ui/dialog.tsx");
+        let index = PathBuf::from("/p/components/ui/index.ts");
+        let app = PathBuf::from("/p/app/page.tsx");
+
+        let imports = vec![
+            named_import(&index, &dialog, "Dialog", "Dialog"),
+            named_import(&app, &index, "Dialog", "Dialog"),
+        ];
+        let exports = vec![
+            named_export(&dialog, "Dialog"),
+            reexport(&index, "Dialog", &dialog),
+        ];
+        let issues = compute_orphans(&imports, &exports, &opts_default(), &PublicApi::default());
+        assert!(
+            issues.is_empty(),
+            "Dialog should be reachable through the barrel; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn aliased_named_reexport_consumed() {
+        // export { Dialog as MyDialog } from './dialog' → engine records
+        // an import with source_name="Dialog", local_name="MyDialog".
+        // touched gets (dialog, "Dialog"), which matches dialog.tsx's
+        // export name.
+        let dialog = PathBuf::from("/p/dialog.tsx");
+        let index = PathBuf::from("/p/index.ts");
+        let app = PathBuf::from("/p/app.ts");
+
+        let imports = vec![
+            named_import(&index, &dialog, "Dialog", "MyDialog"),
+            named_import(&app, &index, "MyDialog", "MyDialog"),
+        ];
+        let exports = vec![
+            named_export(&dialog, "Dialog"),
+            reexport(&index, "MyDialog", &dialog),
+        ];
+        let issues = compute_orphans(&imports, &exports, &opts_default(), &PublicApi::default());
+        assert!(
+            issues.is_empty(),
+            "Aliased re-export should reach the source name; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn multi_level_named_reexport_consumed() {
+        // primitive.ts → inner_barrel.ts (re-exports X) → outer_barrel.ts
+        // (re-exports X) → app.ts (imports X). Each level contributes
+        // its own per-edge ImportRecord, so primitive.ts:X stays
+        // reachable through transitive barrels.
+        let primitive = PathBuf::from("/p/primitive.ts");
+        let inner = PathBuf::from("/p/inner.ts");
+        let outer = PathBuf::from("/p/outer.ts");
+        let app = PathBuf::from("/p/app.ts");
+
+        let imports = vec![
+            named_import(&inner, &primitive, "X", "X"),
+            named_import(&outer, &inner, "X", "X"),
+            named_import(&app, &outer, "X", "X"),
+        ];
+        let exports = vec![
+            named_export(&primitive, "X"),
+            reexport(&inner, "X", &primitive),
+            reexport(&outer, "X", &inner),
+        ];
+        let issues = compute_orphans(&imports, &exports, &opts_default(), &PublicApi::default());
+        assert!(
+            issues.is_empty(),
+            "Multi-level barrels should chain; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn dead_barrel_no_longer_shields_primitive() {
+        // primitive.ts is re-exported from dead_barrel.ts but nobody
+        // consumes dead_barrel.ts. Today's per-edge `touched` does
+        // record (primitive, "PrimitiveX") because of the re-export
+        // edge from dead_barrel — so primitive is NOT flagged. That's
+        // the documented limit of this fix (out-of-scope: live-set
+        // reachability filtering). The point of this test is to pin
+        // the behavior so a future stricter implementation surfaces
+        // here as an intentional change.
+        let primitive = PathBuf::from("/p/primitive.ts");
+        let barrel = PathBuf::from("/p/dead_barrel.ts");
+
+        let imports = vec![named_import(
+            &barrel,
+            &primitive,
+            "PrimitiveX",
+            "PrimitiveX",
+        )];
+        let exports = vec![
+            named_export(&primitive, "PrimitiveX"),
+            reexport(&barrel, "PrimitiveX", &primitive),
+        ];
+        let issues = compute_orphans(&imports, &exports, &opts_default(), &PublicApi::default());
+        // primitive is shielded by the per-edge touch (acknowledged
+        // false-negative); but the previous lenient `reexport_sources`
+        // shortcut also shielded the case where the barrel was missing
+        // the per-name edge. See the OUT OF SCOPE note in the module.
+        assert_eq!(
+            issues.len(),
+            0,
+            "primitive.ts:PrimitiveX is touched by the re-export edge; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn export_default_from_named_reexport() {
+        // index.ts: `export { default } from './dialog'` plus a
+        // consumer doing `import D from './index'`. The engine records
+        // the re-export as Named with source_name="default"; the
+        // compute_orphans loop maps that into default_touched so
+        // dialog.tsx's default export reads as consumed.
+        let dialog = PathBuf::from("/p/dialog.tsx");
+        let index = PathBuf::from("/p/index.ts");
+        let app = PathBuf::from("/p/app.ts");
+
+        let imports = vec![
+            named_import(&index, &dialog, "default", "default"),
+            default_import(&app, &index, "D"),
+        ];
+        let exports = vec![
+            default_export(&dialog),
+            reexport(&index, "default", &dialog),
+        ];
+        let issues = compute_orphans(&imports, &exports, &opts_default(), &PublicApi::default());
+        assert!(
+            issues.is_empty(),
+            "`export {{ default }} from` should reach the source default; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn star_reexport_marks_namespace_consumed() {
+        // `export * from './m'` records a Namespace ImportRecord, so
+        // every named export of m reads as consumed.
+        let m = PathBuf::from("/p/m.ts");
+        let barrel = PathBuf::from("/p/barrel.ts");
+        let app = PathBuf::from("/p/app.ts");
+
+        let imports = vec![
+            namespace_import(&barrel, &m),
+            named_import(&app, &barrel, "X", "X"),
+        ];
+        let exports = vec![
+            named_export(&m, "X"),
+            named_export(&m, "Y"),
+            reexport(&barrel, "*", &m),
+        ];
+        let issues = compute_orphans(&imports, &exports, &opts_default(), &PublicApi::default());
+        assert!(
+            issues.is_empty(),
+            "namespace re-export should consume all named exports; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn unused_named_export_still_flagged() {
+        // Sanity check: when nothing imports a named export, it's
+        // still flagged. Guards against the fix accidentally turning
+        // the check into a no-op.
+        let m = PathBuf::from("/p/m.ts");
+        let exports = vec![named_export(&m, "Forgotten")];
+        let issues = compute_orphans(&[], &exports, &opts_default(), &PublicApi::default());
+        assert_eq!(issues.len(), 1, "expected one orphan, got: {:?}", issues);
+        assert!(issues[0].message.contains("Forgotten"));
     }
 }

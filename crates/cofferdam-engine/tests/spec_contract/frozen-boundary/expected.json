@@ -1,0 +1,18 @@
+{
+  "findings": [
+    {
+      "id": "Design.BoundaryFrozen",
+      "file": "src/legacy/helper.ts",
+      "line": 1,
+      "column": 1,
+      "message": "file is in frozen boundary `src/legacy/**`: see ADR-0007"
+    },
+    {
+      "id": "Design.BoundaryFrozen",
+      "file": "src/legacy/old.ts",
+      "line": 1,
+      "column": 1,
+      "message": "file is in frozen boundary `src/legacy/**`: see ADR-0007"
+    }
+  ]
+}

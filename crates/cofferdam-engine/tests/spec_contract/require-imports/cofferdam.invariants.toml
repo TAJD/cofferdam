@@ -1,0 +1,20 @@
+# Pins Design.InvariantViolation's `require_imports`: every file in
+# the `app` layer must import something under `src/lib/logger/`. Files
+# not in `from_layers` are exempt. Prefix matching is directory-based:
+# `src/lib/logger` matches anything resolving under `src/lib/logger/`,
+# so the requirement is encoded as a directory containing `index.ts`.
+
+[layers]
+app = ["src/app/**"]
+lib = ["src/lib/**"]
+
+[layers.allow]
+app = ["lib"]
+
+[invariants]
+"app-must-log" = { require_imports = ["src/lib/logger"], from_layers = ["app"] }
+
+# Allowlist all sources so unrelated Design.OrphanExport findings don't
+# pollute this fixture's contract.
+[public_api]
+exports = ["src/**"]

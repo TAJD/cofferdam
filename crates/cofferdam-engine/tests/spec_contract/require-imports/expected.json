@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.InvariantViolation",
+      "file": "src/app/bad.ts",
+      "line": 4,
+      "column": 1,
+      "message": "invariant `app-must-log` violated: file is missing required import matching one of [\"src/lib/logger\"]"
+    }
+  ]
+}

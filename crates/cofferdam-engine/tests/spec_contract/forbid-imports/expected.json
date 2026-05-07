@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.InvariantViolation",
+      "file": "src/app/page.ts",
+      "line": 3,
+      "column": 1,
+      "message": "invariant `no-direct-db-access` violated: forbidden import `../infra/db/connection` (matches prefix `src/infra/db`)"
+    }
+  ]
+}

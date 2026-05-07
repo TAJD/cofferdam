@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.OrphanExport",
+      "file": "src/util.ts",
+      "line": 3,
+      "column": 14,
+      "message": "`PRIVATE` is exported but never imported in the project"
+    }
+  ]
+}

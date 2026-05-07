@@ -1,0 +1,10 @@
+# Pins Design.BoundaryFrozen: every file inside the frozen glob gets a
+# finding stamped with the configured reason; files outside don't.
+
+[boundaries]
+"src/legacy/**" = { frozen = true, reason = "see ADR-0007" }
+
+# Allowlist all sources so unrelated Design.OrphanExport findings don't
+# pollute this fixture's contract. The orphan rule has its own fixture.
+[public_api]
+exports = ["src/**"]

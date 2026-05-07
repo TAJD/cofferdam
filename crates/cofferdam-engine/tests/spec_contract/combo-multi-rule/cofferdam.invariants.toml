@@ -1,0 +1,21 @@
+# Combo fixture: every spec section in one config so finding
+# attribution stays cleanly separated when several rules fire on
+# disjoint files.
+
+[layers]
+infra  = ["src/infra/**"]
+domain = ["src/domain/**"]
+app    = ["src/app/**"]
+
+[layers.allow]
+domain = ["infra"]
+app    = ["domain", "infra"]
+
+[public_api]
+exports = ["src/index.ts"]
+
+[boundaries]
+"src/legacy/**" = { frozen = true, reason = "see ADR-0007" }
+
+[invariants]
+"no-direct-db-access" = { forbid_imports = ["src/infra/db"], from_layers = ["app"] }

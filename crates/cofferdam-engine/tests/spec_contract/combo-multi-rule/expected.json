@@ -1,0 +1,32 @@
+{
+  "findings": [
+    {
+      "id": "Design.InvariantViolation",
+      "file": "src/app/page.ts",
+      "line": 3,
+      "column": 1,
+      "message": "invariant `no-direct-db-access` violated: forbidden import `../infra/db/connection` (matches prefix `src/infra/db`)"
+    },
+    {
+      "id": "Warning.UnusedImport",
+      "file": "src/index.ts",
+      "line": 2,
+      "column": 10,
+      "message": "re-export `fetchUser` is never imported by another file"
+    },
+    {
+      "id": "Design.BoundaryFrozen",
+      "file": "src/legacy/old-helper.ts",
+      "line": 1,
+      "column": 1,
+      "message": "file is in frozen boundary `src/legacy/**`: see ADR-0007"
+    },
+    {
+      "id": "Design.OrphanExport",
+      "file": "src/legacy/old-helper.ts",
+      "line": 2,
+      "column": 17,
+      "message": "`helper` is exported but never imported in the project"
+    }
+  ]
+}

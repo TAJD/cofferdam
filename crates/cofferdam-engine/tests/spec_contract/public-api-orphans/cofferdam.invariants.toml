@@ -1,0 +1,11 @@
+# Pins Design.OrphanExport's interpretation of [public_api].exports:
+# entries shield matching files from being flagged as orphans even when
+# nothing in the project consumes them; non-matching files stay
+# eligible. Both exact paths and globs must work — the glob entry
+# covers cd-no7's resolution.
+
+[public_api]
+exports = [
+  "src/index.ts",
+  "components/ui/**",
+]

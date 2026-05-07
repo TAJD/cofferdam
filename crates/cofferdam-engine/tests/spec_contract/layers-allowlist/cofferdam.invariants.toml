@@ -1,0 +1,18 @@
+# Three-layer architecture. `app` may reach down to `domain` and `infra`;
+# `domain` may reach `infra`; `infra` is isolated and may not import
+# upward. Pins Design.LayerViolation's interpretation of `[layers.allow]`.
+
+[layers]
+infra  = ["src/infra/**"]
+domain = ["src/domain/**"]
+app    = ["src/app/**"]
+
+[layers.allow]
+domain = ["infra"]
+app    = ["domain", "infra"]
+# infra has no allow entry → must not import any other in-project layer
+
+# Allowlist all sources so unrelated Design.OrphanExport findings don't
+# pollute this fixture's contract. The orphan rule has its own fixture.
+[public_api]
+exports = ["src/**"]

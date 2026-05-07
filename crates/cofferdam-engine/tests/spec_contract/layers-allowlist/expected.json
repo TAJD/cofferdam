@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.LayerViolation",
+      "file": "src/infra/db.ts",
+      "line": 2,
+      "column": 1,
+      "message": "layer `infra` may not import from layer `domain`"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Pins Design.InvariantViolation's `forbid_imports`: app-layer files
+# may not directly import anything below `src/infra/db`. The
+# from_layers filter narrows the rule to the app layer; identical
+# imports from outside the app layer (e.g. from `src/services/`) are
+# unaffected.
+
+[layers]
+app      = ["src/app/**"]
+services = ["src/services/**"]
+infra    = ["src/infra/**"]
+
+[layers.allow]
+app      = ["services", "infra"]
+services = ["infra"]
+
+[invariants]
+"no-direct-db-access" = { forbid_imports = ["src/infra/db"], from_layers = ["app"] }
+
+# Allowlist all sources so unrelated Design.OrphanExport findings don't
+# pollute this fixture's contract.
+[public_api]
+exports = ["src/**"]

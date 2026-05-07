@@ -47,4 +47,11 @@ proptest = "1"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = "symbols"
+# `strip = "symbols"` triggers a rustc internal crash
+# (STATUS_HEAP_CORRUPTION / ACCESS_VIOLATION) under ThinLTO on
+# Windows MSVC with rustc 1.95 / LLVM 22 — fresh builds fail before
+# emitting a binary. `strip = "debuginfo"` produces an equivalent-size
+# binary on Windows (debug info lives in the side-by-side .pdb anyway)
+# and avoids the crash. Don't tighten back to "symbols" without
+# verifying a clean-tree `cargo build --release` succeeds.
+strip = "debuginfo"

@@ -13,10 +13,10 @@
 //! - **NOT line numbers.** Line numbers churn on every reformat — basing
 //!   identity on them invalidates the baseline the first time anyone runs
 //!   `prettier`.
-//! - **Default = SHA-256 of the trimmed offending span text.** Robust to
-//!   line moves and surrounding edits; only changes when the offending
-//!   code itself changes. Aggressive trim (whitespace) absorbs reformats
-//!   that touch indentation.
+//! - **Default = SHA-256 of the offending span text with all internal
+//!   whitespace runs collapsed to a single space.** Robust to line moves,
+//!   re-indentation, line-wrap shifts, CRLF/LF differences, and alignment
+//!   padding — only changes when the offending tokens themselves change.
 //!
 //! Per-check overrides for `rule_signature` will land later (e.g.
 //! `Refactor.CognitiveComplexity` may want to hash the AST shape rather
@@ -29,7 +29,7 @@
 //!
 //! ```json
 //! {
-//!   "version": 1,
+//!   "version": 2,
 //!   "findings": [
 //!     {
 //!       "file": "src/foo.ts",
@@ -52,7 +52,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current baseline schema version. Bump on incompatible changes only.
-pub const VERSION: u32 = 1;
+///
+/// V2 (cd-1h7): `signature_for_span` collapses internal whitespace runs
+/// before hashing, so `prettier --write` and similar reformatters can no
+/// longer drift signatures. V1 baselines must be regenerated via
+/// `cofferdam baseline write` once after upgrade — `read` rejects them
+/// with `BaselineError::Version` so the user sees a clear failure mode
+/// rather than silent invalidation of every baselined entry.
+pub const VERSION: u32 = 2;
 
 /// Default baseline file path, relative to the project root. Kept here
 /// so the CLI and any other consumer agree on the convention.
@@ -66,8 +73,9 @@ pub struct BaselineEntry {
     /// different developers' workspace prefixes.
     pub file: String,
     pub check_id: String,
-    /// Hex-encoded SHA-256 of the trimmed offending span text. See
-    /// module docs for why this is text-based, not line-based.
+    /// Hex-encoded SHA-256 of the offending span text with internal
+    /// whitespace runs collapsed (V2). See module docs for why this is
+    /// text-based, not line-based.
     pub rule_signature: String,
 }
 
@@ -109,7 +117,8 @@ pub enum BaselineError {
         source: serde_json::Error,
     },
     #[error(
-        "baseline {path} declares unsupported version {found}; this binary supports {supported}"
+        "baseline {path} declares unsupported version {found}; this binary supports {supported}. \
+         Run `cofferdam baseline write` to regenerate it under the current schema."
     )]
     Version {
         path: PathBuf,
@@ -129,9 +138,21 @@ pub enum BaselineError {
     },
 }
 
-/// Compute the canonical signature for a span's text. Trims aggressively
-/// so reformats that only touch surrounding whitespace don't invalidate
-/// the baseline.
+/// Compute the canonical signature for a span's text.
+///
+/// Collapses every run of ASCII whitespace (spaces, tabs, newlines, CR)
+/// down to a single space and trims the ends before hashing. This is the
+/// V2 algorithm (cd-1h7): V1 only `.trim()`d the ends, so internal
+/// whitespace shifts from `prettier --write` (re-indent, line-wrap, CRLF
+/// vs LF) re-hashed the same logical finding to a new signature and
+/// silently invalidated baselines on a no-op reformat.
+///
+/// The collapse is non-strict in one direction: whitespace inside string
+/// literals inside the span also collapses, so `"a  b"` and `"a b"` hash
+/// identically. That's a deliberate trade — the alternative would be a
+/// lex pass per signature, and the precision gain is negligible since
+/// baselines key by `(file, check_id, signature)` and the check_id
+/// already separates "same span, different lint."
 ///
 /// Returns hex-encoded SHA-256 (64 chars). We keep the full digest rather
 /// than truncating: collisions on truncated hashes inside a single repo
@@ -144,10 +165,29 @@ pub fn signature_for_span(file_text: &str, span: &Span) -> String {
     } else {
         ""
     };
-    let trimmed = snippet.trim();
+
+    // Collapse every whitespace run to a single space, then trim. The
+    // resulting normal form is the same regardless of indentation,
+    // line-wrapping, CRLF/LF, or alignment-padding shifts.
+    let mut canonical = String::with_capacity(snippet.len());
+    let mut last_was_space = true; // suppresses leading whitespace
+    for ch in snippet.chars() {
+        if ch.is_ascii_whitespace() {
+            if !last_was_space {
+                canonical.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            canonical.push(ch);
+            last_was_space = false;
+        }
+    }
+    if canonical.ends_with(' ') {
+        canonical.pop();
+    }
 
     let mut hasher = Sha256::new();
-    hasher.update(trimmed.as_bytes());
+    hasher.update(canonical.as_bytes());
     let digest = hasher.finalize();
 
     let mut out = String::with_capacity(64);
@@ -360,6 +400,73 @@ mod tests {
             },
         );
         assert_eq!(s_a, s_b, "trim should make these equal");
+    }
+
+    /// cd-1h7: whitespace-only reformat (`prettier --write`) used to drift
+    /// the signature. The post-fix algorithm collapses every internal
+    /// whitespace run to a single space, so re-indentation, line wrapping,
+    /// CRLF/LF, and alignment-padding all hash identically.
+    #[test]
+    fn signature_invariant_under_internal_whitespace_reformat() {
+        // Pre-prettier: 4-space indent, body on its own line.
+        let pre = "function foo(a,    b) {\n    return a   +   b;\n}";
+        // Post-prettier: 2-space indent, single-space arg list, single-space body.
+        let post = "function foo(a, b) {\n  return a + b;\n}";
+        // CRLF variant of the post text — should also collapse to the same form.
+        let post_crlf = "function foo(a, b) {\r\n  return a + b;\r\n}";
+
+        let span_pre = Span {
+            start_byte: 0,
+            end_byte: pre.len() as u32,
+            line: 1,
+            column: 1,
+        };
+        let span_post = Span {
+            start_byte: 0,
+            end_byte: post.len() as u32,
+            line: 1,
+            column: 1,
+        };
+        let span_crlf = Span {
+            start_byte: 0,
+            end_byte: post_crlf.len() as u32,
+            line: 1,
+            column: 1,
+        };
+
+        let s_pre = signature_for_span(pre, &span_pre);
+        let s_post = signature_for_span(post, &span_post);
+        let s_crlf = signature_for_span(post_crlf, &span_crlf);
+        assert_eq!(
+            s_pre, s_post,
+            "indentation + alignment shifts must not change the signature"
+        );
+        assert_eq!(s_post, s_crlf, "CRLF vs LF must not change the signature");
+    }
+
+    /// Token boundaries still matter — we only collapse whitespace, not
+    /// glue tokens together. `a + b` and `a+b` should hash differently
+    /// because they're textually distinct (and prettier chooses one form
+    /// canonically anyway, so this never drifts in practice).
+    #[test]
+    fn signature_distinguishes_glued_tokens_from_spaced() {
+        let span = Span {
+            start_byte: 0,
+            end_byte: 5,
+            line: 1,
+            column: 1,
+        };
+        let glued = signature_for_span("a + b", &span);
+        let spaced = signature_for_span(
+            "a+b",
+            &Span {
+                start_byte: 0,
+                end_byte: 3,
+                line: 1,
+                column: 1,
+            },
+        );
+        assert_ne!(glued, spaced);
     }
 
     #[test]

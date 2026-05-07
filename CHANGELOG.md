@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-07
+
+### Fixed
+- Plugin findings now flow through the full `cofferdam check` pipeline (cd-1c7 / gh #31). Previously visible only via `cofferdam check --no-baseline --format=json`, plugin findings were silently dropped from default text output, never recorded in `.cofferdam/baseline.json`, and ignored by `--fail-on` — making it impossible to enforce custom architectural rules in CI. Plugin findings now render under the per-category headings (or a new `Other` heading when their check id prefix is not one of the five built-in categories), participate in baseline writes / diffs, and trigger the gate at their declared severity. Inline `// cofferdam-ignore` directives also apply to plugin check ids.
+
 ## [0.3.1] - 2026-05-06
 
 ### Added

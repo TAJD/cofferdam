@@ -69,11 +69,10 @@
 //! Phase 1 (post-cd-9hp.9): migrate to canonical graph.
 //! Phase 2 (post-cd-9hp.10): formalise the adapter contract.
 
+pub mod checks;
 pub mod parser;
 
-// Re-export the parser surface. Checks come in checkpoints 3 and 5.
-//
-// pub use checks::all_rust_checks;
+pub use checks::all_rust_checks;
 pub use parser::{parse_rust, RustParseError, RustParseTree};
 
 /// Identifier the engine uses to route per-file dispatch (cd-91zc).

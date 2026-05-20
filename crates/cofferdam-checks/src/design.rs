@@ -446,7 +446,19 @@ fn is_glob_pattern(entry: &str) -> bool {
 /// project-root-relative in forward-slash form so `GlobSet::is_match`
 /// receives the same relative key that the orphan loop computes.
 /// Empty input yields a default `PublicApi` (no matches).
+///
+/// `project_root` is absolutized via `std::path::absolute` before any
+/// join (cd-gro / gh #41). Engine.analyze_with_sources promotes every
+/// source path to absolute form (cd-q9f), so the stored exact keys
+/// must match that — otherwise `is_match` on an absolute `file_key`
+/// silently misses every exact entry when the spec was discovered
+/// from a relative path. The root prefix used for glob-path stripping
+/// gets the same treatment so an absolute `file_key` can be reduced
+/// to the project-relative form globs are written against.
 fn resolve_public_api(entries: &[String], project_root: &Path) -> PublicApi {
+    let project_root_abs =
+        std::path::absolute(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+
     let mut exact = HashSet::new();
     let mut glob_builder = GlobSetBuilder::new();
     let mut has_globs = false;
@@ -476,7 +488,7 @@ fn resolve_public_api(entries: &[String], project_root: &Path) -> PublicApi {
                 }
             }
         } else {
-            let abs = project_root.join(trimmed);
+            let abs = project_root_abs.join(trimmed);
             exact.insert(path_key(&abs));
         }
     }
@@ -490,7 +502,7 @@ fn resolve_public_api(entries: &[String], project_root: &Path) -> PublicApi {
     PublicApi {
         exact,
         globs,
-        root_key: path_key(project_root),
+        root_key: path_key(&project_root_abs),
     }
 }
 
@@ -1363,10 +1375,17 @@ mod tests {
         resolve_public_api(&owned, project_root)
     }
 
-    // Helper: normalise an absolute path the same way the rest of the check
-    // does — forward slashes, lower-case on Windows.
+    // Helper: normalise a path the same way the engine does for
+    // `ExportRecord.file` — absolutize first (cd-q9f), then forward-slash
+    // and lower-case on Windows (`path_key`). The absolutize step matches
+    // what `Engine.analyze_with_sources` does to every input path, so
+    // these tests mirror the real wire shape rather than the raw key()
+    // form. cd-gro / gh #41 turned on the analogous absolutize in
+    // resolve_public_api; key() must do the same on both sides or the
+    // tests would diverge from production.
     fn key(p: &Path) -> String {
-        path_key(p)
+        let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        path_key(&abs)
     }
 
     #[test]
@@ -1492,6 +1511,64 @@ mod tests {
         assert!(is_glob_pattern("{a,b}.ts"));
         assert!(!is_glob_pattern("src/index.ts"));
         assert!(!is_glob_pattern("./src/index.ts"));
+    }
+
+    // cd-gro / gh #41: when the invariants spec is discovered from a
+    // relative root, project_root is relative. The engine absolutizes
+    // every source path via `std::path::absolute` (cd-q9f), so the
+    // file_key passed to `is_match` is always absolute. Before the fix,
+    // the exact entry stored a relative key and `exact.contains(absolute)`
+    // silently missed every entry — the user's gh #41 symptom.
+    //
+    // Both halves are pinned here: exact-path lookup and the glob-path
+    // root-prefix stripping that lets `apps/foo/**` match an absolute
+    // `/cwd/apps/foo/x.ts`.
+    #[test]
+    fn relative_project_root_normalises_to_absolute_for_exact_match() {
+        // Use the process CWD as the absolutize anchor — that's what
+        // `std::path::absolute(".")` resolves against. The test asserts
+        // the relative-project-root path produces the same exact key
+        // as the absolute-project-root path would.
+        let cwd = std::env::current_dir().expect("cwd");
+        let rel_root = PathBuf::from(".");
+        let api = make_public_api(&["apps/web/src/App.tsx"], &rel_root);
+
+        // Engine emits file paths as absolute (cd-q9f).
+        let absolute_file = cwd.join("apps/web/src/App.tsx");
+        let file_key = path_key(&absolute_file);
+        assert!(
+            api.is_match(&file_key),
+            "exact entry with relative project_root must still match an absolute file_key — \
+             cd-gro / gh #41. file_key={file_key}",
+        );
+    }
+
+    #[test]
+    fn relative_project_root_normalises_to_absolute_for_glob_match() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let rel_root = PathBuf::from(".");
+        let api = make_public_api(&["apps/web/src/routes/**"], &rel_root);
+
+        let absolute_file = cwd.join("apps/web/src/routes/index.tsx");
+        let file_key = path_key(&absolute_file);
+        assert!(
+            api.is_match(&file_key),
+            "glob entry with relative project_root must still match an absolute file_key — \
+             cd-gro / gh #41. file_key={file_key}",
+        );
+    }
+
+    #[test]
+    fn dot_subdir_project_root_works_too() {
+        // `./apps` style — relative but with a subdir segment. Also tests
+        // that the absolutize step doesn't choke on a relative prefix.
+        let cwd = std::env::current_dir().expect("cwd");
+        let rel_root = PathBuf::from("./apps");
+        let api = make_public_api(&["web/src/App.tsx"], &rel_root);
+
+        let absolute_file = cwd.join("apps").join("web/src/App.tsx");
+        let file_key = path_key(&absolute_file);
+        assert!(api.is_match(&file_key));
     }
 
     // ── compute_orphans: re-export edge reachability (cd-klp) ──────────────

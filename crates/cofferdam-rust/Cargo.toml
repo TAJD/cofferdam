@@ -1,0 +1,23 @@
+[package]
+name = "cofferdam-rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Rust source-code adapter for cofferdam — tree-sitter-rust + checks specific to Rust crates"
+
+[dependencies]
+cofferdam-core = { workspace = true }
+# tree-sitter pin: bump together with tree-sitter-rust to keep ABI in sync.
+# tree-sitter 0.23 is the current stable line (Nov 2025+).
+tree-sitter = "0.23"
+tree-sitter-rust = "0.23"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Snapshot testing for parser→Span conversions and per-check expected outputs.
+# Keeps cd-91zc's fixtures in the spec_contract style — golden files plus a
+# `BLESS=1` regenerate environment variable.
+insta = { version = "1", features = ["yaml"] }

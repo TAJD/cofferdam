@@ -8,6 +8,7 @@ members = [
     "crates/cofferdam-cli",
     "crates/cofferdam-lsp",
     "crates/cofferdam-napi",
+    "crates/cofferdam-rust",
 ]
 
 [workspace.package]

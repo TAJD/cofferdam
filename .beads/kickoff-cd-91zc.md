@@ -16,97 +16,75 @@ User direction: dogfood cofferdam on its own Rust codebase. Two strategic payoff
 
 - `crates/cofferdam-rust/src/parser.rs` ships the conversion surface.
 - Public API: `parse_rust`, `RustParseTree`, `RustParseError`. `root_node`, `text`, `span_of`, `text_of`, `has_errors`, `error_spans`.
-- 7 tests covering byte-range round-trip, UTF-8 sanity, multi-line line/column tracking, and tree-sitter's error-recovery surface.
-- `RustParseTree::has_errors` / `error_spans` added beyond the original scope — tree-sitter is recovery-oriented so checks need an "is this trustworthy?" gate.
+- 7 parser tests covering byte-range round-trip, UTF-8 sanity, multi-line line/column tracking, and tree-sitter's error-recovery surface.
 
-## Kickoff prompt for fresh session — checkpoint 3 (`Rust.NoUnwrapInLib`)
+### Checkpoint 3 — `Rust.NoUnwrapInLib` (2026-05-21, commit a98bded)
+
+- `crates/cofferdam-rust/src/checks/no_unwrap_in_lib.rs` ships the check.
+- `crates/cofferdam-rust/src/checks/mod.rs` exposes `all_rust_checks()`.
+- `crates/cofferdam-rust/docs/Rust.NoUnwrapInLib.md` per-check doc page.
+- 4 fixtures + 6 unit tests; check is reachable from tests but NOT yet in `cofferdam-checks::all_builtins()` — that ships with checkpoint 4's engine wiring.
+- Key discovery worth carrying forward: `attribute_item` is a **preceding sibling** of the decorated item in tree-sitter-rust, not a child. See `preceding_attribute_items()` for the walking helper.
+
+## Kickoff prompt for fresh session — checkpoint 4 (engine wiring)
 
 Copy-paste verbatim into a fresh Claude Code session:
 
 ---
 
-Implement `Rust.NoUnwrapInLib` for cd-91zc phase 0. The parser layer (`cofferdam_core::span_from_bytes` + `cofferdam-rust`'s `parse_rust` / `RustParseTree`) is shipped — see `crates/cofferdam-rust/src/parser.rs`. This is checkpoint 3 of 6.
+Wire the Rust adapter into the engine for cd-91zc phase 0. The check (`Rust.NoUnwrapInLib`) and parser layer are shipped — see `crates/cofferdam-rust/`. This is checkpoint 4 of 6. Bigger surface than checkpoints 2 and 3; touches cofferdam-core, cofferdam-engine, cofferdam-cli.
 
 Scope:
 
-1. Create `crates/cofferdam-rust/src/checks/mod.rs` (re-exports a future `all_rust_checks()`) and `crates/cofferdam-rust/src/checks/no_unwrap_in_lib.rs`.
-
-2. The check, by example:
+1. **`cofferdam_core::SourceFile` gains a `language` field.**
 
    ```rust
-   // FIRES:
-   let x = some_option.unwrap();
-   let y = result.expect("won't happen");
-
-   // DOES NOT FIRE — test context:
-   #[cfg(test)]
-   mod tests {
-       #[test]
-       fn it_works() {
-           assert_eq!(parse("1").unwrap(), 1);  // ok
-       }
-   }
-
-   // DOES NOT FIRE — test attribute on the function itself:
-   #[test]
-   fn standalone_test() {
-       compute().unwrap();
+   #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+   pub enum Language {
+       /// TypeScript / TSX / JS / JSX — the existing oxc adapter.
+       TypeScript,
+       /// Rust — cd-91zc's tree-sitter-rust adapter.
+       Rust,
    }
    ```
 
-   Heuristic: a call expression where the method identifier is `unwrap` or `expect`, and no ancestor node is:
-   - a function/impl/mod with `#[cfg(test)]` attribute, or
-   - a function with `#[test]` attribute, or
-   - a `mod` named `tests`.
+   Detection at `SourceFile::new` based on file extension: `.ts` / `.tsx` / `.js` / `.jsx` / `.cjs` / `.mjs` → `TypeScript`; `.rs` → `Rust`; default `TypeScript` for backward compatibility (every existing fixture is TS).
 
-3. Implement `Check` trait from `cofferdam_core::Check` matching the existing built-in pattern (see `crates/cofferdam-checks/src/refactor.rs` for `Refactor.CyclomaticComplexity` as a reference). `CheckMeta`:
+2. **`cofferdam-engine`'s per-file run loop dispatches by language.**
 
-   ```rust
-   const META: CheckMeta = CheckMeta {
-       id: "Rust.NoUnwrapInLib",
-       category: Category::Warning,
-       base_priority: 12,
-       default_severity: Severity::Medium,
-       explanation: "...",
-       body: include_str!("../../docs/Rust.NoUnwrapInLib.md"),
-       requires_types: false,
-       consistency: false,
-       options: &[],
-       autofix: false,
-   };
-   ```
+   The engine today calls every registered check on every file. Change to: for each file, only invoke checks whose meta declares (or implicitly defaults to) the same language. For phase 0, the simplest cut is a small `language(&self) -> Language` method on `Check` defaulting to `TypeScript`. The Rust adapter's checks override to return `Language::Rust`.
 
-   Don't add `Rust.NoUnwrapInLib` to `cofferdam-checks::all_builtins()` — that's checkpoint 4 (engine wiring with the `Language` enum). For now the check lives in `cofferdam-rust` and is callable from tests.
+   Adding the method to `Check` is workspace-internal (no plugin SDK impact — plugin SDK is TS-only today). Keep the default `TypeScript` so existing built-ins compile unchanged.
 
-4. Per-check doc page at `crates/cofferdam-rust/docs/Rust.NoUnwrapInLib.md`. Same format as the doc pages under `crates/cofferdam-checks/docs/` — frontmatter + prose.
+3. **`cofferdam-checks::all_builtins()` includes `Rust.NoUnwrapInLib`.**
 
-5. Fixtures under `crates/cofferdam-rust/tests/fixtures/no_unwrap_in_lib/`:
-   - `flagged_in_lib.rs` — a lib-style file with `.unwrap()` outside test context. Expect 2-3 findings.
-   - `silent_in_test_module.rs` — `#[cfg(test)] mod tests { ... }` with `.unwrap()` inside. Expect 0 findings.
-   - `silent_with_test_attr.rs` — `#[test] fn ...` with `.unwrap()` inside. Expect 0 findings.
-   - `mixed.rs` — both lib and test contexts in one file; expects only lib-context findings.
+   Add `cofferdam-rust = { workspace = true }` to `cofferdam-checks/Cargo.toml`. `all_builtins()` appends `cofferdam_rust::all_rust_checks()`. The engine's per-language dispatch ensures `Rust.NoUnwrapInLib` only runs on `.rs` files.
 
-6. Use `parse_rust` to get the tree; iterate `call_expression` nodes via a `TreeCursor`. For each, walk back up the ancestor chain checking for the three test markers (`cfg(test)` attr, `#[test]` attr, `mod tests`).
+4. **`cofferdam check crates/`** works end-to-end. Tree-sitter parser runs on every `.rs` file; `Rust.NoUnwrapInLib` fires on unwraps in lib context. Verify against the cofferdam codebase itself — expect findings on real unwraps in `cofferdam-engine` / `cofferdam-cli` (legitimate refactor candidates).
 
-7. Tests use plain assertions over `Vec<Issue>`. Match the patterns in `crates/cofferdam-checks/src/refactor.rs`'s test modules.
+5. **`cofferdam-cli` discovery** accepts `.rs` files. Check `crates/cofferdam-cli/src/main.rs` and `crates/cofferdam-engine/src/discover.rs` — the `ignore::WalkBuilder` likely already picks them up but the per-extension filter may be TS-only. Widen if needed.
+
+6. **`SourceFile::parsed`** (the oxc TS AST) — for `.rs` files this stays `None`. Existing TS checks already gate on `let Some(parsed) = ctx.parsed else { return Vec::new(); };` — they'll skip Rust files cleanly. The Rust check uses its own internal `parse_rust(&file.text)` and ignores `ctx.parsed`.
 
 Do NOT in this checkpoint:
-- Add the `Language` enum to `SourceFile` (checkpoint 4).
-- Wire into `cofferdam-engine` / `cofferdam-cli` (checkpoint 4).
-- Ship `Rust.NoUnimplementedInNonTest` or `Rust.MissingPubDoc` (checkpoint 5).
-- Touch `cofferdam-checks::all_builtins()`.
+- Add the canonical graph (cd-9hp.9 phase 1).
+- Add the adapter contract trait (cd-9hp.10 phase 2).
+- Touch the plugin SDK (the SDK is TS-only; Rust plugins are out of scope for phase 0).
+- Ship the other two Rust checks (`Rust.NoUnimplementedInNonTest`, `Rust.MissingPubDoc`) — those are checkpoint 5.
 
-Verification block: `cargo build -p cofferdam-rust`, `cargo test -p cofferdam-rust`, `cargo clippy -p cofferdam-rust --all-targets -- -D warnings`, `cargo fmt --check`.
+Tests / fixtures to add:
 
-Commit message: `feat(cofferdam-rust): Rust.NoUnwrapInLib check (cd-91zc checkpoint 3)`.
+- `cofferdam-engine/tests/spec_contract/rust-unwrap-mixed/` — a multi-file fixture (mix of `.rs` lib code + a `tests/` integration test) verifying language dispatch. The existing spec_contract runner needs minor extension to handle `.rs` files; check if `collect_sources` is TS-only and widen.
+
+Verification block: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, plus a manual smoke: `target/debug/cofferdam check crates/cofferdam-rust/src/` should produce findings on any genuine unwrap usage in that crate. Plus the existing TS spec_contract fixtures must still pass — adding the language enum should be additive.
+
+Commit message: `feat(engine): per-language dispatch + Rust adapter wiring (cd-91zc checkpoint 4)`.
 
 ---
 
-## Remaining checkpoints
+## Remaining checkpoints after 4
 
-3. **`Rust.NoUnwrapInLib`** — first concrete check (this checkpoint).
-4. **Engine wiring** — `Language` enum on `SourceFile`; per-file dispatch routes to Rust checks when `Language::Rust`. `cofferdam check crates/` works end-to-end.
-5. **Two more checks** — `Rust.NoUnimplementedInNonTest`, `Rust.MissingPubDoc`. Validates the path generalises.
+5. **Two more Rust checks** — `Rust.NoUnimplementedInNonTest`, `Rust.MissingPubDoc`. Validates the path generalises.
 6. **CI dogfood** — `crates/`'s baseline shipped; CI gate parallel to cd-9tq's TS dogfood.
 
 Phase 1 (post-cd-9hp.9): migrate to the canonical graph.

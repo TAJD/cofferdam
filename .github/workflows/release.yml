@@ -30,11 +30,16 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # Force JS actions still declared as `node20` (e.g. mlugg/setup-zig@v2) to run
-  # on Node 24. GitHub flips this default 2026-06-02 and removes Node 20 from
-  # runners 2026-09-16; opting in early surfaces incompatibilities now and
-  # silences the deprecation warning.
+  # Force any remaining JS actions still declared as `node20` to run on
+  # Node 24. GitHub flips this default 2026-06-02 and removes Node 20
+  # from runners 2026-09-16; opting in early surfaces incompatibilities
+  # now and silences the deprecation warning. The release workflow's
+  # only previous node20 offender (mlugg/setup-zig@v2) is now replaced
+  # by an inline curl install — see the "Install zig" step below.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Pinned zig version + per-host download URLs. Bump together when
+  # cargo-zigbuild requires a newer toolchain.
+  ZIG_VERSION: "0.13.0"
 
 jobs:
   build:
@@ -84,11 +89,39 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install zig + cargo-zigbuild
+      - name: Install zig (inline)
+        # Replaces mlugg/setup-zig@v2 (cd-aqq) — that action's v2.2.1 head
+        # still declares `using: node20` and GitHub annotates every run
+        # with a Node 20 deprecation warning ahead of the 2026-06-02
+        # default flip. Inline install is small (curl + tar), skips the
+        # third-party action entirely, and ships nothing the action
+        # offered us. We don't use the Zig cache that setup-zig wraps
+        # (cargo-zigbuild only invokes `zig cc` as a linker; nothing to
+        # cache across runs that Swatinem/rust-cache doesn't already cover
+        # via the cargo target dir).
         if: matrix.cross
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64)  arch=x86_64 ; ext=tar.xz ;;
+            Linux-ARM64) arch=aarch64 ; ext=tar.xz ;;
+            macOS-X64)  arch=x86_64 ; ext=tar.xz ;;
+            macOS-ARM64) arch=aarch64 ; ext=tar.xz ;;
+            *)
+              echo "::error::unsupported runner ${{ runner.os }}-${{ runner.arch }} for inline zig"
+              exit 2
+              ;;
+          esac
+          os_tag=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          archive="zig-${os_tag}-${arch}-${ZIG_VERSION}.${ext}"
+          url="https://ziglang.org/download/${ZIG_VERSION}/${archive}"
+          echo "Downloading $url"
+          curl -fsSL -o "$archive" "$url"
+          tar -xf "$archive"
+          dir="${archive%.${ext}}"
+          echo "$PWD/$dir" >> "$GITHUB_PATH"
+          "$dir/zig" version
 
       - name: Install cargo-zigbuild
         if: matrix.cross

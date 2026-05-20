@@ -1,0 +1,27 @@
+schema_version = "1.0"
+
+# Cofferdam dogfooding its own TS surfaces (cd-9tq).
+#
+# Scope: `packages/check-sdk/src/` — the published `@cofferdam/check-sdk` SDK.
+# Out of scope (intentionally):
+#   - `examples-plugins/*/` — fixtures and negative-test files are deliberately
+#     synthetic; running cofferdam on them is meaningless.
+#   - `packages/check-sdk/tests/` — the type-acceptance tests use compile-time
+#     declarations (e.g. `declare const ctx: CheckContext;`) that look like
+#     orphans but exist to pin types, not to ship code.
+#
+# Re-evaluate scope when a Rust adapter lands (cd-9tr) and dogfooding extends
+# to the engine itself.
+
+[public_api]
+exports = [
+  # Every file in the SDK is part of the published surface. Listing the
+  # index alone would suppress findings on `index.ts` itself, but every
+  # leaf file (`category.ts`, `define-check.ts`, etc.) re-exports through
+  # the index and has zero inbound imports from this repo — the SDK's
+  # consumers live in downstream packages. cd-klp follows re-export
+  # edges INTO a barrel, but the barrel itself has no project-internal
+  # importer here. The glob captures that "leaf published package"
+  # semantic.
+  "packages/check-sdk/src/**/*.ts",
+]

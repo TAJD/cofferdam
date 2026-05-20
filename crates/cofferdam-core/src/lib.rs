@@ -20,7 +20,7 @@ pub mod span_util;
 
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{Category, Check, CheckContext, CheckMeta, FinalizeContext};
-pub use corpus::{CorpusIndex, CorpusKey};
+pub use corpus::{CorpusError, CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use graph::{
     ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, InvariantsRuntime,

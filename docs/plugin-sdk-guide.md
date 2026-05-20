@@ -367,6 +367,50 @@ export default defineCheck({
 });
 ```
 
+## Cross-file plugin checks: corpus model
+
+Built-in cross-file checks share a typed key-value store called the
+**corpus**. `Check::run` writes per-file fingerprints into a slot;
+`Check::finalize` reads the slot back and emits findings keyed by the
+aggregated view. The pattern lives in
+`crates/cofferdam-core/src/corpus.rs`.
+
+The plugin host does not yet expose corpus access — tracked by
+[cd-9hp.6](https://github.com/TAJD/cofferdam/issues). The contract
+below describes what the surface will be when it lands; the underlying
+runtime (cd-9hp.7) is already in place.
+
+### Why namespace by check id?
+
+Built-in checks ship as one compile-time-reviewed workspace, so two
+`CorpusKey<T>` constants colliding on a name with mismatched `T` is
+caught at code review and surfaces loudly via a panic. Plugins are
+hostile-by-default: two unrelated authors can both pick
+`"export.fingerprints"` and the run would crash mid-analysis. Plugins
+therefore go through a **namespaced fallible API**:
+`try_with_namespaced_slot(check_id, key, ...)` prefixes the storage
+name with the calling check's id, so `Plugin.A.Foo` and `Plugin.B.Foo`
+see independent slots even when their `CorpusKey<T>` constants share
+a name.
+
+Type collisions on the *same* check id (the same plugin author reusing
+a key with mismatched `T`) return a `CorpusError::TypeMismatch` rather
+than panicking. The plugin author handles the error or surfaces it as
+a check-side finding; the engine run itself is unaffected.
+
+### Contract summary
+
+| Caller | API | Failure mode |
+|---|---|---|
+| Built-in checks | `with_slot(&KEY, &#124;t&#124; ...)` | Panic on type mismatch (logic bug) |
+| Built-in checks (deliberately fallible) | `try_with_slot(&KEY, &#124;t&#124; ...)` | Returns `Err(CorpusError::TypeMismatch)` |
+| Plugin checks | `try_with_namespaced_slot(check_id, &KEY, &#124;t&#124; ...)` | Returns `Err(CorpusError::TypeMismatch)`; cannot collide with another plugin's slot of the same name |
+
+Genuinely cross-check shared storage (e.g. the IMPORTS / EXPORTS slots
+in `cofferdam_core::graph` that several built-ins read in `finalize`)
+keeps using raw `with_slot`. The namespacing is intentional isolation
+for plugin authors who don't know what other plugins exist.
+
 The ESLint `no-unused-vars` option `{ vars: "all", args: "after-used" }` maps
 to your `options` schema:
 

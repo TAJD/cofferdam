@@ -137,6 +137,29 @@ struct HostReport {
     end_byte: u32,
     #[serde(default)]
     severity: String,
+    /// Secondary locations participating in the same finding. Used by
+    /// cross-file plugin checks emitted from `finalize` (cd-9hp.6).
+    /// Empty for per-file findings.
+    #[serde(default)]
+    related: Vec<HostRelated>,
+}
+
+#[derive(Deserialize)]
+struct HostRelated {
+    file: String,
+    span: HostRelatedSpan,
+}
+
+#[derive(Deserialize)]
+struct HostRelatedSpan {
+    #[serde(default)]
+    line: u32,
+    #[serde(default)]
+    column: u32,
+    #[serde(default)]
+    start_byte: u32,
+    #[serde(default)]
+    end_byte: u32,
 }
 
 #[derive(Deserialize)]
@@ -582,6 +605,34 @@ pub fn run_plugins_with_sources(
             let prefix = capitalize_category(&r.category).unwrap_or("Warning");
             format!("{}.{}", prefix, r.check_id)
         };
+        let related = r
+            .related
+            .into_iter()
+            .map(|rel| {
+                let rel_file = PathBuf::from(&rel.file);
+                let rel_span = match text_index.get(rel_file.as_path()) {
+                    Some(text) => cofferdam_core::span_from_bytes(
+                        text,
+                        rel.span.start_byte,
+                        rel.span.end_byte,
+                    ),
+                    None => Span {
+                        line: if rel.span.line == 0 { 1 } else { rel.span.line },
+                        column: if rel.span.column == 0 {
+                            1
+                        } else {
+                            rel.span.column
+                        },
+                        start_byte: rel.span.start_byte,
+                        end_byte: rel.span.end_byte,
+                    },
+                };
+                cofferdam_core::RelatedSpan {
+                    file: rel_file,
+                    span: rel_span,
+                }
+            })
+            .collect();
         issues.push(Issue {
             check_id,
             priority: Priority(15),
@@ -589,7 +640,7 @@ pub fn run_plugins_with_sources(
             file,
             span,
             message: r.message,
-            related: Vec::new(),
+            related,
         });
     }
 
@@ -604,6 +655,13 @@ pub fn run_plugins_with_sources(
                 format!(
                     "plugin '{}' threw on file '{}': {}",
                     err.plugin, err.file, err.message
+                ),
+            ),
+            "finalize_threw" => (
+                "Warning.PluginCrashed",
+                format!(
+                    "plugin '{}' threw in finalize(): {}",
+                    err.plugin, err.message
                 ),
             ),
             other => (

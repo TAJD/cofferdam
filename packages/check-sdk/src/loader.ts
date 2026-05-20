@@ -82,12 +82,29 @@ export async function runPlugins(
   files: readonly PluginRunInput[],
   _options: RunPluginsOptions = {},
 ): Promise<PluginReport[]> {
-  const { runPlugin } = await import("./plugin-host.js");
+  const { runPlugin, runPluginFinalize, PluginCorpusStore } = await import(
+    "./plugin-host.js"
+  );
   const out: PluginReport[] = [];
+  // One PluginCorpusStore per plugin survives all per-file invocations and
+  // the optional finalize hook. Each plugin's storage is private.
+  const corpora = new Map<string, InstanceType<typeof PluginCorpusStore>>();
   for (const plugin of plugins) {
-    for (const file of files) {
-      out.push(...runPlugin(plugin.check, file));
+    corpora.set(plugin.check.id, new PluginCorpusStore());
+  }
+  for (const file of files) {
+    for (const plugin of plugins) {
+      const corpus = corpora.get(plugin.check.id);
+      out.push(...runPlugin(plugin.check, file, corpus));
     }
+  }
+  // Finalize pass: invoke each plugin's optional finalize hook in
+  // declaration order after every file's run has completed.
+  for (const plugin of plugins) {
+    if (typeof plugin.check.finalize !== "function") continue;
+    const corpus = corpora.get(plugin.check.id);
+    if (!corpus) continue;
+    out.push(...runPluginFinalize(plugin.check, corpus));
   }
   return out;
 }

@@ -56,8 +56,17 @@ let bigDiffs = [];
 for (const name of readdirSync(FIXTURES_DIR)) {
   const dir = join(FIXTURES_DIR, name);
   if (!statSync(dir).isDirectory()) continue;
-  const fixture = join(dir, "fixture.ts");
-  if (!existsSync(fixture)) continue;
+  // Fixture target is either `fixture.ts` (single file) or `fixture/`
+  // (a directory of files, for cross-file plugin checks — cd-9hp.6).
+  const fixtureFile = join(dir, "fixture.ts");
+  const fixtureDir = join(dir, "fixture");
+  let fixture = null;
+  if (existsSync(fixtureFile)) {
+    fixture = fixtureFile;
+  } else if (existsSync(fixtureDir) && statSync(fixtureDir).isDirectory()) {
+    fixture = fixtureDir;
+  }
+  if (!fixture) continue;
   const expectedPath = join(dir, "expected.json");
 
   // Per-fixture cofferdam.toml lives next to the fixture so each
@@ -126,9 +135,15 @@ function normalise(raw) {
   // line endings.
   const doc = JSON.parse(raw);
   // Make `file` paths repo-relative so the golden is portable across
-  // workstations and CI runners.
+  // workstations and CI runners. Applies to the primary span's `file`
+  // and to every entry under `related[].file` (cd-9hp.6).
   for (const f of doc.findings ?? []) {
     f.file = toRepoRelative(f.file);
+    if (Array.isArray(f.related)) {
+      for (const r of f.related) {
+        if (typeof r.file === "string") r.file = toRepoRelative(r.file);
+      }
+    }
   }
   return JSON.stringify(doc, null, 2) + "\n";
 }

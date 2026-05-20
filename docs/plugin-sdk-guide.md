@@ -367,18 +367,111 @@ export default defineCheck({
 });
 ```
 
-## Cross-file plugin checks: corpus model
+## Cross-file plugin checks: corpus + finalize (cd-9hp.6)
 
-Built-in cross-file checks share a typed key-value store called the
-**corpus**. `Check::run` writes per-file fingerprints into a slot;
-`Check::finalize` reads the slot back and emits findings keyed by the
-aggregated view. The pattern lives in
-`crates/cofferdam-core/src/corpus.rs`.
+A plugin that needs to see *all* files before emitting findings —
+duplicate exports, orphan modules, layered-import audits — uses two
+hooks: the per-file `run` to accumulate state, and a `finalize`
+callback that runs once after every per-file pass has completed.
 
-The plugin host does not yet expose corpus access — tracked by
-[cd-9hp.6](https://github.com/TAJD/cofferdam/issues). The contract
-below describes what the surface will be when it lands; the underlying
-runtime (cd-9hp.7) is already in place.
+The state itself lives in a per-plugin store called **the plugin
+corpus**, exposed on the context as `ctx.corpus`. It is plugin-private
+by construction: two plugins picking the same slot key cannot see each
+other's data. The host namespaces every key by the calling
+`check.id`.
+
+### Quick example
+
+A check that flags duplicate class names across files:
+
+```ts
+import { defineCheck, Category, type Span } from "@cofferdam/check-sdk";
+
+interface ClassDecl {
+  readonly file: string;
+  readonly name: string;
+  readonly span: Span;
+}
+
+export default defineCheck({
+  id: "DuplicateClassName",
+  category: Category.Design,
+  basePriority: 8,
+  explanation: "A `class` name is declared in more than one file.",
+  options: {},
+
+  // Per-file pass: collect every class declaration into the corpus.
+  run(file, ctx) {
+    if (!file.ast) return;
+    for (const cls of file.ast.findAll("Class")) {
+      if (!cls.name) continue;
+      ctx.corpus.append<ClassDecl>("classes", {
+        file: file.path,
+        name: cls.name,
+        span: cls.span,
+      });
+    }
+  },
+
+  // Finalize pass: aggregate and emit. Runs once after every file's
+  // run() has completed.
+  finalize(ctx) {
+    const all = ctx.corpus.read<ClassDecl[]>("classes") ?? [];
+    const byName = new Map<string, ClassDecl[]>();
+    for (const decl of all) {
+      const list = byName.get(decl.name);
+      if (list) list.push(decl);
+      else byName.set(decl.name, [decl]);
+    }
+
+    for (const [name, decls] of byName) {
+      const uniqueFiles = new Set(decls.map((d) => d.file));
+      if (uniqueFiles.size < 2) continue;
+
+      const [primary, ...others] = decls;
+      ctx.report({
+        file: primary.file,
+        message: `class "${name}" is declared in ${uniqueFiles.size} files.`,
+        span: primary.span,
+        related: others.map((d) => ({ file: d.file, span: d.span })),
+      });
+    }
+  },
+});
+```
+
+The full example lives in
+[`examples-plugins/duplicate-class/`](../examples-plugins/duplicate-class).
+
+### `ctx.corpus` API
+
+| Method | Purpose |
+|---|---|
+| `read<T>(key)` | Return the last value written, or `undefined`. |
+| `write<T>(key, value)` | Overwrite the slot. `value` must be JSON-serialisable. |
+| `append<T>(key, item)` | Get-or-create-array, push `item`. Optimised for the common Vec<T> aggregation pattern. |
+
+The slot value lives in memory for the duration of the analysis run.
+There is no cross-run persistence — `cofferdam --watch` (cd-9hp.4)
+will eventually share corpus state between incremental runs, but
+plugins should not rely on that today.
+
+### `finalize(ctx, opts)`
+
+Optional. Same `defineCheck` input as `run`. Invoked once per
+analysis run, after every per-file `run` has completed, in plugin
+declaration order. The context exposes:
+
+* `ctx.corpus` — the same per-plugin store the per-file pass populated.
+* `ctx.report({ file, message, span, related?, severity?, fix? })` —
+  emit a finding. Unlike per-file `report`, you must pass an explicit
+  `file` because finalize has no implicit "current file". Cross-file
+  findings typically attach to one canonical location and use
+  `related` for the other implicated files.
+
+A `finalize` crash is surfaced as
+`Warning.PluginCrashed` with the message `plugin '<id>' threw in
+finalize(): …`; the rest of the run is unaffected.
 
 ### Why namespace by check id?
 
@@ -386,25 +479,23 @@ Built-in checks ship as one compile-time-reviewed workspace, so two
 `CorpusKey<T>` constants colliding on a name with mismatched `T` is
 caught at code review and surfaces loudly via a panic. Plugins are
 hostile-by-default: two unrelated authors can both pick
-`"export.fingerprints"` and the run would crash mid-analysis. Plugins
-therefore go through a **namespaced fallible API**:
-`try_with_namespaced_slot(check_id, key, ...)` prefixes the storage
-name with the calling check's id, so `Plugin.A.Foo` and `Plugin.B.Foo`
-see independent slots even when their `CorpusKey<T>` constants share
-a name.
+`"exports"` and the run would otherwise crash mid-analysis. The
+plugin host therefore stores each plugin's slots in its own private
+map; from a plugin's perspective, no key conflict with any other
+plugin is possible.
 
-Type collisions on the *same* check id (the same plugin author reusing
-a key with mismatched `T`) return a `CorpusError::TypeMismatch` rather
-than panicking. The plugin author handles the error or surfaces it as
-a check-side finding; the engine run itself is unaffected.
+The Rust runtime underneath (cd-9hp.7) supports the same model via
+`CorpusIndex::try_with_namespaced_slot(check_id, key, …)`. Plugin
+authors don't see that API directly — the JS host translates
+`ctx.corpus.read/write/append` into the appropriate namespaced calls.
 
 ### Contract summary
 
 | Caller | API | Failure mode |
 |---|---|---|
-| Built-in checks | `with_slot(&KEY, &#124;t&#124; ...)` | Panic on type mismatch (logic bug) |
-| Built-in checks (deliberately fallible) | `try_with_slot(&KEY, &#124;t&#124; ...)` | Returns `Err(CorpusError::TypeMismatch)` |
-| Plugin checks | `try_with_namespaced_slot(check_id, &KEY, &#124;t&#124; ...)` | Returns `Err(CorpusError::TypeMismatch)`; cannot collide with another plugin's slot of the same name |
+| Built-in Rust checks | `corpus.with_slot(&KEY, &#124;t&#124; ...)` | Panic on type mismatch (logic bug) |
+| Built-in Rust checks (deliberately fallible) | `corpus.try_with_slot(&KEY, &#124;t&#124; ...)` | Returns `Err(CorpusError::TypeMismatch)` |
+| Plugin checks (JS) | `ctx.corpus.read/write/append(key, ...)` | Slots are plugin-private; collision between plugins is impossible by construction |
 
 Genuinely cross-check shared storage (e.g. the IMPORTS / EXPORTS slots
 in `cofferdam_core::graph` that several built-ins read in `finalize`)

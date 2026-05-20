@@ -6,7 +6,11 @@
 // matching types twice.
 
 import type { Category } from "./category.js";
-import type { CheckContext, SourceFile } from "./check-context.js";
+import type {
+  CheckContext,
+  FinalizeContext,
+  SourceFile,
+} from "./check-context.js";
 import type { OptionsSchema, ResolvedOptions } from "./options.js";
 import type { Severity } from "./severity.js";
 
@@ -93,6 +97,17 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
   /** File-scope filter. `undefined` = applies to every file. */
   readonly files: FileScope | undefined;
   run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void;
+  /**
+   * Optional cross-file finalize hook (cd-9hp.6). Invoked once per
+   * analysis run after every file's `run` has completed, in plugin
+   * declaration order. Use this to emit findings that depend on
+   * corpus-wide state populated during the per-file pass — orphan
+   * exports, duplicate names, layered-import audits.
+   *
+   * Findings emitted here flow through the same suppression, baseline,
+   * and severity machinery as per-file findings.
+   */
+  finalize?(ctx: FinalizeContext, opts: ResolvedOptions<S>): void;
 }
 
 /**
@@ -128,6 +143,11 @@ export interface DefineCheckInput<S extends OptionsSchema> {
   /** File-scope filter; defaults to "every file". */
   readonly files?: FileScope;
   run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void;
+  /**
+   * Optional cross-file finalize hook (cd-9hp.6). See the
+   * {@link Check.finalize} doc on the output interface.
+   */
+  finalize?(ctx: FinalizeContext, opts: ResolvedOptions<S>): void;
 }
 
 /**
@@ -177,5 +197,6 @@ export function defineCheck<const S extends OptionsSchema = {}>(
     options: input.options ?? ({} as S),
     files: input.files,
     run: input.run,
+    ...(input.finalize !== undefined ? { finalize: input.finalize } : {}),
   };
 }

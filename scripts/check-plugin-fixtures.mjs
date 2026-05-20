@@ -36,9 +36,18 @@ let checked = 0;
 for (const name of readdirSync(FIXTURES_DIR)) {
   const dir = join(FIXTURES_DIR, name);
   if (!statSync(dir).isDirectory()) continue;
-  const fixture = join(dir, "fixture.ts");
+  // Fixture target is `fixture.ts` (single file) or `fixture/`
+  // (directory of files for cross-file plugin checks — cd-9hp.6).
+  const fixtureFile = join(dir, "fixture.ts");
+  const fixtureDir = join(dir, "fixture");
+  let fixture = null;
+  if (existsSync(fixtureFile)) {
+    fixture = fixtureFile;
+  } else if (existsSync(fixtureDir) && statSync(fixtureDir).isDirectory()) {
+    fixture = fixtureDir;
+  }
   const expectedPath = join(dir, "expected.json");
-  if (!existsSync(fixture) || !existsSync(expectedPath)) continue;
+  if (!fixture || !existsSync(expectedPath)) continue;
 
   // Match regen-plugin-fixtures.mjs: per-fixture cofferdam.toml, if
   // present, is passed via --config. Discovery starts from CWD (the
@@ -88,6 +97,11 @@ function normalise(raw) {
   const doc = JSON.parse(raw);
   for (const f of doc.findings ?? []) {
     f.file = toRepoRelative(f.file);
+    if (Array.isArray(f.related)) {
+      for (const r of f.related) {
+        if (typeof r.file === "string") r.file = toRepoRelative(r.file);
+      }
+    }
   }
   return JSON.stringify(doc, null, 2) + "\n";
 }

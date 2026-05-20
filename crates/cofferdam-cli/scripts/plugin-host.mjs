@@ -176,12 +176,21 @@ if (process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE) {
   );
 }
 
+// cd-9hp.6: per-plugin corpus stores survive every per-file `run` and
+// are reused by the optional `finalize` hook. Storage is plugin-private
+// — two plugins picking the same slot key cannot see each other's data.
+const corpusStores = new Map();
+for (const { check } of loadedPlugins) {
+  corpusStores.set(check.id, buildCorpusStore());
+}
+
 for (const file of manifest.files) {
   for (const { pluginPath, check } of loadedPlugins) {
     if (!fileMatchesScope(file.path, check.files, file.layer ?? null)) continue;
 
     const opts = resolveOptions(check, manifest.options ?? {});
     const sourceFile = buildSourceFile(file);
+    const corpusStore = corpusStores.get(check.id);
     const ctx = {
       report(args) {
         if (!args || typeof args !== "object") return;
@@ -200,6 +209,7 @@ for (const file of manifest.files) {
         if (args.related) out.related = args.related;
         reports.push(out);
       },
+      corpus: corpusStore.view(),
     };
 
     try {
@@ -212,6 +222,47 @@ for (const file of manifest.files) {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+}
+
+// cd-9hp.6: finalize pass. After every per-file run has completed,
+// invoke each plugin's optional `finalize(ctx, opts)` once. Findings
+// emitted here attach to whatever file the plugin supplies via
+// `args.file`; the host does not infer a primary file.
+for (const { pluginPath, check } of loadedPlugins) {
+  if (typeof check.finalize !== "function") continue;
+  const opts = resolveOptions(check, manifest.options ?? {});
+  const corpusStore = corpusStores.get(check.id);
+  const ctx = {
+    report(args) {
+      if (!args || typeof args !== "object") return;
+      const span = args.span;
+      if (!span) return;
+      const out = {
+        checkId: check.id,
+        category: check.category ?? "warning",
+        message: String(args.message ?? ""),
+        file: typeof args.file === "string" ? args.file : "",
+        startByte: Number(span.start_byte ?? 0) | 0,
+        endByte: Number(span.end_byte ?? 0) | 0,
+        severity: args.severity ?? check.defaultSeverity ?? "medium",
+      };
+      if (args.fix) out.fix = args.fix;
+      if (args.related) out.related = args.related;
+      reports.push(out);
+    },
+    corpus: corpusStore.view(),
+  };
+
+  try {
+    check.finalize(ctx, opts);
+  } catch (err) {
+    errors.push({
+      kind: "finalize_threw",
+      plugin: pluginPath,
+      file: "",
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -504,6 +555,35 @@ function buildLineView(native) {
         column: charStart + 1,
         start_byte: native.lineStart + charStart,
         end_byte: native.lineStart + charEnd,
+      };
+    },
+  };
+}
+
+// cd-9hp.6: plugin corpus store. One per plugin per analysis run.
+// Plugin-private: every `view()` reads/writes the same underlying Map
+// for this store, but the host hands a distinct store to each plugin,
+// so two plugins picking the same slot key never collide.
+function buildCorpusStore() {
+  const slots = new Map();
+  return {
+    view() {
+      return {
+        read(key) {
+          return slots.get(String(key));
+        },
+        write(key, value) {
+          slots.set(String(key), value);
+        },
+        append(key, item) {
+          const k = String(key);
+          const existing = slots.get(k);
+          if (Array.isArray(existing)) {
+            existing.push(item);
+          } else {
+            slots.set(k, [item]);
+          }
+        },
       };
     },
   };

@@ -13,7 +13,14 @@
 // parsing).
 
 import type { Check, FileScope } from "./define-check.js";
-import type { CheckContext, Fix, ReportArgs } from "./check-context.js";
+import type {
+  CheckContext,
+  FinalizeContext,
+  FinalizeReportArgs,
+  Fix,
+  PluginCorpus,
+  ReportArgs,
+} from "./check-context.js";
 import type { LineView } from "./line-view.js";
 import type { Span } from "./span.js";
 
@@ -220,6 +227,41 @@ function globMatchSingle(pattern: string, path: string): boolean {
 }
 
 /**
+ * In-memory backing for {@link PluginCorpus}. The plugin host creates
+ * one per check per analysis run and reuses it across every per-file
+ * `runPlugin` call (and the optional `runPluginFinalize` call) so the
+ * slots survive the per-file boundary.
+ *
+ * Plugins never see this directly — they see the `PluginCorpus`
+ * accessor built from it. Exported because the loader script needs
+ * to instantiate one when wiring multi-file runs together.
+ */
+export class PluginCorpusStore {
+  private readonly slots = new Map<string, unknown>();
+
+  /** Accessor view that satisfies {@link PluginCorpus}. */
+  public view(): PluginCorpus {
+    const slots = this.slots;
+    return {
+      read<T = unknown>(key: string): T | undefined {
+        return slots.get(key) as T | undefined;
+      },
+      write<T = unknown>(key: string, value: T): void {
+        slots.set(key, value);
+      },
+      append<T = unknown>(key: string, item: T): void {
+        const existing = slots.get(key);
+        if (Array.isArray(existing)) {
+          (existing as T[]).push(item);
+        } else {
+          slots.set(key, [item]);
+        }
+      },
+    };
+  }
+}
+
+/**
  * Execute a single plugin against a single file. Collects `ctx.report`
  * calls into a `PluginReport[]` the loader can hand to native
  * `mergePluginFindings`.
@@ -231,26 +273,25 @@ function globMatchSingle(pattern: string, path: string): boolean {
  * FileScope filtering is applied here: if the check declares a `files`
  * scope and the input path does not match, the function returns an empty
  * array immediately without calling `run()`.
+ *
+ * Pass `corpus` to preserve slot state across the multi-file run. When
+ * omitted, a fresh `PluginCorpusStore` is built for this single call —
+ * fine for one-shot tests but useless for cross-file aggregation.
  */
-export function runPlugin(check: Check, input: PluginRunInput): PluginReport[] {
+export function runPlugin(
+  check: Check,
+  input: PluginRunInput,
+  corpus?: PluginCorpusStore,
+): PluginReport[] {
   if (!fileMatchesScope(input.path, check.files, input.layer)) return [];
 
   const reports: PluginReport[] = [];
+  const corpusView = (corpus ?? new PluginCorpusStore()).view();
   const ctx: CheckContext = {
     report(args: ReportArgs): void {
-      const { span, severity, related, fix } = args;
-      const report: PluginReport = {
-        checkId: check.id,
-        message: args.message,
-        file: input.path,
-        startByte: span.start_byte,
-        endByte: span.end_byte,
-        severity: severity ?? check.defaultSeverity,
-        ...(fix !== undefined ? { fix } : {}),
-        ...(related !== undefined ? { related } : {}),
-      };
-      reports.push(report);
+      reports.push(buildReport(check, input.path, args));
     },
+    corpus: corpusView,
   };
 
   // Resolve options — currently use the schema defaults; the loader can
@@ -276,6 +317,63 @@ export function runPlugin(check: Check, input: PluginRunInput): PluginReport[] {
   }
 
   return reports;
+}
+
+/**
+ * Run a check's optional `finalize` hook after every per-file `run`
+ * has completed (cd-9hp.6). Returns the additional reports the check
+ * emitted at this stage; an empty array when the check declares no
+ * finalize. Reuses `corpus` so finalize sees the slots the per-file
+ * pass populated.
+ *
+ * A finalize crash is surfaced as a `Warning.PluginCrashed` report
+ * with `file = ""` and zero spans, mirroring how `runPlugin` handles a
+ * per-file throw.
+ */
+export function runPluginFinalize(
+  check: Check,
+  corpus: PluginCorpusStore,
+): PluginReport[] {
+  if (typeof check.finalize !== "function") return [];
+
+  const reports: PluginReport[] = [];
+  const ctx: FinalizeContext = {
+    report(args: FinalizeReportArgs): void {
+      reports.push(buildReport(check, args.file, args));
+    },
+    corpus: corpus.view(),
+  };
+
+  const opts = resolveDefaults(check.options);
+
+  try {
+    check.finalize(ctx, opts as Parameters<NonNullable<typeof check.finalize>>[1]);
+  } catch (err) {
+    reports.push({
+      checkId: "Warning.PluginCrashed",
+      message: `plugin '${check.id}' finalize threw: ${err instanceof Error ? err.message : String(err)}`,
+      file: "",
+      startByte: 0,
+      endByte: 0,
+      severity: "high",
+    });
+  }
+
+  return reports;
+}
+
+function buildReport(check: Check, defaultFile: string, args: ReportArgs): PluginReport {
+  const { span, severity, related, fix } = args;
+  return {
+    checkId: check.id,
+    message: args.message,
+    file: defaultFile,
+    startByte: span.start_byte,
+    endByte: span.end_byte,
+    severity: severity ?? check.defaultSeverity,
+    ...(fix !== undefined ? { fix } : {}),
+    ...(related !== undefined ? { related } : {}),
+  };
 }
 
 function resolveDefaults<S extends Record<string, { readonly default: unknown }>>(

@@ -1,0 +1,8 @@
+# cofferdam.toml — local config for the duplicate-class e2e fixture (cd-9hp.6).
+#
+# Lives next to the fixture rather than at the repo root so the e2e run
+# is self-contained: `cofferdam check examples-plugins/duplicate-class/fixture`
+# auto-discovers this file via the engine's walk-up search and loads the
+# plugin from a directory-relative path.
+
+plugins = ["./"]

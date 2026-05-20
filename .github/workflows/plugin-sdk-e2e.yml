@@ -51,7 +51,7 @@ jobs:
         # isn't published to npm yet; copy the built dist into each
         # plugin's node_modules so the host script's `import` resolves.
         run: |
-          for plugin in brand-casing no-http-client tenant-isolation; do
+          for plugin in brand-casing no-http-client tenant-isolation duplicate-class; do
             mkdir -p examples-plugins/$plugin/node_modules/@cofferdam/check-sdk
             cp -r packages/check-sdk/package.json packages/check-sdk/dist \
               examples-plugins/$plugin/node_modules/@cofferdam/check-sdk/
@@ -59,7 +59,7 @@ jobs:
 
       - name: Build plugins (TS → dist)
         run: |
-          for plugin in brand-casing no-http-client tenant-isolation; do
+          for plugin in brand-casing no-http-client tenant-isolation duplicate-class; do
             (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p .)
           done
 
@@ -88,6 +88,8 @@ jobs:
 
       - name: Negative fixtures pin SDK type strictness (cd-81a.2 / cd-svf)
         run: |
+          # duplicate-class omits the negative tsconfig — it's the
+          # cd-9hp.6 cross-file fixture, not a type-tightness pin.
           for plugin in brand-casing no-http-client tenant-isolation; do
             (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json)
           done

@@ -39,8 +39,29 @@
 //! Round-trip (load → re-serialize → load) is covered by tests in this
 //! module — it's the contract `cofferdam advise` and any future
 //! `cofferdam invariants normalize` would lean on.
+//!
+//! ## Schema versioning (cd-9hp.12)
+//!
+//! Every spec carries a `schema_version` field. The policy is documented
+//! in `docs/schema-versioning.md` and summarised here:
+//!
+//! * `MAJOR.MINOR`, semver-flavoured. Accepted as integer (`1` → `1.0`)
+//!   or string (`"1.0"`, `"1.2"`).
+//! * `CURRENT_SCHEMA_VERSION` is what this build emits and reads.
+//! * `MIN_SUPPORTED_SCHEMA_VERSION` is the oldest version still accepted.
+//!   Past versions ≥ `MIN_SUPPORTED` < `CURRENT` are inside the
+//!   deprecation window: accepted, but the engine surfaces a one-time
+//!   hint telling the user to migrate.
+//! * Versions below `MIN_SUPPORTED` are rejected with an actionable
+//!   migration message.
+//! * Versions above `CURRENT` (any MAJOR) are rejected with an upgrade
+//!   message.
+//! * A missing `schema_version` is treated as the current MAJOR's `.0`
+//!   release for backwards-compatibility with the v0 surface; the
+//!   `schema_version_explicit` flag is `false` so the engine can warn.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -48,6 +69,102 @@ use serde::{Deserialize, Serialize};
 
 /// Default filename loaders look for during walk-up discovery.
 pub const FILE_NAME: &str = "cofferdam.invariants.toml";
+
+/// Schema version this build of cofferdam emits and reads natively.
+///
+/// Bump policy: MINOR for additive changes, MAJOR for breaking changes.
+/// MAJOR bumps must also extend the deprecation window via
+/// `MIN_SUPPORTED_SCHEMA_VERSION` and ship a migration recipe in
+/// `docs/schema-versioning.md`.
+pub const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, minor: 0 };
+
+/// Oldest schema version this build still accepts.
+///
+/// `>= MIN_SUPPORTED` and `< CURRENT` falls in the deprecation window
+/// (accepted with a hint). Anything strictly below `MIN_SUPPORTED` is
+/// rejected.
+pub const MIN_SUPPORTED_SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, minor: 0 };
+
+/// Semver-flavoured `MAJOR.MINOR` version tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl SchemaVersion {
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self { major, minor }
+    }
+
+    /// Parse `"MAJOR"` or `"MAJOR.MINOR"`. Returns the original input
+    /// alongside a reason on failure so callers can surface it.
+    pub fn parse_str(raw: &str) -> Result<Self, &'static str> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err("schema_version string is empty");
+        }
+        let mut parts = trimmed.split('.');
+        let major_str = parts.next().unwrap();
+        let major: u32 = major_str
+            .parse()
+            .map_err(|_| "schema_version MAJOR must be a non-negative integer")?;
+        let minor: u32 = match parts.next() {
+            None => 0,
+            Some(m) => m
+                .parse()
+                .map_err(|_| "schema_version MINOR must be a non-negative integer")?,
+        };
+        if parts.next().is_some() {
+            return Err("schema_version must be MAJOR or MAJOR.MINOR (no PATCH)");
+        }
+        Ok(Self { major, minor })
+    }
+}
+
+impl fmt::Display for SchemaVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+/// Outcome of validating a declared schema version against a policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionCheck {
+    /// Declared version equals `current`. No action needed.
+    Ok,
+    /// Declared version is older than `current` but ≥ `min_supported`.
+    /// Engine should surface a one-time deprecation hint.
+    Deprecated,
+    /// Declared version exceeds `current`. Reject with upgrade message.
+    Future,
+    /// Declared version is older than `min_supported`. Reject with
+    /// migration message.
+    Unsupported,
+}
+
+/// Pure validation of a declared schema version against a (current,
+/// min_supported) policy. Factored out so tests can exercise the full
+/// matrix today, before MAJOR=2 of any schema actually exists.
+pub fn validate_version(
+    declared: SchemaVersion,
+    current: SchemaVersion,
+    min_supported: SchemaVersion,
+) -> VersionCheck {
+    debug_assert!(
+        min_supported <= current,
+        "policy: min_supported must be ≤ current"
+    );
+    if declared > current {
+        VersionCheck::Future
+    } else if declared < min_supported {
+        VersionCheck::Unsupported
+    } else if declared < current {
+        VersionCheck::Deprecated
+    } else {
+        VersionCheck::Ok
+    }
+}
 
 /// Parsed spec. Field semantics:
 ///
@@ -64,8 +181,21 @@ pub const FILE_NAME: &str = "cofferdam.invariants.toml";
 /// * `invariants[name]` declares a generic forbid/require import rule.
 ///   `Design.InvariantViolation` evaluates one finding per violation,
 ///   keyed by the invariant's name.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvariantsSpec {
+    /// Schema version this spec declares. Defaults to
+    /// `CURRENT_SCHEMA_VERSION` when the field is missing on disk; see
+    /// `schema_version_explicit` to tell those cases apart.
+    pub schema_version: SchemaVersion,
+    /// Whether the spec on disk declared `schema_version` explicitly.
+    /// `false` means the loader filled in the default — engine surfaces
+    /// a one-time hint encouraging adoption of the explicit form.
+    pub schema_version_explicit: bool,
+    /// Set when the declared version is older than
+    /// `CURRENT_SCHEMA_VERSION` but still within the deprecation
+    /// window. Engine surfaces a one-time hint asking the user to
+    /// migrate.
+    pub schema_version_deprecated: bool,
     /// Absolute path of the directory containing `cofferdam.invariants.toml`.
     /// Glob patterns are matched against paths relative to this root.
     pub project_root: PathBuf,
@@ -80,6 +210,22 @@ pub struct InvariantsSpec {
     pub boundaries: BTreeMap<String, BoundarySpec>,
     /// Invariant name → spec.
     pub invariants: BTreeMap<String, InvariantSpec>,
+}
+
+impl Default for InvariantsSpec {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version_explicit: false,
+            schema_version_deprecated: false,
+            project_root: PathBuf::new(),
+            layers: BTreeMap::new(),
+            layers_allow: BTreeMap::new(),
+            public_api: PublicApiSpec::default(),
+            boundaries: BTreeMap::new(),
+            invariants: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -112,8 +258,14 @@ pub struct InvariantSpec {
 
 /// On-disk shape — what serde reads/writes. The owned `InvariantsSpec`
 /// is built from this once project_root is known.
+///
+/// Field order matters: TOML serialisation places scalars before tables
+/// so `schema_version` MUST appear before any `BTreeMap` / table field,
+/// otherwise the round-trip output is invalid TOML.
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct TomlDoc {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schema_version: Option<toml::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     layers: BTreeMap<String, toml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,6 +320,40 @@ pub enum InvariantsError {
         key: String,
         reason: &'static str,
     },
+    #[error("{path}: schema_version `{raw}` is malformed: {reason}")]
+    MalformedSchemaVersion {
+        path: PathBuf,
+        raw: String,
+        reason: &'static str,
+    },
+    #[error("{path}: schema_version {declared} exceeds this build's maximum supported version ({current}); upgrade cofferdam or pin the spec to a version your build understands")]
+    FutureSchemaVersion {
+        path: PathBuf,
+        declared: SchemaVersion,
+        current: SchemaVersion,
+    },
+    #[error("{path}: schema_version {declared} is no longer supported by this build (minimum supported is {min_supported}); run `cofferdam invariants migrate` against an older cofferdam release or update the spec to a supported version")]
+    UnsupportedSchemaVersion {
+        path: PathBuf,
+        declared: SchemaVersion,
+        min_supported: SchemaVersion,
+    },
+}
+
+impl InvariantsError {
+    /// `true` when the error means "the spec is on disk but cannot
+    /// safely be loaded". The CLI/engine should fail loudly on these
+    /// rather than silently ignore the spec — silently ignoring would
+    /// mean the user's architectural rules don't apply without them
+    /// knowing.
+    pub fn is_fatal(&self) -> bool {
+        matches!(
+            self,
+            InvariantsError::MalformedSchemaVersion { .. }
+                | InvariantsError::FutureSchemaVersion { .. }
+                | InvariantsError::UnsupportedSchemaVersion { .. }
+        )
+    }
 }
 
 /// Walk up from `start` looking for `cofferdam.invariants.toml`. Stops
@@ -207,6 +393,58 @@ pub fn parse(path: &Path, raw: &str) -> Result<InvariantsSpec, InvariantsError> 
         path: path.to_path_buf(),
         source,
     })?;
+
+    let (schema_version, schema_version_explicit) = match doc.schema_version.as_ref() {
+        None => (CURRENT_SCHEMA_VERSION, false),
+        Some(toml::Value::Integer(i)) if *i >= 0 => (SchemaVersion::new(*i as u32, 0), true),
+        Some(toml::Value::Integer(i)) => {
+            return Err(InvariantsError::MalformedSchemaVersion {
+                path: path.to_path_buf(),
+                raw: i.to_string(),
+                reason: "schema_version integer must be non-negative",
+            });
+        }
+        Some(toml::Value::String(s)) => match SchemaVersion::parse_str(s) {
+            Ok(v) => (v, true),
+            Err(reason) => {
+                return Err(InvariantsError::MalformedSchemaVersion {
+                    path: path.to_path_buf(),
+                    raw: s.clone(),
+                    reason,
+                });
+            }
+        },
+        Some(other) => {
+            return Err(InvariantsError::MalformedSchemaVersion {
+                path: path.to_path_buf(),
+                raw: other.to_string(),
+                reason: "schema_version must be an integer or `MAJOR.MINOR` string",
+            });
+        }
+    };
+
+    let schema_version_deprecated = match validate_version(
+        schema_version,
+        CURRENT_SCHEMA_VERSION,
+        MIN_SUPPORTED_SCHEMA_VERSION,
+    ) {
+        VersionCheck::Ok => false,
+        VersionCheck::Deprecated => true,
+        VersionCheck::Future => {
+            return Err(InvariantsError::FutureSchemaVersion {
+                path: path.to_path_buf(),
+                declared: schema_version,
+                current: CURRENT_SCHEMA_VERSION,
+            });
+        }
+        VersionCheck::Unsupported => {
+            return Err(InvariantsError::UnsupportedSchemaVersion {
+                path: path.to_path_buf(),
+                declared: schema_version,
+                min_supported: MIN_SUPPORTED_SCHEMA_VERSION,
+            });
+        }
+    };
 
     let mut layers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut layers_allow: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -317,6 +555,9 @@ pub fn parse(path: &Path, raw: &str) -> Result<InvariantsSpec, InvariantsError> 
         .unwrap_or_else(|| PathBuf::from("."));
 
     Ok(InvariantsSpec {
+        schema_version,
+        schema_version_explicit,
+        schema_version_deprecated,
         project_root,
         layers,
         layers_allow,
@@ -385,6 +626,7 @@ pub fn to_toml_string(spec: &InvariantsSpec) -> Result<String, toml::ser::Error>
         .collect();
 
     let doc = TomlDoc {
+        schema_version: Some(toml::Value::String(spec.schema_version.to_string())),
         layers: layers_doc,
         public_api,
         boundaries,
@@ -400,6 +642,8 @@ mod tests {
     use tempfile::tempdir;
 
     const FULL_SPEC: &str = r#"
+schema_version = "1.0"
+
 [layers]
 infra  = ["src/infra/**"]
 domain = ["src/domain/**"]
@@ -422,6 +666,9 @@ exports = ["package.json:exports", "src/index.ts"]
     #[test]
     fn parses_full_spec() {
         let spec = parse(Path::new("cofferdam.invariants.toml"), FULL_SPEC).expect("parse");
+        assert_eq!(spec.schema_version, SchemaVersion::new(1, 0));
+        assert!(spec.schema_version_explicit);
+        assert!(!spec.schema_version_deprecated);
         assert_eq!(spec.layers.len(), 3);
         assert_eq!(spec.layers_allow.get("app").unwrap(), &["domain", "infra"]);
         assert_eq!(
@@ -507,5 +754,171 @@ app = "should be an array"
 "#;
         let err = parse(Path::new("test.toml"), raw).unwrap_err();
         assert!(matches!(err, InvariantsError::BadLayer { .. }));
+    }
+
+    // ----- schema_version (cd-9hp.12) -----
+
+    #[test]
+    fn schema_version_missing_defaults_to_current_implicit() {
+        let raw = r#"
+[layers]
+app = ["src/app/**"]
+"#;
+        let spec = parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(spec.schema_version, CURRENT_SCHEMA_VERSION);
+        assert!(
+            !spec.schema_version_explicit,
+            "missing field should be marked implicit"
+        );
+        assert!(!spec.schema_version_deprecated);
+    }
+
+    #[test]
+    fn schema_version_accepts_integer_form() {
+        let raw = r#"
+schema_version = 1
+
+[layers]
+app = ["src/app/**"]
+"#;
+        let spec = parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(spec.schema_version, SchemaVersion::new(1, 0));
+        assert!(spec.schema_version_explicit);
+    }
+
+    #[test]
+    fn schema_version_accepts_string_form() {
+        let raw = r#"schema_version = "1.0""#;
+        let spec = parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(spec.schema_version, SchemaVersion::new(1, 0));
+        assert!(spec.schema_version_explicit);
+    }
+
+    #[test]
+    fn schema_version_rejects_future_major() {
+        // CURRENT is 1.0 today; any 2.x must be rejected.
+        let raw = r#"schema_version = "2.0""#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, InvariantsError::FutureSchemaVersion { .. }));
+        assert!(err.is_fatal());
+    }
+
+    #[test]
+    fn schema_version_rejects_future_minor() {
+        // 1.5 today is unknown to this build (CURRENT is 1.0).
+        let raw = r#"schema_version = "1.5""#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, InvariantsError::FutureSchemaVersion { .. }));
+    }
+
+    #[test]
+    fn schema_version_rejects_malformed_string() {
+        let raw = r#"schema_version = "1.0.0""#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(
+            err,
+            InvariantsError::MalformedSchemaVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn schema_version_rejects_negative_integer() {
+        let raw = r#"schema_version = -1"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(
+            err,
+            InvariantsError::MalformedSchemaVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn schema_version_rejects_wrong_type() {
+        let raw = r#"schema_version = true"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(
+            err,
+            InvariantsError::MalformedSchemaVersion { .. }
+        ));
+    }
+
+    // The policy logic is exercised against synthetic (current,
+    // min_supported) values so we cover all four `VersionCheck` arms
+    // today, before any real schema MAJOR=2 exists.
+
+    #[test]
+    fn validate_version_ok() {
+        let r = validate_version(
+            SchemaVersion::new(1, 0),
+            SchemaVersion::new(1, 0),
+            SchemaVersion::new(1, 0),
+        );
+        assert_eq!(r, VersionCheck::Ok);
+    }
+
+    #[test]
+    fn validate_version_in_deprecation_window() {
+        // Hypothetical future state: current=2.0, min=1.0. A declared
+        // 1.5 is older than current but ≥ min — accepted with hint.
+        let r = validate_version(
+            SchemaVersion::new(1, 5),
+            SchemaVersion::new(2, 0),
+            SchemaVersion::new(1, 0),
+        );
+        assert_eq!(r, VersionCheck::Deprecated);
+    }
+
+    #[test]
+    fn validate_version_future_rejected() {
+        let r = validate_version(
+            SchemaVersion::new(2, 0),
+            SchemaVersion::new(1, 0),
+            SchemaVersion::new(1, 0),
+        );
+        assert_eq!(r, VersionCheck::Future);
+    }
+
+    #[test]
+    fn validate_version_out_of_window_rejected() {
+        // Hypothetical: current=3.0, min=2.0. A declared 1.0 is below
+        // the deprecation window — rejected with migration message.
+        let r = validate_version(
+            SchemaVersion::new(1, 0),
+            SchemaVersion::new(3, 0),
+            SchemaVersion::new(2, 0),
+        );
+        assert_eq!(r, VersionCheck::Unsupported);
+    }
+
+    #[test]
+    fn schema_version_parse_str_variants() {
+        assert_eq!(SchemaVersion::parse_str("1"), Ok(SchemaVersion::new(1, 0)));
+        assert_eq!(
+            SchemaVersion::parse_str("2.3"),
+            Ok(SchemaVersion::new(2, 3))
+        );
+        assert!(SchemaVersion::parse_str("").is_err());
+        assert!(SchemaVersion::parse_str("1.2.3").is_err());
+        assert!(SchemaVersion::parse_str("a.b").is_err());
+    }
+
+    #[test]
+    fn round_trip_canonicalises_version_to_string() {
+        // Input declares as integer; output should declare as "1.0".
+        let raw = r#"
+schema_version = 1
+
+[layers]
+app = ["src/app/**"]
+"#;
+        let parsed = parse(Path::new("test.toml"), raw).expect("parse");
+        let serialized = to_toml_string(&parsed).expect("serialize");
+        assert!(
+            serialized.contains(r#"schema_version = "1.0""#),
+            "serializer should emit canonical MAJOR.MINOR string, got: {serialized}"
+        );
+        // And the canonical form re-parses to the same version.
+        let reparsed = parse(Path::new("test.toml"), &serialized).expect("reparse");
+        assert_eq!(reparsed.schema_version, SchemaVersion::new(1, 0));
+        assert!(reparsed.schema_version_explicit);
     }
 }

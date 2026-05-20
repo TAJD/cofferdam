@@ -1,3 +1,4 @@
+schema_version = "1.0"
 # Pins Design.InvariantViolation's `require_imports`: every file in
 # the `app` layer must import something under `src/lib/logger/`. Files
 # not in `from_layers` are exempt. Prefix matching is directory-based:

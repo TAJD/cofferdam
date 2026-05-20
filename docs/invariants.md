@@ -16,6 +16,8 @@ are optional and additive; you can ship one without the other.
 ## Schema
 
 ```toml
+schema_version = "1.0"
+
 [layers]
 infra  = ["src/infra/**"]
 domain = ["src/domain/**"]
@@ -35,6 +37,20 @@ exports = ["package.json:exports", "src/index.ts"]
 "no-direct-db-access" = { forbid_imports = ["src/infra/db"], from_layers = ["app"] }
 "telemetry-required"  = { require_imports = ["src/infra/telemetry"], from_layers = ["app"] }
 ```
+
+### `schema_version`
+
+`MAJOR.MINOR` (semver-flavoured). Accepted as integer (`1` → treated
+as `1.0`) or string (`"1.0"`, `"1.2"`). The current version this build
+ships is `1.0`. The field is honoured at load time — future versions
+the build doesn't understand are rejected with an upgrade message;
+past versions outside the deprecation window are rejected with a
+migration message. A spec without `schema_version` is loaded as
+`1.0` for backwards compatibility, with a one-time hint pointing at
+this section.
+
+Full policy — bump rules, deprecation window, supported versions —
+lives in [docs/schema-versioning.md](./schema-versioning.md).
 
 ### `[layers]` and `[layers.allow]`
 

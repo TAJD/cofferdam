@@ -1,3 +1,4 @@
+schema_version = "1.0"
 # Three-layer architecture. `app` may reach down to `domain` and `infra`;
 # `domain` may reach `infra`; `infra` is isolated and may not import
 # upward. Pins Design.LayerViolation's interpretation of `[layers.allow]`.

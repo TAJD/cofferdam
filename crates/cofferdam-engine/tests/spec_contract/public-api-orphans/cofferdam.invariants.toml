@@ -1,3 +1,4 @@
+schema_version = "1.0"
 # Pins Design.OrphanExport's interpretation of [public_api].exports:
 # entries shield matching files from being flagged as orphans even when
 # nothing in the project consumes them; non-matching files stay

@@ -354,14 +354,46 @@ pub fn resolve_with_invariants(
         .as_ref()
         .and_then(|p| p.parent())
         .unwrap_or(cwd);
-    if let Err(e) = merge_invariants_from(&mut cfg, invariants_start) {
-        diags
-            .warnings
-            .push(format!("ignoring cofferdam.invariants.toml ({e})"));
-    } else if cfg.layers_double_declaration {
-        diags.warnings.push(
-            "[layers] declared in both cofferdam.toml and cofferdam.invariants.toml — invariants.toml takes precedence; remove [layers] from cofferdam.toml to silence this hint".to_string()
-        );
+    match merge_invariants_from(&mut cfg, invariants_start) {
+        Err(ConfigError::Invariants(e)) if e.is_fatal() => {
+            // Schema-version errors and other fatal invariants errors
+            // mean "the spec exists but cannot safely be loaded". Fail
+            // loudly rather than silently ignoring the user's
+            // architectural rules.
+            return Err(ConfigError::Invariants(e));
+        }
+        Err(e) => {
+            diags
+                .warnings
+                .push(format!("ignoring cofferdam.invariants.toml ({e})"));
+        }
+        Ok(_) => {
+            if cfg.layers_double_declaration {
+                diags.warnings.push(
+                    "[layers] declared in both cofferdam.toml and cofferdam.invariants.toml — invariants.toml takes precedence; remove [layers] from cofferdam.toml to silence this hint".to_string()
+                );
+            }
+            if let Some(spec) = cfg.invariants.as_ref() {
+                if spec.schema_version_deprecated {
+                    diags.warnings.push(format!(
+                        "cofferdam.invariants.toml declares schema_version {} which is older than the current {}; update the spec to silence this hint (see docs/schema-versioning.md)",
+                        spec.schema_version,
+                        cofferdam_core::invariants::CURRENT_SCHEMA_VERSION,
+                    ));
+                } else if !spec.schema_version_explicit
+                    && (!spec.layers.is_empty()
+                        || !spec.boundaries.is_empty()
+                        || !spec.invariants.is_empty()
+                        || !spec.public_api.exports.is_empty())
+                {
+                    diags.warnings.push(format!(
+                        "cofferdam.invariants.toml is missing `schema_version`; assumed {}. Add `schema_version = \"{}\"` at the top of the file to silence this hint (see docs/schema-versioning.md)",
+                        cofferdam_core::invariants::CURRENT_SCHEMA_VERSION,
+                        cofferdam_core::invariants::CURRENT_SCHEMA_VERSION,
+                    ));
+                }
+            }
+        }
     }
 
     // Decide whether we have anything worth returning. cofferdam.toml's

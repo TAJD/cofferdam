@@ -1,3 +1,4 @@
+schema_version = "1.0"
 # Combo fixture: every spec section in one config so finding
 # attribution stays cleanly separated when several rules fire on
 # disjoint files.

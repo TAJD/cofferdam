@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `schema_version` field for `cofferdam.invariants.toml` (cd-9hp.12). Spec files now declare their schema version as `schema_version = "1.0"` (or integer `1`) at the top of the file. Versions newer than this build understands are rejected with an upgrade message; versions older than the supported window are rejected with a migration message; missing fields are loaded as `1.0` with a one-time hint. The full versioning policy — MAJOR.MINOR semantics, deprecation window, bump rules — is documented in [docs/schema-versioning.md](docs/schema-versioning.md). Existing spec fixtures updated to declare `1.0` explicitly. The canonical-graph and predicate-DSL schemas will inherit this same policy (cd-T1, cd-9hp.1).
+
+### Schema changes
+- `cofferdam.invariants.toml`: added optional `schema_version` field at the top level. Missing field is backward-compatible; current build is at `1.0`. No semantic change to any existing field. See [docs/schema-versioning.md](docs/schema-versioning.md).
+
 ## [0.3.2] - 2026-05-07
 
 ### Fixed

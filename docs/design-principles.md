@@ -213,7 +213,7 @@ The transferable pattern, in one sentence: **a typed parsed corpus over a projec
 
 ### 3.4 What does *not* transfer
 
-- The five-category taxonomy is tuned to TS code-quality. A schema validator might want three (Naming, Compatibility, Conventions). The taxonomy is configurable in principle (see the closed-enum bead in this epic); ship per-domain.
+- The five-category taxonomy is tuned to TS code-quality but stays closed. A schema validator might want three (Naming, Compatibility, Conventions); for cofferdam those map into the existing five via namespaced check IDs (`Design.schema.breaking`, `Readability.schema.naming`) rather than new top-level buckets — categories describe *intent*, namespaces describe *domain*. cd-9hp.3 closed this choice; reopen only if a domain genuinely demands a new intent bucket.
 - The autofix engine assumes byte-offset edits in the original source. Domains with semantic diffs (schema migrations, IaC plans) need a different fix model.
 - Severity and priority semantics are project-specific. A schema validator's "Breaking" severity is more like cofferdam's `Warning.severity = "error"` than its `Warning` category.
 
@@ -263,7 +263,7 @@ The architecture is generic in principle; three honest asymmetries complicate it
 
 - **Span.** `Span` is byte-offset-based today (`crates/cofferdam-core/src/span_util.rs`). Fine for text source. For binary, generated, or upstream-referenced artifacts you need a more flexible `Location { uri, range }`. The generalisation is cheap now and expensive later — `Span` flows through `Issue`, `RelatedSpan`, suppression directives, baseline files, and SARIF output.
 - **Identity.** Suppression, baselines, and incremental analysis all need stable identity for findings. Today identity is `(check_id, file, span_hash)`. Each adapter needs its own stable-ID story: SQL migrations want `(rule, migration_file, statement_index)`; schema-IDL wants `(rule, schema_file, type_name)`. The engine has to ask the adapter for an identity scheme rather than assuming text spans hash.
-- **Taxonomy.** The five categories are TS-tuned. A schema validator wants `Breaking | NonBreaking | Convention`; a SQL-migration domain wants `Reversible | Irreversible | DataLoss`. The configurable-taxonomy work (`cd-9hp.3`) is therefore a prerequisite for non-TS domains, not just a doc fix — adapters must register their own taxonomies, the engine must display them coherently, and `cofferdam.toml` has to accept domain-aware severity overrides.
+- **Taxonomy.** The five categories are TS-tuned. A schema validator might want `Breaking | NonBreaking | Convention`; a SQL-migration domain might want `Reversible | Irreversible | DataLoss`. cd-9hp.3 closed this surface: the five stay, and adapters slot into them via namespaced check IDs (`Design.schema.breaking`, `Design.sql.irreversible`). Categories describe *intent* (architectural smell vs. readability nit), namespaces describe *domain*. If a future domain genuinely demands a new top-level intent — not just a new namespace under an existing one — reopen cd-9hp.3 and widen the enum then.
 
 These are forcing functions on the canonical schema and on the engine's identity, output, and configuration surfaces — not blockers, but they have to be solved before a second domain ships.
 
@@ -275,7 +275,7 @@ The forward direction the predicate-DSL bead (`cd-9hp.1`) sketches: **promote th
 
 The convergence: cofferdam keeps its TS-first identity, but the engine's *layers* are factored so a future schema-cofferdam or iac-cofferdam is a different adapter plus a different ruleset, not a different binary. The shared substrate is the graph plus the DSL plus the output. That's the win the §3 substitution tables describe; the contracts in §4.1 and the discipline in §4.2–§4.4 are what make it real.
 
-Cofferdam is likely to end up at an in-memory knowledge graph somewhere along this path. The current bead set — DSL (`cd-9hp.1`), configurable taxonomy (`cd-9hp.3`), plugin corpus access (`cd-9hp.6`), corpus error-handling (`cd-9hp.7`), spec contract suite (`cd-9hp.8`) — is approximately the right path toward that landing spot, even if we do not sequence them as one project.
+Cofferdam is likely to end up at an in-memory knowledge graph somewhere along this path. The current bead set — DSL (`cd-9hp.1`), canonical graph schema (`cd-9hp.9`), plugin corpus access (`cd-9hp.6`), corpus error-handling (`cd-9hp.7`), spec contract suite (`cd-9hp.8`) — is approximately the right path toward that landing spot, even if we do not sequence them as one project.
 
 ---
 
@@ -349,7 +349,7 @@ Terms used in this document and across the codebase, sorted alphabetically. Code
 
 **Boundary (frozen)** — a glob pattern marked `frozen = true` in `[boundaries]` of `cofferdam.invariants.toml`. New code added under the pattern triggers `Design.BoundaryFrozen`. Used to retire legacy areas of the codebase incrementally.
 
-**Category** — one of five buckets a check belongs to: Consistency, Design, Readability, Refactor, Warning. Currently a closed Rust enum (`crates/cofferdam-core/src/check.rs:29`); doc claims projects can add categories — see bead `cd-9hp.3` for the open question.
+**Category** — one of five buckets a check belongs to: Consistency, Design, Readability, Refactor, Warning. A closed Rust enum (`crates/cofferdam-core/src/check.rs:29`) — the taxonomy is deliberately frozen (cd-9hp.3). Cross-domain extensibility happens via namespaced check IDs (`Design.sql.foreign_key`), not new categories.
 
 **Check** — a unit of analysis. A Rust type implementing the `Check` trait, or a JS plugin produced by `defineCheck`. Has static metadata (`CheckMeta`) and three execution methods (`run`, `pass2`, `finalize`) plus optional `autofix`. `crates/cofferdam-core/src/check.rs:216`.
 

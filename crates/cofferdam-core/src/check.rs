@@ -2,8 +2,18 @@
 //!
 //! Five categories — the taxonomy is load-bearing: it's how users mentally
 //! bucket findings, and downstream formatters group reports by category.
-//! Configurable taxonomy (decision #8) lets projects *add* categories —
-//! never remove these five.
+//! The five are **closed**: no project- or plugin-configurable additions.
+//!
+//! The real cross-domain extensibility surface lives in check IDs, not
+//! categories. A SQL adapter's checks live in the existing buckets via
+//! namespaced IDs (`Design.sql.foreign_key`, `Readability.sql.row_length`);
+//! categories describe *intent* (architectural smell vs. readability nit),
+//! namespaces describe *domain* (TypeScript vs. SQL vs. IaC). See cd-9hp.1
+//! (predicate DSL) for the namespace forward-compat policy.
+//!
+//! (Earlier iterations of this comment pledged configurable categories;
+//! that pledge is retracted — cd-9hp.3. If a real need for new top-level
+//! categories appears later, reopen that bead and widen `Category` then.)
 
 use std::sync::OnceLock;
 

@@ -35,7 +35,6 @@ const META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: true,
-    observes_findings: false,
 };
 
 impl Check for TripleEquals {
@@ -208,7 +207,6 @@ const NO_CONSOLE_LOG_META: CheckMeta = CheckMeta {
     consistency: false,
     options: NO_CONSOLE_LOG_OPTIONS,
     autofix: false,
-    observes_findings: false,
 };
 
 impl Check for NoConsoleLog {
@@ -292,7 +290,6 @@ const NO_DEBUGGER_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
-    observes_findings: false,
 };
 
 impl Check for NoDebugger {
@@ -360,7 +357,6 @@ const NO_EVAL_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
-    observes_findings: false,
 };
 
 impl Check for NoEval {
@@ -447,7 +443,6 @@ const UI_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
-    observes_findings: false,
 };
 
 pub struct UnusedImport;

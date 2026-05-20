@@ -95,7 +95,7 @@ These are the load-bearing design choices. Each is a real decision in the code w
 
 ### 2.1 Static metadata, dynamic dispatch
 
-`CheckMeta` (`crates/cofferdam-core/src/check.rs:58-109`) is a `&'static` struct returned from `Check::meta()`. Capabilities — `requires_types`, `consistency`, `observes_findings`, `autofix`, `options` schema, default severity, base priority — are all declared, not inferred.
+`CheckMeta` (`crates/cofferdam-core/src/check.rs:58-109`) is a `&'static` struct returned from `Check::meta()`. Capabilities — `requires_types`, `consistency`, `autofix`, `options` schema, default severity, base priority — are all declared, not inferred. Finalize-observer dispatch lives outside `CheckMeta` in `FINALIZE_OBSERVER_CHECK_IDS` (cd-9hp.5).
 
 Why it matters: the engine plans the run before executing it. It knows which checks need a two-pass orchestration, which need the (planned) ts-morph worker pool, which observe the full finding set during finalize. Scheduling is data-driven from declarations. The check trait stays a normal trait object; the engine never has to introspect a check at runtime to know what to do with it.
 
@@ -135,7 +135,7 @@ Closely related to #2.1 but worth calling out separately. A check declares what 
 
 - `requires_types = true` ⇒ engine routes the check to a type-aware backend.
 - `consistency = true` ⇒ engine runs `pass2`.
-- `observes_findings = true` ⇒ engine defers `finalize` until after every other finalize has completed and a `ALL_PRE_FILTER_FINDINGS` snapshot is rebuilt (`check.rs:100-108`).
+- Check ID in `FINALIZE_OBSERVER_CHECK_IDS` ⇒ engine defers `finalize` until after every other finalize has completed and a `ALL_PRE_FILTER_FINDINGS` snapshot is rebuilt. Dispatched by ID rather than a `CheckMeta` flag (cd-9hp.5).
 - `autofix = true` ⇒ `cofferdam fix --dry-run` predicts what will change.
 - `options: &[OptionSpec]` ⇒ engine validates user config at startup, surfaces typos before file 4000.
 
@@ -157,11 +157,11 @@ Why it matters: this is what makes the `--robot` mode trustworthy. Every channel
 
 ### 2.7 Suppression as observed metadata
 
-Suppression is not a special-case in the engine. The two-phase `finalize` (`crates/cofferdam-engine/src/lib.rs`, the cd-wqc fix) lets a check declare `observes_findings = true` and run *after* every other finalize has emitted, with a snapshot of the full pre-filter finding set in the corpus.
+Suppression is not a special-case in the engine. The two-phase `finalize` (`crates/cofferdam-engine/src/lib.rs`, the cd-wqc fix) defers the finalize of any check whose ID is in `cofferdam_core::FINALIZE_OBSERVER_CHECK_IDS` until after every other finalize has emitted, with a snapshot of the full pre-filter finding set in the corpus.
 
-Today only `Consistency.UnusedSuppression` uses this. It reads the suppression directives, checks whether each one corresponds to a finding the engine actually emitted, and flags stale ones. The mechanism is real, generic, and reusable; it's just that we have one user.
+Today only `Consistency.UnusedSuppression` is in that set. It reads the suppression directives, checks whether each one corresponds to a finding the engine actually emitted, and flags stale ones. The dispatch was originally a generic `observes_findings: bool` flag on `CheckMeta`; cd-9hp.5 collapsed it to an explicit ID list since six months of usage produced exactly one user.
 
-Why it matters: meta-checks (rules about rules) are part of the same system as ordinary rules. There is no "suppression engine" that lives outside the check pipeline — there is one check that happens to look at every other check's output.
+Why it matters: meta-checks (rules about rules) are part of the same system as ordinary rules. There is no "suppression engine" that lives outside the check pipeline — there is one check that happens to look at every other check's output. If a second observer use case appears, extend `FINALIZE_OBSERVER_CHECK_IDS`; if the list grows beyond three entries, reopen cd-9hp.5 and reinstate the generic flag.
 
 ### 2.8 Spec as shared truth
 
@@ -188,7 +188,7 @@ The transferable pattern, in one sentence: **a typed parsed corpus over a projec
 ### 3.2 What you keep
 
 - The `Check` trait shape: `meta()` + `run()` + optional `pass2()` + optional `finalize()` + optional `autofix()`.
-- `CheckMeta` with capability flags (`requires_types`, `consistency`, `observes_findings`, `options`, etc.).
+- `CheckMeta` with capability flags (`requires_types`, `consistency`, `options`, etc.) plus the engine-side `FINALIZE_OBSERVER_CHECK_IDS` list for the rare meta-check pattern.
 - `CorpusKey<T>` — typed, key-addressed, per-slot mutex.
 - Phase orchestration: per-file, then per-file pass-2 (consistency), then finalize.
 - Stable dotted IDs as identity.
@@ -377,7 +377,7 @@ Terms used in this document and across the codebase, sorted alphabetically. Code
 
 **Layer** — a named glob pattern set in `[layers]` of the invariants spec. Files are resolved to a layer by longest-non-glob-prefix specificity (`crates/cofferdam-core/src/layers.rs:42`). `[layers.allow]` declares which layers may import from which.
 
-**Observer check** — a check with `observes_findings = true` in its meta. Its `finalize` is deferred until every other check's `finalize` has emitted, then it runs with a snapshot of the full pre-filter finding set in the corpus. Today only `Consistency.UnusedSuppression`. `crates/cofferdam-core/src/check.rs:100`.
+**Observer check** — a check whose ID is in `cofferdam_core::FINALIZE_OBSERVER_CHECK_IDS`. Its `finalize` is deferred until every other check's `finalize` has emitted, then it runs with a snapshot of the full pre-filter finding set in the corpus. Today only `Consistency.UnusedSuppression`. The mechanism was a generic `CheckMeta` flag until cd-9hp.5 collapsed it to an explicit ID list; widen the list (or reinstate the flag) when a second use case appears.
 
 **Options schema (`OptionSpec`)** — a check's declared list of configurable knobs. Validated against user `cofferdam.toml` at engine startup; resolved values are lent to the running check via `CheckContext::options`. `crates/cofferdam-core/src/options.rs`.
 
@@ -410,7 +410,7 @@ if (a == b) { /* legitimate ergonomic == */ }
 
 Tracked by the engine; `Consistency.UnusedSuppression` flags directives that don't actually suppress anything (stale).
 
-**Two-phase finalize** — the engine's finalize-stage orchestration. Phase A runs every check whose `observes_findings` is `false`; the engine then rebuilds the `ALL_PRE_FILTER_FINDINGS` corpus snapshot from run + pass2 + Phase A; Phase B runs the observers. Documented in `CLAUDE.md` under "Engine finalize ordering."
+**Two-phase finalize** — the engine's finalize-stage orchestration. Phase A runs every check NOT in `FINALIZE_OBSERVER_CHECK_IDS`; the engine then rebuilds the `ALL_PRE_FILTER_FINDINGS` corpus snapshot from run + pass2 + Phase A; Phase B runs the observers. Documented in `CLAUDE.md` under "Engine finalize ordering."
 
 ---
 

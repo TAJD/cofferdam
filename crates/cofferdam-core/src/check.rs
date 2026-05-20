@@ -107,15 +107,27 @@ pub struct CheckMeta {
     /// --dry-run` to predict which findings would be modified and by the
     /// doc catalog / `explain` to surface support to users.
     pub autofix: bool,
-    /// When `true`, this check's `finalize()` is deferred until after all
-    /// other checks' `finalize()` has completed and the `ALL_PRE_FILTER_FINDINGS`
-    /// corpus slot has been re-snapshotted to include finalize-stage findings
-    /// from non-observer checks. This ensures the observer sees a complete
-    /// picture of all emitted findings — including those from cross-file /
-    /// finalize-only emitters like `Warning.UnusedImport`, `Design.OrphanExport`,
-    /// and `Design.DeadExport` — before deciding which suppression directives
-    /// are stale. Today only `Consistency.UnusedSuppression` sets this to `true`.
-    pub observes_findings: bool,
+}
+
+/// Check IDs whose `finalize()` runs in the second finalize phase — after
+/// every other check's `finalize()` has emitted and the
+/// `ALL_PRE_FILTER_FINDINGS` corpus slot has been re-snapshotted to include
+/// finalize-stage findings from the first phase. This lets the second-phase
+/// observer see a complete picture of emitted findings, including those
+/// from cross-file emitters (`Warning.UnusedImport`, `Design.OrphanExport`,
+/// `Design.DeadExport`), before deciding which suppression directives are
+/// stale.
+///
+/// Today only `Consistency.UnusedSuppression` qualifies. The engine
+/// dispatches by check ID (cd-9hp.5) rather than via a `CheckMeta` flag —
+/// the mechanism had one user in six months and the generic flag was paying
+/// no rent. If a second observer use case appears, extend this set.
+pub const FINALIZE_OBSERVER_CHECK_IDS: &[&str] = &["Consistency.UnusedSuppression"];
+
+/// True when the check ID is in `FINALIZE_OBSERVER_CHECK_IDS` — engine helper
+/// for the two-phase finalize dispatch.
+pub fn is_finalize_observer(check_id: &str) -> bool {
+    FINALIZE_OBSERVER_CHECK_IDS.contains(&check_id)
 }
 
 /// Mutable per-file scratch passed to `Check::run`. Carries the

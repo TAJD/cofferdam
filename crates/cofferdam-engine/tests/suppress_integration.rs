@@ -351,20 +351,21 @@ fn suppress_directive_stale_when_finalize_only_check_has_no_finding() {
     );
 }
 
-/// Meta-test: exactly one check in all_builtins() carries
-/// `meta().observes_findings == true` and it must be
-/// `Consistency.UnusedSuppression`. Guards against future authors
-/// copy-pasting a meta wholesale.
+/// Meta-test: the engine's finalize-observer dispatch (cd-9hp.5) treats
+/// exactly one built-in as the observer, and it must be
+/// `Consistency.UnusedSuppression`. Guards against the
+/// `FINALIZE_OBSERVER_CHECK_IDS` const drifting out of sync with the
+/// actual observer-style check.
 #[test]
 fn exactly_one_check_observes_findings() {
     let observers: Vec<&str> = all_builtins()
         .iter()
-        .filter(|c| c.meta().observes_findings)
+        .filter(|c| cofferdam_core::is_finalize_observer(c.meta().id))
         .map(|c| c.meta().id)
         .collect();
     assert_eq!(
         observers,
         vec!["Consistency.UnusedSuppression"],
-        "expected exactly one observes_findings=true check (Consistency.UnusedSuppression), got: {observers:?}"
+        "expected exactly one finalize-observer check (Consistency.UnusedSuppression), got: {observers:?}"
     );
 }

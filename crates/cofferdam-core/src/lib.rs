@@ -19,7 +19,10 @@ pub mod source;
 pub mod span_util;
 
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
-pub use check::{Category, Check, CheckContext, CheckMeta, FinalizeContext};
+pub use check::{
+    is_finalize_observer, Category, Check, CheckContext, CheckMeta, FinalizeContext,
+    FINALIZE_OBSERVER_CHECK_IDS,
+};
 pub use corpus::{CorpusError, CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use graph::{

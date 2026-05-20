@@ -75,7 +75,6 @@ const META: CheckMeta = CheckMeta {
     explanation: "...",
     requires_types: false,        // true → routes to ts-morph in phase 5
     consistency: false,           // true → engine runs in two-pass mode
-    observes_findings: false,     // true → deferred finalize phase that sees ALL findings via ALL_PRE_FILTER_FINDINGS. Today only Consistency.UnusedSuppression sets this.
 };
 
 impl Check for X {
@@ -186,7 +185,7 @@ impl Check for MyCheck {
 
 Two checks share storage by referencing the same `CorpusKey<T>` constant (same name + same `T`); distinct keys (or a different `T`) get distinct slots. Findings spanning multiple locations use `Issue.related: Vec<RelatedSpan>` — formatters omit it when empty. The single-`Mutex<HashMap>` corpus serialises slot access; cd-6ad swaps in per-slot locks once per-file parallelism lands.
 
-**Engine finalize ordering (since cd-wqc).** Finalize runs in two phases. Phase A runs every check whose `meta().observes_findings` is `false` and appends issues; the engine then rebuilds the `ALL_PRE_FILTER_FINDINGS` snapshot from the union of run + pass2 + Phase A issues; Phase B runs the observer set. Today only `Consistency.UnusedSuppression` is an observer. If you write a new check that emits from `finalize()` AND needs to see other checks' findings, set `observes_findings: true`. Otherwise leave it `false` so YOUR findings are visible to the suppression-staleness check (the cd-wqc bug was finalize-only emitters being invisible to it).
+**Engine finalize ordering (cd-wqc + cd-9hp.5).** Finalize runs in two phases. Phase A runs every check that is NOT in `cofferdam_core::FINALIZE_OBSERVER_CHECK_IDS` and appends issues; the engine then rebuilds the `ALL_PRE_FILTER_FINDINGS` snapshot from the union of run + pass2 + Phase A issues; Phase B runs the observer set. Today only `Consistency.UnusedSuppression` is an observer — dispatch is by check ID, not by a generic `CheckMeta` flag (cd-9hp.5 removed the flag because it had one user in six months). If you write a new check that emits from `finalize()` AND needs to see other checks' findings, add its ID to `FINALIZE_OBSERVER_CHECK_IDS` in `crates/cofferdam-core/src/check.rs`.
 
 ## Parallel agent dispatch (when running multiple agents)
 

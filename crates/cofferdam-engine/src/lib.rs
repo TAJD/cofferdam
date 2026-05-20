@@ -311,14 +311,21 @@ impl Engine {
             }
         }
 
-        // Two-phase finalize (cd-wqc):
+        // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):
         //
-        // Phase A — run finalize on every check that does NOT observe the
-        // pre-filter findings snapshot (`observes_findings == false`).
-        // These are the cross-file emitters: OrphanExport, UnusedImport,
-        // DuplicateExportName, DeadExport, ImportCycle, LayerViolation, etc.
+        // Phase A — run finalize on every check that is NOT in the
+        // finalize-observer set. These are the cross-file emitters:
+        // OrphanExport, UnusedImport, DuplicateExportName, DeadExport,
+        // ImportCycle, LayerViolation, etc.
+        //
+        // Dispatch by check ID (`cofferdam_core::is_finalize_observer`)
+        // rather than via a generic `observes_findings` flag on `CheckMeta`.
+        // The mechanism had one user in six months
+        // (`Consistency.UnusedSuppression`); the flag was paying no rent.
+        // If a second observer use case appears, extend
+        // `FINALIZE_OBSERVER_CHECK_IDS` in cofferdam-core.
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-            if !check.meta().observes_findings {
+            if !cofferdam_core::is_finalize_observer(check.meta().id) {
                 let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
                 issues.extend(check.finalize(&mut finalize_ctx));
             }
@@ -341,12 +348,11 @@ impl Engine {
             corpus.with_slot(&ALL_PRE_FILTER_FINDINGS, |slot| *slot = map);
         }
 
-        // Phase B — run finalize on every check that observes the snapshot
-        // (`observes_findings == true`). Today only
-        // `Consistency.UnusedSuppression` sets this flag. Per-check options
-        // flow in the same way as Phase A (cd-3uj).
+        // Phase B — run finalize on every check in the observer set.
+        // Today only `Consistency.UnusedSuppression` qualifies. Per-check
+        // options flow in the same way as Phase A (cd-3uj).
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-            if check.meta().observes_findings {
+            if cofferdam_core::is_finalize_observer(check.meta().id) {
                 let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
                 issues.extend(check.finalize(&mut finalize_ctx));
             }

@@ -191,7 +191,7 @@ pub static INVARIANTS: CorpusKey<Option<InvariantsRuntime>> =
 ///
 /// The engine writes this slot in two phases (cd-wqc). First, all
 /// `check.run()` and `pass2()` calls complete. Then Phase A of `finalize`
-/// runs for every check whose `meta().observes_findings == false` (cross-file
+/// runs for every check NOT in `FINALIZE_OBSERVER_CHECK_IDS` (cross-file
 /// emitters such as `Warning.UnusedImport`, `Design.OrphanExport`, and
 /// `Design.DeadExport`). After Phase A, the slot is snapshotted with the
 /// union of run/pass2 AND Phase A finalize findings so that Phase B observer

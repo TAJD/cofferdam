@@ -171,12 +171,22 @@ fn parse_disable_next_line(line: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Parse Biome-style next-line directives:
-///   - `// cofferdam-ignore: <CheckId>[: <reason>]`
+/// Parse Biome-style next-line directives. Accepted spellings:
+///   - `// cofferdam-ignore: <CheckId>[: <reason>]`           (canonical)
+///   - `// cofferdam-ignore <CheckId>[ <sep> <reason>]`       (space form, cd-b77)
 ///   - `// cofferdam-ignore` (broad form, suppresses ALL checks)
 ///
 /// Returns `Some([])` for the broad form, `Some([id])` for the scoped form,
 /// `None` when the line does not contain a Biome ignore directive.
+///
+/// The space form (cd-b77 / gh #42) accepts any reason separator a human
+/// would naturally write: ASCII hyphen `-`, em-dash `—`, colon `:`, or
+/// just whitespace. The parser doesn't validate the separator — it takes
+/// the first whitespace-delimited token (with any trailing colon trimmed)
+/// and binds it as the check id if the token looks check-id-shaped
+/// (`Category.Name`). Prose comments that happen to mention
+/// `cofferdam-ignore` but whose next token is not a check id are left
+/// alone, matching the prior behaviour.
 fn parse_biome_ignore_next_line(line: &str) -> Option<Vec<String>> {
     // Reject the multi-form spellings (-start / -end / -file) — they have
     // their own parsers. We also need to reject the ESLint `-disable-*`
@@ -191,16 +201,20 @@ fn parse_biome_ignore_next_line(line: &str) -> Option<Vec<String>> {
         return None;
     }
 
-    // `// cofferdam-ignore` with no colon → broad suppression of next line.
     let after_trim = after.trim_start();
     if !after_trim.starts_with(':') {
-        // Either bare `cofferdam-ignore` or end-of-comment trailing content.
-        // Accept only if the trailing content is empty / pure whitespace /
-        // ends the comment block. Anything else is a comment that happens
-        // to mention the marker — leave it alone.
+        // No colon after the marker. Three sub-cases:
+        //   (a) empty post-marker → broad form.
+        //   (b) post-marker first token is check-id-shaped → space-form
+        //       scoped directive (cd-b77). Binds the token as the id.
+        //   (c) post-marker is prose → not a directive; return None.
         let stripped = after_trim.trim_end_matches("*/").trim();
         if stripped.is_empty() {
             return Some(Vec::new());
+        }
+        let first_token = first_token_as_id(stripped);
+        if let Some(id) = first_token {
+            return Some(vec![id]);
         }
         return None;
     }
@@ -221,6 +235,43 @@ fn parse_biome_ignore_next_line(line: &str) -> Option<Vec<String>> {
         return Some(Vec::new());
     }
     Some(vec![id.to_string()])
+}
+
+/// If the first whitespace-delimited token in `stripped` looks
+/// check-id-shaped (`Category.Name` — contains a dot, ASCII identifier
+/// chars), return it. The trailing `:` of a `id: reason` form is
+/// trimmed before the shape test so authors can keep using the
+/// colon-reason separator alongside the space-id form.
+///
+/// Conservative on purpose: prose like `cofferdam-ignore please` won't
+/// bind "please" as an id; `cofferdam-ignore Design.OrphanExport reason`
+/// binds `Design.OrphanExport`.
+fn first_token_as_id(stripped: &str) -> Option<String> {
+    let raw = stripped.split_whitespace().next()?;
+    let candidate = raw.trim_end_matches(':');
+    if looks_like_check_id(candidate) {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+/// Heuristic: a token is plausibly a `Category.Name`-style check id if
+/// it contains at least one dot, starts with an ASCII letter, and only
+/// uses ASCII identifier chars / dots / underscores. Conservative —
+/// avoids binding random English words as ids.
+pub(crate) fn looks_like_check_id(s: &str) -> bool {
+    if s.is_empty() || !s.contains('.') {
+        return false;
+    }
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
 }
 
 /// Combined next-line parser: tries Biome form first, falls back to ESLint
@@ -727,5 +778,72 @@ mod tests {
         let text = "/* cofferdam-ignore: Warning.TripleEquals */\nif (a == b) {}";
         let sup = Suppressions::parse(text);
         assert!(sup.is_suppressed(2, "Warning.TripleEquals"));
+    }
+
+    // ---- cd-b77 / gh #42: space-separator next-line form ----
+
+    #[test]
+    fn space_form_em_dash_reason_suppresses() {
+        // The form reported in gh #42: space-separated id, em-dash reason.
+        let text = "// cofferdam-ignore Design.OrphanExport — Vite entry referenced via index.html\nexport default function App() {}";
+        let sup = Suppressions::parse(text);
+        assert!(sup.is_suppressed(2, "Design.OrphanExport"));
+        assert!(!sup.is_suppressed(2, "Warning.TripleEquals"));
+    }
+
+    #[test]
+    fn space_form_ascii_hyphen_reason_suppresses() {
+        let text =
+            "// cofferdam-ignore Warning.TripleEquals - intentional == coercion\nif (a == b) {}";
+        let sup = Suppressions::parse(text);
+        assert!(sup.is_suppressed(2, "Warning.TripleEquals"));
+    }
+
+    #[test]
+    fn space_form_colon_reason_suppresses() {
+        // No leading colon — id followed by `: reason`. Trailing colon
+        // on the id token gets trimmed so this still binds the id.
+        let text =
+            "// cofferdam-ignore Design.MaxParameters: refactor pending\nfunction f(a,b,c,d,e,f,g) {}";
+        let sup = Suppressions::parse(text);
+        assert!(sup.is_suppressed(2, "Design.MaxParameters"));
+    }
+
+    #[test]
+    fn space_form_bare_id_no_reason_suppresses() {
+        let text = "// cofferdam-ignore Warning.TripleEquals\nif (a == b) {}";
+        let sup = Suppressions::parse(text);
+        assert!(sup.is_suppressed(2, "Warning.TripleEquals"));
+    }
+
+    #[test]
+    fn space_form_prose_after_marker_not_a_directive() {
+        // The first token isn't check-id-shaped (no dot) — leave it as prose.
+        let text = "// cofferdam-ignore please understand this is intentional\nif (a == b) {}";
+        let sup = Suppressions::parse(text);
+        assert!(
+            !sup.is_suppressed(2, "Warning.TripleEquals"),
+            "prose mentioning the marker must not silently suppress",
+        );
+    }
+
+    #[test]
+    fn space_form_inside_block_comment_suppresses() {
+        let text =
+            "/* cofferdam-ignore Warning.TripleEquals — block-comment form */\nif (a == b) {}";
+        let sup = Suppressions::parse(text);
+        assert!(sup.is_suppressed(2, "Warning.TripleEquals"));
+    }
+
+    #[test]
+    fn looks_like_check_id_heuristic() {
+        assert!(looks_like_check_id("Design.OrphanExport"));
+        assert!(looks_like_check_id("Warning.TripleEquals"));
+        assert!(looks_like_check_id("Plugin.Custom.Subcheck"));
+        assert!(!looks_like_check_id("please"));
+        assert!(!looks_like_check_id(""));
+        assert!(!looks_like_check_id("123.bad"));
+        assert!(!looks_like_check_id("no-dashes-allowed.x"));
+        assert!(!looks_like_check_id("Just_underscores"));
     }
 }

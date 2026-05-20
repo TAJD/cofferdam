@@ -225,7 +225,7 @@ const BS_META: CheckMeta = CheckMeta {
     category: Category::Consistency,
     base_priority: 0,
     default_severity: Severity::Info,
-    explanation: "Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to `// cofferdam-ignore: <CheckId>: <reason>` so suppression intent is auditable.",
+    explanation: "Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to a scoped form so suppression intent is auditable: `// cofferdam-ignore: <CheckId>: <reason>` (colon-separator) or `// cofferdam-ignore <CheckId> — <reason>` (space-separator, em-dash or hyphen reason).",
     body: include_str!("../docs/Consistency.BroadSuppression.md"),
     requires_types: false,
     consistency: false,
@@ -249,7 +249,7 @@ impl Check for BroadSuppression {
                 let end = byte_offset + line.len() as u32;
                 out.push(Issue {
                     check_id: BS_META.id.to_string(),
-                    message: "Broad `// cofferdam-ignore` (no check id) — narrow it to a specific id and add a reason.".to_string(),
+                    message: "Broad `// cofferdam-ignore` (no check id) — narrow it to a specific id. Accepted forms: `// cofferdam-ignore: <CheckId>: <reason>` or `// cofferdam-ignore <CheckId> — <reason>`.".to_string(),
                     file: file.path.clone(),
                     span: Span {
                         start_byte: start,
@@ -272,9 +272,10 @@ impl Check for BroadSuppression {
 /// If `line` is a Biome-style broad suppression (`cofferdam-ignore` with
 /// no following `:` and no `-start` / `-end` / `-file` variant), return
 /// the byte column where the marker starts. Returns `None` for the
-/// scoped form, the multi-line variants, and lines that mention the
-/// directive only in prose. The directive must be the comment's first
-/// non-whitespace token to count.
+/// scoped form (colon or space-separator with a check-id-shaped first
+/// token — cd-b77 / gh #42), the multi-line variants, and lines that
+/// mention the directive only in prose. The directive must be the
+/// comment's first non-whitespace token to count.
 fn find_broad_suppression(line: &str) -> Option<usize> {
     let needle = "cofferdam-ignore";
     let leading_ws = line.len() - line.trim_start().len();
@@ -296,12 +297,43 @@ fn find_broad_suppression(line: &str) -> Option<usize> {
         return None;
     }
 
+    // Colon form: `cofferdam-ignore: <Id>...` is scoped (not broad).
     if after.trim_start().starts_with(':') {
         return None;
     }
 
+    // Space form: `cofferdam-ignore <CheckId> [— reason]` is also
+    // scoped — the suppression parser now binds the first token as the
+    // id (cd-b77). Match the same heuristic here so we don't flag a
+    // directive that the engine actually treats as scoped.
+    let stripped = after.trim_start().trim_end_matches("*/").trim();
+    if let Some(first) = stripped.split_whitespace().next() {
+        let candidate = first.trim_end_matches(':');
+        if looks_like_check_id(candidate) {
+            return None;
+        }
+    }
+
     let comment_marker_len = trimmed.len() - after_marker.len();
     Some(leading_ws + comment_marker_len + directive_offset_in_inner)
+}
+
+/// See `cofferdam_engine::suppress::looks_like_check_id` — duplicated
+/// here because the cofferdam-checks crate can't depend on cofferdam-engine
+/// (the engine consumes the checks). Behaviour must stay in sync; tests
+/// in both crates cover the same expectations.
+fn looks_like_check_id(s: &str) -> bool {
+    if s.is_empty() || !s.contains('.') {
+        return false;
+    }
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
 }
 
 // ─── Consistency.UnusedSuppression ─────────────────────────────────────────
@@ -606,9 +638,11 @@ fn extract_block_start(trimmed: &str) -> Option<String> {
     }
 }
 
-/// If `trimmed` is a Biome next-line form (`cofferdam-ignore: <id>`), return
-/// the check id. Returns `Some("")` for the broad form (no id). Returns
-/// `None` for lines that aren't a next-line directive.
+/// If `trimmed` is a Biome next-line form (`cofferdam-ignore: <id>` or
+/// the cd-b77 `cofferdam-ignore <id> [— reason]` space form), return
+/// the check id. Returns `Some("")` for the broad form (no id, or
+/// prose comment that happens to mention the marker). Returns
+/// `None` for lines that aren't a next-line directive at all.
 fn extract_next_line_directive(trimmed: &str) -> Option<String> {
     let needle = "cofferdam-ignore";
     let idx = trimmed.find(needle)?;
@@ -620,7 +654,16 @@ fn extract_next_line_directive(trimmed: &str) -> Option<String> {
     }
     let after_trim = after.trim_start();
     if !after_trim.starts_with(':') {
-        // Broad next-line form — skip (BroadSuppression's territory).
+        // No leading colon. Check for the space-separator scoped form
+        // (cd-b77): a check-id-shaped first token binds the id.
+        let stripped = after_trim.trim_end_matches("*/").trim();
+        if let Some(raw) = stripped.split_whitespace().next() {
+            let candidate = raw.trim_end_matches(':');
+            if looks_like_check_id(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+        // Otherwise: broad next-line form — skip (BroadSuppression's territory).
         return Some(String::new());
     }
     let payload = after_trim[1..].trim().trim_end_matches("*/").trim();
@@ -973,5 +1016,76 @@ const el = <Foo className="ignored" />;
             "broad-form directive must not be flagged by UnusedSuppression; got: {:?}",
             issues
         );
+    }
+
+    // ---- cd-b77 / gh #42: space-separator next-line form ----
+
+    #[test]
+    fn broad_suppression_silent_on_space_form_em_dash() {
+        // The form reported in gh #42: `cofferdam-ignore <Id> — reason`.
+        // BroadSuppression must NOT fire on it (the suppression parser
+        // binds the id; flagging it as broad is contradictory).
+        let line = "// cofferdam-ignore Design.OrphanExport — Vite entry";
+        assert!(
+            find_broad_suppression(line).is_none(),
+            "space-form scoped directive must not be flagged broad",
+        );
+    }
+
+    #[test]
+    fn broad_suppression_silent_on_space_form_ascii_hyphen() {
+        let line = "// cofferdam-ignore Warning.TripleEquals - intentional";
+        assert!(find_broad_suppression(line).is_none());
+    }
+
+    #[test]
+    fn broad_suppression_silent_on_space_form_colon_reason() {
+        let line = "// cofferdam-ignore Design.MaxParameters: refactor pending";
+        assert!(find_broad_suppression(line).is_none());
+    }
+
+    #[test]
+    fn broad_suppression_still_fires_on_truly_broad() {
+        // No id, no separator — really broad. Must still fire.
+        let line = "// cofferdam-ignore";
+        assert!(find_broad_suppression(line).is_some());
+    }
+
+    #[test]
+    fn broad_suppression_fires_on_prose() {
+        // The first token isn't check-id-shaped — treat as prose and
+        // emit the broad-form nudge.
+        let line = "// cofferdam-ignore please understand this is intentional";
+        assert!(find_broad_suppression(line).is_some());
+    }
+
+    #[test]
+    fn unused_suppression_extracts_id_from_space_form() {
+        // `extract_next_line_directive` returns the id for the space form,
+        // so UnusedSuppression can match findings against it the same way
+        // it does for the colon form.
+        let line = "// cofferdam-ignore Design.OrphanExport — Vite entry";
+        assert_eq!(
+            extract_next_line_directive(line),
+            Some("Design.OrphanExport".to_string()),
+        );
+    }
+
+    #[test]
+    fn unused_suppression_treats_prose_as_broad() {
+        // No check-id-shaped first token → record as broad (empty string,
+        // skipped by the caller). Same behaviour as the prior code.
+        let line = "// cofferdam-ignore please";
+        assert_eq!(extract_next_line_directive(line), Some(String::new()));
+    }
+
+    #[test]
+    fn looks_like_check_id_matches_suppress_crate() {
+        // Behaviour parity with cofferdam_engine::suppress::looks_like_check_id.
+        assert!(looks_like_check_id("Design.OrphanExport"));
+        assert!(looks_like_check_id("Plugin.Custom.Subcheck"));
+        assert!(!looks_like_check_id("please"));
+        assert!(!looks_like_check_id(""));
+        assert!(!looks_like_check_id("123.bad"));
     }
 }

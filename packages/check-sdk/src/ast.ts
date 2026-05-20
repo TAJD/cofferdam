@@ -22,7 +22,7 @@ export type Walk = (typeof Walk)[keyof typeof Walk];
 
 /**
  * Kinds exposed via {@link AstView.findAll} and the {@link AstNode}
- * union. Deliberately a small set covering the rovikore-host plugin
+ * union. Deliberately a small set covering the examplco-host plugin
  * patterns; grows as plugin needs surface.
  *
  * v0 freeze: cd-717 (`design/sdk-ast-surface.md`). 5 strict +

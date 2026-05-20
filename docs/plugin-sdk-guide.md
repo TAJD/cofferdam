@@ -45,7 +45,7 @@ Keep the body under 30 lines; the SDK is designed to make that possible.
 // src/index.ts
 import { defineCheck, Category } from "@cofferdam/check-sdk";
 
-const TRIGGER = /\bRovikore\b/;
+const TRIGGER = /\bExamplco\b/;
 const PLUGIN_IGNORE = /\bbrand:ignore\b/;
 
 export default defineCheck({
@@ -53,10 +53,10 @@ export default defineCheck({
   category: Category.Warning,
   basePriority: 15,
   explanation:
-    "Brand name must be all-caps ROVIKORE in user-facing copy. " +
+    "Brand name must be all-caps EXAMPLCO in user-facing copy. " +
     'Add `// brand:ignore — <why>` on the previous line for legitimate references.',
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
     allowedAliases: { default: [] as string[], type: "string[]" },
   },
   run(file, ctx, opts) {
@@ -389,12 +389,12 @@ same concepts in TypeScript.
 ### Before (Elixir) — BrandCasing
 
 ```elixir
-defmodule RovikoreHost.Credo.BrandCasing do
-  @moduledoc "Brand name must be all-caps ROVIKORE in user-facing copy."
+defmodule ExamplcoHost.Credo.BrandCasing do
+  @moduledoc "Brand name must be all-caps EXAMPLCO in user-facing copy."
   use Credo.Check,
     category: :warning,
     base_priority: :high,
-    param_defaults: [brand: "ROVIKORE", allowed_aliases: []]
+    param_defaults: [brand: "EXAMPLCO", allowed_aliases: []]
 
   def run(source_file, params \\ []) do
     brand = Params.get(params, :brand, __MODULE__)
@@ -407,7 +407,7 @@ defmodule RovikoreHost.Credo.BrandCasing do
     |> Enum.reduce([], fn {line, line_no}, issues ->
       cond do
         String.match?(line, ~r/# brand:ignore/) -> issues
-        String.match?(line, ~r/^.*".*Rovikore.*"/) ->
+        String.match?(line, ~r/^.*".*Examplco.*"/) ->
           [issue_for(issue_meta, line_no, brand) | issues]
         true -> issues
       end
@@ -416,7 +416,7 @@ defmodule RovikoreHost.Credo.BrandCasing do
 
   defp issue_for(issue_meta, line_no, brand) do
     format_issue(issue_meta,
-      message: "Brand name must be #{brand}, not Rovikore.",
+      message: "Brand name must be #{brand}, not Examplco.",
       line_no: line_no
     )
   end
@@ -428,16 +428,16 @@ end
 ```ts
 import { defineCheck, Category } from "@cofferdam/check-sdk";
 
-const TRIGGER = /\bRovikore\b/;
+const TRIGGER = /\bExamplco\b/;
 const PLUGIN_IGNORE = /\bbrand:ignore\b/;
 
 export default defineCheck({
   id: "BrandCasing",
   category: Category.Warning,
   basePriority: 15,
-  explanation: "Brand name must be all-caps ROVIKORE in user-facing copy.",
+  explanation: "Brand name must be all-caps EXAMPLCO in user-facing copy.",
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
     allowedAliases: { default: [] as string[], type: "string[]" },
   },
   run(file, ctx, opts) {
@@ -468,13 +468,13 @@ export default defineCheck({
 |---|---|
 | `use Credo.Check, category: :warning` | `category: Category.Warning` |
 | `base_priority: :high` | `basePriority: 15` (numeric, -20..20) |
-| `param_defaults: [brand: "ROVIKORE"]` | `options: { brand: { default: "ROVIKORE", type: "string" } }` |
+| `param_defaults: [brand: "EXAMPLCO"]` | `options: { brand: { default: "EXAMPLCO", type: "string" } }` |
 | `Params.get(params, :brand, __MODULE__)` | `opts.brand` (typed, no cast) |
 | `SourceFile.lines() |> Enum.with_index(1)` | `[...file.lines()]` (1-based `lineNo`) |
 | `# brand:ignore` magic comment | plugin-level `ignoredNext` set (same semantics) |
 | `format_issue(issue_meta, message: ..., line_no: ...)` | `ctx.report({ message, span })` |
 
-The `NoHttpClient` and `TenantIsolation` patterns from rovikore-host are
+The `NoHttpClient` and `TenantIsolation` patterns from examplco-host are
 Elixir/Phoenix checks with no literal TypeScript analogue — they are ported as
 the closest equivalent pattern (Pattern B and Pattern C respectively) rather
 than a line-for-line translation. See §6 of `plugin-sdk-e2e.md` for the
@@ -504,13 +504,13 @@ test("runPlugin emits one report per matched line, with file-absolute spans", as
     id: "BrandCasing",
     category: Category.Warning,
     basePriority: 15,
-    explanation: "Brand must be ROVIKORE.",
-    options: { brand: { default: "ROVIKORE", type: "string" } },
+    explanation: "Brand must be EXAMPLCO.",
+    options: { brand: { default: "EXAMPLCO", type: "string" } },
     run(file, ctx, opts) {
       for (const ln of file.lines()) {
         if (ln.isComment || ln.isDocComment || ln.isPragma) continue;
         if (!ln.isStringLiteral && !ln.isJsxText) continue;
-        const m = /\bRovikore\b/.exec(ln.text);
+        const m = /\bExamplco\b/.exec(ln.text);
         if (!m) continue;
         ctx.report({
           message: `Brand must be ${opts.brand}, not ${m[0]}.`,
@@ -521,11 +521,11 @@ test("runPlugin emits one report per matched line, with file-absolute spans", as
   });
 
   // Synthetic file: three lines, one with a flagged string literal.
-  const text = "const x = 1;\nconst y = 'Rovikore';\nconst z = 2;\n";
+  const text = "const x = 1;\nconst y = 'Examplco';\nconst z = 2;\n";
   const lineViews = [
     { lineNo: 1, text: "const x = 1;",         isComment: false, isDocComment: false,
       isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 0 },
-    { lineNo: 2, text: "const y = 'Rovikore';", isComment: false, isDocComment: false,
+    { lineNo: 2, text: "const y = 'Examplco';", isComment: false, isDocComment: false,
       isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 13 },
     { lineNo: 3, text: "const z = 2;",         isComment: false, isDocComment: false,
       isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 36 },
@@ -535,11 +535,11 @@ test("runPlugin emits one report per matched line, with file-absolute spans", as
 
   assert.equal(reports.length, 1);
   assert.equal(reports[0].checkId, "BrandCasing");
-  // "Rovikore" starts at byte 11 within line 2; line 2 starts at byte 13.
+  // "Examplco" starts at byte 11 within line 2; line 2 starts at byte 13.
   assert.equal(reports[0].startByte, 24);
   assert.equal(reports[0].endByte, 32);
   // Round-trip: the reported span slices back to the trigger string.
-  assert.equal(text.slice(reports[0].startByte, reports[0].endByte), "Rovikore");
+  assert.equal(text.slice(reports[0].startByte, reports[0].endByte), "Examplco");
 });
 ```
 

@@ -10,7 +10,7 @@
 //   node scripts/check-spans.mjs <findings.json> <source.ts> <trigger> [check-id]
 //
 // <trigger> forms:
-//   - Literal:  Rovikore               (slice must equal exactly)
+//   - Literal:  Examplco               (slice must equal exactly)
 //   - Regex:    /^https?:\/\//         (slice must match)
 //
 // [check-id] (optional): when present, only findings whose `id` exactly

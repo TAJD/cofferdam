@@ -1,4 +1,4 @@
-// NoHttpClient — port of rovikore-host's `NoBannedHttpClient` Credo
+// NoHttpClient — port of examplco-host's `NoBannedHttpClient` Credo
 // check (cd-b5h e2e fixture). Pattern B / AST findAll.
 //
 // Flags imports of banned HTTP packages (axios, node-fetch, got, undici)

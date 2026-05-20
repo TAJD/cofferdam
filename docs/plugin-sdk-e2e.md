@@ -6,17 +6,17 @@ also doubles as the acceptance contract for cd-7e4.
 
 ## 1. Why BrandCasing
 
-Source: `C:/Users/tajdi/rovikore-host/backend/dev_checks/rovikore_host_credo/brand_casing.ex`.
-That Elixir/Credo check flags occurrences of `Rovikore` (sentence case) in
+Source: `C:/Users/tajdi/examplco-host/backend/dev_checks/examplco_host_credo/brand_casing.ex`.
+That Elixir/Credo check flags occurrences of `Examplco` (sentence case) in
 user-facing surfaces, exempting:
 
-- module identifiers (`alias Mix.Tasks.Rovikore.Gen.ApiKey`, `defmodule …`)
-- comments (`# foo Rovikore bar`)
+- module identifiers (`alias Mix.Tasks.Examplco.Gen.ApiKey`, `defmodule …`)
+- comments (`# foo Examplco bar`)
 - doc lines (`@moduledoc`, `@doc`, `@shortdoc`, `@typedoc`)
 - the `dev_checks/` directory itself (the check references the trigger word)
 - any line preceded by `# brand:ignore — <why>`
 
-It is the smallest of the three rovikore-host acceptance targets named in
+It is the smallest of the three examplco-host acceptance targets named in
 cd-81a.2 and exercises **only** Pattern A from the SDK design (line walk +
 magic-comment exemption). It does not need the AST surface (cd-81a.2) to be
 feature-complete to run, only to be wired enough that `file.lines()` can
@@ -26,7 +26,7 @@ LineView + the loader work before AST findAll/walk are stable.
 NoHttpClient (Pattern B) and TenantIsolation (Pattern C) get sibling fixtures
 later (see §6).
 
-The TS port flags `Rovikore` in:
+The TS port flags `Examplco` in:
 
 - string literals (single, double, template — these are user-facing copy)
 - JSX text and attribute values (real display copy in React/HTML output)
@@ -35,8 +35,8 @@ and exempts:
 
 - comments (`// …`, `/* … */`)
 - JSDoc / doc comments (`/** … */`)
-- identifiers (imports, type names, class/function names — `import { Rovikore }`,
-  `class RovikoreClient`, `Rovikore.foo()`)
+- identifiers (imports, type names, class/function names — `import { Examplco }`,
+  `class ExamplcoClient`, `Examplco.foo()`)
 - any line preceded by `// brand:ignore — <why>` (plugin-level escape hatch)
 - any line covered by `// cofferdam-ignore: BrandCasing` (engine-level
   suppression from cd-81a.4 — exercised explicitly per acceptance criteria)
@@ -65,8 +65,8 @@ plugins = ["./examples-plugins/brand-casing"]
 # Default options come from the plugin's defineCheck schema; this block exists
 # to prove the cofferdam.toml override path works (cd-81a.3) AND to document
 # the surface for the README.
-brand = "ROVIKORE"
-allowedAliases = ["RovikoreClient", "RovikoreCdn"]
+brand = "EXAMPLCO"
+allowedAliases = ["ExamplcoClient", "ExamplcoCdn"]
 ```
 
 ### `package.json`
@@ -121,7 +121,7 @@ acceptance criteria — keep the body tight):
 ```ts
 import { defineCheck, Category, Severity } from "@cofferdam/check-sdk";
 
-const TRIGGER = /\bRovikore\b/;
+const TRIGGER = /\bExamplco\b/;
 const PLUGIN_IGNORE = /\bbrand:ignore\b/;
 
 export default defineCheck({
@@ -129,10 +129,10 @@ export default defineCheck({
   category: Category.Warning,
   basePriority: 15,
   explanation:
-    "Brand name must be all-caps ROVIKORE in user-facing copy. " +
+    "Brand name must be all-caps EXAMPLCO in user-facing copy. " +
     'Add `// brand:ignore — <why>` on the previous line for legitimate references.',
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
     allowedAliases: { default: [], type: "string[]" },
   },
   run(file, ctx, opts) {
@@ -169,8 +169,8 @@ export default defineCheck({
 | `defineCheck(...)`            | cd-81a.8    | The factory itself; typed return.         |
 | `Category` / `Severity` enums | cd-81a.8    | Identical values to the Rust enums.       |
 | `file.lines()` iterator       | cd-81a.1    | LineView — drives the whole walk.         |
-| `LineView.isComment`          | cd-81a.1    | Skip `// foo Rovikore`.                   |
-| `LineView.isDocComment`       | cd-81a.1    | Skip `/** Rovikore */`.                   |
+| `LineView.isComment`          | cd-81a.1    | Skip `// foo Examplco`.                   |
+| `LineView.isDocComment`       | cd-81a.1    | Skip `/** Examplco */`.                   |
 | `LineView.isStringLiteral`    | cd-81a.1    | Only flag inside `"…"` / `'…'` / `` `…` `` |
 | `LineView.isJsxText` (new)    | cd-81a.1?   | Flag JSX text content. See §6.            |
 | `LineView.isPragma`           | cd-81a.1    | Skip `// @ts-…`, `/** @jsx … */`.         |
@@ -223,31 +223,31 @@ overall pass/fail state.
 ```ts
 // fixture.ts — input to `cofferdam check`. Comments label expected outcomes.
 
-import { Rovikore } from "./brand";        // OK: identifier import
-import type { RovikoreClient } from "./b"; // OK: type identifier
+import { Examplco } from "./brand";        // OK: identifier import
+import type { ExamplcoClient } from "./b"; // OK: type identifier
 
-class RovikoreSdk {                         // OK: identifier (class name)
+class ExamplcoSdk {                         // OK: identifier (class name)
   greet(): string {
-    return "Welcome to Rovikore!";          // FLAG #1: string literal
+    return "Welcome to Examplco!";          // FLAG #1: string literal
   }
 }
 
-export const HEADER = `Rovikore — go faster`; // FLAG #2: template literal
+export const HEADER = `Examplco — go faster`; // FLAG #2: template literal
 
-// Below the brand:ignore line — plugin-level escape hatch from rovikore.
+// Below the brand:ignore line — plugin-level escape hatch from examplco.
 // brand:ignore — legacy fixture asserting on the old casing
-export const LEGACY = "Rovikore (legacy)";  // EXEMPT (plugin magic comment)
+export const LEGACY = "Examplco (legacy)";  // EXEMPT (plugin magic comment)
 
 // Engine-level suppression from cd-81a.4 — different mechanism, same effect.
 // cofferdam-ignore: BrandCasing: see ROVI-481 — copywriter approved exception
-export const CAMPAIGN = "Rovikore Spring Sale"; // EXEMPT (engine suppression)
+export const CAMPAIGN = "Examplco Spring Sale"; // EXEMPT (engine suppression)
 
-// Comment with the trigger word: Rovikore is fine in dev context. // EXEMPT
-/** JSDoc mentioning Rovikore in passing. */                       // EXEMPT
-/* Block comment: Rovikore here is also fine. */                   // EXEMPT
+// Comment with the trigger word: Examplco is fine in dev context. // EXEMPT
+/** JSDoc mentioning Examplco in passing. */                       // EXEMPT
+/* Block comment: Examplco here is also fine. */                   // EXEMPT
 
 export function ok(): string {
-  return "ROVIKORE all caps — fine.";       // OK: brand spelled correctly
+  return "EXAMPLCO all caps — fine.";       // OK: brand spelled correctly
 }
 ```
 
@@ -277,7 +277,7 @@ like:
       "column": 13,
       "start_byte": 0,
       "end_byte": 0,
-      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+      "message": "Brand name must be \"EXAMPLCO\", not \"Examplco\"."
     },
     {
       "id": "BrandCasing",
@@ -289,7 +289,7 @@ like:
       "column": 25,
       "start_byte": 0,
       "end_byte": 0,
-      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+      "message": "Brand name must be \"EXAMPLCO\", not \"Examplco\"."
     }
   ],
   "summary": {
@@ -301,8 +301,8 @@ like:
 
 `start_byte` / `end_byte` are zero-filled until the loader runs and the real
 offsets are recorded. Line/column numbers come from `fixture.ts` directly:
-the FLAG #1 string-literal `Rovikore` is on line 11 of the fixture
-(`return "Welcome to Rovikore!";`), and FLAG #2 (template literal) is on
+the FLAG #1 string-literal `Examplco` is on line 11 of the fixture
+(`return "Welcome to Examplco!";`), and FLAG #2 (template literal) is on
 line 14 (`export const HEADER = ` + backticks). Regenerate everything by
 running `cofferdam check examples-plugins/brand-casing/fixture.ts --format
 json --pretty | jq .` once the SDK lands.
@@ -310,7 +310,7 @@ json --pretty | jq .` once the SDK lands.
 ### Round-trip check
 
 A separate script asserts that for each issue, slicing the source by
-`byte_start..byte_end` returns the literal string `"Rovikore"`. This is the
+`byte_start..byte_end` returns the literal string `"Examplco"`. This is the
 tangible cd-81a.2 acceptance bullet — *spans round-trip back to the original
 source* — not just a JSON-shape diff.
 
@@ -336,7 +336,7 @@ to the existing `cofferdam-check.yml`):
   run: diff -u examples-plugins/brand-casing/expected.json actual.json
 
 - name: Round-trip span check
-  run: node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
+  run: node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Examplco
 
 - name: Negative fixture pins SDK type strictness
   # tsc -p tsconfig.fail.json must exit zero — every `@ts-expect-error`
@@ -364,7 +364,7 @@ The point of the BrandCasing fixture is to land Pattern A (line walk +
 magic-comment exemption) end-to-end. Pattern B and Pattern C from cd-81a's
 description need their own fixtures once the SDK lands.
 
-A note on porting fidelity: cd-81a's description names rovikore checks like
+A note on porting fidelity: cd-81a's description names examplco checks like
 TenantIsolation and ApiFirst as *drivers* for the API design — they exist in
 Elixir/Phoenix-with-Ash and don't have literal TypeScript analogues. The
 sibling fixtures should exercise the same SDK *pattern* against a target
@@ -399,7 +399,7 @@ with the same five files; the toml `plugins = [...]` array grows.
 Out of scope for the sibling work: NoFloatPrices (Phoenix-shaped, niche),
 ApiFirst (Phoenix contracts, no clean TS analogue). If a Pattern B/C signal
 turns up later that's worth a fixture, file a fresh bead — don't force a
-literal port from rovikore.
+literal port from examplco.
 
 ## 7. ts-morph routing status (0.2.x)
 

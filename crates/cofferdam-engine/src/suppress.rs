@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn biome_ignore_with_id_and_reason_strips_reason() {
         let text =
-            "// cofferdam-ignore: BrandCasing: see ROVI-481 — copywriter approved exception\nconst x = \"Rovikore Spring\";";
+            "// cofferdam-ignore: BrandCasing: see ROVI-481 — copywriter approved exception\nconst x = \"Examplco Spring\";";
         let sup = Suppressions::parse(text);
         assert!(sup.is_suppressed(2, "BrandCasing"));
         assert!(!sup.is_suppressed(2, "Warning.TripleEquals"));

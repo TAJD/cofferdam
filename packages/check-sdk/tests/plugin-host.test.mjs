@@ -24,14 +24,14 @@ test("runPlugin emits one report per matched line, with file-absolute spans", as
     `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
   );
 
-  const trigger = /\bRovikore\b/;
+  const trigger = /\bExamplco\b/;
   const check = defineCheck({
     id: "BrandCasing",
     category: Category.Warning,
     basePriority: 15,
-    explanation: "Brand must be ROVIKORE.",
+    explanation: "Brand must be EXAMPLCO.",
     options: {
-      brand: { default: "ROVIKORE", type: "string" },
+      brand: { default: "EXAMPLCO", type: "string" },
     },
     run(file, ctx, opts) {
       for (const ln of file.lines()) {
@@ -47,12 +47,12 @@ test("runPlugin emits one report per matched line, with file-absolute spans", as
     },
   });
 
-  const text = "const x = 1;\nconst y = 'Rovikore';\nconst z = 2;\n";
+  const text = "const x = 1;\nconst y = 'Examplco';\nconst z = 2;\n";
   // Synthetic line views matching the cofferdam-core LineView shape.
   // `lineStart` reflects each line's byte offset in `text`.
   const lineViews = [
     { lineNo: 1, text: "const x = 1;",        isComment: false, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 0 },
-    { lineNo: 2, text: "const y = 'Rovikore';", isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 13 },
+    { lineNo: 2, text: "const y = 'Examplco';", isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 13 },
     { lineNo: 3, text: "const z = 2;",        isComment: false, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 36 },
   ];
 
@@ -62,12 +62,12 @@ test("runPlugin emits one report per matched line, with file-absolute spans", as
   const r = reports[0];
   assert.equal(r.checkId, "BrandCasing");
   assert.equal(r.file, "synthetic.ts");
-  // Line 2 is "const y = 'Rovikore';" — 'Rovikore' starts at char 11 in
+  // Line 2 is "const y = 'Examplco';" — 'Examplco' starts at char 11 in
   // the line text, so file byte = 13 + 11 = 24, end = 24 + 8 = 32.
   assert.equal(r.startByte, 24);
   assert.equal(r.endByte, 32);
   // Round-trip: slice the text by the reported bytes.
-  assert.equal(text.slice(r.startByte, r.endByte), "Rovikore");
+  assert.equal(text.slice(r.startByte, r.endByte), "Examplco");
 });
 
 test("runPlugin captures plugin throws as Warning.PluginCrashed", async () => {
@@ -305,7 +305,7 @@ test("plugin magic comments filter inside run(); engine suppression filters at t
     `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
   );
 
-  const trigger = /\bRovikore\b/;
+  const trigger = /\bExamplco\b/;
 
   // Plugin defines its own magic-comment escape hatch — `// brand:ignore`
   // on the previous line. This filtering runs INSIDE the plugin (cd-cmb
@@ -337,17 +337,17 @@ test("plugin magic comments filter inside run(); engine suppression filters at t
   });
 
   const text = [
-    "const a = 'Rovikore one';",                        // line 1 — FLAG
+    "const a = 'Examplco one';",                        // line 1 — FLAG
     "// brand:ignore — legacy fixture",                 // line 2 — magic comment
-    "const b = 'Rovikore two';",                        // line 3 — EXEMPT (plugin filter)
-    "const c = 'Rovikore three';",                      // line 4 — FLAG
+    "const b = 'Examplco two';",                        // line 3 — EXEMPT (plugin filter)
+    "const c = 'Examplco three';",                      // line 4 — FLAG
   ].join("\n") + "\n";
 
   const lineViews = [
-    { lineNo: 1, text: "const a = 'Rovikore one';",  isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 0 },
+    { lineNo: 1, text: "const a = 'Examplco one';",  isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 0 },
     { lineNo: 2, text: "// brand:ignore — legacy fixture", isComment: true, isDocComment: false, isStringLiteral: false, isJsxText: false, isPragma: false, lineStart: 26 },
-    { lineNo: 3, text: "const b = 'Rovikore two';",  isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 60 },
-    { lineNo: 4, text: "const c = 'Rovikore three';", isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 86 },
+    { lineNo: 3, text: "const b = 'Examplco two';",  isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 60 },
+    { lineNo: 4, text: "const c = 'Examplco three';", isComment: false, isDocComment: false, isStringLiteral: true,  isJsxText: false, isPragma: false, lineStart: 86 },
   ];
 
   const reports = runPlugin(check, { path: "f.ts", text, lineViews });

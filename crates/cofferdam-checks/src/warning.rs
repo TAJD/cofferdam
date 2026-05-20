@@ -18,7 +18,7 @@ use oxc_ast_visit::Visit;
 /// `Warning.TripleEquals` — flags `==` and `!=` (vs `===` / `!==`).
 ///
 /// Implementation note: pattern B from the SDK design (see
-/// rovikore_host_credo_checks memory). Walks every BinaryExpression
+/// examplco_host_credo_checks memory). Walks every BinaryExpression
 /// and checks the operator. The visitor is one-shot per file; phase-1
 /// engine creates a fresh allocator + parsed view per file, runs all
 /// checks, drops everything.

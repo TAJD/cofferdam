@@ -8,9 +8,9 @@
 //!    descent and `Walk::Skip` short-circuit.
 //! 3. **Direct rooted access** via `root()` — escape hatch.
 //!
-//! TS-domain examples deliberately — the rovikore-host check catalogue
+//! TS-domain examples deliberately — the examplco-host check catalogue
 //! is Elixir/Ash-specific, so porting those literally would be misleading
-//! (see `feedback_no_rovikore_ports_in_ts` memory). The *patterns* port;
+//! (see `feedback_no_examplco_ports_in_ts` memory). The *patterns* port;
 //! the *checks* don't.
 
 use std::path::PathBuf;
@@ -213,7 +213,7 @@ fn walk_skip_halts_descent_into_node_only() {
 // Pattern C — stateful walk with file-level decision
 //
 // TS analog of the "scan a class, accumulate flags, decide once" pattern
-// from rovikore-host TenantIsolation: find every class that declares
+// from examplco-host TenantIsolation: find every class that declares
 // both `width` and `height` as instance properties — a structural
 // signature commonly used to gate "you should extend our Box base
 // class" lints.
@@ -353,7 +353,7 @@ fn check_context_ast_returns_none_when_unparsed() {
 // Banned-import detection via find_all — the "TS-native NoHttpClient"
 // shape: ImportDeclaration source string match.
 //
-// Different from the rovikore HTTPoison check (which scans Elixir
+// Different from the examplco HTTPoison check (which scans Elixir
 // alias references) — but exercises the same SDK seam: eager filter,
 // then post-filter on a node attribute.
 // ============================================================

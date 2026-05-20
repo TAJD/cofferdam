@@ -13,7 +13,7 @@ import type { Severity } from "./severity.js";
 /**
  * Declarative file-scope filter (cd-81a.5). When set, the engine
  * pre-filters discovered files against this scope before invoking
- * `run()`. Replaces the `scannable?` boilerplate that rovikore-host
+ * `run()`. Replaces the `scannable?` boilerplate that examplco-host
  * checks ship today.
  */
 export interface FileScope {
@@ -144,14 +144,14 @@ export interface DefineCheckInput<S extends OptionsSchema> {
  *     basePriority: 15,
  *     explanation: "Brand name must be all-caps in user-facing copy.",
  *     options: {
- *       brand: { default: "ROVIKORE", type: "string" },
+ *       brand: { default: "EXAMPLCO", type: "string" },
  *       allowedAliases: { default: [] as string[], type: "string[]" },
  *     },
  *     run(file, ctx, opts) {
  *       for (const ln of file.lines()) {
  *         if (ln.isComment) continue;
  *         if (!ln.isStringLiteral) continue;
- *         const m = /\bRovikore\b/.exec(ln.text);
+ *         const m = /\bExamplco\b/.exec(ln.text);
  *         if (!m) continue;
  *         if (opts.allowedAliases.some((a) => ln.text.includes(a))) continue;
  *         ctx.report({

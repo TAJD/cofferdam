@@ -1,5 +1,5 @@
 // TenantIsolation — Pattern C / stateful walk fixture for cd-11j.
-// Inspired by rovikore-host's TenantIsolation (Ash/Elixir) — same
+// Inspired by examplco-host's TenantIsolation (Ash/Elixir) — same
 // multi-tenancy data-leak concern, mapped to a TS-native target.
 //
 // Pattern C: collect state across the AST walk, decide per-file at the

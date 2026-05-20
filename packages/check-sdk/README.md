@@ -17,7 +17,7 @@ The SDK ships compiled JS + types; no runtime dependencies. Node 16+.
 ## Hello check
 
 ```ts
-// my-checks/no-rovikore.ts
+// my-checks/no-examplco.ts
 import { Category, defineCheck, Severity } from "@cofferdam/check-sdk";
 
 export default defineCheck({
@@ -25,10 +25,10 @@ export default defineCheck({
   category: Category.Warning,
   basePriority: 15,
   defaultSeverity: Severity.High,
-  explanation: "Brand must be spelled ROVIKORE.",
+  explanation: "Brand must be spelled EXAMPLCO.",
   files: { extensions: ["ts", "tsx"] },
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
   },
   run(file, ctx, opts) {
     for (const line of file.lines()) {
@@ -36,7 +36,7 @@ export default defineCheck({
       // so we don't false-positive on identifiers / JSX text.
       if (line.isComment || line.isJsxText) continue;
       if (!line.isStringLiteral) continue;
-      const m = /\bRovikore\b/.exec(line.text);
+      const m = /\bExamplco\b/.exec(line.text);
       if (!m) continue;
       ctx.report({
         message: `Brand must be ${opts.brand}, not ${m[0]}.`,
@@ -50,10 +50,10 @@ export default defineCheck({
 Wire it into `cofferdam.toml`:
 
 ```toml
-plugins = ["./my-checks/no-rovikore.ts"]
+plugins = ["./my-checks/no-examplco.ts"]
 
 [checks."BrandCasing"]
-brand = "ROVIKORE"
+brand = "EXAMPLCO"
 ```
 
 Then `cofferdam check src/` runs your plugin alongside every built-in check. Findings flow through the same priority computation, suppression directives, baseline diffing, and output formats.

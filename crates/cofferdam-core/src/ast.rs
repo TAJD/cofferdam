@@ -1,8 +1,8 @@
 //! Plugin-facing AST surface — the ergonomic wrapper that custom-check
 //! authors program against, layered over `oxc_ast` + `oxc_ast_visit`.
 //!
-//! Three access patterns, mapped from rovikore-host's existing 11 custom
-//! Credo checks (see `rovikore_host_credo_checks` memory file):
+//! Three access patterns, mapped from examplco-host's existing 11 custom
+//! Credo checks (see `examplco_host_credo_checks` memory file):
 //!
 //! 1. **Eager filter** — `view.find_all(NodeKind::CallExpression)` returns
 //!    every node of a kind. Mirrors Credo's `prewalk` with clause-head
@@ -158,7 +158,7 @@ pub trait AstVisitor<'a> {
 }
 
 /// Kinds exposed via [`AstView::find_all`] and [`NodeRef`]. Deliberately
-/// a small set covering the rovikore-host check patterns; grow as plugin
+/// a small set covering the examplco-host check patterns; grow as plugin
 /// needs surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {

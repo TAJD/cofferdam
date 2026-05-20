@@ -13,7 +13,7 @@ export default defineCheck({
   basePriority: 15,
   explanation: "x",
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
   },
   run(file, ctx, opts) {
     // Wrong method name on the SourceFile shape — the SDK exposes

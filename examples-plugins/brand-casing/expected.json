@@ -10,7 +10,7 @@
       "column": 24,
       "start_byte": 611,
       "end_byte": 619,
-      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+      "message": "Brand name must be \"EXAMPLCO\", not \"Examplco\"."
     },
     {
       "id": "Warning.BrandCasing",
@@ -22,7 +22,7 @@
       "column": 24,
       "start_byte": 689,
       "end_byte": 697,
-      "message": "Brand name must be \"ROVIKORE\", not \"Rovikore\"."
+      "message": "Brand name must be \"EXAMPLCO\", not \"Examplco\"."
     },
     {
       "id": "Design.OrphanExport",

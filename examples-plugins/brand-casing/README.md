@@ -1,7 +1,7 @@
 # `@cofferdam-fixtures/brand-casing`
 
 End-to-end fixture for the cofferdam plugin SDK (cd-7e4). Ports the
-`BrandCasing` rovikore-host Credo check to `@cofferdam/check-sdk` and runs it
+`BrandCasing` examplco-host Credo check to `@cofferdam/check-sdk` and runs it
 through the napi `worker_threads` loader against `fixture.ts`.
 
 **Status: design-only.** The SDK epic (cd-81a) has no completed children
@@ -31,7 +31,7 @@ fill in to match the spec in `docs/plugin-sdk-e2e.md`.
 pnpm --filter brand-casing build
 cargo run --release -p cofferdam-cli -- check \
   examples-plugins/brand-casing/fixture.ts --format json > actual.json
-node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Rovikore
+node scripts/check-spans.mjs actual.json examples-plugins/brand-casing/fixture.ts Examplco
 diff -u expected.json actual.json
 ```
 
@@ -45,4 +45,4 @@ documented in `docs/plugin-sdk-e2e.md` §1.
 
 Full spec: `docs/plugin-sdk-e2e.md` (in this repo).
 
-Original Credo check: `C:/Users/tajdi/rovikore-host/backend/dev_checks/rovikore_host_credo/brand_casing.ex`.
+Original Credo check: `C:/Users/tajdi/examplco-host/backend/dev_checks/examplco_host_credo/brand_casing.ex`.

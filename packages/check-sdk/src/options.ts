@@ -37,7 +37,7 @@ type ResolvedFromKind<K extends OptionKind> = K extends "string"
  * @example
  *   const sdk = defineCheck({
  *     options: {
- *       brand: { default: "ROVIKORE", type: "string" },
+ *       brand: { default: "EXAMPLCO", type: "string" },
  *       allowedAliases: { default: [] as string[], type: "string[]" },
  *     },
  *     run(file, ctx, opts) {

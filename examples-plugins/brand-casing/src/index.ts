@@ -1,5 +1,5 @@
-// BrandCasing — port of rovikore-host's Credo check (cd-7e4 e2e
-// fixture). Flags any user-facing occurrence of "Rovikore" — the brand
+// BrandCasing — port of examplco-host's Credo check (cd-7e4 e2e
+// fixture). Flags any user-facing occurrence of "Examplco" — the brand
 // is supposed to render in all caps everywhere copy reaches users.
 //
 // Lines exempt from the flag:
@@ -13,7 +13,7 @@
 
 import { Category, defineCheck, Severity } from "@cofferdam/check-sdk";
 
-const TRIGGER = /\bRovikore\b/;
+const TRIGGER = /\bExamplco\b/;
 const PLUGIN_IGNORE = /\bbrand:ignore\b/;
 
 export default defineCheck({
@@ -22,10 +22,10 @@ export default defineCheck({
   basePriority: 15,
   defaultSeverity: Severity.High,
   explanation:
-    'Brand name must be all-caps "ROVIKORE" in user-facing copy. ' +
+    'Brand name must be all-caps "EXAMPLCO" in user-facing copy. ' +
     "Add `// brand:ignore — <why>` on the previous line for legitimate references.",
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
     allowedAliases: { default: [] as string[], type: "string[]" },
   },
   files: {
@@ -52,7 +52,7 @@ export default defineCheck({
       const m = TRIGGER.exec(ln.text);
       if (!m) continue;
 
-      // Skip identifier-position matches: `import { Rovikore } from "./brand";`
+      // Skip identifier-position matches: `import { Examplco } from "./brand";`
       // has a string literal (the module specifier) AND the trigger word
       // appears in identifier position. Quote-count up to the match —
       // odd = inside a quoted region (string/template), even = outside.

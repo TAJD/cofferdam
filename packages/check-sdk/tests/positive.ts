@@ -31,7 +31,7 @@ const branded = defineCheck({
   basePriority: 15,
   explanation: "Brand name must be all-caps.",
   options: {
-    brand: { default: "ROVIKORE", type: "string" },
+    brand: { default: "EXAMPLCO", type: "string" },
     allowedAliases: { default: [] as string[], type: "string[]" },
     maxHits: { default: 5, type: "number" },
     requireExempt: { default: false, type: "boolean" },

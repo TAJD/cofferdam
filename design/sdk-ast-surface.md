@@ -367,7 +367,7 @@ interface ReportArgs {
 | `span` | every fixture; comes from `lineView.spanFor` (Pattern A) or `node.span` (B/C) |
 | `severity` | `tenant-isolation`: per-finding override (a wrapped-but-shadowed call is `medium`; an unwrapped call is `high`). The default comes from `defineCheck.defaultSeverity`. |
 | `related` | `tenant-isolation`: report the unscoped query and link the *file's* wrapper-import-or-lack-thereof as related context. |
-| `fix` | `brand-casing` (escape hatch): replace `Rovikore` with `ROVIKORE`. Locked by cd-81a.6. |
+| `fix` | `brand-casing` (escape hatch): replace `Examplco` with `EXAMPLCO`. Locked by cd-81a.6. |
 
 **v0 deliberately omits**: `ctx.replaceText(span, str)`,
 `ctx.insertBefore(span, str)`, `ctx.insertAfter(span, str)`,
@@ -439,7 +439,7 @@ To make the v0 surface mechanically enforceable after this doc lands:
    guardrail at the SDK level — if any of our serialized JS leaks an oxc
    identifier, we've broken the abstraction.
 
-The cd-81a.2 acceptance bullet is "three rovikore checks implementable with
+The cd-81a.2 acceptance bullet is "three examplco checks implementable with
 no SDK gaps" — guardrails 1–3 raise that to "implementable AND the surface
 is tight."
 

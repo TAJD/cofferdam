@@ -12,4 +12,4 @@
 plugins = ["./"]
 
 [checks."BrandCasing"]
-allowedAliases = ["RovikoreClient", "RovikoreCdn"]
+allowedAliases = ["ExamplcoClient", "ExamplcoCdn"]

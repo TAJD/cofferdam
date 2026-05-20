@@ -17,7 +17,6 @@ tree-sitter-rust = "0.23"
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# Snapshot testing for parser→Span conversions and per-check expected outputs.
-# Keeps cd-91zc's fixtures in the spec_contract style — golden files plus a
-# `BLESS=1` regenerate environment variable.
-insta = { version = "1", features = ["yaml"] }
+# Speculative deps removed — checkpoint 2's parser tests are plain
+# assertions on byte-range round-trips. Insta-style snapshots may
+# return in checkpoint 3 for per-check fixture output.

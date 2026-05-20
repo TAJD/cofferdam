@@ -69,36 +69,13 @@
 //! Phase 1 (post-cd-9hp.9): migrate to canonical graph.
 //! Phase 2 (post-cd-9hp.10): formalise the adapter contract.
 
-// Re-export the parser surface as it lands. Today: nothing — the
-// `parser` module is checkpoint 2.
+pub mod parser;
+
+// Re-export the parser surface. Checks come in checkpoints 3 and 5.
 //
-// pub use parser::{parse_rust_file, RustParseTree};
 // pub use checks::all_rust_checks;
+pub use parser::{parse_rust, RustParseError, RustParseTree};
 
 /// Identifier the engine uses to route per-file dispatch (cd-91zc).
 /// Lifts to a `Language` enum on `SourceFile` in checkpoint 4.
 pub const LANGUAGE_TAG: &str = "rust";
-
-#[cfg(test)]
-mod tests {
-    /// Smoke test: confirm tree-sitter-rust links and parses a trivial
-    /// source. This is the only test that should exist in the crate
-    /// skeleton; everything else lands per-checkpoint with a real
-    /// fixture suite.
-    #[test]
-    fn tree_sitter_rust_parses_trivial_source() {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_rust::LANGUAGE.into())
-            .expect("load tree-sitter-rust");
-        let tree = parser
-            .parse("fn main() {}", None)
-            .expect("parse trivial source");
-        let root = tree.root_node();
-        assert_eq!(root.kind(), "source_file");
-        assert!(
-            root.child_count() > 0,
-            "expected at least one top-level item"
-        );
-    }
-}

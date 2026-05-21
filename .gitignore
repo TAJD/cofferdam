@@ -74,6 +74,8 @@ t9d-corpus/
 # cd-9hp.4 cp1 — per-run parse-cache speedup numbers. Same dev-machine
 # snapshot pattern as graph-bench-results.
 /tests/parse-cache-bench-results/
+# cd-9hp.4 cp2 — per-run findings-cache speedup numbers.
+/tests/findings-cache-bench-results/
 # bd worktree
 d1y-twopass/
 # bd worktree

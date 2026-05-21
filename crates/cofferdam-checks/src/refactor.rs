@@ -66,6 +66,7 @@ const CYC_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 impl Check for CyclomaticComplexity {
@@ -241,6 +242,7 @@ const COG_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 impl Check for CognitiveComplexity {
@@ -529,6 +531,7 @@ const LAC_META: CheckMeta = CheckMeta {
     consistency: false,
     options: LAC_OPTIONS,
     autofix: false,
+    pure_run: true,
 };
 
 impl Check for LongAndComplex {
@@ -886,6 +889,11 @@ const DUP_META: CheckMeta = CheckMeta {
     consistency: false,
     options: DUP_BLOCK_OPTIONS,
     autofix: false,
+    // Writes per-file fingerprints into DUPLICATE_BLOCKS during run();
+    // skipping run() on cache hit would drop those contributions, so
+    // we always re-run this one. cp3's corpus-snapshot replay will
+    // lift this restriction.
+    pure_run: false,
 };
 
 impl Check for DuplicateBlock {
@@ -1678,6 +1686,7 @@ const PREFER_OPTIONAL_CHAIN_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 impl Check for PreferOptionalChain {
@@ -1807,6 +1816,7 @@ const PREFER_NULLISH_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 impl Check for PreferNullishCoalescing {
@@ -1941,6 +1951,7 @@ const UNUSED_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 /// Bitmask of symbol kinds we'll flag when unused. Excludes type-only
@@ -2170,6 +2181,7 @@ const DEX_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 /// `Refactor.DeadExport` — finalize-stage cross-file check that

@@ -58,6 +58,7 @@ const META: CheckMeta = CheckMeta {
     consistency: false,
     options: MP_OPTIONS,
     autofix: false,
+    pure_run: true,
 };
 
 impl MaxParameters {
@@ -185,6 +186,11 @@ const DEN_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    // Writes per-file ExportRecords into the EXPORTS slot during run();
+    // skipping run() on cache hit would drop those contributions and
+    // break the cross-file dedupe in finalize(). cp3's corpus-snapshot
+    // replay lifts this restriction.
+    pure_run: false,
 };
 
 impl Check for DuplicateExportName {
@@ -328,6 +334,7 @@ const OE_META: CheckMeta = CheckMeta {
     consistency: false,
     options: OE_OPTIONS,
     autofix: false,
+    pure_run: true,
 };
 
 /// `Design.OrphanExport` — finalize-stage check that flags exports
@@ -663,6 +670,7 @@ const IC_META: CheckMeta = CheckMeta {
     consistency: false,
     options: IC_OPTIONS,
     autofix: false,
+    pure_run: true,
 };
 
 /// `Design.ImportCycle` — finalize-stage check that flags closed
@@ -863,6 +871,7 @@ const LV_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 /// `Design.LayerViolation` — finalize-stage check that flags
@@ -1056,6 +1065,12 @@ const BF_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    // Reads GRAPH_INVARIANTS from corpus in run() — that slot is
+    // populated from cofferdam.invariants.toml so its content is fully
+    // captured by config_hash. Could in principle be marked pure once
+    // the engine guarantees the config-derived slots are settled
+    // before pass 1; for cp2 we stay conservative.
+    pure_run: false,
 };
 
 /// `Design.BoundaryFrozen` — per-file check that flags any change
@@ -1151,6 +1166,7 @@ const IV_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 /// `Design.InvariantViolation` — finalize-stage check that
@@ -1343,6 +1359,11 @@ const SI_META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    // Writes per-file evidence to SCRIPTED_FILES in run() so finalize
+    // can iterate files where the `when` gate matched. Skipping run()
+    // on cache hit would drop that bookkeeping and silently break the
+    // scripted-invariant pipeline.
+    pure_run: false,
 };
 
 /// Corpus slot recording every parsed file `Design.ScriptedInvariant` saw

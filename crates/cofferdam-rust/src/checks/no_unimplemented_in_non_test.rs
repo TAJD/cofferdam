@@ -38,6 +38,7 @@ const META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
+    pure_run: true,
 };
 
 impl Check for NoUnimplementedInNonTest {

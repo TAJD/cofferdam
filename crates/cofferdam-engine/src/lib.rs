@@ -8,6 +8,7 @@ pub mod baseline;
 pub mod cache;
 pub mod config;
 pub mod discover;
+pub mod findings_cache;
 pub mod graph;
 pub mod since;
 pub mod suppress;
@@ -137,6 +138,41 @@ impl Engine {
         })
     }
 
+    /// Stable hash of the engine's resolved configuration: per-check
+    /// options, severity overrides, layers, invariants. Used as one
+    /// axis of the per-file findings cache key
+    /// ([`findings_cache::FindingsKey::config_hash`]) so a config
+    /// edit invalidates cached findings.
+    ///
+    /// cp2's implementation hashes the Rust `Debug` format of each
+    /// component — deterministic for the `BTreeMap` / `Option<T>`
+    /// shapes the engine owns, but fragile across refactors. cp3
+    /// swaps in a CBOR / postcard serializer for cross-process
+    /// stability when the disk-backed cache lands.
+    pub fn config_hash(&self) -> findings_cache::ConfigHash {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        // Per-check options, keyed by stable check id. The Vec
+        // ordering mirrors the registration order, which is stable
+        // within a build but not necessarily across rebuilds; we
+        // sort by check_id so the hash doesn't drift on a registry
+        // shuffle.
+        let mut by_id: BTreeMap<&str, (String, String)> = BTreeMap::new();
+        for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+            let id = check.meta().id;
+            let sev = self
+                .severities
+                .get(id)
+                .copied()
+                .unwrap_or(check.meta().default_severity);
+            by_id.insert(id, (format!("{:?}", opts), format!("{:?}", sev)));
+        }
+        h.update(format!("{:?}", by_id).as_bytes());
+        h.update(format!("{:?}", self.layers).as_bytes());
+        h.update(format!("{:?}", self.invariants).as_bytes());
+        h.finalize().into()
+    }
+
     /// Run all configured checks against every file in `paths`.
     ///
     /// For each file: read text, parse with oxc, build CheckContext with
@@ -205,6 +241,36 @@ impl Engine {
         sources: Vec<(PathBuf, String)>,
         cache: Option<&cache::ParseCache>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_caches(sources, cache, None)
+    }
+
+    /// Triple-cache entry point used by the watch loop and the cp2
+    /// no-op-re-run bench. Adds a per-file findings cache on top of
+    /// the parse cache: for each `CheckMeta::pure_run` check, the
+    /// engine memoises `Vec<Issue>` under a
+    /// `(content_hash, config_hash, check_id)` key and replays it
+    /// on cache hit instead of calling `Check::run`. Non-pure
+    /// checks always run.
+    ///
+    /// Behaviour matches `analyze_with_sources_cached` byte-for-byte
+    /// modulo work skipped on hits — the findings appended to the
+    /// returned issues vector are identical. cp3 layers the corpus
+    /// snapshot replay on top so even non-pure checks can be
+    /// skipped on hit.
+    pub fn analyze_with_sources_caches(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        let cache = parse_cache;
+        // Computed once per analysis. cp2 uses Debug-format hashing —
+        // deterministic for BTreeMap-backed `CheckOptions` and the
+        // derived `Debug` on `LayersConfig` / `InvariantsSpec`; good
+        // enough for an in-memory cache that lives only for the
+        // process. cp3's disk-backed cache will swap in a CBOR /
+        // postcard serializer for cross-process stability.
+        let config_hash = self.config_hash();
         // Promote every input path to its absolute form before anything
         // downstream sees it. Two reasons (cd-q9f):
         //
@@ -374,12 +440,47 @@ impl Engine {
                 // Pass-1 graph extraction: imports/exports for every
                 // parsed file, into the well-known IMPORTS/EXPORTS
                 // corpus slots. Graph-aware checks (orphan, cycle,
-                // layer, dead) read these in their `finalize`.
+                // layer, dead) read these in their `finalize`. Always
+                // runs — cp3 will lift graph extraction into a cached
+                // (and replayable) step too.
                 graph_builder.collect(&file, &parsed, &corpus);
+
+                // Per-file content hash, computed once and reused
+                // for every pure-check lookup against this file.
+                // cache::hash_text is just a SHA-256 over the source
+                // bytes — under a microsecond even for big files.
+                let content_hash = findings_cache.map(|_| cache::hash_text(&file.text));
 
                 for (check, opts) in self.checks.iter().zip(self.options.iter()) {
                     if check.language() != Language::TypeScript {
                         continue;
+                    }
+                    // Findings-cache fast path: skip Check::run when
+                    // (a) the check declares pure_run, and (b) a cache
+                    // entry exists under (content, config, check_id).
+                    // Non-pure checks always run — their findings may
+                    // depend on corpus state, which the cache key
+                    // can't capture today.
+                    if check.meta().pure_run {
+                        if let (Some(fc), Some(content_hash)) = (findings_cache, content_hash) {
+                            let key = findings_cache::FindingsKey {
+                                content_hash,
+                                config_hash,
+                                check_id: check.meta().id,
+                            };
+                            if let Some(cached) = fc.get(&key) {
+                                issues.extend(cached);
+                                continue;
+                            }
+                            let mut ctx = CheckContext::new(&file)
+                                .with_parsed(&parsed)
+                                .with_options(opts)
+                                .with_corpus(&corpus);
+                            let fresh = check.run(&file, &mut ctx);
+                            fc.insert(key, fresh.clone());
+                            issues.extend(fresh);
+                            continue;
+                        }
                     }
                     let mut ctx = CheckContext::new(&file)
                         .with_parsed(&parsed)

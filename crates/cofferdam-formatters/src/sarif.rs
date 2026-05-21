@@ -376,6 +376,7 @@ mod tests {
             consistency: false,
             options: &[],
             autofix: false,
+            pure_run: false,
         }
     }
 

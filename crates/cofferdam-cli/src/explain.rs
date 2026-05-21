@@ -479,6 +479,7 @@ mod tests {
         consistency: false,
         options: &[],
         autofix: false,
+        pure_run: false,
     };
 
     const WITH_OPTS_META: CheckMeta = CheckMeta {
@@ -497,6 +498,7 @@ mod tests {
             doc: "max columns per line",
         }],
         autofix: false,
+        pure_run: false,
     };
 
     #[test]
@@ -539,6 +541,7 @@ mod tests {
             consistency: false,
             options: &[],
             autofix: true,
+            pure_run: false,
         };
         let out = render_text(&AUTOFIX_META);
         assert!(

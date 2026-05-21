@@ -112,6 +112,24 @@ pub struct CheckMeta {
     /// --dry-run` to predict which findings would be modified and by the
     /// doc catalog / `explain` to surface support to users.
     pub autofix: bool,
+    /// Whether `Check::run` is a pure function of `(file content, options)`.
+    /// "Pure" here means the per-file `run()` body neither reads from nor
+    /// writes to `CheckContext::corpus`, and produces a deterministic
+    /// `Vec<Issue>` given the same inputs.
+    ///
+    /// The engine's per-file findings cache (cd-9hp.4 cp2) consults this
+    /// flag: pure checks have their findings memoised under a
+    /// `(content_hash, config_hash, engine_version)` key and replayed on
+    /// cache hit, skipping the `run()` call entirely.
+    ///
+    /// Defaults to `false` — checks that touch corpus from `run()` (graph
+    /// producers like `Design.DuplicateExportName`, scripted-invariant
+    /// collectors) or that depend on the engine's per-run state must keep
+    /// it `false`. Setting `true` when the check actually does touch
+    /// corpus would mean cached findings get replayed without the
+    /// corresponding side effects, silently dropping cross-file
+    /// contributions.
+    pub pure_run: bool,
 }
 
 /// Check IDs whose `finalize()` runs in the second finalize phase — after

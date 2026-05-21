@@ -41,7 +41,9 @@ crates/
   cofferdam-checks/       # built-in checks (one file per category)
   cofferdam-formatters/   # text + json output, future compact/SARIF
   cofferdam-cli/          # `cofferdam` binary
-  cofferdam-lsp/          # LSP server (phase 6, stub today)
+  cofferdam-graph/        # canonical cross-file graph schema (cd-9hp.9)
+  cofferdam-rust/         # Rust source adapter — cofferdam's polylingual proof (cd-91zc)
+  cofferdam-lsp/          # workspace-aware LSP server over stdio (cd-9hp.4 cp5)
   cofferdam-napi/         # napi-rs FFI surface (phase 4, stub today)
 packages/                 # @cofferdam/* npm packages (phase 4+)
 examples/                 # fixture .ts files exercised by checks
@@ -72,9 +74,14 @@ const META: CheckMeta = CheckMeta {
     id: "Category.Name",          // Stable, dotted. Don't rename.
     category: Category::Warning,  // Pick one of the five.
     base_priority: 15,            // -20..=20. Warning=15, Refactor=10, Design=5, Readability=-5, etc.
+    default_severity: Severity::High,  // engine stamps this onto every emitted Issue
     explanation: "...",
-    requires_types: false,        // true → routes to ts-morph in phase 5
+    body: include_str!("../docs/Category.Name.md"),  // long-form catalog entry; file must exist (compile-time include)
+    requires_types: false,        // true → routes through the ts-morph type host (cd-9hp.2); see design/type-host-wire.md
     consistency: false,           // true → engine runs in two-pass mode
+    options: &[],                 // or a `&[OptionSpec]` const for a configurable check
+    autofix: false,               // true → implement Check::autofix
+    pure_run: true,               // run() is pure over (content, options) → enables findings cache. MUST be false if run() reads ctx.corpus OR ctx.types
 };
 
 impl Check for X {
@@ -87,6 +94,10 @@ impl Check for X {
     }
 }
 ```
+
+### Type-aware checks (cd-9hp.2)
+
+A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`. Ships dormant — no built-in sets the flag yet, and a `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on).
 
 ### Cofferdam-specific gotchas (every agent needs these)
 

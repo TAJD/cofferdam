@@ -6,6 +6,7 @@ members = [
     "crates/cofferdam-checks",
     "crates/cofferdam-formatters",
     "crates/cofferdam-cli",
+    "crates/cofferdam-graph",
     "crates/cofferdam-lsp",
     "crates/cofferdam-napi",
     "crates/cofferdam-rust",
@@ -24,6 +25,7 @@ cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.2" }
 cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.2" }
 cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.2" }
 cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.2" }
+cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.2" }
 cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.2" }
 
 # Third-party (kept narrow at phase 0; expanded as phases land)
@@ -41,6 +43,11 @@ oxc_syntax = "0.128"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# cd-9hp.9 cp1 — small-string optimisation for canonical-graph schema
+# identifiers (namespace tags, symbol names, layer names). Used by
+# cofferdam-graph; pulled into the workspace deps so its version is
+# pinned alongside the other shared crates.
+smol_str = { version = "0.3", features = ["serde"] }
 thiserror = "1"
 toml = "0.8"
 insta = "1"

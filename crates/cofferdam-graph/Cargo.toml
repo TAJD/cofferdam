@@ -1,0 +1,21 @@
+[package]
+name = "cofferdam-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Canonical graph schema for cross-file rules (cd-9hp.9). Type-only at checkpoint 1; petgraph backend lands in checkpoint 2."
+
+[dependencies]
+# cd-9hp.9 cp1 is type-only — no petgraph yet. petgraph + attribute
+# indexing lands in cp2 inside this same crate, keeping cofferdam-core
+# dependency-light per the workspace guidance.
+cofferdam-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+smol_str = { workspace = true }
+
+[dev-dependencies]

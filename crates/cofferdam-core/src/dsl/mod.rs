@@ -17,6 +17,7 @@
 //! - Quantifiers, aggregation, cross-rule references (reserved for v2).
 
 pub mod ast;
+pub mod evaluator;
 pub mod parser;
 
 #[cfg(test)]

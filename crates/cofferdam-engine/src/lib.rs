@@ -26,7 +26,7 @@ use cofferdam_core::{
     InvariantsSpec, Issue, Language, LayersConfig, Priority, Severity, SourceFile, Span,
     ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
-use cofferdam_rust::parse_rust;
+use cofferdam_rust::{parse_rust, RustParseTree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -260,27 +260,29 @@ impl Engine {
                 //
                 // * `Err(_)`: the parser failed to produce a tree at
                 //   all (grammar load failure / cancellation / timeout).
-                //   Surface as `Warning.ParseError` — this is a real
-                //   tool-level failure the user needs to know about.
+                //   Surface as `Warning.ParseError` via
+                //   `rust_load_error_issue`.
                 //
                 // * `Ok(tree)` with `has_errors() == true`: tree-sitter
-                //   recovered with ERROR / MISSING nodes. We do NOT
-                //   emit `Warning.ParseError` here because
-                //   tree-sitter-rust 0.23 has known false positives on
-                //   valid Rust (e.g. `&raw` where `raw` is a variable
-                //   name — the grammar tries to parse it as a raw
-                //   reference expression). Silently skipping mirrors
-                //   the pre-cd-0039 per-check `has_errors()` gate and
-                //   keeps the dogfood baseline stable. Once the
-                //   grammar is more accurate (or we add a quirk
-                //   allowlist), this branch can promote to a real
-                //   emission.
+                //   recovered with ERROR / MISSING nodes. Surface as
+                //   `Warning.ParseError` pointing at the first error
+                //   span. (Pre-cd-0039-followup this branch silently
+                //   skipped — tree-sitter-rust 0.23 had false positives
+                //   on valid Rust like `&raw` where `raw` is a variable
+                //   name. The 0.24 grammar fixed those. The
+                //   `diagnose_parse_errors` integration test in
+                //   `cofferdam-rust` pins the regression: if the bug
+                //   ever comes back, those tests start failing and the
+                //   silent-skip would need to come back too.)
                 //
                 // * `Ok(tree)` clean: install on parsed_lang and run
                 //   the matching checks.
                 let tree = match parse_rust(&file.text) {
                     Ok(t) if !t.has_errors() => t,
-                    Ok(_) => continue,
+                    Ok(t) => {
+                        issues.push(rust_parse_error_issue(&file, &t));
+                        continue;
+                    }
                     Err(e) => {
                         issues.push(rust_load_error_issue(&file, &e));
                         continue;
@@ -538,13 +540,35 @@ fn parse_error_issue(file: &SourceFile, diagnostics: &[oxc_diagnostics::OxcDiagn
     }
 }
 
+/// Build a `Warning.ParseError` for a Rust file whose tree-sitter
+/// parse recovered with ERROR / MISSING nodes. The finding points at
+/// the first error span tree-sitter recovered. We emit the first one
+/// only — cascading errors typically share a root cause and listing
+/// them all adds noise without information (mirrors the TS adapter's
+/// policy in `parse_error_issue`).
+fn rust_parse_error_issue(file: &SourceFile, tree: &RustParseTree) -> Issue {
+    let span = tree.error_spans().first().copied().unwrap_or(Span {
+        start_byte: 0,
+        end_byte: 0,
+        line: 1,
+        column: 1,
+    });
+    Issue {
+        check_id: "Warning.ParseError".to_string(),
+        message: "parse error: tree-sitter recovered with ERROR / MISSING nodes (Rust adapter)"
+            .to_string(),
+        file: file.path.clone(),
+        span,
+        priority: Priority(20),
+        severity: Severity::Critical,
+        related: Vec::new(),
+    }
+}
+
 /// Build a `Warning.ParseError` for the rare case where tree-sitter
 /// itself fails to produce a tree at all (grammar load failure, parser
-/// cancellation, timeout). Recovered `has_errors()` trees do NOT come
-/// through here — tree-sitter-rust 0.23 has known false positives on
-/// valid Rust (e.g. variables named `raw` adjacent to `&`) that would
-/// produce false `Warning.ParseError` findings on real codebases. See
-/// the dispatch comment in `analyze_with_sources`.
+/// cancellation, timeout). Distinct from `rust_parse_error_issue`
+/// because there's no tree to extract error spans from.
 fn rust_load_error_issue(file: &SourceFile, err: &cofferdam_rust::RustParseError) -> Issue {
     Issue {
         check_id: "Warning.ParseError".to_string(),

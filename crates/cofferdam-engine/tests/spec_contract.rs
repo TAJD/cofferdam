@@ -232,14 +232,13 @@ fn spec_contract_rust_unwrap_mixed() {
 
 #[test]
 fn spec_contract_rust_parse_error() {
-    // cd-0039: malformed `.rs` input is dispatched through the
-    // engine's centralised Rust parse, but tree-sitter-rust 0.23 has
-    // enough grammar false positives on valid code that emitting
-    // `Warning.ParseError` from `has_errors()` trees would regress
-    // the dogfood baseline. The contract this fixture pins: malformed
-    // input causes NO findings (silent skip), and the engine doesn't
-    // panic. Hard parser-load failures (which produce zero false
-    // positives in practice) still emit Warning.ParseError; that
-    // branch isn't reachable from a fixture file.
+    // cd-0039 + followup: malformed `.rs` input surfaces as exactly
+    // one `Warning.ParseError` finding pointing at the first ERROR
+    // span tree-sitter recovered. Earlier the engine silent-skipped
+    // `has_errors()` trees to dodge tree-sitter-rust 0.23 grammar
+    // false positives; bumping to 0.24 fixed all known quirks (pinned
+    // by `crates/cofferdam-rust/tests/diagnose_parse_errors.rs`) so
+    // the engine emits the finding the same way the TS adapter does
+    // for malformed JavaScript.
     check_fixture("rust-parse-error");
 }

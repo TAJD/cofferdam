@@ -1,3 +1,11 @@
 {
-  "findings": []
+  "findings": [
+    {
+      "id": "Warning.ParseError",
+      "file": "src/broken.rs",
+      "line": 4,
+      "column": 1,
+      "message": "parse error: tree-sitter recovered with ERROR / MISSING nodes (Rust adapter)"
+    }
+  ]
 }

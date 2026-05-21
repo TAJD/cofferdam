@@ -43,6 +43,9 @@ const MLL_META: CheckMeta = CheckMeta {
 };
 
 impl MaxLineLength {
+    /// Construct with a max line-length ceiling. `all_builtins`
+    /// installs the default of 120; user config overrides via
+    /// `[checks."Readability.MaxLineLength"].limit`.
     pub fn new(limit: u32) -> Self {
         Self {
             limit,
@@ -129,6 +132,9 @@ const MFL_META: CheckMeta = CheckMeta {
 };
 
 impl MaxFunctionLength {
+    /// Construct with a max function-length ceiling. `all_builtins`
+    /// installs the default of 50; user config overrides via
+    /// `[checks."Readability.MaxFunctionLength"].limit`.
     pub fn new(limit: u32) -> Self {
         Self {
             limit,

@@ -15,7 +15,7 @@ const BY_CHECK_LIMIT: usize = 10;
 // ── Output types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct DeltaJson {
+pub(crate) struct DeltaJson {
     pub added: usize,
     pub removed: usize,
     pub by_check: std::collections::BTreeMap<String, i64>,
@@ -28,7 +28,7 @@ struct DiffReport {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub struct DiffArgs {
+pub(crate) struct DiffArgs {
     /// First baseline path. If `None`, defaults to `.cofferdam/baseline.json`.
     pub a: Option<PathBuf>,
     /// Second baseline path. If `Some`, compare `a` vs `b` directly.
@@ -38,7 +38,7 @@ pub struct DiffArgs {
     pub pretty: bool,
 }
 
-pub fn run(args: DiffArgs) -> ExitCode {
+pub(crate) fn run(args: DiffArgs) -> ExitCode {
     match (&args.a, &args.b) {
         (Some(a), Some(b)) => {
             // Two explicit paths: compare a vs b.
@@ -74,7 +74,7 @@ pub fn run(args: DiffArgs) -> ExitCode {
 // ── Rendering ────────────────────────────────────────────────────────────────
 
 /// Render a `Delta` to stdout in text or JSON form.
-pub fn render(delta: Delta, robot: bool, pretty: bool) {
+pub(crate) fn render(delta: Delta, robot: bool, pretty: bool) {
     if robot {
         let report = DiffReport {
             delta: DeltaJson {
@@ -96,7 +96,7 @@ pub fn render(delta: Delta, robot: bool, pretty: bool) {
 }
 
 /// Render the delta summary block (human-readable, to stderr).
-pub fn render_delta_text(delta: &Delta) {
+pub(crate) fn render_delta_text(delta: &Delta) {
     let net: i64 = delta.added as i64 - delta.removed as i64;
     eprintln!(
         "  delta vs prior: {} (added {}, removed {})",

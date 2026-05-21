@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::plugins::{self, PluginCheckMeta};
 
-pub struct ExplainArgs {
+pub(crate) struct ExplainArgs {
     pub check_id: String,
     pub robot: bool,
     pub pretty: bool,
@@ -31,7 +31,7 @@ pub struct ExplainArgs {
     pub no_config: bool,
 }
 
-pub fn run(args: ExplainArgs) -> ExitCode {
+pub(crate) fn run(args: ExplainArgs) -> ExitCode {
     let ExplainArgs {
         check_id,
         robot,

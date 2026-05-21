@@ -44,7 +44,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 ## Warning
 
 - [`Rust.NoUnimplementedInNonTest`](Rust.NoUnimplementedInNonTest.md) — `unimplemented!()` / `todo!()` panic at runtime; calling them outside test code ships a guaranteed crash. Implement the function or move it into a `#[test]`.
-- [`Rust.NoUnwrapInLib`](Rust.NoUnwrapInLib.md) — Calling `.unwrap()` or `.expect()` in library code panics on `None`/`Err(_)`. Return `Result` and propagate via `?`, or write a `#[test]` for the call.
+- [`Rust.NoUnwrapInLib`](Rust.NoUnwrapInLib.md) — Calling `.unwrap()` in library code panics on `None`/`Err(_)` with no diagnostic context. Return `Result` and propagate via `?`, or use `.expect("<reason>")` when the value is provably infallible.
 - [`Warning.NoConsoleLog`](Warning.NoConsoleLog.md) — `console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.
 - [`Warning.NoDebugger`](Warning.NoDebugger.md) — `debugger` statements halt execution under attached devtools. Remove before shipping.
 - [`Warning.NoEval`](Warning.NoEval.md) — `eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.

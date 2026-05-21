@@ -57,6 +57,11 @@ pub struct ImportRecord {
     pub span: Span,
 }
 
+/// The shape of an import edge in the project graph. Different
+/// graph-aware checks care about different kinds (e.g.
+/// `Design.LayerViolation` only edges that resolve to in-project
+/// files; `Refactor.DeadExport` walks every named binding regardless
+/// of kind).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportKind {
     /// `import x from './m'`.
@@ -67,6 +72,9 @@ pub enum ImportKind {
     Namespace,
 }
 
+/// One imported binding from a named-import edge. Carries both the
+/// source name and the local alias because `import { foo as bar }`
+/// gives the local scope `bar` but consumers see the export as `foo`.
 #[derive(Debug, Clone)]
 pub struct ImportedName {
     /// Name as it appears in the source module (the export's name).
@@ -114,6 +122,10 @@ pub struct ExportRecord {
     pub resolved_source: Option<PathBuf>,
 }
 
+/// The shape of an export — distinguishes named, default, namespace
+/// (`export * from`), and re-exports. Graph-aware checks key off
+/// this when deciding whether an export is part of the published
+/// surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportKind {
     /// `export function foo`, `export const foo`, `export { foo }`.
@@ -174,6 +186,11 @@ pub struct InvariantsRuntime {
 }
 
 impl InvariantsRuntime {
+    /// True when no invariants spec was loaded (or it carries no
+    /// public_api / boundaries / invariants entries). The engine
+    /// skips publishing into the `INVARIANTS` corpus slot when this
+    /// returns `true`, so dependent checks no-op without touching
+    /// the slot.
     pub fn is_empty(&self) -> bool {
         self.public_api.exports.is_empty()
             && self.boundaries.is_empty()

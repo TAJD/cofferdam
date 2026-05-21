@@ -39,6 +39,9 @@ use std::fmt::Write;
 /// Header line, exactly as emitted (no trailing newline).
 pub const COMPACT_HEADER: &str = "priority|severity|category|id|file|line|column|message";
 
+/// Pipe-delimited line-per-finding formatter — the most
+/// token-economical output, designed for piping findings into an AI
+/// prompt or further tooling. Header line is `COMPACT_HEADER`.
 pub struct CompactFormatter;
 
 impl CompactFormatter {

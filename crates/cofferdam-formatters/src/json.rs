@@ -20,13 +20,13 @@ use cofferdam_core::{Category, Issue, RelatedSpan, Severity};
 use serde::Serialize;
 
 #[derive(Serialize)]
-pub struct RobotReport<'a> {
+pub(crate) struct RobotReport<'a> {
     pub findings: Vec<RobotFinding<'a>>,
     pub summary: RobotSummary,
 }
 
 #[derive(Serialize)]
-pub struct RobotFinding<'a> {
+pub(crate) struct RobotFinding<'a> {
     /// Dotted check ID, e.g. `Warning.TripleEquals`. Stable string.
     pub id: &'a str,
     /// Lowercase category name (`"warning"`, `"refactor"`, ...).
@@ -57,7 +57,7 @@ pub struct RobotFinding<'a> {
 }
 
 #[derive(Serialize)]
-pub struct RelatedFinding {
+pub(crate) struct RelatedFinding {
     pub file: String,
     pub line: u32,
     pub column: u32,
@@ -66,7 +66,7 @@ pub struct RelatedFinding {
 }
 
 #[derive(Serialize)]
-pub struct RobotSummary {
+pub(crate) struct RobotSummary {
     pub total: usize,
     /// Per-category totals, only categories with > 0 findings present.
     /// Stable keys: `consistency`, `design`, `readability`, `refactor`,
@@ -99,6 +99,10 @@ pub struct JsonRenderOpts {
     pub truncated_from: Option<usize>,
 }
 
+/// JSON formatter — emits cofferdam findings as a machine-readable
+/// JSON document with a stable schema (the wire structs themselves
+/// are `pub(crate)`). Construct via the unit type and call `render` /
+/// `render_with_opts` / `render_with_baseline_opts`.
 pub struct JsonFormatter;
 
 impl JsonFormatter {
@@ -118,6 +122,9 @@ impl JsonFormatter {
         )
     }
 
+    /// Render findings honouring the supplied `JsonRenderOpts`
+    /// (compact vs pretty, truncation metadata). The JSON schema is
+    /// part of the stable surface — additive changes only.
     pub fn render_with_opts(issues: &[Issue], opts: JsonRenderOpts) -> String {
         Self::render_inner(issues, opts)
     }
@@ -184,6 +191,10 @@ impl JsonFormatter {
         )
     }
 
+    /// Render with per-finding baseline tags and explicit options.
+    /// Each finding gains a `baselined: bool` field; the document
+    /// gains `summary.new` and `summary.baselined` counts so CI can
+    /// gate on the new total alone.
     pub fn render_with_baseline_with_opts(
         tagged: &[(Issue, bool)],
         opts: JsonRenderOpts,

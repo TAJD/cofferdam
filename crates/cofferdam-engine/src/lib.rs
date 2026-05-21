@@ -28,6 +28,10 @@ use cofferdam_core::{
 };
 use cofferdam_rust::{parse_rust, RustParseTree};
 
+/// Errors the engine can surface independent of per-check findings —
+/// today, I/O failures while reading input paths. Per-file parse
+/// failures are NOT errors here; they emit `Warning.ParseError`
+/// issues through the regular findings channel.
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error("failed to read {path}: {source}")]
@@ -38,6 +42,11 @@ pub enum EngineError {
     },
 }
 
+/// The analyzer's orchestrator. Owns the registered check set, their
+/// resolved options + severity overrides, and the project-level
+/// invariants spec (when one is loaded). Call `analyze` /
+/// `analyze_with_text` / `analyze_with_signatures` to run a pass over
+/// a list of input paths.
 pub struct Engine {
     checks: Vec<Box<dyn Check>>,
     /// Resolved options per check, parallel to `checks`. Built once
@@ -63,6 +72,9 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Build an `Engine` from a check set with default options.
+    /// Prefer `with_config` when you have a loaded `ProjectConfig`
+    /// — the option/severity overrides flow from there.
     pub fn new(checks: Vec<Box<dyn Check>>) -> Self {
         let options = checks
             .iter()

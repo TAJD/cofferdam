@@ -34,7 +34,7 @@ use cofferdam_engine::since;
 use cofferdam_engine::{Engine, ProjectConfig};
 use serde::Serialize;
 
-pub struct DiffArgs {
+pub(crate) struct DiffArgs {
     pub diff_ref: String,
     pub paths: Vec<PathBuf>,
     pub fail_on: Option<Severity>,
@@ -72,7 +72,7 @@ struct DiffReport {
     summary: DiffSummary,
 }
 
-pub fn run(args: DiffArgs) -> ExitCode {
+pub(crate) fn run(args: DiffArgs) -> ExitCode {
     let DiffArgs {
         diff_ref,
         paths,

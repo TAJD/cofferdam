@@ -25,6 +25,10 @@ use ignore::WalkBuilder;
 /// without per-call option fiddling.
 pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "rs"];
 
+/// Configuration for the file walker. Controls which extensions are
+/// included, whether to honour `.gitignore` / `.cofferdamignore`, and
+/// hidden-file handling. Used by every CLI subcommand and the LSP /
+/// napi-rs surfaces, so the discovery contract stays uniform.
 #[derive(Debug, Clone)]
 pub struct DiscoveryOptions {
     /// Extensions to include (without leading dot).

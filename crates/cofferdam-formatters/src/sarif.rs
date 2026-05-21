@@ -54,7 +54,7 @@ const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const FINGERPRINT_KEY: &str = "cofferdam/v1";
 
 #[derive(Serialize)]
-pub struct SarifReport<'a> {
+pub(crate) struct SarifReport<'a> {
     #[serde(rename = "$schema")]
     pub schema: &'static str,
     pub version: &'static str,
@@ -62,19 +62,19 @@ pub struct SarifReport<'a> {
 }
 
 #[derive(Serialize)]
-pub struct SarifRun<'a> {
+pub(crate) struct SarifRun<'a> {
     pub tool: SarifTool<'a>,
     pub results: Vec<SarifResult<'a>>,
 }
 
 #[derive(Serialize)]
-pub struct SarifTool<'a> {
+pub(crate) struct SarifTool<'a> {
     pub driver: SarifDriver<'a>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SarifDriver<'a> {
+pub(crate) struct SarifDriver<'a> {
     pub name: &'static str,
     pub version: &'static str,
     pub information_uri: &'static str,
@@ -83,7 +83,7 @@ pub struct SarifDriver<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SarifRule<'a> {
+pub(crate) struct SarifRule<'a> {
     pub id: &'a str,
     pub name: &'a str,
     pub short_description: SarifText<'a>,
@@ -93,17 +93,17 @@ pub struct SarifRule<'a> {
 }
 
 #[derive(Serialize)]
-pub struct SarifText<'a> {
+pub(crate) struct SarifText<'a> {
     pub text: &'a str,
 }
 
 #[derive(Serialize)]
-pub struct SarifLevel {
+pub(crate) struct SarifLevel {
     pub level: &'static str,
 }
 
 #[derive(Serialize)]
-pub struct SarifRuleProperties {
+pub(crate) struct SarifRuleProperties {
     pub category: &'static str,
     pub priority: i8,
     pub tags: Vec<&'static str>,
@@ -111,7 +111,7 @@ pub struct SarifRuleProperties {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SarifResult<'a> {
+pub(crate) struct SarifResult<'a> {
     pub rule_id: &'a str,
     pub level: &'static str,
     pub message: SarifMessage<'a>,
@@ -122,31 +122,31 @@ pub struct SarifResult<'a> {
 }
 
 #[derive(Serialize)]
-pub struct SarifMessage<'a> {
+pub(crate) struct SarifMessage<'a> {
     pub text: &'a str,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SarifLocation {
+pub(crate) struct SarifLocation {
     pub physical_location: SarifPhysicalLocation,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SarifPhysicalLocation {
+pub(crate) struct SarifPhysicalLocation {
     pub artifact_location: SarifArtifactLocation,
     pub region: SarifRegion,
 }
 
 #[derive(Serialize)]
-pub struct SarifArtifactLocation {
+pub(crate) struct SarifArtifactLocation {
     pub uri: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SarifRegion {
+pub(crate) struct SarifRegion {
     pub start_line: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_column: Option<u32>,
@@ -162,6 +162,11 @@ pub struct SarifRenderOpts {
     pub pretty: bool,
 }
 
+/// SARIF 2.1.0 formatter. Construct via the unit type and call
+/// `render` / `render_with_opts` to serialize findings to a SARIF
+/// JSON document. The internal wire-format structs (`SarifReport`,
+/// `SarifRun`, etc.) are `pub(crate)` — only this formatter and
+/// `SarifRenderOpts` are part of the crate's public surface.
 pub struct SarifFormatter;
 
 impl SarifFormatter {
@@ -178,6 +183,10 @@ impl SarifFormatter {
         Self::render_with_opts(issues, metas, SarifRenderOpts { pretty: true })
     }
 
+    /// Render with explicit options (compact vs pretty). `metas`
+    /// populates `runs[].tool.driver.rules[]` so consumers see one
+    /// rule entry per registered check id; missing meta falls back
+    /// to a minimal stub keyed by id alone.
     pub fn render_with_opts(
         issues: &[Issue],
         metas: &[CheckMeta],

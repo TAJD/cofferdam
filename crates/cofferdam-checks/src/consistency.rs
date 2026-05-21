@@ -30,6 +30,10 @@ struct FileQuoteStats {
 static QUOTE_STATS: CorpusKey<HashMap<PathBuf, FileQuoteStats>> =
     CorpusKey::new("Consistency.QuoteStyle.stats");
 
+/// `Consistency.QuoteStyle` — two-pass check that learns the
+/// dominant quote style per file in pass 1 and flags deviations in
+/// pass 2. See `CheckMeta` and the per-check docs page for the full
+/// emission contract.
 pub struct QuoteStyle;
 
 const META: CheckMeta = CheckMeta {
@@ -363,6 +367,10 @@ struct PerFileDirective {
 static SUPPRESSION_DIRECTIVES: CorpusKey<HashMap<PathBuf, Vec<PerFileDirective>>> =
     CorpusKey::new("Consistency.UnusedSuppression.directives");
 
+/// `Consistency.UnusedSuppression` — second-phase finalize observer
+/// that flags `// cofferdam-ignore` directives whose target check
+/// emitted no finding on the suppressed line. See `CheckMeta` for the
+/// two-phase finalize semantics and `FINALIZE_OBSERVER_CHECK_IDS`.
 pub struct UnusedSuppression;
 
 const US_META: CheckMeta = CheckMeta {

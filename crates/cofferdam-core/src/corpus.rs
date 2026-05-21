@@ -42,6 +42,12 @@ pub struct CorpusKey<T> {
 }
 
 impl<T: 'static + Send + Default> CorpusKey<T> {
+    /// Construct a corpus slot identifier. `name` is the storage key
+    /// and uniquely identifies the slot across the run. Two
+    /// `CorpusKey<T>` constants sharing a `name` AND `T` reference
+    /// the same slot; sharing `name` with mismatched `T` is a logic
+    /// bug that surfaces as `CorpusError::TypeMismatch` on the
+    /// fallible API or a panic on the built-in path.
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -49,6 +55,7 @@ impl<T: 'static + Send + Default> CorpusKey<T> {
         }
     }
 
+    /// The storage key this `CorpusKey<T>` references.
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -90,6 +97,8 @@ pub struct CorpusIndex {
 }
 
 impl CorpusIndex {
+    /// Build an empty corpus. The engine creates one per analysis
+    /// run; tests usually want `CorpusIndex::default()` (same shape).
     pub fn new() -> Self {
         Self::default()
     }

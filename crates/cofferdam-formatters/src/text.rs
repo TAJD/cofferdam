@@ -27,13 +27,21 @@ pub struct TextRenderOpts {
     pub hide_baselined: bool,
 }
 
+/// Human-readable text formatter. Groups findings by category, sorts
+/// by priority within each, prefixes the priority and severity, and
+/// emits ANSI colour by default (configurable via `TextRenderOpts`).
+/// The CLI's default output format.
 pub struct TextFormatter;
 
 impl TextFormatter {
+    /// Render findings with default options.
     pub fn render(issues: &[Issue]) -> String {
         Self::render_with_opts(issues, TextRenderOpts::default())
     }
 
+    /// Render findings honouring the supplied `TextRenderOpts`.
+    /// Useful when a caller wants ANSI off, `--hide-baselined`, or
+    /// custom truncation.
     pub fn render_with_opts(issues: &[Issue], opts: TextRenderOpts) -> String {
         Self::render_inner(issues.iter().map(|i| (i, false)), issues.len(), None, opts)
     }
@@ -45,6 +53,10 @@ impl TextFormatter {
         Self::render_with_baseline_opts(tagged, TextRenderOpts::default())
     }
 
+    /// Render with per-finding baseline tags and explicit options.
+    /// Findings matching the active baseline render with a
+    /// `[baselined]` tag; the run footer breaks out the new vs.
+    /// baselined counts so CI can gate on the new total only.
     pub fn render_with_baseline_opts(tagged: &[(Issue, bool)], opts: TextRenderOpts) -> String {
         let baselined = tagged.iter().filter(|(_, b)| *b).count();
         Self::render_inner(

@@ -29,7 +29,7 @@ use crate::Cli;
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn run(out: PathBuf, check: bool) -> ExitCode {
+pub(crate) fn run(out: PathBuf, check: bool) -> ExitCode {
     // Resolve `out` against CWD so relative paths like "docs" work.
     let cwd = match std::env::current_dir() {
         Ok(d) => d,

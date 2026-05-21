@@ -34,6 +34,11 @@ fn empty_corpus() -> &'static CorpusIndex {
     EMPTY.get_or_init(CorpusIndex::default)
 }
 
+/// One of the five top-level finding categories. The taxonomy is
+/// closed (no plugin- or project-configurable additions) and
+/// load-bearing — formatters and the UI bucket findings by category.
+/// See the module docs for the rationale and the cd-9hp.3 retraction
+/// of the originally-pledged configurable-taxonomy surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
@@ -165,6 +170,12 @@ pub struct CheckContext<'a> {
 }
 
 impl<'a> CheckContext<'a> {
+    /// Construct a minimal `CheckContext` borrowing `file`. The
+    /// `parsed`, `parsed_lang`, `options`, and `corpus` slots use
+    /// safe defaults — use the builder methods to install richer
+    /// state. The engine builds a fully-populated context per file;
+    /// tests typically only install the slots their check actually
+    /// reads.
     pub fn new(file: &'a SourceFile) -> Self {
         Self {
             file,
@@ -175,6 +186,8 @@ impl<'a> CheckContext<'a> {
         }
     }
 
+    /// Install the oxc-typed `ParsedView` for the current TS file.
+    /// The engine calls this in its TS dispatch branch.
     pub fn with_parsed(mut self, parsed: &'a crate::parser::ParsedView<'a>) -> Self {
         self.parsed = Some(parsed);
         self
@@ -188,11 +201,15 @@ impl<'a> CheckContext<'a> {
         self
     }
 
+    /// Install the validated `CheckOptions` bag for the running check.
     pub fn with_options(mut self, options: &'a CheckOptions) -> Self {
         self.options = options;
         self
     }
 
+    /// Install the shared `CorpusIndex` used by cross-file checks.
+    /// The engine creates one corpus per analysis run and shares it
+    /// across every per-file context plus the finalize pass.
     pub fn with_corpus(mut self, corpus: &'a CorpusIndex) -> Self {
         self.corpus = corpus;
         self
@@ -236,6 +253,9 @@ pub struct FinalizeContext<'a> {
 }
 
 impl<'a> FinalizeContext<'a> {
+    /// Construct a `FinalizeContext` borrowing the run's shared
+    /// `CorpusIndex`. The engine builds one per check and passes it
+    /// to `Check::finalize`.
     pub fn new(corpus: &'a CorpusIndex) -> Self {
         Self {
             corpus,
@@ -243,6 +263,7 @@ impl<'a> FinalizeContext<'a> {
         }
     }
 
+    /// Install the validated `CheckOptions` bag for the running check.
     pub fn with_options(mut self, options: &'a CheckOptions) -> Self {
         self.options = options;
         self

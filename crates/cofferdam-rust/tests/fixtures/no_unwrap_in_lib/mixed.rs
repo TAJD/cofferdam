@@ -1,10 +1,13 @@
-// Mixed file: 2 lib unwraps (should fire), 2 test unwraps (should not).
-// Lib lines are at 4 and 9; the assertion in the check tests pins those.
+// Mixed file: 1 lib `.unwrap()` (fires), 1 lib `.expect()` (allow-listed),
+// 1 test `.unwrap()` (silent via cfg_test), 1 test `.expect()` (silent).
+// The lib fire is at line 5 — the assertion in the check tests pins it.
 pub fn parse_id(s: &str) -> i64 {
     s.parse::<i64>().unwrap()
 }
 
 pub fn first_char(s: &str) -> char {
+    // `.expect(...)` with a non-empty message is the documented
+    // escape valve for proven-safe panics; NOT flagged.
     s.chars().next().expect("non-empty string")
 }
 

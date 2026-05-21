@@ -47,6 +47,9 @@ pub struct AstView<'a> {
 }
 
 impl<'a> AstView<'a> {
+    /// Construct an `AstView` over the parsed program and the source
+    /// text it was parsed from. Both references must outlive the
+    /// view.
     pub fn new(program: &'a Program<'a>, text: &'a str) -> Self {
         Self { program, text }
     }
@@ -217,6 +220,9 @@ impl<'a> NodeRef<'a> {
         }
     }
 
+    /// Plugin-facing `NodeKind` discriminant for this reference.
+    /// Used by `NodeRef::matches(kind)` and pattern-matched visitor
+    /// shapes in the plugin SDK.
     pub fn kind(&self) -> NodeKind {
         match self {
             Self::CallExpression(_) => NodeKind::CallExpression,

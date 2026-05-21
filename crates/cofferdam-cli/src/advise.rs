@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::plugins::{self, PluginCheckMeta, PluginFileScope};
 
-pub struct AdviseArgs {
+pub(crate) struct AdviseArgs {
     pub paths: Vec<PathBuf>,
     pub format: AdviseFormat,
     pub pretty: bool,
@@ -35,12 +35,12 @@ pub struct AdviseArgs {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum AdviseFormat {
+pub(crate) enum AdviseFormat {
     Text,
     Json,
 }
 
-pub fn run(args: AdviseArgs) -> ExitCode {
+pub(crate) fn run(args: AdviseArgs) -> ExitCode {
     let AdviseArgs {
         paths,
         format,

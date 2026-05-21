@@ -55,6 +55,9 @@ const META: CheckMeta = CheckMeta {
 };
 
 impl MaxParameters {
+    /// Construct with a parameter-count ceiling. `all_builtins`
+    /// installs the default of 5; user config overrides via
+    /// `[checks."Design.MaxParameters"].limit`.
     pub fn new(limit: u32) -> Self {
         Self { limit, meta: &META }
     }
@@ -160,6 +163,9 @@ struct NamedExport {
 /// it (only one is registered today, but the API permits sharing).
 static EXPORTS: CorpusKey<Vec<NamedExport>> = CorpusKey::new("Design.DuplicateExportName.exports");
 
+/// `Design.DuplicateExportName` — finalize-stage cross-file check
+/// that flags identifier names exported from more than one file. See
+/// `CheckMeta` for the full emission rules.
 pub struct DuplicateExportName;
 
 const DEN_META: CheckMeta = CheckMeta {
@@ -318,6 +324,10 @@ const OE_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Design.OrphanExport` — finalize-stage check that flags exports
+/// nothing in the project imports. Honours `[public_api]` exports
+/// (those ARE the published surface and are exempt). See `CheckMeta`
+/// for the contrast with `Refactor.DeadExport`.
 pub struct OrphanExport;
 
 impl Check for OrphanExport {
@@ -588,6 +598,9 @@ const IC_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Design.ImportCycle` — finalize-stage check that flags closed
+/// cycles in the project's import graph. Self-imports and cycles
+/// confined to a single file aren't flagged. See `CheckMeta`.
 pub struct ImportCycle;
 
 impl Check for ImportCycle {
@@ -785,6 +798,10 @@ const LV_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Design.LayerViolation` — finalize-stage check that flags
+/// imports crossing the `[layers]` boundaries declared in
+/// `cofferdam.invariants.toml`. See `CheckMeta` for the allowlist
+/// semantics.
 pub struct LayerViolation;
 
 impl Check for LayerViolation {
@@ -974,6 +991,9 @@ const BF_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Design.BoundaryFrozen` — per-file check that flags any change
+/// inside a `[boundaries."path"]` block declared `frozen = true` in
+/// `cofferdam.invariants.toml`. See `CheckMeta`.
 pub struct BoundaryFrozen;
 
 impl Check for BoundaryFrozen {
@@ -1066,6 +1086,10 @@ const IV_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Design.InvariantViolation` — finalize-stage check that
+/// evaluates `[invariants."rule-name"]` rules from
+/// `cofferdam.invariants.toml` against the project's import graph.
+/// See `CheckMeta` for the rule-evaluation semantics.
 pub struct InvariantViolation;
 
 impl Check for InvariantViolation {

@@ -14,6 +14,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Errors that can arise resolving the `--since <git-ref>` filter to
+/// a concrete file set. Covers git invocation failure, non-zero exit,
+/// and unparseable output. Surfaced to the CLI which formats them
+/// into a one-line warning rather than failing the run.
 #[derive(Debug, thiserror::Error)]
 pub enum SinceError {
     #[error("failed to invoke git: {0}")]

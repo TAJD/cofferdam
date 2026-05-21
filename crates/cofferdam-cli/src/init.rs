@@ -64,13 +64,13 @@ pub const STARTER_TOML: &str = "\
 /// interactive `[Y/n]` prompt at TTY; `Yes`/`No` skip it (set by
 /// `--baseline` / `--no-baseline`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum BaselineChoice {
+pub(crate) enum BaselineChoice {
     Auto,
     Yes,
     No,
 }
 
-pub struct InitArgs {
+pub(crate) struct InitArgs {
     pub path: PathBuf,
     pub force: bool,
     pub baseline_choice: BaselineChoice,
@@ -88,7 +88,7 @@ struct InitOutcome {
     gitignore_changed: bool,
 }
 
-pub fn run(args: InitArgs) -> ExitCode {
+pub(crate) fn run(args: InitArgs) -> ExitCode {
     let InitArgs {
         path,
         force,
@@ -245,7 +245,7 @@ fn write_baseline_for_init(root: &Path, target: &Path) -> Result<usize, String> 
 /// matches files individually, which lets the negation reach.
 /// 0.2.x scaffolded the broken `.cofferdam/` form (cd-6we / gh #4); if
 /// we see it alongside the negation, we migrate it to `.cofferdam/*`.
-pub fn merge_gitignore(path: &Path) -> io::Result<bool> {
+pub(crate) fn merge_gitignore(path: &Path) -> io::Result<bool> {
     const DIR_GLOB: &str = ".cofferdam/*";
     const DIR_BROKEN: &str = ".cofferdam/";
     const NEGATE_BASELINE: &str = "!.cofferdam/baseline.json";

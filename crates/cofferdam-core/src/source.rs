@@ -37,6 +37,10 @@ impl Language {
     }
 }
 
+/// One source file under analysis. Owns its text so checks can slice
+/// arbitrary byte ranges without lifetime gymnastics. The `language`
+/// field is derived from the file extension at construction time and
+/// drives per-language dispatch in the engine.
 #[derive(Debug, Clone)]
 pub struct SourceFile {
     pub path: PathBuf,
@@ -48,6 +52,8 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
+    /// Construct a `SourceFile`. Derives `language` from `path`'s
+    /// extension via `Language::from_path`.
     pub fn new(path: impl Into<PathBuf>, text: impl Into<String>) -> Self {
         let path = path.into();
         let language = Language::from_path(&path);

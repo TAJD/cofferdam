@@ -1,10 +1,18 @@
-//! `Rust.NoUnwrapInLib` — flags `.unwrap()` / `.expect()` outside test context.
+//! `Rust.NoUnwrapInLib` — flags `.unwrap()` outside test context.
+//!
+//! `.expect("<message>")` is deliberately NOT flagged: the descriptive
+//! message is the documented Rust convention for "I've proven this
+//! can't fail and here is why" — it gives the panic an actionable
+//! diagnostic instead of a generic backtrace. Bare `.unwrap()`, in
+//! contrast, is the lazy version with no context. The check matches
+//! clippy's `unwrap_used` (which flags `.unwrap()`) rather than
+//! `expect_used` (which flags `.expect()` and is rarely enabled).
 //!
 //! Implementation walks the tree-sitter syntax tree looking for
 //! `call_expression` nodes whose function is a `field_expression`
-//! resolving to `field_identifier` "unwrap" or "expect". For each
-//! hit, the check walks up the ancestor chain checking three guards
-//! that mark "test context":
+//! resolving to `field_identifier` "unwrap". For each hit, the check
+//! walks up the ancestor chain checking three guards that mark
+//! "test context":
 //!
 //! * `mod tests` — module declaration with the literal name `tests`.
 //! * `#[cfg(test)]` — outer attribute carrying `cfg(test)` on the
@@ -35,7 +43,7 @@ const META: CheckMeta = CheckMeta {
     category: Category::Warning,
     base_priority: 12,
     default_severity: Severity::Medium,
-    explanation: "Calling `.unwrap()` or `.expect()` in library code panics on `None`/`Err(_)`. Return `Result` and propagate via `?`, or write a `#[test]` for the call.",
+    explanation: "Calling `.unwrap()` in library code panics on `None`/`Err(_)` with no diagnostic context. Return `Result` and propagate via `?`, or use `.expect(\"<reason>\")` when the value is provably infallible.",
     body: include_str!("../../docs/Rust.NoUnwrapInLib.md"),
     requires_types: false,
     consistency: false,
@@ -76,15 +84,15 @@ fn collect_findings(
     out: &mut Vec<Issue>,
 ) {
     let node = cursor.node();
-    if let Some(method) = unwrap_or_expect_call(node, tree) {
+    if let Some(method) = unwrap_call(node, tree) {
         if !in_test_context(node, tree) {
             let span = tree.span_of(method);
-            let method_name = tree.text_of(method);
             out.push(Issue {
                 check_id: META.id.to_string(),
-                message: format!(
-                    "`.{method_name}()` in library code panics on `None`/`Err(_)`; return `Result` and propagate via `?` or move the call into a `#[test]`."
-                ),
+                message: "`.unwrap()` in library code panics with no diagnostic context; \
+                     return `Result` and propagate via `?` or use `.expect(\"<reason>\")` \
+                     when the value is provably infallible."
+                    .to_string(),
                 file: file.path.clone(),
                 span,
                 priority: Priority(META.base_priority),
@@ -104,10 +112,11 @@ fn collect_findings(
     }
 }
 
-/// If `node` is a `call_expression` of the form `<receiver>.unwrap()`
-/// or `<receiver>.expect(...)`, return the `field_identifier` node so
-/// the caller can produce a span pointing at the method name.
-fn unwrap_or_expect_call<'a>(
+/// If `node` is a `call_expression` of the form `<receiver>.unwrap()`,
+/// return the `field_identifier` node so the caller can produce a span
+/// pointing at the method name. Deliberately does not match `.expect()`
+/// — see the module docs for the `unwrap`-vs-`expect` policy.
+fn unwrap_call<'a>(
     node: tree_sitter::Node<'a>,
     tree: &RustParseTree,
 ) -> Option<tree_sitter::Node<'a>> {
@@ -122,8 +131,7 @@ fn unwrap_or_expect_call<'a>(
     if field.kind() != "field_identifier" {
         return None;
     }
-    let name = tree.text_of(field);
-    if name == "unwrap" || name == "expect" {
+    if tree.text_of(field) == "unwrap" {
         Some(field)
     } else {
         None
@@ -188,20 +196,31 @@ mod tests {
     }
 
     #[test]
-    fn fires_only_on_lib_calls_in_mixed_file() {
+    fn fires_only_on_lib_unwrap_in_mixed_file() {
         let src = include_str!("../../tests/fixtures/no_unwrap_in_lib/mixed.rs");
         let issues = run_check(src);
-        // Mixed fixture has 2 lib-context unwraps and 2 test-context
-        // ones; expect exactly the lib pair.
+        // Mixed fixture has 1 lib `.unwrap()` (fires), 1 lib `.expect()`
+        // (allow-listed), 1 test `.unwrap()` (silent via cfg_test), 1
+        // test `.expect()` (silent).
         assert_eq!(
             issues.len(),
-            2,
-            "expected exactly the 2 lib-context findings; got: {issues:?}",
+            1,
+            "expected exactly the 1 lib-context unwrap finding; got: {issues:?}",
         );
-        // Spot-check: both findings land on lines where the lib code
-        // calls unwrap/expect (lines 4 and 8 in the fixture).
-        let lines: Vec<u32> = issues.iter().map(|i| i.span.line).collect();
-        assert_eq!(lines, vec![4, 8], "unexpected lines for lib findings");
+        assert_eq!(issues[0].span.line, 5, "unexpected line for lib finding");
+    }
+
+    #[test]
+    fn expect_with_descriptive_message_is_silent() {
+        // The `.expect("<reason>")` convention is the documented
+        // escape valve for proven-safe panics — clippy matches this
+        // with its `unwrap_used` (on) vs `expect_used` (off) split.
+        let src = "pub fn first(s: &str) -> char { s.chars().next().expect(\"non-empty\") }\n";
+        let issues = run_check(src);
+        assert!(
+            issues.is_empty(),
+            "`.expect(...)` should not fire Rust.NoUnwrapInLib; got: {issues:?}",
+        );
     }
 
     #[test]
@@ -216,7 +235,8 @@ mod tests {
 
     #[test]
     fn distinguishes_unwrap_from_unrelated_methods() {
-        // Method names that aren't unwrap/expect must not fire.
+        // Method names that aren't `unwrap` must not fire (including
+        // `.expect(...)`, which is allow-listed by design).
         let src = "pub fn f(x: String) -> usize { x.len() }\n";
         let issues = run_check(src);
         assert!(issues.is_empty());

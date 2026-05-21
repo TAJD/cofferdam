@@ -114,6 +114,79 @@ Read by `Design.InvariantViolation`. All invariants share one check id
 Design.InvariantViolation` or globally with a severity override on the
 check.
 
+### `[invariants.scripted]`
+
+When the `forbid_imports` / `require_imports` shape can't express a
+rule — file-level constraints, layer-conditional gates, predicates
+over both imports AND exports — declare a **scripted** invariant with
+the v1 predicate DSL.
+
+```toml
+[invariants.scripted."controller-test-pair"]
+when    = "file matches 'src/controllers/**/*.ts'"
+require = "exists('tests/' + basename(file))"
+message = "Every controller needs a test file under tests/"
+
+[invariants.scripted."ui-no-localstorage"]
+when    = "file matches 'ui/**'"
+forbid  = "imports 'localStorage'"
+message = "UI files must not touch localStorage directly"
+```
+
+Each rule has four fields:
+
+* `when` (optional) — predicate that gates the rule. The rule only
+  fires on files where `when` evaluates true. Omit to apply to every
+  file.
+* `require` — predicate that MUST hold. The rule emits a finding when
+  it evaluates false.
+* `forbid` — predicate that MUST NOT hold. The rule emits a finding
+  when it evaluates true.
+* `message` — literal text surfaced on each finding.
+
+Exactly one of `require` / `forbid` must be set. Setting both or
+neither is a config-load error.
+
+**DSL surface (v1).** Boolean glue (`and`, `or`, `not`, parentheses)
+over comparisons; string concat with `+`; functions `basename(...)`,
+`dirname(...)`, `exists(...)`. Operators:
+
+| Operator | Purpose |
+|---|---|
+| `matches` | gitignore-style glob match against a file path |
+| `==` / `!=` | string equality on `file.path` / `file.layer` |
+| `in '<layer>'` | file resolves to the named layer |
+| `imports '<spec>'` | direct import edge to a module specifier or path |
+| `transitively imports '<spec>'` | transitive closure (direct-only in v1; full closure in cd-9hp.9) |
+| `imports as type '<spec>'` / `imports as value '<spec>'` | type-only vs value imports |
+| `exports '<name>'` | file exports a named symbol |
+
+Subjects: `file`, `file.path`, `file.layer`. Namespaces `core.*` and
+`ts.*` are reserved in the grammar for future-domain expansion; v1
+does not yet resolve them. Full grammar — including the EBNF and the
+list of error classes — lives in
+[docs/dsl-grammar.md](./dsl-grammar.md).
+
+**Fail-fast at config load.** Every DSL string is parsed when
+`cofferdam.invariants.toml` is loaded. A malformed predicate is a
+fatal error pointing at the offending rule + field; the engine
+refuses to start. Bad scripts never reach file 4000 of the run.
+
+**v1 limitations.**
+
+* Findings carry the file path with line/col `1:1`. Per-edge spans
+  for `imports` predicates are reserved for a future MINOR bump.
+* `message` is the literal string. `{file}` and friends from the
+  grammar doc are forward-compat surface — v1 emits the message
+  verbatim and reserves interpolation for v2.
+* `transitively imports` evaluates direct edges only in v1 (graph
+  closure ships with cd-9hp.9).
+
+Read by `Design.ScriptedInvariant`. All scripted rules share one
+check id — suppress per-line via `// cofferdam-disable-next-line
+Design.ScriptedInvariant` or globally with a severity override on
+the check.
+
 ## Migration from `cofferdam.toml`
 
 Existing `[layers]` configuration in `cofferdam.toml` continues to

@@ -14,9 +14,10 @@ rules declares `schema_version = "1.0"` at the top of
 
 ```toml
 [invariants.scripted."<rule-name>"]
-when    = "<predicate>"
-require = "<predicate>"
-message = "<format-string>"
+when    = "<predicate>"     # optional gate
+require = "<predicate>"     # exactly one of require / forbid
+forbid  = "<predicate>"     # exactly one of require / forbid
+message = "<finding-text>"
 ```
 
 `<rule-name>` is the stable identifier used in suppression directives
@@ -24,16 +25,21 @@ and baseline entries. Conventions: lowercase, dash-separated, scoped
 by domain (`controller-test-pair`, `domain-purity`,
 `sql-no-nullable-fk`).
 
-A rule fires when `when` evaluates true AND `require` evaluates false
-on the same file. `message` is formatted with `{name}` substitutions
-(see "Format strings" below) and emitted as the finding message.
+A rule fires per file when:
 
-Both `when` and `require` are optional. Defaults:
+- `when` (if set) evaluates true on the file, AND
+- `require` (if set) evaluates false on the file, OR
+- `forbid` (if set) evaluates true on the file.
 
-- `when` omitted ⇒ rule applies to every file in scope.
-- `require` omitted ⇒ rule fires whenever `when` matches (used for
-  pure denylist rules: "no file in `layer.app` may import
-  `infra.db`" — the `forbid` operator in `when` is sufficient).
+Exactly one of `require` / `forbid` must be set. Setting both or
+neither is a load-time error. `when` is optional; when omitted, the
+rule applies to every file in scope. `message` is emitted as the
+finding's message text.
+
+Choosing `require` vs `forbid` is purely a readability call:
+`require X` reads naturally for "X must hold"; `forbid Y` reads
+naturally for "Y must not hold". They are not equivalent at the
+schema level — pick the one that reads at the call site.
 
 ## Predicate grammar
 
@@ -63,11 +69,11 @@ concat       = operand "+" operand ;   (* left-associative *)
 call         = identifier "(" [ args ] ")" ;
 args         = predicate ( "," predicate )* ;
 
-(* `forbid` and `require` are sugar that wraps an operator in negation
-   for readability:
-     forbid imports 'X'    ⇔   not imports 'X'
-     require exports 'Y'   ⇔   exports 'Y'
-   They are recognised only at the top of `when` / `require`. *)
+(* `top_predicate` is the parse entry point — a `predicate` optionally
+   prefixed with `forbid` / `require`. v1 reads the TOML `require` /
+   `forbid` fields as bare predicates (no prefix); the wrapper keywords
+   live in the grammar so a future MINOR bump can collapse the two
+   fields back into one without breaking existing rules. *)
 top_predicate = ( "forbid" | "require" ) predicate | predicate ;
 
 string       = "'" <chars> "'" | "\"" <chars> "\"" ;
@@ -126,22 +132,22 @@ v1 ships three; new additions go through MINOR version bumps.
 | `dirname(p)` | `string → string` | Path without the final component |
 | `exists(p)` | `string → bool` | A file exists at the project-relative path |
 
-## Format strings
+## Message text
 
-`message` is a TOML string where `{<expression>}` interpolates a
-predicate result. The expression must yield a string; common forms:
+v1 emits `message` verbatim — whatever literal TOML string the user
+wrote lands in the finding. The
+<code>&#123;&#123;file&#125;&#125;</code>-style interpolation surface
+sketched in earlier design notes is reserved for v2 (cd-9hp.9). When
+that ships, curly braces in literal messages will need escaping; v1
+authors should avoid `{…}` substrings in messages today to keep
+forward-compat free.
 
-- `{file}` — the current file's project-relative path
-- `{file.layer}` — the current file's resolved layer (or empty)
-- `{basename(file)}` — the file's basename
-
-Curly braces in the literal message are escaped as <code>&#123;&#123;</code> and <code>&#125;&#125;</code>.
-
-<!-- The pair above is written in HTML-entity form because VitePress'
-     Vue compiler scans rendered markdown for literal double-brace
-     template interpolations even inside inline backtick code spans.
-     Entity escapes keep the rendered output identical without tripping
-     Vue. scripts/check-vitepress.mjs enforces this at pre-commit. -->
+<!-- Curly-brace pairs are written in HTML-entity form because
+     VitePress' Vue compiler scans rendered markdown for literal
+     double-brace template interpolations even inside inline backtick
+     code spans. Entity escapes keep the rendered output identical
+     without tripping Vue. scripts/check-vitepress.mjs enforces this
+     at pre-commit. -->
 
 
 ## Errors
@@ -187,21 +193,22 @@ schema_version = "1.0"
 
 [invariants.scripted."controller-test-pair"]
 when    = "file matches 'src/controllers/**/*.ts'"
-require = "exists('tests/controllers/' + basename(file) + '.test.ts')"
-message = "Every controller needs a registered test (expected 'tests/controllers/{basename(file)}.test.ts')"
+require = "exists('tests/' + basename(file))"
+message = "Every controller needs a test file under tests/"
 
 [invariants.scripted."ui-no-localstorage"]
-when    = "file matches 'src/components/ui/**'"
-require = "forbid imports 'localStorage'"
-message = "UI primitives must not touch `localStorage`; route storage through the persistence layer."
+when    = "file matches 'ui/**'"
+forbid  = "imports 'localStorage'"
+message = "UI files must not touch localStorage directly"
 ```
 
-The first rule fires per-file when a controller exists but its
-companion test file does not. The second fires when a UI primitive
-imports `localStorage`. Both demonstrate the canonical TOML surface;
-the parser turns each predicate string into a strongly-typed AST
-that the runtime evaluator (`Design.ScriptedInvariant`) walks per
-file.
+The first rule fires per file when a controller exists but its
+sibling test file does not. The second fires when a UI file imports
+`localStorage`. Both are pinned by the spec-contract fixtures
+`scripted-file-level` and `scripted-cross-file` under
+`crates/cofferdam-engine/tests/spec_contract/`; the parser turns
+each predicate string into a strongly-typed AST that the runtime
+evaluator (`Design.ScriptedInvariant`) walks per file.
 
 ## Implementation pointer
 

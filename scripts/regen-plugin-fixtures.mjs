@@ -74,8 +74,12 @@ for (const name of readdirSync(FIXTURES_DIR)) {
   // config dir, no repo-root config pollution). Pass it explicitly —
   // the engine's walk-up discovery starts from CWD, not the input
   // file, and won't find a sibling-of-fixture config on its own.
+  // `--no-baseline` (cd-sv9m): insulate goldens from any
+  // `.cofferdam/baseline.json` that may exist in the repo. Without
+  // this, the JSON output toggles between two schemas depending on
+  // whether a repo-level baseline happens to exist at regen time.
   const fixtureConfig = join(dir, "cofferdam.toml");
-  const args = ["check", fixture, "--format", "json", "--pretty"];
+  const args = ["check", fixture, "--format", "json", "--pretty", "--no-baseline"];
   if (existsSync(fixtureConfig)) args.push("--config", fixtureConfig);
 
   let actual;

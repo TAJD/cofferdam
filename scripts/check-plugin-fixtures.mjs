@@ -53,8 +53,15 @@ for (const name of readdirSync(FIXTURES_DIR)) {
   // present, is passed via --config. Discovery starts from CWD (the
   // repo root in CI), not from the fixture's directory, so explicit
   // pointing is required.
+  //
+  // `--no-baseline` insulates these goldens from any baseline that may
+  // exist under the repo (e.g. `.cofferdam/baseline.json` added by the
+  // SDK dogfood — cd-sv9m). Plugin fixtures assert SDK behavior, not
+  // baseline behavior; the auto-discovered baseline would otherwise
+  // toggle the per-finding `baselined` field and the summary
+  // `new`/`baselined` counts in the output, breaking every fixture.
   const fixtureConfig = join(dir, "cofferdam.toml");
-  const args = ["check", fixture, "--format", "json", "--pretty"];
+  const args = ["check", fixture, "--format", "json", "--pretty", "--no-baseline"];
   if (existsSync(fixtureConfig)) args.push("--config", fixtureConfig);
 
   let raw;

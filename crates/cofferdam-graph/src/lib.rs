@@ -32,21 +32,25 @@
 //!   `(variant discriminant, identifying attrs)` via sha2 truncated
 //!   to 64 bits. Stable within and across processes for a given
 //!   build of cofferdam-graph.
+//! - [`store`] — petgraph-backed [`store::Graph`] with path and
+//!   layer indexes and bounded-depth BFS over edge-kind filters.
+//!   The mutation API is build-only at cp2; incremental removal /
+//!   replacement lands with cd-9hp.4.
 //!
 //! # What this crate is NOT (yet)
 //!
-//! - No petgraph dependency — cp2 adds it.
-//! - No `Graph` struct, no `add_node` / `add_edge` API — cp2.
 //! - No engine wiring — cp3 migrates `Design.OrphanExport`.
 //! - No `schema_version` enforcement at load time — cp5 wires the
 //!   versioning policy through.
 
 pub mod id;
 pub mod schema;
+pub mod store;
 pub mod value;
 
 pub use id::{compute_node_id, NodeId};
 pub use schema::{EdgeKind, ExportKind, NodeKind, SymbolKind};
+pub use store::{EdgePayload, Graph};
 pub use value::{AttrMap, Value};
 
 /// Schema version this build emits and reads natively. Bumps follow

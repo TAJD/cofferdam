@@ -76,6 +76,8 @@ t9d-corpus/
 /tests/parse-cache-bench-results/
 # cd-9hp.4 cp2 — per-run findings-cache speedup numbers.
 /tests/findings-cache-bench-results/
+# cd-9hp.4 cp3 — per-run full-run-cache speedup numbers.
+/tests/run-cache-bench-results/
 # bd worktree
 d1y-twopass/
 # bd worktree

@@ -10,6 +10,7 @@ pub mod config;
 pub mod discover;
 pub mod findings_cache;
 pub mod graph;
+pub mod run_cache;
 pub mod since;
 pub mod suppress;
 
@@ -258,6 +259,74 @@ impl Engine {
     /// snapshot replay on top so even non-pure checks can be
     /// skipped on hit.
     pub fn analyze_with_sources_caches(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_full(sources, parse_cache, findings_cache, None)
+    }
+
+    /// Outermost-layer cache entry point (cd-9hp.4 cp3).
+    ///
+    /// Adds a [`run_cache::RunCache`] in front of the parse +
+    /// findings caches. On hit (input fingerprint + config unchanged
+    /// since the last analyze that populated the cache), returns the
+    /// memoised issue list directly — the entire per-file loop,
+    /// graph extract, non-pure check runs, and finalize are all
+    /// skipped. On miss, runs the full analyze through the inner
+    /// caches as normal and inserts the result.
+    ///
+    /// Trade-off documented in [`crate::run_cache`]: ANY file change
+    /// flips the input fingerprint and invalidates the entry,
+    /// falling through to a fresh analyze. Partial replay (file X
+    /// changed → only X re-runs, others reuse contributions) is a
+    /// follow-up bead.
+    pub fn analyze_with_sources_full(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        // Outermost layer: if the run cache has an entry for this
+        // exact input set + config, return its issues directly.
+        // The text map is reconstructed cheaply from `sources` — no
+        // point caching it. Texts come from disk (or a caller-
+        // supplied vec); the cache only memoises analyzer output.
+        if let Some(rc) = run_cache {
+            let key = run_cache::RunKey {
+                input_set: run_cache::input_set_hash(&sources),
+                config_hash: self.config_hash(),
+            };
+            if let Some(cached) = rc.get(&key) {
+                let texts: HashMap<PathBuf, String> = sources.iter().cloned().collect();
+                return (cached, texts);
+            }
+            let (issues, texts) = self.run_cache_miss_path(sources, parse_cache, findings_cache);
+            rc.insert(key, issues.clone());
+            return (issues, texts);
+        }
+        self.run_cache_miss_path(sources, parse_cache, findings_cache)
+    }
+
+    /// The full analyze path used on a `RunCache` miss. Factored out
+    /// so the outermost-cache branch can call it without code
+    /// duplication.
+    fn run_cache_miss_path(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache)
+    }
+
+    /// Inner entry point — does the full per-file analysis through
+    /// the parse + findings caches. Was the body of
+    /// `analyze_with_sources_caches` before the cp3 outermost-layer
+    /// `RunCache` was layered on top.
+    fn analyze_with_sources_caches_inner(
         &self,
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,

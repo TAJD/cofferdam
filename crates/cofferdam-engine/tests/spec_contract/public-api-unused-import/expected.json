@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Warning.UnusedImport",
+      "file": "src/leaf.ts",
+      "line": 5,
+      "column": 10,
+      "message": "re-export `BETA` is never imported by another file"
+    }
+  ]
+}

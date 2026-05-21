@@ -194,6 +194,15 @@ fn spec_contract_public_api_orphans() {
 }
 
 #[test]
+fn spec_contract_public_api_unused_import() {
+    // cd-5ej: Warning.UnusedImport must respect [public_api].exports.
+    // Re-exports living in allow-listed files (exact path or glob) are
+    // the published surface — silent. Re-exports from non-allow-listed
+    // files with no project-internal importer still fire.
+    check_fixture("public-api-unused-import");
+}
+
+#[test]
 fn spec_contract_forbid_imports() {
     check_fixture("forbid-imports");
 }

@@ -2,61 +2,6 @@
   "version": 2,
   "findings": [
     {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "08ee52ae125a0a90df4b11a13ef422a0837c8d1a9e5c2883cb7779352ca17d62"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "292c06f0045a45d044be282b132b7055ae224e18e02b523a451d8ea96fadfd24"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "4519488e87d1cdcba4dade9e724bb06b75ad54a5639d30aa012ad38f786db682"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "5e9f98120dbe568255ee059f39671686982b113d4e917b6d6faf149918c81709"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "6ac90cd391bdcdf04926ccc80486000c992a7bbbc62e44f5b6793dc9823f9101"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "7349ca3b325cb1af53366a625c527c0f65a9d3021dec4cd0767d38fc9f02b3cf"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "8231892d2975a8d8badd024fbb5e365bd95c284a204d577ba75b907ffdc4323b"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "963dbe5b62ff90b66025671bba437ca3f3869353c012acc43b08de53e6e5482b"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "a2142b9a856316be7a405330861396e17a65fa5b0d43f4137b9ef5df9ee067e7"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "e42ad49bcd22c34988a8bdbf4f426617589cfceb6b8d24c66b99d415a644edea"
-    },
-    {
-      "file": "packages/check-sdk/src/index.ts",
-      "check_id": "Warning.UnusedImport",
-      "rule_signature": "ffceb0d3cf8f829f4c00349644c5c87122d3b16e8279c84add3ece7a5215ef0b"
-    },
-    {
       "file": "packages/check-sdk/src/plugin-host.ts",
       "check_id": "Refactor.CognitiveComplexity",
       "rule_signature": "acc354291099caaaf55ac56ac8f844baa36b4dba4bb523b279e8600c4ebb00a0"

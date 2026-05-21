@@ -8,13 +8,6 @@
       "message": "invariant `no-direct-db-access` violated: forbidden import `../infra/db/connection` (matches prefix `src/infra/db`)"
     },
     {
-      "id": "Warning.UnusedImport",
-      "file": "src/index.ts",
-      "line": 2,
-      "column": 10,
-      "message": "re-export `fetchUser` is never imported by another file"
-    },
-    {
       "id": "Design.BoundaryFrozen",
       "file": "src/legacy/old-helper.ts",
       "line": 1,

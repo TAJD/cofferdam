@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::framework_paths::is_framework_entry;
+use crate::public_api::{resolve_public_api, PublicApi};
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, OptionDefault, OptionKind,
@@ -459,11 +460,24 @@ impl Check for UnusedImport {
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         use cofferdam_core::graph::{
             ExportKind as GExportKind, ExportRecord as GExportRecord, ImportKind as GImportKind,
-            ImportRecord as GImportRecord, EXPORTS as G_EXPORTS, IMPORTS as G_IMPORTS,
+            ImportRecord as GImportRecord, InvariantsRuntime, EXPORTS as G_EXPORTS,
+            IMPORTS as G_IMPORTS, INVARIANTS as G_INVARIANTS,
         };
 
         let imports: Vec<GImportRecord> = ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.clone());
         let exports: Vec<GExportRecord> = ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.clone());
+        // [public_api] from cofferdam.invariants.toml. Re-exports from
+        // files matched by `[public_api].exports` ARE the published
+        // surface by construction (downstream consumers live in the
+        // installed package and aren't visible in the corpus), so they
+        // must not be flagged as orphan re-exports. Same exemption shape
+        // as Design.OrphanExport (cd-5ej / cd-gro).
+        let runtime: Option<InvariantsRuntime> =
+            ctx.corpus.with_slot(&G_INVARIANTS, |slot| slot.clone());
+        let public_api: PublicApi = runtime
+            .as_ref()
+            .map(|r| resolve_public_api(&r.public_api.exports, &r.project_root))
+            .unwrap_or_default();
 
         // For each (re-exporter_path_key, name) — is anyone in the
         // project importing it?
@@ -513,6 +527,13 @@ impl Check for UnusedImport {
                 continue;
             }
             let key = path_key(&exp.file);
+            // Public API: re-exports from a `[public_api].exports`
+            // file are the published surface; downstream consumers live
+            // outside the corpus, so absence-of-import-in-project does
+            // not mean unused (cd-5ej).
+            if public_api.is_match(&key) {
+                continue;
+            }
             // If the re-exporter is itself reached by a namespace import
             // anywhere, every name on it is opaquely consumed.
             if ns_consumed.contains(&key) {

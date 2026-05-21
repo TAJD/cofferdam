@@ -93,6 +93,10 @@ pub struct ProjectConfig {
     pub layers_double_declaration: bool,
 }
 
+/// Errors that can prevent `cofferdam.toml` from loading. Includes IO
+/// failure, malformed TOML, and schema-validation failures (each
+/// variant carries the source path so the CLI can format actionable
+/// diagnostics).
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to read config {path}: {source}")]
@@ -317,6 +321,13 @@ pub struct LoadDiagnostics {
     pub warnings: Vec<String>,
 }
 
+/// Load both `cofferdam.toml` and `cofferdam.invariants.toml`,
+/// merging their `[layers]` blocks (invariants takes precedence) and
+/// returning a unified `ProjectConfig` plus the path the config was
+/// loaded from. Honours `no_config = true` to disable discovery
+/// entirely (the `--no-config` CLI flag). Non-fatal load failures
+/// (e.g. an unreadable explicit path) surface in `LoadDiagnostics`
+/// rather than the `Result` so the CLI can warn-and-continue.
 #[allow(clippy::result_large_err)]
 pub fn resolve_with_invariants(
     explicit_toml: Option<&Path>,

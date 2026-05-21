@@ -65,6 +65,9 @@ pub const VERSION: u32 = 2;
 /// so the CLI and any other consumer agree on the convention.
 pub const DEFAULT_PATH: &str = ".cofferdam/baseline.json";
 
+/// One row in the on-disk baseline file. Keys a known-accepted
+/// finding by (file, check_id, rule_signature) so a fresh analyzer
+/// run can decide whether each finding is new or pre-existing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct BaselineEntry {
     /// Forward-slash relative path to the file containing the finding.
@@ -72,6 +75,8 @@ pub struct BaselineEntry {
     /// (typically the repo root) so baselines remain stable across
     /// different developers' workspace prefixes.
     pub file: String,
+    /// Dotted check ID from `CheckMeta` — the same identifier used in
+    /// config, suppression directives, and SARIF rule IDs.
     pub check_id: String,
     /// Hex-encoded SHA-256 of the offending span text with internal
     /// whitespace runs collapsed (V2). See module docs for why this is
@@ -79,13 +84,25 @@ pub struct BaselineEntry {
     pub rule_signature: String,
 }
 
+/// On-disk baseline document — schema-versioned bundle of accepted
+/// findings. Persisted as JSON at `.cofferdam/baseline.json` by
+/// default; the path is configurable via `--baseline`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Baseline {
+    /// Schema version. Loader rejects mismatches via
+    /// [`BaselineError::Version`] so a future format change can't be
+    /// misread by an older binary.
     pub version: u32,
+    /// Sorted list of accepted findings. Sort is stable on
+    /// (file, check_id, rule_signature) so the file diffs cleanly
+    /// in PR review.
     pub findings: Vec<BaselineEntry>,
 }
 
 impl Baseline {
+    /// Construct a `Baseline` from a list of entries, sorting them
+    /// into the canonical order so the on-disk JSON is reproducible.
+    /// Stamps `version` with the current `VERSION` constant.
     pub fn new(findings: Vec<BaselineEntry>) -> Self {
         let mut findings = findings;
         sort_entries(&mut findings);
@@ -102,6 +119,9 @@ impl Baseline {
     }
 }
 
+/// Errors that can prevent a baseline from loading. IO failure,
+/// malformed JSON, and schema-version mismatches each have their own
+/// variant so the CLI can format actionable diagnostics.
 #[derive(Debug, thiserror::Error)]
 pub enum BaselineError {
     #[error("failed to read baseline {path}: {source}")]

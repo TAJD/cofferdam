@@ -93,6 +93,7 @@ pub struct SchemaVersion {
 }
 
 impl SchemaVersion {
+    /// Construct a `SchemaVersion` from explicit major/minor integers.
     pub const fn new(major: u32, minor: u32) -> Self {
         Self { major, minor }
     }
@@ -105,6 +106,9 @@ impl SchemaVersion {
             return Err("schema_version string is empty");
         }
         let mut parts = trimmed.split('.');
+        // `str::split` always yields at least one element, and `trimmed` was
+        // checked non-empty above — `parts.next()` cannot return None here.
+        // cofferdam-ignore: Rust.NoUnwrapInLib: invariant proven by the non-empty check above
         let major_str = parts.next().unwrap();
         let major: u32 = major_str
             .parse()
@@ -228,6 +232,10 @@ impl Default for InvariantsSpec {
     }
 }
 
+/// `[public_api]` block from `cofferdam.invariants.toml` — the
+/// allowlist of files that compose the project's published surface.
+/// Re-exports in matching files are exempt from `Design.OrphanExport`
+/// and `Warning.UnusedImport`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PublicApiSpec {
     /// Each entry is either a relative file path (`src/index.ts`) or a
@@ -237,12 +245,24 @@ pub struct PublicApiSpec {
     pub exports: Vec<String>,
 }
 
+/// `[boundaries."path/glob"]` block from `cofferdam.invariants.toml`.
+/// `Design.BoundaryFrozen` reads this to flag changes to files inside
+/// frozen directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundarySpec {
+    /// When true, the boundary refuses changes (modulo
+    /// suppression directives). Disables review-time green-lighting
+    /// for the matching path glob.
     pub frozen: bool,
+    /// Optional context surfaced to the user when the boundary fires
+    /// — typically a pointer to the prior incident or design decision
+    /// that froze the surface.
     pub reason: Option<String>,
 }
 
+/// `[invariants."rule-name"]` block from `cofferdam.invariants.toml`.
+/// Defines architectural rules over the project's import graph that
+/// `Design.InvariantViolation` evaluates in `finalize`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InvariantSpec {
     /// Imports matching any of these prefixes (project-relative) are
@@ -300,6 +320,10 @@ struct InvariantToml {
     from_layers: Vec<String>,
 }
 
+/// Errors that can prevent `cofferdam.invariants.toml` from loading.
+/// Surface includes IO failure, malformed TOML, and schema-validation
+/// failures (each variant carries the source path so the CLI can point
+/// the user at the offending file + line).
 #[derive(Debug, thiserror::Error)]
 pub enum InvariantsError {
     #[error("failed to read {path}: {source}")]

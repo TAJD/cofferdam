@@ -34,6 +34,10 @@ pub enum OptionKind {
 }
 
 impl OptionKind {
+    /// Display name for this kind, used in error messages (e.g.
+    /// `expected bool, got string`). The names are part of the
+    /// user-visible diagnostic surface — don't change without a
+    /// deprecation note.
     pub const fn name(self) -> &'static str {
         match self {
             OptionKind::Bool => "bool",
@@ -58,6 +62,8 @@ pub enum OptionDefault {
 }
 
 impl OptionDefault {
+    /// The `OptionKind` this default carries. Used by validation to
+    /// confirm `OptionSpec.kind` agrees with `OptionSpec.default`.
     pub const fn kind(&self) -> OptionKind {
         match self {
             OptionDefault::Bool(_) => OptionKind::Bool,
@@ -68,6 +74,9 @@ impl OptionDefault {
         }
     }
 
+    /// Materialise a compile-time default as a runtime `OptionValue`.
+    /// String slices are owned (`.to_string()`); list slices are
+    /// collected. Cheap — defaults are small.
     pub fn to_value(&self) -> OptionValue {
         match *self {
             OptionDefault::Bool(b) => OptionValue::Bool(b),
@@ -107,6 +116,8 @@ pub enum OptionValue {
 }
 
 impl OptionValue {
+    /// The `OptionKind` this value carries. Used for type-mismatch
+    /// diagnostics when a user overrides an option with the wrong shape.
     pub fn kind(&self) -> OptionKind {
         match self {
             OptionValue::Bool(_) => OptionKind::Bool,
@@ -131,6 +142,10 @@ pub enum RawOptionValue {
 }
 
 impl RawOptionValue {
+    /// Coarse type label for diagnostic messages. Lists are flattened
+    /// to a single `"list"` label — the element types only matter once
+    /// the homogeneity check passes, and surfacing per-element types
+    /// up here would add noise without information.
     pub fn kind_label(&self) -> &'static str {
         match self {
             RawOptionValue::Bool(_) => "bool",
@@ -154,6 +169,8 @@ pub struct CheckOptions {
 }
 
 impl CheckOptions {
+    /// Empty options bag. The process-wide [`EMPTY_OPTIONS`] static
+    /// uses this so tests and option-less checks share one instance.
     pub const fn empty() -> Self {
         Self {
             values: BTreeMap::new(),
@@ -169,10 +186,16 @@ impl CheckOptions {
         Self { values }
     }
 
+    /// Untyped accessor. Returns `Some(&OptionValue)` if the key is
+    /// declared in the schema. Prefer the typed getters below for
+    /// well-known types.
     pub fn get(&self, name: &str) -> Option<&OptionValue> {
         self.values.get(name)
     }
 
+    /// Typed accessor for `OptionKind::Bool` values. Returns `None`
+    /// when the key is missing OR the value's runtime type doesn't
+    /// match — defensive against schema/check-author drift.
     pub fn get_bool(&self, name: &str) -> Option<bool> {
         match self.values.get(name)? {
             OptionValue::Bool(b) => Some(*b),
@@ -180,6 +203,7 @@ impl CheckOptions {
         }
     }
 
+    /// Typed accessor for `OptionKind::Int` values.
     pub fn get_int(&self, name: &str) -> Option<i64> {
         match self.values.get(name)? {
             OptionValue::Int(i) => Some(*i),
@@ -187,6 +211,7 @@ impl CheckOptions {
         }
     }
 
+    /// Typed accessor for `OptionKind::String` values.
     pub fn get_string(&self, name: &str) -> Option<&str> {
         match self.values.get(name)? {
             OptionValue::String(s) => Some(s.as_str()),
@@ -194,6 +219,7 @@ impl CheckOptions {
         }
     }
 
+    /// Typed accessor for `OptionKind::StringList` values.
     pub fn get_string_list(&self, name: &str) -> Option<&[String]> {
         match self.values.get(name)? {
             OptionValue::StringList(xs) => Some(xs.as_slice()),
@@ -201,6 +227,7 @@ impl CheckOptions {
         }
     }
 
+    /// Typed accessor for `OptionKind::IntList` values.
     pub fn get_int_list(&self, name: &str) -> Option<&[i64]> {
         match self.values.get(name)? {
             OptionValue::IntList(xs) => Some(xs.as_slice()),

@@ -446,6 +446,10 @@ const UI_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Warning.UnusedImport` — finalize-stage check that flags imports
+/// no consumer reads. Honours `[public_api]` exports (a re-export from
+/// an allow-listed file is the published surface). See `CheckMeta`
+/// for the full emission rules.
 pub struct UnusedImport;
 
 impl Check for UnusedImport {

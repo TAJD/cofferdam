@@ -47,6 +47,9 @@ pub struct CyclomaticComplexity {
 }
 
 impl CyclomaticComplexity {
+    /// Construct with a per-function complexity ceiling. `all_builtins`
+    /// installs the default of 10; user config overrides via
+    /// `[checks."Refactor.CyclomaticComplexity"].limit`.
     pub fn new(limit: u32) -> Self {
         Self { limit }
     }
@@ -219,6 +222,9 @@ pub struct CognitiveComplexity {
 }
 
 impl CognitiveComplexity {
+    /// Construct with a per-function cognitive-complexity ceiling.
+    /// `all_builtins` installs the default of 15; user config overrides
+    /// via `[checks."Refactor.CognitiveComplexity"].limit`.
     pub fn new(limit: u32) -> Self {
         Self { limit }
     }
@@ -486,6 +492,9 @@ pub struct LongAndComplex {
 }
 
 impl LongAndComplex {
+    /// Construct with paired length and cyclomatic ceilings. The check
+    /// fires only when a function exceeds BOTH — neither alone is
+    /// enough. `all_builtins` installs (75, 15).
     pub fn new(length_limit: u32, cyclomatic_limit: u32) -> Self {
         Self {
             length_limit,
@@ -794,6 +803,9 @@ static DUPLICATE_BLOCKS: CorpusKey<Vec<Fingerprint>> =
 /// are counted as separate tokens.
 const DUPLICATE_BLOCK_MIN_TOKENS: usize = 50;
 
+/// `Refactor.DuplicateBlock` — flags repeated statement / token
+/// sequences across the project corpus. See `CheckMeta` for the
+/// emission contract and configurable thresholds.
 pub struct DuplicateBlock {
     min_statements: usize,
     min_chars: usize,
@@ -1650,6 +1662,9 @@ fn collect_token_fingerprints(
 // resolution. A check that requires the *same exact bytes* on both sides
 // of `&&` won't be confused by whitespace tweaks or comments.
 
+/// `Refactor.PreferOptionalChain` — flags `a && a.b` patterns that
+/// would be clearer as `a?.b`. See `CheckMeta` for the full matching
+/// rules and known false-positive shapes the check declines to flag.
 pub struct PreferOptionalChain;
 
 const PREFER_OPTIONAL_CHAIN_META: CheckMeta = CheckMeta {
@@ -1775,6 +1790,10 @@ impl<'a> Visit<'a> for OptionalChainVisitor<'a> {
 //   - `obj.prop || other()`  (RHS is a call — not a "default" shape)
 //   - `obj.prop || flag`     (RHS is a bare identifier — likely alt branch)
 
+/// `Refactor.PreferNullishCoalescing` — flags `lhs || default`
+/// patterns where `lhs ?? default` would be safer (avoids treating
+/// falsy-but-valid values like `0` or `""` as missing). See
+/// `CheckMeta` for the exact shape the check matches.
 pub struct PreferNullishCoalescing;
 
 const PREFER_NULLISH_META: CheckMeta = CheckMeta {
@@ -1906,6 +1925,9 @@ impl<'a> Visit<'a> for NullishVisitor<'a> {
 // `export const` in the codebase, which would torch the check's
 // credibility on day one.
 
+/// `Refactor.UnusedVariable` — flags `let` / `const` declarations
+/// whose binding is never read in the same scope. See `CheckMeta`
+/// for the module-scope export carve-out.
 pub struct UnusedVariable;
 
 const UNUSED_META: CheckMeta = CheckMeta {
@@ -2150,6 +2172,10 @@ const DEX_META: CheckMeta = CheckMeta {
     autofix: false,
 };
 
+/// `Refactor.DeadExport` — finalize-stage cross-file check that
+/// flags exports nothing imports. Differs from `Design.OrphanExport`
+/// in that DeadExport excludes the project's declared public-API
+/// surface; see `CheckMeta` for the precise distinction.
 pub struct DeadExport;
 
 impl Check for DeadExport {

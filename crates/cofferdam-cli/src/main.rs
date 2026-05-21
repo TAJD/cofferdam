@@ -816,6 +816,56 @@ fn fmt_opt_ms(v: Option<u64>) -> String {
     }
 }
 
+/// Install a worker-backed type oracle on `engine` when (a) a registered
+/// check declares `requires_types`, and (b) a `tsconfig.json` can be
+/// found. Returns the engine unchanged when no type-aware check is
+/// registered (the bead's auto-opt-out — no Node cost when unused) or
+/// when the worker can't be started (a single warning is printed and
+/// type-aware checks are skipped, rather than failing the whole run).
+///
+/// `project_root` anchors `tsconfig.json` discovery and `node_modules`
+/// resolution for `ts-morph`.
+fn install_type_oracle_if_needed(engine: Engine, project_root: &Path) -> Engine {
+    if !engine.needs_type_oracle() {
+        return engine;
+    }
+    let Some(tsconfig) = find_tsconfig(project_root) else {
+        eprintln!(
+            "warning: type-aware checks are registered but no tsconfig.json was found near {} — skipping them",
+            project_root.display()
+        );
+        return engine;
+    };
+    // The directory holding tsconfig.json is the natural root for
+    // `node_modules` resolution; fall back to project_root.
+    let node_root = tsconfig.parent().unwrap_or(project_root);
+    match type_host::build_type_oracle(node_root, &tsconfig) {
+        Ok(oracle) => engine.with_type_oracle(Box::new(oracle)),
+        Err(e) => {
+            eprintln!(
+                "warning: type host unavailable ({e}) — skipping type-aware checks. \
+                 Install Node + ts-morph, or set `[engine] type_aware = false` to silence this."
+            );
+            engine
+        }
+    }
+}
+
+/// Walk up from `start` looking for `tsconfig.json`. Returns the first
+/// one found, or `None` at the filesystem root. Mirrors the discovery
+/// the graph builder's resolver already does for `paths`/`baseUrl`.
+fn find_tsconfig(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        let candidate = d.join("tsconfig.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
 fn run_lsp() -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match cofferdam_lsp::run_stdio_server(cwd) {
@@ -1013,6 +1063,16 @@ fn run_check(args: CheckArgs) -> ExitCode {
         None => Engine::new(all_builtins()),
     };
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
+
+    // cd-9hp.2 cp2: install the ts-morph type oracle when a registered
+    // check needs types. Dormant until cp3 ships the first
+    // `requires_types` built-in — `needs_type_oracle()` is false today,
+    // so no worker is spawned and there's zero added cost. cp4 layers
+    // the `[engine] type_aware = false` opt-out on top of this gate.
+    let type_root = project_root
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let engine = install_type_oracle_if_needed(engine, &type_root);
 
     // Disk-backed findings + run cache (cd-9hp.4 cp4). Resolves to
     // `Some(dir)` when caching is requested (default on); load

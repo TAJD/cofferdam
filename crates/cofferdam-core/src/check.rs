@@ -185,6 +185,14 @@ pub struct CheckContext<'a> {
     /// `FinalizeContext`. Defaults to a process-wide empty corpus so
     /// per-file unit tests don't have to plumb one through.
     pub corpus: &'a CorpusIndex,
+    /// Type oracle for checks declaring `CheckMeta::requires_types`
+    /// (cd-9hp.2). `Some` only when the engine has a live type host —
+    /// the CLI builds one when a type-aware check is registered and
+    /// `[engine] type_aware` isn't disabled. The engine skips a
+    /// `requires_types` check entirely when this is `None`, so a check
+    /// that opted in can `unwrap()` it; defensive checks may still
+    /// guard. `None` for every non-type-aware check.
+    pub types: Option<&'a dyn crate::types::TypeOracle>,
 }
 
 impl<'a> CheckContext<'a> {
@@ -201,6 +209,7 @@ impl<'a> CheckContext<'a> {
             parsed_lang: None,
             options: &EMPTY_OPTIONS,
             corpus: empty_corpus(),
+            types: None,
         }
     }
 
@@ -230,6 +239,15 @@ impl<'a> CheckContext<'a> {
     /// across every per-file context plus the finalize pass.
     pub fn with_corpus(mut self, corpus: &'a CorpusIndex) -> Self {
         self.corpus = corpus;
+        self
+    }
+
+    /// Install the type oracle for this run (cd-9hp.2). The engine
+    /// calls this in its TS dispatch branch only when an oracle is
+    /// available, and only for checks declaring
+    /// `CheckMeta::requires_types`.
+    pub fn with_types(mut self, types: &'a dyn crate::types::TypeOracle) -> Self {
+        self.types = Some(types);
         self
     }
 

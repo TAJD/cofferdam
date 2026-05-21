@@ -29,7 +29,7 @@ use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
     InvariantsSpec, Issue, Language, LayersConfig, Priority, Severity, SourceFile, Span,
-    ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
+    TypeOracle, ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_rust::{parse_rust, RustParseTree};
@@ -75,6 +75,14 @@ pub struct Engine {
     /// each analysis run. `None` skips publication, leaving the
     /// dependent checks no-ops.
     invariants: Option<InvariantsSpec>,
+    /// Type oracle for `requires_types` checks (cd-9hp.2). `None` means
+    /// no type host is available for this run — the per-file loop then
+    /// skips every check declaring `CheckMeta::requires_types`. The CLI
+    /// installs a worker-backed oracle via [`Engine::with_type_oracle`]
+    /// when a type-aware check is registered and the user hasn't
+    /// disabled `[engine] type_aware`. Not part of `config_hash`: it's
+    /// a runtime resource, not configuration.
+    type_oracle: Option<Box<dyn TypeOracle>>,
 }
 
 impl Engine {
@@ -99,6 +107,7 @@ impl Engine {
             severities,
             layers: None,
             invariants: None,
+            type_oracle: None,
         }
     }
 
@@ -137,7 +146,27 @@ impl Engine {
             severities,
             layers: config.layers.clone(),
             invariants: config.invariants.clone(),
+            type_oracle: None,
         })
+    }
+
+    /// Install the type oracle for `requires_types` checks (cd-9hp.2).
+    /// The CLI calls this after building the engine, once it has spawned
+    /// the Node type host and opened the project's tsconfig. Without an
+    /// oracle the engine silently skips every type-aware check, so this
+    /// is the switch that activates the type-aware code path.
+    pub fn with_type_oracle(mut self, oracle: Box<dyn TypeOracle>) -> Self {
+        self.type_oracle = Some(oracle);
+        self
+    }
+
+    /// True when at least one registered check declares
+    /// `CheckMeta::requires_types`. The CLI consults this to decide
+    /// whether to pay the type-host spawn + project-init cost: no
+    /// type-aware check registered means no oracle is needed (the
+    /// bead's auto-opt-out).
+    pub fn needs_type_oracle(&self) -> bool {
+        self.checks.iter().any(|c| c.meta().requires_types)
     }
 
     /// Stable hash of the engine's resolved configuration: per-check
@@ -525,13 +554,28 @@ impl Engine {
                     if check.language() != Language::TypeScript {
                         continue;
                     }
+                    // Type-aware routing (cd-9hp.2). A check declaring
+                    // `requires_types` only runs when the engine has a
+                    // live type oracle; otherwise it's skipped entirely
+                    // (no oracle → no way to answer its type queries).
+                    // The findings cache never applies to type-aware
+                    // checks: their results depend on the whole
+                    // project's types, which the per-file content hash
+                    // can't capture. A `requires_types` check must keep
+                    // `pure_run = false` so the fast path below is never
+                    // taken for it; the explicit guard here is belt and
+                    // braces.
+                    let requires_types = check.meta().requires_types;
+                    if requires_types && self.type_oracle.is_none() {
+                        continue;
+                    }
                     // Findings-cache fast path: skip Check::run when
                     // (a) the check declares pure_run, and (b) a cache
                     // entry exists under (content, config, check_id).
                     // Non-pure checks always run — their findings may
                     // depend on corpus state, which the cache key
                     // can't capture today.
-                    if check.meta().pure_run {
+                    if check.meta().pure_run && !requires_types {
                         if let (Some(fc), Some(content_hash)) = (findings_cache, content_hash) {
                             let key = findings_cache::FindingsKey {
                                 content_hash,
@@ -556,6 +600,9 @@ impl Engine {
                         .with_parsed(&parsed)
                         .with_options(opts)
                         .with_corpus(&corpus);
+                    if let Some(oracle) = self.type_oracle.as_deref() {
+                        ctx = ctx.with_types(oracle);
+                    }
                     issues.extend(check.run(&file, &mut ctx));
                 }
             };

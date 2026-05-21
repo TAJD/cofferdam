@@ -140,22 +140,90 @@ shape.
 - `timings.totalMs` (u64): wall-clock ms from request receipt to
   response emission.
 
-## Future methods (cp2+)
+### `openProject` (cp2)
 
-Sketched here so the wire shape is forward-compatible; not yet
-implemented.
+Open (or return the cached) ts-morph `Project` for a tsconfig and force
+eager source-file resolution, so the per-query path hits a warm
+project. The worker caches the `Project` keyed by tsconfig path for the
+rest of its lifetime — the CLI calls this once up front so the multi-
+second init isn't a mysterious mid-run stall.
 
-### `resolveTypes` (cp2)
+**Request `params`:** `{ "tsconfigPath": "/abs/tsconfig.json" }`
 
-Given a file path and a list of node selectors (start byte / end byte
-pairs), return the resolved type string and a small set of type
-predicates for each selector. The engine batches selectors per file so
-ts-morph's per-file SourceFile cache amortises.
+**Response `result`:**
 
-### `shutdown` (cp2)
+```json
+{ "sourceFileCount": 312, "initMs": 2515, "cached": false }
+```
+
+- `sourceFileCount` (u64): files the project resolved from the tsconfig.
+- `initMs` (u64): wall-clock ms the init took; `0` when `cached: true`.
+- `cached` (bool): `true` when the project was already open in the
+  worker (a no-op repeat call).
+
+### `typeAt` (cp2)
+
+Resolve the type of the AST node spanning a byte range. The worker
+translates the oxc UTF-8 byte offsets to the TS Compiler API's UTF-16
+character positions (using the file text it already holds), finds the
+node via `getDescendantAtStartWithWidth` (falling back to
+`getDescendantAtPos`), and reports compact type facts.
+
+**Request `params`:**
+
+```json
+{
+  "tsconfigPath": "/abs/tsconfig.json",
+  "file": "/abs/src/foo.ts",
+  "startByte": 6,
+  "endByte": 7
+}
+```
+
+The worker lazy-opens the project if `openProject` wasn't called first.
+File-path matching tolerates slash/drive-case differences and will
+`addSourceFileAtPathIfExists` a file the tsconfig globs missed.
+
+**Response `result`:** `TypeFacts`, or JSON `null` when no meaningful
+type could be resolved (file not in project, no node at span, node has
+no type). The Rust client maps a `null` result to `None`, which checks
+treat as "can't conclude — emit nothing".
+
+```json
+{
+  "text": "string | null",
+  "isNullable": true,
+  "includesNull": true,
+  "includesUndefined": false,
+  "isAny": false
+}
+```
+
+- `text` (string): the type's printed form. Human-facing only.
+- `isNullable` (bool): type includes `null` or `undefined`.
+- `includesNull` / `includesUndefined` (bool): per-constituent flags,
+  computed over the type's union members.
+- `isAny` (bool): type is `any` or `unknown`. Narrowing checks MUST
+  bail on this — the compiler can't prove a guard redundant against a
+  type it knows nothing about.
+
+## Future methods
+
+Sketched for forward-compatibility; not yet implemented.
+
+### `resolveTypes` (batch)
+
+Given a file and a list of node selectors, return facts for all of them
+in one round-trip. The engine would batch a check's per-file queries so
+the NDJSON channel isn't hit once per node. Deferred until a real check
+shows the per-query round-trip is a bottleneck — `typeAt` is correct
+and simple in the meantime.
+
+### `shutdown`
 
 Explicit shutdown request. The host flushes pending responses and exits
-0. Without this, closing stdin has the same effect.
+0. Without this, closing stdin has the same effect (the cp1/cp2 client
+relies on EOF).
 
 ## Measured cold-start (cp1 baseline)
 

@@ -1,11 +1,11 @@
 //! Type-host driver — spawns the Node-side ts-morph worker and exchanges
-//! NDJSON RPC requests with it (cd-9hp.2 cp1).
+//! NDJSON RPC requests with it (cd-9hp.2).
 //!
 //! Wire shape: `design/type-host-wire.md`.
 //!
-//! cp1 implements only `ping`. cp2 adds `resolveTypes` and persistent
-//! per-tsconfig project handles. cp3 adds the first real type-aware
-//! built-in check that consumes this surface.
+//! Methods: `ping` (cp1 diagnostics), `openProject` + `typeAt` (cp2 —
+//! the type resolution that backs [`WorkerTypeOracle`]). cp3 ships the
+//! first real type-aware built-in check that consumes this surface.
 //!
 //! Failure modes:
 //!   - Node not installed → spawn error → caller surfaces a clear message.
@@ -13,13 +13,17 @@
 //!     response; caller surfaces and skips type-aware checks.
 //!   - Worker timeout → child is killed; caller treats as fatal for the
 //!     type-host run but keeps non-type-aware findings.
+//!   - Worker dies mid-run → `type_at` returns `None`, silently
+//!     disabling type findings for the rest of the run.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use cofferdam_core::{TypeFacts, TypeOracle};
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/type-host.mjs");
@@ -89,6 +93,60 @@ pub struct PingTimings {
     pub total_ms: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenProjectRpcParams<'a> {
+    tsconfig_path: &'a str,
+}
+
+/// Worker response to `openProject`. Fields mirror the wire contract in
+/// `design/type-host-wire.md`; they're deserialised for shape
+/// validation (a malformed response fails the open) even though the
+/// oracle doesn't read them today. cp4's CI smoke test asserts on
+/// `init_ms`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct OpenProjectResult {
+    source_file_count: u64,
+    init_ms: u64,
+    cached: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TypeAtRpcParams<'a> {
+    tsconfig_path: &'a str,
+    file: &'a str,
+    start_byte: u32,
+    end_byte: u32,
+}
+
+/// Worker-side projection of `TypeFacts`. Mapped into the core type by
+/// the oracle. A `null` JSON response (no resolvable type) deserialises
+/// to `None` at the call site, not here.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TypeFactsWire {
+    text: String,
+    is_nullable: bool,
+    includes_null: bool,
+    includes_undefined: bool,
+    is_any: bool,
+}
+
+impl From<TypeFactsWire> for TypeFacts {
+    fn from(w: TypeFactsWire) -> Self {
+        TypeFacts {
+            text: w.text,
+            is_nullable: w.is_nullable,
+            includes_null: w.includes_null,
+            includes_undefined: w.includes_undefined,
+            is_any: w.is_any,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TypeHostError {
     #[error("Node runtime not available: {0}")]
@@ -128,14 +186,30 @@ pub struct Worker {
 
 impl Worker {
     /// Send a request and block until the matching response arrives.
-    /// `id` must be unique among in-flight requests; cp1 issues one at
-    /// a time so any stable string works.
+    /// `id` must be unique among in-flight requests; cp2 issues them
+    /// sequentially (one outstanding at a time) so any stable string
+    /// works. Errors if the response carries `ok: false` OR a null /
+    /// absent result — use [`Worker::request_nullable`] for methods
+    /// (like `typeAt`) where a null result is a valid "no answer".
     pub fn request<P: Serialize, R: for<'de> Deserialize<'de>>(
         &mut self,
         id: &str,
         method: &str,
         params: &P,
     ) -> Result<R, TypeHostError> {
+        self.request_nullable(id, method, params)?
+            .ok_or_else(|| TypeHostError::BadResponse("ok=true but no result field".into()))
+    }
+
+    /// Like [`Worker::request`] but a successful response with a `null`
+    /// (or absent) result deserialises to `Ok(None)` instead of an
+    /// error. `ok: false` still maps to [`TypeHostError::HostError`].
+    pub fn request_nullable<P: Serialize, R: for<'de> Deserialize<'de>>(
+        &mut self,
+        id: &str,
+        method: &str,
+        params: &P,
+    ) -> Result<Option<R>, TypeHostError> {
         #[derive(Serialize)]
         struct Envelope<'a, P> {
             id: &'a str,
@@ -158,10 +232,10 @@ impl Worker {
             .flush()
             .map_err(|e| TypeHostError::Io(format!("flush request: {e}")))?;
 
-        // Read one NDJSON line. cp1 is synchronous: one request, one
+        // Read one NDJSON line. cp2 is synchronous: one request, one
         // response, in order, so we don't need an out-of-order pairing
-        // layer yet. cp2 will switch to a request-id index when batched
-        // type queries land.
+        // layer yet. Batched type queries (a follow-up) will switch to
+        // a request-id index.
         let mut buf = String::new();
         let n = self
             .stdout
@@ -190,8 +264,7 @@ impl Worker {
         let env: ResponseEnvelope<R> = serde_json::from_str(buf.trim_end())
             .map_err(|e| TypeHostError::BadResponse(format!("{e}: {}", buf.trim_end())))?;
         if env.ok {
-            env.result
-                .ok_or_else(|| TypeHostError::BadResponse("ok=true but no result field".into()))
+            Ok(env.result)
         } else {
             let err = env.error.unwrap_or(HostErrorBody {
                 code: "unknown".into(),
@@ -272,4 +345,150 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
         stdin: Some(stdin),
         stdout: BufReader::new(stdout),
     })
+}
+
+/// Type oracle backed by a live Node ts-morph worker (cd-9hp.2 cp2).
+///
+/// Holds the worker behind a `Mutex` so the `&self` [`TypeOracle`] API
+/// can drive the inherently `&mut` request channel. The engine runs
+/// type-aware checks single-threaded today, so contention is nil; once
+/// per-file parallelism lands the mutex serialises type queries onto the
+/// single-threaded worker, which is correct (if not yet parallel — a
+/// worker pool is the eventual answer).
+///
+/// `type_at` swallows worker/transport errors into `None`: a check can't
+/// do anything useful with a transport failure mid-walk, and the right
+/// behaviour is "emit no finding" rather than crash the run. A dead
+/// worker therefore silently disables type findings for the rest of the
+/// run — cp4's CI smoke test guards against that regressing unnoticed.
+pub struct WorkerTypeOracle {
+    worker: Mutex<Worker>,
+    tsconfig_path: String,
+    next_id: AtomicU64,
+}
+
+impl WorkerTypeOracle {
+    fn next_id(&self) -> String {
+        format!("ta-{}", self.next_id.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl TypeOracle for WorkerTypeOracle {
+    fn type_at(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<TypeFacts> {
+        let file_fwd = file.to_string_lossy().replace('\\', "/");
+        let params = TypeAtRpcParams {
+            tsconfig_path: &self.tsconfig_path,
+            file: &file_fwd,
+            start_byte,
+            end_byte,
+        };
+        let id = self.next_id();
+        let mut worker = self.worker.lock().ok()?;
+        let wire: Option<TypeFactsWire> = worker.request_nullable(&id, "typeAt", &params).ok()?;
+        wire.map(Into::into)
+    }
+}
+
+/// Spawn a type-host worker, open the project's tsconfig (paying the
+/// init cost up front so it isn't a mysterious mid-run stall), and
+/// return a ready-to-use [`WorkerTypeOracle`].
+///
+/// `project_root` is the directory whose `node_modules` resolves
+/// `ts-morph`; `tsconfig_path` is the tsconfig the ts-morph `Project` is
+/// built from. The CLI calls this before constructing the engine when a
+/// type-aware check is registered and the user hasn't disabled
+/// `[engine] type_aware`.
+///
+/// On any failure (Node missing, ts-morph not installed, tsconfig
+/// invalid) returns the error so the caller can surface a single clear
+/// diagnostic and fall back to running without type-aware checks.
+pub fn build_type_oracle(
+    project_root: &Path,
+    tsconfig_path: &Path,
+) -> Result<WorkerTypeOracle, TypeHostError> {
+    let tsconfig = tsconfig_path.to_string_lossy().replace('\\', "/");
+    let mut worker = spawn_worker(project_root)?;
+    let _open: OpenProjectResult = worker.request(
+        "open-1",
+        "openProject",
+        &OpenProjectRpcParams {
+            tsconfig_path: &tsconfig,
+        },
+    )?;
+    Ok(WorkerTypeOracle {
+        worker: Mutex::new(worker),
+        tsconfig_path: tsconfig,
+        next_id: AtomicU64::new(0),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::TypeOracle;
+
+    /// Real worker end-to-end test (cd-9hp.2 cp2). Gated on a ts-morph
+    /// install: set `COFFERDAM_TYPE_HOST_TS_MORPH_ROOT` to a directory
+    /// whose `node_modules` contains `ts-morph` (e.g. the scratch dir
+    /// `target/type-host-scratch` created during development, or any
+    /// project with ts-morph installed). Skips silently when unset so
+    /// CI without ts-morph stays green — cp4 wires a proper CI smoke
+    /// test that always runs against a fixed fixture.
+    ///
+    /// Proves: a worker-backed oracle resolves the declared type of a
+    /// `string | null` binding and reports `includes_null = true`, and a
+    /// plain `string` binding reports `includes_null = false`.
+    #[test]
+    fn worker_oracle_resolves_nullable_type() {
+        let Ok(ts_morph_root) = std::env::var("COFFERDAM_TYPE_HOST_TS_MORPH_ROOT") else {
+            return; // not configured — skip
+        };
+        let ts_morph_root = PathBuf::from(ts_morph_root);
+
+        // Self-contained project: tsconfig + one source file in a temp
+        // dir. ts-morph itself is resolved from `ts_morph_root`.
+        let project = tempfile::tempdir().expect("tempdir");
+        let sample = project.path().join("sample.ts");
+        // Byte layout matters: the test queries the `x` / `s` identifier
+        // by byte offset. Keep this ASCII so byte == UTF-16 position.
+        std::fs::write(
+            &sample,
+            "const x: string | null = null;\nconst s: string = \"hi\";\nexport { x, s };\n",
+        )
+        .expect("write sample");
+        let tsconfig = project.path().join("tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["sample.ts"] }"#,
+        )
+        .expect("write tsconfig");
+
+        let oracle = match build_type_oracle(&ts_morph_root, &tsconfig) {
+            Ok(o) => o,
+            Err(e) => panic!(
+                "build_type_oracle failed (is ts-morph installed at {}?): {e}",
+                ts_morph_root.display()
+            ),
+        };
+
+        // `const x: string | null` — `x` is the 7th byte (index 6).
+        let facts_x = oracle
+            .type_at(&sample, 6, 7)
+            .expect("type_at should resolve x");
+        assert!(
+            facts_x.includes_null,
+            "x: string | null should report includes_null; got {facts_x:?}"
+        );
+        assert!(facts_x.is_nullable, "x should be nullable; got {facts_x:?}");
+
+        // `const s: string` is on line 2. Line 1 is 31 bytes
+        // (30 chars + '\n'); `const ` is 6 more → `s` at byte 37.
+        let facts_s = oracle
+            .type_at(&sample, 37, 38)
+            .expect("type_at should resolve s");
+        assert!(
+            !facts_s.includes_null,
+            "s: string should NOT report includes_null; got {facts_s:?}"
+        );
+    }
 }

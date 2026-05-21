@@ -37,14 +37,21 @@
 //!   The mutation API is build-only at cp2; incremental removal /
 //!   replacement lands with cd-9hp.4.
 //!
-//! # What this crate is NOT (yet)
+//! # Schema versioning
 //!
-//! - No `schema_version` enforcement at load time — cp5 wires the
-//!   versioning policy through.
+//! [`CURRENT_SCHEMA_VERSION`] / [`MIN_SUPPORTED_SCHEMA_VERSION`] pin
+//! the canonical graph's `MAJOR.MINOR` policy (see
+//! `docs/schema-versioning.md`). The [`loader`] module wires
+//! load-time enforcement against serialised graph bundles: a JSON
+//! envelope with a reserved `schema_version` key is validated against
+//! the same matrix `cofferdam.invariants.toml` already enforces
+//! (cd-9hp.12). Adapter (cd-9hp.10) and incremental-cache (cd-9hp.4)
+//! formats will sit inside that envelope.
 
 pub mod build;
 pub mod corpus_slot;
 pub mod id;
+pub mod loader;
 pub mod schema;
 pub mod store;
 pub mod value;
@@ -52,17 +59,28 @@ pub mod value;
 pub use build::{build_canonical_graph, normalized_file_path};
 pub use corpus_slot::CANONICAL_GRAPH;
 pub use id::{compute_node_id, NodeId};
+pub use loader::{
+    load_envelope, validate_envelope_version, validate_envelope_version_against, GraphEnvelope,
+    LoadError,
+};
 pub use schema::{EdgeKind, ExportKind, NodeKind, SymbolKind};
 pub use store::{EdgePayload, Graph};
 pub use value::{AttrMap, Value};
 
-/// Schema version this build emits and reads natively. Bumps follow
-/// the MAJOR.MINOR policy in `docs/schema-versioning.md`. Surfaced
-/// here so the engine and the predicate DSL can pin against a single
-/// constant; full load-time enforcement lands in cd-9hp.9 cp5.
+/// Schema version this build of cofferdam emits and reads natively.
 ///
-/// Re-exported from [`cofferdam_core::invariants`] so a single
-/// canonical type is used across the invariants spec, the DSL
-/// grammar, and the graph schema.
-pub const SCHEMA_VERSION: cofferdam_core::invariants::SchemaVersion =
+/// Bumps follow the MAJOR.MINOR policy in
+/// `docs/schema-versioning.md`. Re-exported from
+/// [`cofferdam_core::invariants`] so a single canonical type is used
+/// across the invariants spec, the DSL grammar, and the graph schema.
+pub const CURRENT_SCHEMA_VERSION: cofferdam_core::invariants::SchemaVersion =
+    cofferdam_core::invariants::SchemaVersion::new(1, 0);
+
+/// Oldest graph-schema version this build still accepts.
+///
+/// `>= MIN_SUPPORTED` and `< CURRENT` falls in the deprecation window
+/// (accepted with a hint surfaced by [`GraphEnvelope::
+/// schema_version_deprecated`]). Anything strictly below
+/// `MIN_SUPPORTED` is rejected with a migration message.
+pub const MIN_SUPPORTED_SCHEMA_VERSION: cofferdam_core::invariants::SchemaVersion =
     cofferdam_core::invariants::SchemaVersion::new(1, 0);

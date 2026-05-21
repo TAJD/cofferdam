@@ -322,6 +322,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smol_str",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

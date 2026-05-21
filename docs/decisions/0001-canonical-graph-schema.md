@@ -203,6 +203,49 @@ The graph's `schema_version` lives alongside the existing
 DSL grammar version which references the graph schema version
 transitively.
 
+#### Load-time enforcement (cd-9hp.9 cp5)
+
+`cofferdam-graph::loader` wires the policy through. A serialised
+canonical-graph bundle is a JSON object with a reserved
+`schema_version` top-level key:
+
+```json
+{
+  "schema_version": "1.0",
+  "body": { ... adapter / cache payload ... }
+}
+```
+
+`load_envelope(bytes, path)` parses the envelope, extracts and
+validates `schema_version` against the same `(CURRENT,
+MIN_SUPPORTED)` matrix `cofferdam.invariants.toml` uses, and returns
+a `GraphEnvelope { schema_version, schema_version_deprecated, body }`
+where `body` is the remaining top-level keys for the consumer to
+interpret. Constants:
+
+```rust
+pub const CURRENT_SCHEMA_VERSION       = SchemaVersion { major: 1, minor: 0 };
+pub const MIN_SUPPORTED_SCHEMA_VERSION = SchemaVersion { major: 1, minor: 0 };
+```
+
+Error taxonomy mirrors `InvariantsError`:
+`Parse | NotAnObject | MissingSchemaVersion | MalformedSchemaVersion
+| FutureSchemaVersion | UnsupportedSchemaVersion`. All variants are
+fatal (`is_fatal() == true`) — silently accepting a graph from a
+future or unsupported schema would defeat the contract. The
+future-version error names this cofferdam build (via
+`env!("CARGO_PKG_VERSION")`) so the user knows which release to
+target.
+
+No on-disk graph format exists yet — that's owned by cd-9hp.10
+(adapter contract) and cd-9hp.4 (incremental cache). cp5 ships the
+**envelope** they'll inherit so the version-checking contract is
+locked in before its consumers ship. The full `VersionCheck` matrix
+(Ok, Deprecated, Future, Unsupported) is exercised in tests against
+hypothetical `(current, min_supported)` states, the same technique
+cd-9hp.12 used to cover the deprecation-window logic before MAJOR=2
+of any schema actually exists.
+
 ## Sequencing after this ADR
 
 cd-9hp.9 proper picks up:

@@ -20,6 +20,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam explain`↴](#cofferdam-explain)
 * [`cofferdam init`↴](#cofferdam-init)
 * [`cofferdam doctor`↴](#cofferdam-doctor)
+* [`cofferdam watch`↴](#cofferdam-watch)
 * [`cofferdam fix`↴](#cofferdam-fix)
 * [`cofferdam advise`↴](#cofferdam-advise)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
@@ -38,6 +39,7 @@ TypeScript code-quality analyzer
 * `explain` — Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog
 * `init` — Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries so a new project has a working `cofferdam check` after one command. Refuses to overwrite an existing cofferdam.toml without `--force`
 * `doctor` — Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗ with a one-line remediation hint on failure. Exit 0 on all-pass, 1 if any check fails. Diagnostic only — never modifies files
+* `watch` — Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
@@ -224,6 +226,28 @@ Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗
 
 * `--robot` — Machine-readable JSON output. Schema mirrors the per-check CheckResult and a top-level summary tally
 * `--pretty` — Pretty-print JSON output. No effect without `--robot`
+
+
+
+## `cofferdam watch`
+
+Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
+
+**Usage:** `cofferdam watch [OPTIONS] [PATHS]...`
+
+###### **Arguments:**
+
+* `<PATHS>` — Files or directories to watch. Defaults to `.`
+
+###### **Options:**
+
+* `--hidden` — Walk hidden files/directories
+* `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory
+* `--no-config` — Disable config-file discovery entirely
+* `--debounce <MS>` — Debounce filesystem events by this many milliseconds. Lower = faster reaction to a save; higher = fewer duplicate runs when an editor emits multiple events per save. 100 ms is the typical sweet spot
+
+  Default value: `100`
 
 
 

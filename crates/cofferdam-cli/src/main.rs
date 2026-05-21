@@ -10,6 +10,7 @@ mod explain;
 mod gen_docs;
 mod init;
 mod plugins;
+mod watch;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -258,6 +259,35 @@ enum Cmd {
         /// Pretty-print JSON output. No effect without `--robot`.
         #[arg(long)]
         pretty: bool,
+    },
+    /// Re-analyze on file change (cd-9hp.4 cp1b). Discovers files
+    /// once, registers a recursive filesystem watcher, and re-runs
+    /// the engine on each detected change. A shared in-memory parse
+    /// cache survives across iterations, so unchanged files skip
+    /// parse on every subsequent pass. Text output only — for
+    /// scripted use cases keep `cofferdam check`.
+    Watch {
+        /// Files or directories to watch. Defaults to `.`.
+        paths: Vec<PathBuf>,
+        /// Walk hidden files/directories.
+        #[arg(long)]
+        hidden: bool,
+        /// Disable `.gitignore` / `.cofferdamignore` filtering.
+        #[arg(long)]
+        no_ignore: bool,
+        /// Path to a `cofferdam.toml` config file. Defaults to
+        /// walking up from the current directory.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+        /// Debounce filesystem events by this many milliseconds.
+        /// Lower = faster reaction to a save; higher = fewer
+        /// duplicate runs when an editor emits multiple events
+        /// per save. 100 ms is the typical sweet spot.
+        #[arg(long, value_name = "MS", default_value_t = 100)]
+        debounce: u64,
     },
     /// Apply mechanical autofixes for supported checks. Runs the engine
     /// against the given paths, groups fixable findings by file, applies
@@ -542,6 +572,21 @@ fn main() -> ExitCode {
             robot,
         }),
         Cmd::Doctor { robot, pretty } => doctor::run(robot, pretty),
+        Cmd::Watch {
+            paths,
+            hidden,
+            no_ignore,
+            config,
+            no_config,
+            debounce,
+        } => watch::run(watch::WatchArgs {
+            paths,
+            hidden,
+            no_ignore,
+            config_path: config,
+            no_config,
+            debounce_ms: debounce,
+        }),
         Cmd::Fix {
             paths,
             hidden,

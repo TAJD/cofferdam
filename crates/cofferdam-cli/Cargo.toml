@@ -32,6 +32,7 @@ cofferdam-formatters = { workspace = true }
 clap = { workspace = true }
 clap-markdown = "0.1"
 globset = { workspace = true }
+notify = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }
 oxc_span = { workspace = true }

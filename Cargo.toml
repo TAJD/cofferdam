@@ -48,6 +48,11 @@ sha2 = "0.10"
 # already noted self_cell as a viable option; the parse cache makes
 # the dep earn its keep.
 self_cell = "1"
+# cd-9hp.4 cp1b — file-system watcher backing `cofferdam watch`'s
+# daemon loop. notify v8 picks the platform-recommended backend
+# (ReadDirectoryChangesW on Windows, FSEvents on macOS, inotify on
+# Linux); we layer a manual recv-timeout debounce on top.
+notify = "8"
 # cd-9hp.9 cp1 — small-string optimisation for canonical-graph schema
 # identifiers (namespace tags, symbol names, layer names). Used by
 # cofferdam-graph; pulled into the workspace deps so its version is

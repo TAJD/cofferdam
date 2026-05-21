@@ -49,6 +49,35 @@ jobs:
             --baseline .cofferdam/baseline.json \
             --fail-on=high
 
+  dogfood-rust:
+    name: cofferdam runs on its own Rust workspace (cd-91zc)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build cofferdam-cli
+        run: cargo build --release -p cofferdam-cli
+      - name: Run cofferdam against the Rust workspace
+        # Scans the eight workspace `src/` directories — explicit list
+        # so test fixtures (intentional bad code) and integration tests
+        # don't pollute the gate. New Rust findings on lib code surface
+        # here; baselined ones print as `[baselined]` and ride.
+        # `--fail-on=high` is symmetrical with the SDK dogfood above.
+        run: |
+          ./target/release/cofferdam check \
+            crates/cofferdam-core/src \
+            crates/cofferdam-engine/src \
+            crates/cofferdam-checks/src \
+            crates/cofferdam-formatters/src \
+            crates/cofferdam-cli/src \
+            crates/cofferdam-lsp/src \
+            crates/cofferdam-napi/src \
+            crates/cofferdam-rust/src \
+            --baseline .cofferdam/baseline-rust.json \
+            --fail-on=high
+
   coverage:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,6 @@
+# cofferdam-on-cofferdam (cd-9tq + cd-91zc dogfood) — exclude fixture
+# trees that contain intentional bad code so they don't pollute local
+# scans of `cofferdam check crates`. CI runs against explicit source
+# directories and is not affected by this file.
+crates/*/tests/fixtures/
+crates/*/tests/spec_contract/

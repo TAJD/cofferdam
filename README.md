@@ -61,6 +61,14 @@ jobs:
 
 For PR-only mode, baselines, and other CI integrations: see **[`docs/ci-recipes.md`](docs/ci-recipes.md)**.
 
+## Languages
+
+TypeScript is the primary surface: every flagship check (orphan exports, layering, complexity, suppression hygiene) targets TS / TSX / JS / JSX / MJS / CJS via the `oxc` parser.
+
+A second-language **Rust adapter** ships under `crates/cofferdam-rust`, exercising the engine's per-language dispatch (cd-91zc). Three checks today — `Rust.NoUnwrapInLib`, `Rust.NoUnimplementedInNonTest`, `Rust.MissingPubDoc` — and a CI dogfood job that runs cofferdam against its own Rust workspace. The Rust adapter is load-bearing for the polylingual architecture pledge: until a second domain existed, "framework, not TS-tool" was theory; it now ships as a working second parser feeding the same `Check` trait the TS adapter uses.
+
+Future adapters (SQL, IaC, GraphQL) follow the same shape — see [`MAINTAINERS.md`](MAINTAINERS.md#phased-build) for the roadmap.
+
 ## Status
 
 Phase 4, in progress. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.

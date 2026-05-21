@@ -1,0 +1,565 @@
+{
+  "version": 2,
+  "findings": [
+    {
+      "file": "crates/cofferdam-checks/src/consistency.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "6de608b7804b2a62b97a272751e111d439f593d4f70c87fd5011c2d27dd3ca2b"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/consistency.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "cc3e786484cb456534a2095f0cc9aa718aa56f871dd1b01e81f56b84fd20869d"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "1a05b16428b85bb3275d2f2e34160565e6dbc9c9074538b3663e30f0e1c1a03a"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "4ca0a7d6f7219bd6bb15b2f206fbc88ff2a40bdd03a39dbf962cfb083497e56c"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "a180cd75dc1b3dca05c8c735c1777a944ab6bd6b9239d30d7530c41bbf848027"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "c73c6d158383cac7738ee499aa9a3ac3d081a2a1b74f8f60fb44376a877f444d"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "ca2c9fbadd32a9be16790b743ccc45a98fd890b59e427396f125aeba2a5191eb"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/design.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "dc1480ab485f6d32af4300150d1a5e10fbf1d2b20dc7f267972b53746e7ff9b4"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/readability.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-checks/src/readability.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "020a3371d6e2802512ecba18961c6b0b040197ab1951944ac2711a41fb0cff38"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "e247fe21c78576921dc8769b0d0f8d659d9a90f72cdc9b64548386681a24dd48"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise_diff.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise_diff.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "c1c15550b10da0d72923a81a5b7d04ad3a20001348c767ed601d40222aaf62b2"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/advise_diff.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/ast_wire.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "0e76e27734ef314564822237fb5d8094006cf3985f07c4fab11ea050ec2276e3"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/ast_wire.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/ast_wire.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/ast_wire.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "82e338e3b8d3352b0729197c9b33dfa5ae05a149974d49c2430bd1762c288ecb"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/ast_wire.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "9e239b88510e3ec3785a78567b5918a4d83d841551fbd534b9a684e393947c65"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/ast_wire.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "ad720f75544274a167d0b94399828d62ecbbf381b59fb956834ab488c0278229"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_diff.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "1e7851da9ea48f6e445544b7731aeef58eec4643b8e8ce2c6f0cbb23168d93e1"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_diff.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_diff.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "c1c15550b10da0d72923a81a5b7d04ad3a20001348c767ed601d40222aaf62b2"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_diff.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_lint.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "077dd5ff2c46c9476ed5bd3593fdb462649612a2793b0436f19b927680d3ad36"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_lint.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/baseline_lint.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/doctor.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "920e413c7d411b61ef3e8c63b1cb6ad058d5f95f8b481dbafe60248387d8c355"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/doctor.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "958f75a17ad0988942cb33f4c0ffa4ba050bea72929a72e41f29acae3bce23f9"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/doctor.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/explain.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "9f506cc1fd929f4d548472c097659957e2fd73a3c1c6ad7e2f1b6a40f91ba5aa"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/explain.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/explain.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/explain.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/explain.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/gen_docs.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/gen_docs.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/gen_docs.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/init.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "acba25512100f80b56fc3ccd14c65be55d94800cda77585c5f41a887e398f9be"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/init.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "fd8dfbb179d25be71e9cafff193bd3839337b8c2340e5d57dfd8544ae046e895"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/main.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/main.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/main.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/main.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-cli/src/main.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/ast.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "0b27c158feb36ab18a10ff687909ec730ece6280581dd407e2672359be7725dd"
+    },
+    {
+      "file": "crates/cofferdam-core/src/ast.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "082aab748b82216f5f532d9a746f6b87939c55a3eac872d482a456d11954a81d"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "082aab748b82216f5f532d9a746f6b87939c55a3eac872d482a456d11954a81d"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "292c06f0045a45d044be282b132b7055ae224e18e02b523a451d8ea96fadfd24"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "338cdfc4b2a29a164c8300445905a5c10b339f2fcbaad116fbf02577f8e9c4d8"
+    },
+    {
+      "file": "crates/cofferdam-core/src/check.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "51d40e4c15bba920b7e1a28577b828f0a47e11d8ffde9246aee0cd439a7acb8a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "82a3537ff0dbce7eec35d69edc3a189ee6f17d82f353a553f9aa96cb0be3ce89"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/corpus.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-core/src/graph.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "1c90ec3ee0780252ed8677521cc90c98194abf5ac1c6a96b84368639e2d07fda"
+    },
+    {
+      "file": "crates/cofferdam-core/src/graph.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "324868c89700219b9369e97e7afc683f15d62ce2034a8b4d85d00c4e7407b1f4"
+    },
+    {
+      "file": "crates/cofferdam-core/src/graph.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "d39772dfff646e6da7f38e30c2eaf8be10ffe4c8aaac0f2c807c778bc6ca2165"
+    },
+    {
+      "file": "crates/cofferdam-core/src/graph.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "fe85b1eaac97da29d8238529fc1749a05f5695fa019d796385f0c73557f57297"
+    },
+    {
+      "file": "crates/cofferdam-core/src/source.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-core/src/source.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "940d8e9a30f6460bf733f358e3be65d8dde9988442791aa3751528393167e67b"
+    },
+    {
+      "file": "crates/cofferdam-engine/src/discover.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "a3331e9521dbbbf81704cd53d6eb8ee1a16c019ade1e5a381238a3c9e5b836d2"
+    },
+    {
+      "file": "crates/cofferdam-engine/src/lib.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    },
+    {
+      "file": "crates/cofferdam-engine/src/lib.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "1ccbea7b8446706a639d783de120d867bcae020d4e0acc23c23853f817a11028"
+    },
+    {
+      "file": "crates/cofferdam-engine/src/lib.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "8e75ebbdb21505d2f18439f43fe046abc67fc567515bb1d53b855a020a179092"
+    },
+    {
+      "file": "crates/cofferdam-engine/src/since.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "4f0493c3876e470b1e5188839bac46117a85e99c24cc077a12d8770c2b75523b"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/compact.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "f9fbc1ba71c844165bec261ccd22d660c503bc07bf7814cbe65829a8b6ed7627"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "10bbc56361d752eddb4c4c24e7a8efee2f707db1ca46ade3e20dc1326de2383d"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "5a8cf079f80fbb1b67cde47c4ad97e753b9c18db0bc5aa6c0be00080e5c31414"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "7c344b7f6a57fa99bdd96d435eb43908d4c1545c6b0716340610e16508a2aabf"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "84bc5082cbb63409e054c37d41cd5a45b260478e6fed494b19bc13c9689cc979"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "d8dd6b308defc3c30c22e83ff974d3e3092ad9c317a98e3014d298b269d9b56a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "daec25cb9d9e49d174544c4b4f2cc37a186eaac4776617f86b9a06b6e736d930"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "f43a8c8716a7b59f442ea8ca342302beffc7c7636cc314297caf8a3cac848e90"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/json.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "10bbc56361d752eddb4c4c24e7a8efee2f707db1ca46ade3e20dc1326de2383d"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "1caa7c1071366f734a5b5a44dc917d0c30068cb1ed892cf949709453116d279a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "1fa6c6d4ba24f8927a7427116c5ffc2de32d11dba5d36c41a6e2767261668fce"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "2e2077ea873137cd313a9d1d6bfce7c4c603062779654b7d78970b13122d9946"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "2fcfe8d57f013b49e2d4d578e5d9990a1bd18fd46e4c8e2bb25815c6d59d322d"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "3898a6dc1f166e789d6eec7a7d92780bef3937174ed849fa0883c89683db8f7d"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "4498e1d81a4d1845b1b09de891a06a8a95a6a671fd267fca903905a8fe85a884"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "51e7a7e53b501ca63bca33e6a632080bf6151e46cbc522366aaa74cf41a60e6a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "53b325e2c4072f3e91f078767005a0a869d8f45f35eb9f6d0879ae996a2940d2"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "5bceb3eabc9985be0a4fa9a68725800fd7f0d121bfad384c7566e776c6440d24"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "a15d26c4e0bb788cf53beb7b7128e185b165483bb305878b66fe3b55aefed3f6"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "a18d7c1a65f6c3d214e80df8abe0ff6385495202e09b4bc12d3a365959e26e3a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "a74e6b7eb24e133c128b83cfccb4a463a03a542131577cea0ffe4b94fac2434c"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "b0767357fc9e546a1442f7b9b4f27f3edb8eb7a0273642ce36ed22556b838559"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "d6916aa6a17f308726629cccc22e83d8910f97ab69491d661e52e0cca7904554"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "e8bd41bc6da680ed611d5e53b9104520a136dd18542c7984d599fc095621b2bc"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/sarif.rs",
+      "check_id": "Rust.NoUnwrapInLib",
+      "rule_signature": "77f2f036726eaa17f75c9a6bdd9f613862b1a17951469921026e482e66ea046a"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/text.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "10bbc56361d752eddb4c4c24e7a8efee2f707db1ca46ade3e20dc1326de2383d"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/text.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "3f4e85f026e58b54d03deaa686fa56568ebff3261e594e20174b652b5f3d4c90"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/text.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "887270d0cbc560af35f1326d55e9dbdc35ea2301c2cd26633fb6d4932deee268"
+    },
+    {
+      "file": "crates/cofferdam-formatters/src/text.rs",
+      "check_id": "Rust.MissingPubDoc",
+      "rule_signature": "c5e9bbde3d510704b866ba5505b5b98844f39b7e1146604c84fb2a498a09aaf2"
+    }
+  ]
+}

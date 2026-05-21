@@ -1,0 +1,15 @@
+schema_version = "1.0"
+# Pins Design.ScriptedInvariant's file-level evaluation:
+# every controller (src/controllers/**) must have a sibling test file
+# under tests/ with the same basename. The rule fires per-file with a
+# `when` gate + `require exists(...)` body.
+
+[invariants.scripted."controller-test-pair"]
+when    = "file matches 'src/controllers/**/*.ts'"
+require = "exists('tests/' + basename(file))"
+message = "Every controller needs a test file under tests/"
+
+# Allowlist all sources so unrelated Design.OrphanExport findings don't
+# pollute this fixture's contract.
+[public_api]
+exports = ["**/*.ts"]

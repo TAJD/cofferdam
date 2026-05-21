@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.ScriptedInvariant",
+      "file": "ui/Dashboard.tsx",
+      "line": 1,
+      "column": 1,
+      "message": "scripted invariant `ui-no-localstorage` failed: UI files must not touch localStorage directly"
+    }
+  ]
+}

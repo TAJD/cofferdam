@@ -1,0 +1,13 @@
+schema_version = "1.0"
+# Pins Design.ScriptedInvariant's cross-file (corpus-based) path:
+# files under ui/** must not import any module whose specifier starts
+# with 'localStorage' (the stand-in for "browser storage" in v1; in a
+# real project this might be '@/lib/storage' or similar).
+
+[invariants.scripted."ui-no-localstorage"]
+when    = "file matches 'ui/**'"
+forbid  = "imports 'localStorage'"
+message = "UI files must not touch localStorage directly"
+
+[public_api]
+exports = ["**/*.ts", "**/*.tsx"]

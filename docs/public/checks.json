@@ -206,6 +206,18 @@
       ]
     },
     {
+      "id": "Design.ScriptedInvariant",
+      "category": "Design",
+      "base_priority": 7,
+      "default_severity": "Medium",
+      "explanation": "A scripted invariant declared in cofferdam.invariants.toml under [invariants.scripted] is violated for this file.",
+      "body": "# Design.ScriptedInvariant\n\nEvaluates one or more `[invariants.scripted.\"rule-name\"]` blocks in\n`cofferdam.invariants.toml` using the v1 predicate DSL. Lets projects\nencode architectural rules that don't fit the flat\n`forbid_imports` / `require_imports` shape — file-level constraints,\ncross-file `imports` / `exports` predicates, layer-conditional gates.\n\n## Configuration\n\n```toml\n[invariants.scripted.\"controller-test-pair\"]\nwhen    = \"file matches 'src/controllers/**/*.ts'\"\nrequire = \"exists 'tests/' + basename(file)\"\nmessage = \"Every controller needs a test under tests/\"\n\n[invariants.scripted.\"ui-no-localstorage\"]\nwhen    = \"file matches 'ui/**'\"\nforbid  = \"imports 'localStorage'\"\nmessage = \"UI files must not touch localStorage directly\"\n```\n\nEach rule has four fields:\n\n* `when` (optional) — predicate that gates the rule. The rule only\n  fires on files where `when` evaluates true. Omit to apply\n  everywhere.\n* `require` (optional) — predicate that must hold; the rule emits a\n  finding when it evaluates false.\n* `forbid` (optional) — predicate that must NOT hold; the rule emits\n  a finding when it evaluates true.\n* `message` — the literal text surfaced on each finding.\n\nExactly one of `require` / `forbid` must be set. Setting both, or\nneither, is a config-load error.\n\n## DSL vocabulary\n\nSee `docs/dsl-grammar.md` for the full grammar. v1 surface:\n\n* Subjects: `file`, `file.path`, `file.layer`.\n* Operators: `matches` (glob), `==` / `!=`, `in '<layer>'`, `imports`,\n  `transitively imports`, `imports as type`, `imports as value`,\n  `exports`.\n* Functions: `basename(...)`, `dirname(...)`, `exists(...)`.\n* Boolean glue: `and`, `or`, `not`, parentheses.\n* String concat: `'a' + basename(file) + '.ts'`.\n\n## Validation\n\nDSL strings are parsed at config load (`cofferdam.invariants.toml`\nload). Bad scripts fail fast with an actionable error pointing at the\noffending rule + field, not at file 4000 of the run.\n\n## Span semantics (v1)\n\nFindings carry the file path with line/col 1:1. Per-edge spans for\n`imports` predicates are reserved for a future MINOR bump.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": []
+    },
+    {
       "id": "Readability.MaxFunctionLength",
       "category": "Readability",
       "base_priority": -5,

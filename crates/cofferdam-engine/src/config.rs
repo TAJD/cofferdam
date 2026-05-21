@@ -395,7 +395,8 @@ pub fn resolve_with_invariants(
                     && (!spec.layers.is_empty()
                         || !spec.boundaries.is_empty()
                         || !spec.invariants.is_empty()
-                        || !spec.public_api.exports.is_empty())
+                        || !spec.public_api.exports.is_empty()
+                        || !spec.scripted.is_empty())
                 {
                     diags.warnings.push(format!(
                         "cofferdam.invariants.toml is missing `schema_version`; assumed {}. Add `schema_version = \"{}\"` at the top of the file to silence this hint (see docs/schema-versioning.md)",
@@ -418,6 +419,7 @@ pub fn resolve_with_invariants(
                 || !spec.boundaries.is_empty()
                 || !spec.invariants.is_empty()
                 || !spec.public_api.exports.is_empty()
+                || !spec.scripted.is_empty()
         })
         .unwrap_or(false);
 

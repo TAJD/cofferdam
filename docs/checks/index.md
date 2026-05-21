@@ -23,6 +23,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.LayerViolation`](Design.LayerViolation.md) — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
 - [`Design.MaxParameters`](Design.MaxParameters.md) — Functions with too many parameters are hard to call correctly. Pass an options object instead.
 - [`Design.OrphanExport`](Design.OrphanExport.md) — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
+- [`Design.ScriptedInvariant`](Design.ScriptedInvariant.md) — A scripted invariant declared in cofferdam.invariants.toml under [invariants.scripted] is violated for this file.
 - [`Rust.MissingPubDoc`](Rust.MissingPubDoc.md) — Public items in a library crate compose the published API surface. Document each `pub fn` / `pub struct` / `pub enum` / `pub trait` with a `///` doc comment so consumers can understand what to call.
 
 ## Readability

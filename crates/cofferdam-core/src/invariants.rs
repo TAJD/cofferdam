@@ -214,6 +214,10 @@ pub struct InvariantsSpec {
     pub boundaries: BTreeMap<String, BoundarySpec>,
     /// Invariant name → spec.
     pub invariants: BTreeMap<String, InvariantSpec>,
+    /// Scripted-invariant name → spec. Surfaces in
+    /// `[invariants.scripted."rule-name"]` blocks; evaluated by
+    /// `Design.ScriptedInvariant` via the v1 predicate DSL.
+    pub scripted: BTreeMap<String, ScriptedInvariantSpec>,
 }
 
 impl Default for InvariantsSpec {
@@ -228,6 +232,7 @@ impl Default for InvariantsSpec {
             public_api: PublicApiSpec::default(),
             boundaries: BTreeMap::new(),
             invariants: BTreeMap::new(),
+            scripted: BTreeMap::new(),
         }
     }
 }
@@ -276,6 +281,24 @@ pub struct InvariantSpec {
     pub from_layers: Vec<String>,
 }
 
+/// One `[invariants.scripted."rule-name"]` block from
+/// `cofferdam.invariants.toml`. Evaluated by `Design.ScriptedInvariant`
+/// against the project graph using the v1 predicate DSL (see
+/// `docs/dsl-grammar.md`).
+///
+/// `when` is an optional gate: when present, the rule only fires on
+/// files where it evaluates true. `require` and `forbid` are the actual
+/// predicate; exactly one of the two MUST be set. `message` is surfaced
+/// to the user in the finding (literal v1 — `{file}` placeholder
+/// support is reserved for v2).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptedInvariantSpec {
+    pub when: Option<String>,
+    pub require: Option<String>,
+    pub forbid: Option<String>,
+    pub message: String,
+}
+
 /// On-disk shape — what serde reads/writes. The owned `InvariantsSpec`
 /// is built from this once project_root is known.
 ///
@@ -292,8 +315,11 @@ struct TomlDoc {
     public_api: Option<PublicApiToml>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     boundaries: BTreeMap<String, BoundaryToml>,
+    /// Captured raw so the loader can dispatch the special `scripted`
+    /// sub-table (`[invariants.scripted."rule-name"]`) separately from
+    /// the existing flat `[invariants."rule-name"]` entries.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    invariants: BTreeMap<String, InvariantToml>,
+    invariants: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -318,6 +344,17 @@ struct InvariantToml {
     require_imports: Vec<String>,
     #[serde(default)]
     from_layers: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct ScriptedToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    when: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    require: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forbid: Option<String>,
+    message: String,
 }
 
 /// Errors that can prevent `cofferdam.invariants.toml` from loading.
@@ -362,6 +399,26 @@ pub enum InvariantsError {
         declared: SchemaVersion,
         min_supported: SchemaVersion,
     },
+    #[error("{path}: in [invariants.\"{rule}\"], unsupported shape ({reason})")]
+    BadInvariant {
+        path: PathBuf,
+        rule: String,
+        reason: &'static str,
+    },
+    #[error("{path}: in [invariants.scripted.\"{rule}\"], unsupported shape ({reason})")]
+    BadScriptedShape {
+        path: PathBuf,
+        rule: String,
+        reason: &'static str,
+    },
+    #[error("{path}: in [invariants.scripted.\"{rule}\"].{field}, DSL parse failed: {source}")]
+    BadScript {
+        path: PathBuf,
+        rule: String,
+        field: &'static str,
+        #[source]
+        source: crate::dsl::parser::DslParseError,
+    },
 }
 
 impl InvariantsError {
@@ -376,6 +433,9 @@ impl InvariantsError {
             InvariantsError::MalformedSchemaVersion { .. }
                 | InvariantsError::FutureSchemaVersion { .. }
                 | InvariantsError::UnsupportedSchemaVersion { .. }
+                | InvariantsError::BadInvariant { .. }
+                | InvariantsError::BadScriptedShape { .. }
+                | InvariantsError::BadScript { .. }
         )
     }
 }
@@ -558,20 +618,94 @@ pub fn parse(path: &Path, raw: &str) -> Result<InvariantsSpec, InvariantsError> 
         })
         .collect();
 
-    let invariants: BTreeMap<String, InvariantSpec> = doc
-        .invariants
-        .into_iter()
-        .map(|(k, v)| {
-            (
-                k,
-                InvariantSpec {
-                    forbid_imports: v.forbid_imports,
-                    require_imports: v.require_imports,
-                    from_layers: v.from_layers,
-                },
-            )
-        })
-        .collect();
+    let mut invariants: BTreeMap<String, InvariantSpec> = BTreeMap::new();
+    let mut scripted: BTreeMap<String, ScriptedInvariantSpec> = BTreeMap::new();
+    for (key, val) in doc.invariants {
+        if key == "scripted" {
+            let table = match val {
+                toml::Value::Table(t) => t,
+                _ => {
+                    return Err(InvariantsError::BadScriptedShape {
+                        path: path.to_path_buf(),
+                        rule: String::new(),
+                        reason: "expected a table of `rule-name = { when, require/forbid, message }` entries",
+                    });
+                }
+            };
+            for (rule_name, rule_val) in table {
+                let rule: ScriptedToml =
+                    rule_val
+                        .try_into()
+                        .map_err(|_| InvariantsError::BadScriptedShape {
+                            path: path.to_path_buf(),
+                            rule: rule_name.clone(),
+                            reason: "expected { when?: string, require?: string, forbid?: string, message: string }",
+                        })?;
+                // Schema validation: exactly one of `require` / `forbid`.
+                if rule.require.is_some() == rule.forbid.is_some() {
+                    return Err(InvariantsError::BadScriptedShape {
+                        path: path.to_path_buf(),
+                        rule: rule_name.clone(),
+                        reason: "exactly one of `require` or `forbid` must be set",
+                    });
+                }
+                // DSL parse validation: fail-fast at config load.
+                if let Some(src) = rule.when.as_deref() {
+                    crate::dsl::parser::parse_predicate(src).map_err(|source| {
+                        InvariantsError::BadScript {
+                            path: path.to_path_buf(),
+                            rule: rule_name.clone(),
+                            field: "when",
+                            source,
+                        }
+                    })?;
+                }
+                if let Some(src) = rule.require.as_deref() {
+                    crate::dsl::parser::parse_predicate(src).map_err(|source| {
+                        InvariantsError::BadScript {
+                            path: path.to_path_buf(),
+                            rule: rule_name.clone(),
+                            field: "require",
+                            source,
+                        }
+                    })?;
+                }
+                if let Some(src) = rule.forbid.as_deref() {
+                    crate::dsl::parser::parse_predicate(src).map_err(|source| {
+                        InvariantsError::BadScript {
+                            path: path.to_path_buf(),
+                            rule: rule_name.clone(),
+                            field: "forbid",
+                            source,
+                        }
+                    })?;
+                }
+                scripted.insert(
+                    rule_name,
+                    ScriptedInvariantSpec {
+                        when: rule.when,
+                        require: rule.require,
+                        forbid: rule.forbid,
+                        message: rule.message,
+                    },
+                );
+            }
+            continue;
+        }
+        let rule: InvariantToml = val.try_into().map_err(|_| InvariantsError::BadInvariant {
+            path: path.to_path_buf(),
+            rule: key.clone(),
+            reason: "expected { forbid_imports?, require_imports?, from_layers? } table",
+        })?;
+        invariants.insert(
+            key,
+            InvariantSpec {
+                forbid_imports: rule.forbid_imports,
+                require_imports: rule.require_imports,
+                from_layers: rule.from_layers,
+            },
+        );
+    }
 
     let project_root = path
         .parent()
@@ -588,6 +722,7 @@ pub fn parse(path: &Path, raw: &str) -> Result<InvariantsSpec, InvariantsError> 
         public_api,
         boundaries,
         invariants,
+        scripted,
     })
 }
 
@@ -634,20 +769,29 @@ pub fn to_toml_string(spec: &InvariantsSpec) -> Result<String, toml::ser::Error>
         })
         .collect();
 
-    let invariants: BTreeMap<String, InvariantToml> = spec
-        .invariants
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                InvariantToml {
-                    forbid_imports: v.forbid_imports.clone(),
-                    require_imports: v.require_imports.clone(),
-                    from_layers: v.from_layers.clone(),
-                },
-            )
-        })
-        .collect();
+    let mut invariants: BTreeMap<String, toml::Value> = BTreeMap::new();
+    for (k, v) in &spec.invariants {
+        let it = InvariantToml {
+            forbid_imports: v.forbid_imports.clone(),
+            require_imports: v.require_imports.clone(),
+            from_layers: v.from_layers.clone(),
+        };
+        // try_from is infallible for the well-typed InvariantToml shape.
+        invariants.insert(k.clone(), toml::Value::try_from(&it)?);
+    }
+    if !spec.scripted.is_empty() {
+        let mut scripted_table = toml::map::Map::new();
+        for (k, v) in &spec.scripted {
+            let st = ScriptedToml {
+                when: v.when.clone(),
+                require: v.require.clone(),
+                forbid: v.forbid.clone(),
+                message: v.message.clone(),
+            };
+            scripted_table.insert(k.clone(), toml::Value::try_from(&st)?);
+        }
+        invariants.insert("scripted".to_string(), toml::Value::Table(scripted_table));
+    }
 
     let doc = TomlDoc {
         schema_version: Some(toml::Value::String(spec.schema_version.to_string())),
@@ -944,5 +1088,127 @@ app = ["src/app/**"]
         let reparsed = parse(Path::new("test.toml"), &serialized).expect("reparse");
         assert_eq!(reparsed.schema_version, SchemaVersion::new(1, 0));
         assert!(reparsed.schema_version_explicit);
+    }
+
+    // ----- scripted invariants (cd-9hp.1) -----
+
+    const SCRIPTED_SPEC: &str = r#"
+schema_version = "1.0"
+
+[invariants.scripted."controller-test-pair"]
+when    = "file matches 'src/controllers/**/*.ts'"
+require = "exists('tests/' + basename(file))"
+message = "Every controller needs a test"
+
+[invariants.scripted."ui-no-localstorage"]
+when    = "file matches 'ui/**'"
+forbid  = "imports 'localStorage'"
+message = "UI files must not touch localStorage"
+"#;
+
+    #[test]
+    fn parses_scripted_invariants() {
+        let spec = parse(Path::new("cofferdam.invariants.toml"), SCRIPTED_SPEC).expect("parse");
+        assert_eq!(spec.scripted.len(), 2);
+        let ctp = spec.scripted.get("controller-test-pair").expect("present");
+        assert_eq!(
+            ctp.when.as_deref(),
+            Some("file matches 'src/controllers/**/*.ts'")
+        );
+        assert_eq!(
+            ctp.require.as_deref(),
+            Some("exists('tests/' + basename(file))")
+        );
+        assert_eq!(ctp.forbid, None);
+        assert_eq!(ctp.message, "Every controller needs a test");
+
+        let ui = spec.scripted.get("ui-no-localstorage").expect("present");
+        assert_eq!(ui.forbid.as_deref(), Some("imports 'localStorage'"));
+        assert_eq!(ui.require, None);
+    }
+
+    #[test]
+    fn scripted_round_trip_preserves_data() {
+        let path = Path::new("cofferdam.invariants.toml");
+        let parsed = parse(path, SCRIPTED_SPEC).expect("parse");
+        let serialized = to_toml_string(&parsed).expect("serialize");
+        let reparsed = parse(path, &serialized).expect("reparse");
+        let mut a = parsed.clone();
+        let mut b = reparsed;
+        a.project_root.clear();
+        b.project_root.clear();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn scripted_rejects_both_require_and_forbid() {
+        let raw = r#"
+[invariants.scripted."ambiguous"]
+when    = "file matches '**'"
+require = "exists('x')"
+forbid  = "imports 'y'"
+message = "broken"
+"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(
+            matches!(err, InvariantsError::BadScriptedShape { ref rule, .. } if rule == "ambiguous"),
+            "expected BadScriptedShape(ambiguous), got {err:?}"
+        );
+        assert!(err.is_fatal());
+    }
+
+    #[test]
+    fn scripted_rejects_neither_require_nor_forbid() {
+        let raw = r#"
+[invariants.scripted."empty"]
+when    = "file matches '**'"
+message = "broken"
+"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(
+            matches!(err, InvariantsError::BadScriptedShape { ref rule, .. } if rule == "empty"),
+            "expected BadScriptedShape(empty), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn scripted_fails_fast_on_malformed_dsl() {
+        // Mismatched paren in `require` body — must surface at config
+        // load with the offending rule + field, NOT silently propagate
+        // to per-file evaluation.
+        let raw = r#"
+[invariants.scripted."broken"]
+when    = "file matches 'src/**'"
+require = "exists('x'"
+message = "broken"
+"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                InvariantsError::BadScript { ref rule, field, .. }
+                    if rule == "broken" && field == "require"
+            ),
+            "expected BadScript(broken, require), got {err:?}"
+        );
+        assert!(err.is_fatal());
+    }
+
+    #[test]
+    fn scripted_fails_fast_on_malformed_when() {
+        let raw = r#"
+[invariants.scripted."broken"]
+when    = "file matches"
+require = "exists('x')"
+message = "broken"
+"#;
+        let err = parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                InvariantsError::BadScript { field, .. } if field == "when"
+            ),
+            "expected BadScript(_, when), got {err:?}"
+        );
     }
 }

@@ -183,18 +183,20 @@ pub struct InvariantsRuntime {
     pub public_api: crate::invariants::PublicApiSpec,
     pub boundaries: BTreeMap<String, crate::invariants::BoundarySpec>,
     pub invariants: BTreeMap<String, crate::invariants::InvariantSpec>,
+    pub scripted: BTreeMap<String, crate::invariants::ScriptedInvariantSpec>,
 }
 
 impl InvariantsRuntime {
     /// True when no invariants spec was loaded (or it carries no
-    /// public_api / boundaries / invariants entries). The engine
-    /// skips publishing into the `INVARIANTS` corpus slot when this
-    /// returns `true`, so dependent checks no-op without touching
+    /// public_api / boundaries / invariants / scripted entries). The
+    /// engine skips publishing into the `INVARIANTS` corpus slot when
+    /// this returns `true`, so dependent checks no-op without touching
     /// the slot.
     pub fn is_empty(&self) -> bool {
         self.public_api.exports.is_empty()
             && self.boundaries.is_empty()
             && self.invariants.is_empty()
+            && self.scripted.is_empty()
     }
 }
 

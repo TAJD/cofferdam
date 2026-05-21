@@ -220,6 +220,21 @@ fn spec_contract_combo_multi_rule() {
 }
 
 #[test]
+fn spec_contract_scripted_file_level() {
+    // cd-9hp.1 checkpoint 4: scripted invariant via the v1 DSL,
+    // file-level evaluation. Fires on files matching the `when` glob
+    // when their `exists(...)` requirement is unmet.
+    check_fixture("scripted-file-level");
+}
+
+#[test]
+fn spec_contract_scripted_cross_file() {
+    // cd-9hp.1 checkpoint 4: scripted invariant via the v1 DSL,
+    // cross-file evaluation through the corpus `imports` operator.
+    check_fixture("scripted-cross-file");
+}
+
+#[test]
 fn spec_contract_rust_unwrap_mixed() {
     // cd-91zc checkpoint 4: verifies engine per-language dispatch.
     // The fixture ships two `.rs` files (one lib unwrap, one test-only

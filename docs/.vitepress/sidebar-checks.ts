@@ -27,6 +27,7 @@ export const checksItems = [
       { text: 'LayerViolation', link: '/checks/Design.LayerViolation' },
       { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },
       { text: 'OrphanExport', link: '/checks/Design.OrphanExport' },
+      { text: 'ScriptedInvariant', link: '/checks/Design.ScriptedInvariant' },
       { text: 'MissingPubDoc', link: '/checks/Rust.MissingPubDoc' },
     ],
   },

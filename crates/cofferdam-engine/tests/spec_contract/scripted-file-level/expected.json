@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.ScriptedInvariant",
+      "file": "src/controllers/widgets.ts",
+      "line": 1,
+      "column": 1,
+      "message": "scripted invariant `controller-test-pair` failed: Every controller needs a test file under tests/"
+    }
+  ]
+}

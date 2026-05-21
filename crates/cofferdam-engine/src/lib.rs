@@ -243,6 +243,7 @@ impl Engine {
                 public_api: spec.public_api.clone(),
                 boundaries: spec.boundaries.clone(),
                 invariants: spec.invariants.clone(),
+                scripted: spec.scripted.clone(),
             };
             if !runtime.is_empty() {
                 corpus.with_slot(&INVARIANTS, |slot| *slot = Some(runtime));

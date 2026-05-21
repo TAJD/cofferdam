@@ -400,6 +400,14 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// Run the Language Server Protocol server over stdio (cd-9hp.4
+    /// cp5). Editors that speak LSP — VS Code (via the bundled
+    /// extension stub at `editors/vscode`), Helix, neovim — connect
+    /// and receive workspace diagnostics on save. The server hydrates
+    /// the cp4 disk cache at startup and persists it on shutdown.
+    /// Run with no arguments; the LSP transport handles its own
+    /// configuration via the standard `initialize` request.
+    Lsp,
 }
 
 #[derive(Subcommand)]
@@ -665,6 +673,18 @@ fn main() -> ExitCode {
             no_ignore,
         }),
         Cmd::GenDocs { out, check } => gen_docs::run(out, check),
+        Cmd::Lsp => run_lsp(),
+    }
+}
+
+fn run_lsp() -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match cofferdam_lsp::run_stdio_server(cwd) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("cofferdam-lsp: {e}");
+            ExitCode::from(2)
+        }
     }
 }
 

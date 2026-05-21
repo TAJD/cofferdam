@@ -53,6 +53,13 @@ self_cell = "1"
 # (ReadDirectoryChangesW on Windows, FSEvents on macOS, inotify on
 # Linux); we layer a manual recv-timeout debounce on top.
 notify = "8"
+# cd-9hp.4 cp5 — LSP server. lsp-server is rust-analyzer's sync
+# transport library; pairs with lsp-types for the protocol message
+# definitions. We pin to 3.17 features only (no proposed). No tokio
+# in the workspace — the engine is sync so async buys nothing.
+lsp-server = "0.7"
+lsp-types = "0.95"
+crossbeam-channel = "0.5"
 # cd-9hp.9 cp1 — small-string optimisation for canonical-graph schema
 # identifiers (namespace tags, symbol names, layer names). Used by
 # cofferdam-graph; pulled into the workspace deps so its version is

@@ -24,6 +24,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam fix`↴](#cofferdam-fix)
 * [`cofferdam advise`↴](#cofferdam-advise)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
+* [`cofferdam lsp`↴](#cofferdam-lsp)
 
 ## `cofferdam`
 
@@ -43,6 +44,7 @@ TypeScript code-quality analyzer
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
+* `lsp` — Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
 
 
 
@@ -319,6 +321,14 @@ Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a s
 
   Default value: `docs`
 * `--check` — Don't write — only fail (exit 1) if the existing files would change. The CI gate uses this
+
+
+
+## `cofferdam lsp`
+
+Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
+
+**Usage:** `cofferdam lsp`
 
 
 

@@ -6,8 +6,19 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Language Server Protocol implementation (phase 6). Stub at phase 0."
+description = "Language Server Protocol implementation. Workspace-aware diagnostics powered by the cofferdam engine."
 
 [dependencies]
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }
+cofferdam-checks = { workspace = true }
+cofferdam-formatters = { workspace = true }
+lsp-server = { workspace = true }
+lsp-types = { workspace = true }
+crossbeam-channel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

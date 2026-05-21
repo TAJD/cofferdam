@@ -1,0 +1,41 @@
+{
+  "name": "cofferdam-vscode",
+  "displayName": "cofferdam",
+  "description": "TypeScript code-quality analyzer — VS Code language client (cd-9hp.4 cp5 smoke-test stub; not published).",
+  "version": "0.3.2",
+  "publisher": "cofferdam",
+  "private": true,
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Linters", "Programming Languages"],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^20",
+    "typescript": "^5.4.0"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "cofferdam",
+      "properties": {
+        "cofferdam.executable": {
+          "type": "string",
+          "default": "cofferdam",
+          "description": "Path to the cofferdam binary. Defaults to `cofferdam` on PATH; set to an absolute path when running a build from this repo's `target/release/`."
+        }
+      }
+    }
+  }
+}

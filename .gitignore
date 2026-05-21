@@ -80,6 +80,10 @@ t9d-corpus/
 /tests/run-cache-bench-results/
 # cd-9hp.4 cp4 — disk-backed cache speedup numbers.
 /tests/disk-cache-bench-results/
+# cd-9hp.4 cp5 — VS Code smoke-test extension build artefacts.
+/editors/vscode/node_modules/
+/editors/vscode/out/
+/editors/vscode/package-lock.json
 # cd-9hp.4 cp4 — runtime cache (gitignored at the user's CWD; the
 # pattern below also covers nested checkouts).
 .cofferdam/cache/

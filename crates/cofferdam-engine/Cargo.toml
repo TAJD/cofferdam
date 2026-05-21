@@ -25,6 +25,10 @@ toml = { workspace = true }
 
 [dev-dependencies]
 cofferdam-checks = { workspace = true }
+# cd-acv3 (cd-9hp.9.1): storage-backend spike validating petgraph as the
+# substrate for the canonical graph. Dev-dep only — not exposed to
+# downstream crates until cd-9hp.9 proper lands.
+petgraph = "0.8"
 proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -71,6 +71,9 @@ t9d-corpus/
 # regression budget lives in docs/decisions/0001-canonical-graph-schema.md;
 # runtime rows here are dev-machine snapshots.
 /tests/graph-bench-results/
+# cd-9hp.4 cp1 — per-run parse-cache speedup numbers. Same dev-machine
+# snapshot pattern as graph-bench-results.
+/tests/parse-cache-bench-results/
 # bd worktree
 d1y-twopass/
 # bd worktree

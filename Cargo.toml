@@ -43,6 +43,11 @@ oxc_syntax = "0.128"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# cd-9hp.4 cp1 — self-referential parse-cache entry (Allocator + parse
+# result borrowed from it). The pattern in `crates/cofferdam-core/src/parser.rs`
+# already noted self_cell as a viable option; the parse cache makes
+# the dep earn its keep.
+self_cell = "1"
 # cd-9hp.9 cp1 — small-string optimisation for canonical-graph schema
 # identifiers (namespace tags, symbol names, layer names). Used by
 # cofferdam-graph; pulled into the workspace deps so its version is

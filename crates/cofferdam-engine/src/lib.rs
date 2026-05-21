@@ -5,6 +5,7 @@
 //! rayon comes in a follow-up once the AST seam is stable.
 
 pub mod baseline;
+pub mod cache;
 pub mod config;
 pub mod discover;
 pub mod graph;
@@ -185,6 +186,25 @@ impl Engine {
         &self,
         sources: Vec<(PathBuf, String)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_cached(sources, None)
+    }
+
+    /// Variant of [`Engine::analyze_with_sources`] that consults a
+    /// shared [`cache::ParseCache`] before invoking oxc on each
+    /// TypeScript file. Daemon-mode callers (cd-9hp.4 cp1b's
+    /// `--watch`) hold a long-lived cache across invocations so
+    /// no-op re-runs skip parse for unchanged files.
+    ///
+    /// Behaviour matches `analyze_with_sources` byte-for-byte; the
+    /// cache shaves parse cost only — corpus state is still
+    /// rebuilt from scratch every cycle. Per-file findings,
+    /// `(content, config, engine)`-keyed invalidation, and corpus
+    /// snapshot replay land in cp2/cp3.
+    pub fn analyze_with_sources_cached(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        cache: Option<&cache::ParseCache>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Promote every input path to its absolute form before anything
         // downstream sees it. Two reasons (cd-q9f):
         //
@@ -334,39 +354,51 @@ impl Engine {
                 continue;
             }
 
-            // Per-file allocator. Lives until the file's checks finish,
-            // then drops with the AST it owns. Bumpalo allocation makes
-            // this trivially cheap.
-            let allocator = Allocator::default();
-            let parsed_return = parse_into(&allocator, &file);
+            // Post-parse pass for one TypeScript file. Pulled into a
+            // closure so the cached and non-cached paths below share
+            // one body — the cache branch invokes it inside
+            // `ParseCache::with_parsed`'s callback (where the parsed
+            // borrow can't escape), the non-cache branch invokes it
+            // directly. `issues` is taken by `&mut` so the closure
+            // doesn't have to capture it mutably.
+            let run_ts = |parsed_return: &oxc_parser::ParserReturn<'_>, issues: &mut Vec<Issue>| {
+                if parse_fatal(parsed_return) {
+                    issues.push(parse_error_issue(&file, &parsed_return.errors));
+                    return;
+                }
+                let parsed = ParsedView {
+                    program: &parsed_return.program,
+                    diagnostics: &parsed_return.errors,
+                };
 
-            if parse_fatal(&parsed_return) {
-                issues.push(parse_error_issue(&file, &parsed_return.errors));
-                continue;
-            }
+                // Pass-1 graph extraction: imports/exports for every
+                // parsed file, into the well-known IMPORTS/EXPORTS
+                // corpus slots. Graph-aware checks (orphan, cycle,
+                // layer, dead) read these in their `finalize`.
+                graph_builder.collect(&file, &parsed, &corpus);
 
-            let parsed = ParsedView {
-                program: &parsed_return.program,
-                diagnostics: &parsed_return.errors,
+                for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                    if check.language() != Language::TypeScript {
+                        continue;
+                    }
+                    let mut ctx = CheckContext::new(&file)
+                        .with_parsed(&parsed)
+                        .with_options(opts)
+                        .with_corpus(&corpus);
+                    issues.extend(check.run(&file, &mut ctx));
+                }
             };
 
-            // Pass-1 graph extraction: imports/exports for every parsed
-            // file, into the well-known IMPORTS/EXPORTS corpus slots.
-            // Graph-aware checks (orphan, cycle, layer, dead) read these
-            // in their `finalize`. Doing this BEFORE checks run means a
-            // future check could even consume the graph from inside its
-            // own per-file `run`.
-            graph_builder.collect(&file, &parsed, &corpus);
-
-            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != Language::TypeScript {
-                    continue;
+            match cache {
+                Some(c) => c.with_parsed(&file, |p| run_ts(p, &mut issues)),
+                None => {
+                    // Per-file allocator. Lives until the file's
+                    // checks finish, then drops with the AST it owns.
+                    // Bumpalo allocation makes this trivially cheap.
+                    let allocator = Allocator::default();
+                    let parsed_return = parse_into(&allocator, &file);
+                    run_ts(&parsed_return, &mut issues);
                 }
-                let mut ctx = CheckContext::new(&file)
-                    .with_parsed(&parsed)
-                    .with_options(opts)
-                    .with_corpus(&corpus);
-                issues.extend(check.run(&file, &mut ctx));
             }
         }
 

@@ -64,6 +64,7 @@ export const checksItems = [
       { text: 'NoEval', link: '/checks/Warning.NoEval' },
       { text: 'TripleEquals', link: '/checks/Warning.TripleEquals' },
       { text: 'UnusedImport', link: '/checks/Warning.UnusedImport' },
+      { text: 'UnusedNullCheck', link: '/checks/Warning.UnusedNullCheck' },
     ],
   },
 ]

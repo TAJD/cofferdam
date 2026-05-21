@@ -15,6 +15,7 @@ use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
 };
 use oxc_ast_visit::Visit;
+use oxc_span::GetSpan;
 
 /// `Warning.TripleEquals` — flags `==` and `!=` (vs `===` / `!==`).
 ///
@@ -170,6 +171,161 @@ impl<'a> Visit<'a> for Collector<'a> {
         }
         // Walk into children — `==` can appear inside other binary ops
         // (e.g. `a && b == c`).
+        oxc_ast_visit::walk::walk_binary_expression(self, node);
+    }
+}
+
+/// `Warning.UnusedNullCheck` — the first type-aware built-in (cd-9hp.2).
+///
+/// Flags an equality comparison against `null` / `undefined` where the
+/// other operand's resolved TypeScript type already excludes the value
+/// being checked for — so the guard can never change the outcome. Either
+/// dead defensive code, or a sign the annotation disagrees with reality.
+///
+/// Requires the ts-morph type host (`requires_types: true`): without an
+/// installed `TypeOracle` the engine skips this check entirely. The
+/// per-operand type query goes through `ctx.types` (see
+/// `cofferdam-core::types` and `design/type-host-wire.md`).
+///
+/// Semantics mirror JS nullish equality precisely:
+///
+/// - `x == null` / `x != null` (loose) match BOTH null and undefined, so
+///   they're redundant only when the type excludes both.
+/// - `x === null` / `x !== null` (strict) check null alone.
+/// - `x === undefined` / `x !== undefined` check undefined alone.
+///
+/// Bails on `any` / `unknown` — the compiler can't prove a guard
+/// redundant against a type it knows nothing about.
+pub struct UnusedNullCheck;
+
+const UNUSED_NULL_CHECK_META: CheckMeta = CheckMeta {
+    id: "Warning.UnusedNullCheck",
+    category: Category::Warning,
+    base_priority: 15,
+    // Low by default: a redundant guard is a cleanup smell, not a
+    // runtime bug (cofferdam trusts the types). Demote noise on real
+    // repos; teams can raise it via cofferdam.toml.
+    default_severity: Severity::Low,
+    explanation: "An equality check against `null`/`undefined` whose other operand's TypeScript type already excludes that value — the guard can never change the outcome. Dead defensive code, or a hint the type annotation disagrees with reality.",
+    body: include_str!("../docs/Warning.UnusedNullCheck.md"),
+    requires_types: true,
+    consistency: false,
+    options: &[],
+    autofix: false,
+    pure_run: false,
+};
+
+impl Check for UnusedNullCheck {
+    fn meta(&self) -> &'static CheckMeta {
+        &UNUSED_NULL_CHECK_META
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+        // Type-aware: the engine only routes us here when an oracle is
+        // installed, but guard defensively rather than unwrap.
+        let Some(types) = ctx.types else {
+            return Vec::new();
+        };
+        let mut visitor = NullCheckCollector {
+            file,
+            types,
+            issues: Vec::new(),
+        };
+        visitor.visit_program(parsed.program);
+        visitor.issues
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NullishKind {
+    Null,
+    Undefined,
+}
+
+/// Classify an operand as the `null` literal, the `undefined` identifier,
+/// or neither. `undefined` is a global identifier in JS, not a literal —
+/// a shadowed local `undefined` is rare enough to ignore in v1.
+fn nullish_operand(expr: &Expression) -> Option<NullishKind> {
+    match expr {
+        Expression::NullLiteral(_) => Some(NullishKind::Null),
+        Expression::Identifier(id) if id.name.as_str() == "undefined" => {
+            Some(NullishKind::Undefined)
+        }
+        _ => None,
+    }
+}
+
+struct NullCheckCollector<'a> {
+    file: &'a SourceFile,
+    types: &'a dyn cofferdam_core::TypeOracle,
+    issues: Vec<Issue>,
+}
+
+impl<'a> NullCheckCollector<'a> {
+    fn check_comparison(&mut self, node: &BinaryExpression<'a>) {
+        let strict = match node.operator {
+            BinaryOperator::Equality | BinaryOperator::Inequality => false,
+            BinaryOperator::StrictEquality | BinaryOperator::StrictInequality => true,
+            _ => return,
+        };
+
+        // Exactly one side must be a nullish literal; the other is the
+        // value whose type we interrogate.
+        let value = match (nullish_operand(&node.left), nullish_operand(&node.right)) {
+            (Some(kind), None) => (kind, &node.right),
+            (None, Some(kind)) => (kind, &node.left),
+            // both nullish (`null == undefined`) or neither — not our pattern.
+            _ => return,
+        };
+        let (kind, value_expr) = value;
+
+        let span = value_expr.span();
+        let Some(facts) = self.types.type_at(&self.file.path, span.start, span.end) else {
+            return;
+        };
+        // Can't conclude anything against `any` / `unknown`.
+        if facts.is_any {
+            return;
+        }
+
+        // Redundant iff the type excludes everything the comparison tests
+        // for. Loose ops (`==`/`!=`) test null OR undefined regardless of
+        // which literal is written.
+        let (redundant, excluded) = match (kind, strict) {
+            (_, false) => (
+                !facts.includes_null && !facts.includes_undefined,
+                "null or undefined",
+            ),
+            (NullishKind::Null, true) => (!facts.includes_null, "null"),
+            (NullishKind::Undefined, true) => (!facts.includes_undefined, "undefined"),
+        };
+        if !redundant {
+            return;
+        }
+
+        let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+        self.issues.push(Issue {
+            check_id: UNUSED_NULL_CHECK_META.id.to_string(),
+            message: format!(
+                "redundant nullish check — value is typed `{}`, which already excludes {}",
+                facts.text, excluded
+            ),
+            file: self.file.path.clone(),
+            span,
+            priority: Priority(UNUSED_NULL_CHECK_META.base_priority),
+            severity: Severity::Low,
+            related: Vec::new(),
+        });
+    }
+}
+
+impl<'a> Visit<'a> for NullCheckCollector<'a> {
+    fn visit_binary_expression(&mut self, node: &BinaryExpression<'a>) {
+        self.check_comparison(node);
+        // Nested comparisons (`a && b !== null`) live in children.
         oxc_ast_visit::walk::walk_binary_expression(self, node);
     }
 }
@@ -960,5 +1116,145 @@ mod tests {
             issues.is_empty(),
             "bare member access (no call) must not fire"
         );
+    }
+
+    // --- Warning.UnusedNullCheck (cd-9hp.2.3) -------------------------
+    //
+    // The decision logic is type-driven, so a stub oracle stands in for
+    // the ts-morph host: it returns the same TypeFacts for every query,
+    // which is enough because each test source has one comparison. The
+    // real worker path is covered by a gated test in cofferdam-cli.
+
+    use cofferdam_core::{TypeFacts, TypeOracle};
+
+    struct FixedOracle(TypeFacts);
+    impl TypeOracle for FixedOracle {
+        fn type_at(&self, _f: &Path, _s: u32, _e: u32) -> Option<TypeFacts> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn facts(text: &str, null: bool, undef: bool, any: bool) -> TypeFacts {
+        TypeFacts {
+            text: text.into(),
+            is_nullable: null || undef,
+            includes_null: null,
+            includes_undefined: undef,
+            is_any: any,
+        }
+    }
+
+    /// Parse `src`, run UnusedNullCheck with a stub oracle returning
+    /// `f` for every type query.
+    fn run_unused_null_check(src: &str, f: TypeFacts) -> Vec<Issue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src);
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let oracle = FixedOracle(f);
+        let mut ctx = CheckContext::new(&file)
+            .with_parsed(&parsed)
+            .with_types(&oracle);
+        UnusedNullCheck.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn strict_null_check_on_non_null_type_is_flagged() {
+        // `string` excludes null → `!== null` is redundant.
+        let issues = run_unused_null_check(
+            "function f(s: string) { if (s !== null) return s; }",
+            facts("string", false, false, false),
+        );
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("excludes null"));
+    }
+
+    #[test]
+    fn strict_null_check_on_nullable_type_is_not_flagged() {
+        // `string | null` includes null → the guard is meaningful.
+        let issues = run_unused_null_check(
+            "function f(s: string) { if (s !== null) return s; }",
+            facts("string | null", true, false, false),
+        );
+        assert!(
+            issues.is_empty(),
+            "nullable type must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loose_check_requires_excluding_both_null_and_undefined() {
+        // `!= null` (loose) tests null OR undefined. A type that excludes
+        // both → redundant.
+        let flagged = run_unused_null_check(
+            "function f(n: number) { if (n != null) return n; }",
+            facts("number", false, false, false),
+        );
+        assert_eq!(flagged.len(), 1, "number excludes both → flag");
+
+        // A type that still includes undefined → loose check is meaningful.
+        let not_flagged = run_unused_null_check(
+            "function f(n: number) { if (n != null) return n; }",
+            facts("number | undefined", false, true, false),
+        );
+        assert!(
+            not_flagged.is_empty(),
+            "loose check stays meaningful when undefined is possible; got {not_flagged:?}"
+        );
+    }
+
+    #[test]
+    fn strict_undefined_check_keys_on_undefined_only() {
+        // `=== undefined` against a type that excludes undefined but
+        // INCLUDES null → still redundant (it can't be undefined).
+        let issues = run_unused_null_check(
+            "function f(s: string) { return s === undefined; }",
+            facts("string | null", true, false, false),
+        );
+        assert_eq!(issues.len(), 1, "excludes undefined → flag; got {issues:?}");
+    }
+
+    #[test]
+    fn any_type_is_never_flagged() {
+        let issues = run_unused_null_check(
+            "function f(x: any) { if (x != null) return x; }",
+            facts("any", false, false, true),
+        );
+        assert!(issues.is_empty(), "any must bail; got {issues:?}");
+    }
+
+    #[test]
+    fn non_nullish_comparison_is_ignored() {
+        // Neither operand is null/undefined — the oracle is never even
+        // consulted, so the (non-null) facts can't produce a finding.
+        let issues = run_unused_null_check(
+            "function f(a: number, b: number) { return a !== b; }",
+            facts("number", false, false, false),
+        );
+        assert!(
+            issues.is_empty(),
+            "plain comparison must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn skipped_entirely_without_an_oracle() {
+        // A requires_types check with no oracle installed emits nothing.
+        let file = SourceFile::new(
+            PathBuf::from("test.ts"),
+            "function f(s: string) { if (s !== null) return s; }",
+        );
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed); // no with_types
+        let issues = UnusedNullCheck.run(&file, &mut ctx);
+        assert!(issues.is_empty(), "no oracle → no findings; got {issues:?}");
     }
 }

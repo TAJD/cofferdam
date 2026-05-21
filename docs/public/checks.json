@@ -493,6 +493,18 @@
       "consistency": false,
       "autofix": false,
       "options": []
+    },
+    {
+      "id": "Warning.UnusedNullCheck",
+      "category": "Warning",
+      "base_priority": 15,
+      "default_severity": "Low",
+      "explanation": "An equality check against `null`/`undefined` whose other operand's TypeScript type already excludes that value — the guard can never change the outcome. Dead defensive code, or a hint the type annotation disagrees with reality.",
+      "body": "---\nid: Warning.UnusedNullCheck\ncategory: Warning\nbase_priority: 15\ndefault_severity: Low\noptions: []\n---\n\nAn equality comparison against `null` or `undefined` where the other operand's resolved TypeScript type already excludes the value being checked for. The guard can never change the outcome — it's either dead defensive code, or a signal that the type annotation disagrees with reality.\n\nThis is cofferdam's first **type-aware** check (`requires_types: true`). It's routed through the ts-morph type host rather than the pure-Rust pipeline, so it only runs when a type host is available — a project with `tsconfig.json` and `ts-morph` installed, and `[engine] type_aware` not disabled. When no host is available the engine skips the check entirely (no false positives from missing type info).\n\nThe comparison semantics mirror JavaScript's nullish equality exactly:\n\n- `x == null` / `x != null` (**loose**) match *both* `null` and `undefined`. Redundant only when the type excludes both.\n- `x === null` / `x !== null` (**strict**) test `null` alone.\n- `x === undefined` / `x !== undefined` test `undefined` alone.\n\nThe check **bails on `any` and `unknown`** — the compiler can't prove a guard redundant against a type it knows nothing about, so flagging would be a false positive.\n\n```ts\n// flagged — `s` is `string`, which excludes null and undefined\nfunction f(s: string) {\n  if (s !== null) return s;       // redundant\n  if (s != null) return s;        // redundant (loose, excludes both)\n}\n```\n\n```ts\n// not flagged — `s` genuinely includes the value being checked\nfunction g(s: string | null) {\n  if (s !== null) return s;       // meaningful: s can be null\n}\nfunction h(s: string | undefined) {\n  if (s === undefined) return \"\";  // meaningful: s can be undefined\n}\n```\n\n```ts\n// not flagged — strict `!== null` against a type that only adds undefined\nfunction k(s: string | undefined) {\n  if (s !== null) return s;       // s can't be null, but === null is the wrong test;\n                                  // strict-null is NOT redundant only when null is possible.\n}\n```\n\n```ts\n// not flagged — `any` / `unknown` defeat the analysis\nfunction u(x: any) {\n  if (x != null) return x;\n}\n```\n\nNo autofix: removing a guard changes control flow, so the safe action is human review, not a mechanical edit.\n\n```toml\n# Raise from the default (low) if you want redundant guards to gate CI.\n[checks.\"Warning.UnusedNullCheck\"]\nseverity = \"medium\"\n```\n",
+      "requires_types": true,
+      "consistency": false,
+      "autofix": false,
+      "options": []
     }
   ]
 }

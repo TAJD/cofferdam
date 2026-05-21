@@ -51,3 +51,4 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Warning.NoEval`](Warning.NoEval.md) — `eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.
 - [`Warning.TripleEquals`](Warning.TripleEquals.md) — `==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. · autofix
 - [`Warning.UnusedImport`](Warning.UnusedImport.md) — Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.
+- [`Warning.UnusedNullCheck`](Warning.UnusedNullCheck.md) — An equality check against `null`/`undefined` whose other operand's TypeScript type already excludes that value — the guard can never change the outcome. Dead defensive code, or a hint the type annotation disagrees with reality.

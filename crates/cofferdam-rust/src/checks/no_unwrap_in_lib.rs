@@ -19,7 +19,7 @@
 //! directives uniformly across all checks.
 
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, Issue, Language, Priority, Severity, SourceFile,
 };
 
 use crate::parser::{parse_rust, RustParseTree};
@@ -42,6 +42,10 @@ const META: CheckMeta = CheckMeta {
 impl Check for NoUnwrapInLib {
     fn meta(&self) -> &'static CheckMeta {
         &META
+    }
+
+    fn language(&self) -> Language {
+        Language::Rust
     }
 
     fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {

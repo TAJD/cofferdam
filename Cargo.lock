@@ -204,6 +204,7 @@ name = "cofferdam-checks"
 version = "0.3.2"
 dependencies = [
  "cofferdam-core",
+ "cofferdam-rust",
  "globset",
  "oxc_ast",
  "oxc_ast_visit",

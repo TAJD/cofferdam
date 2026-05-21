@@ -1,0 +1,4 @@
+# cd-91zc checkpoint 4 — verifies engine per-language dispatch.
+# No per-check options needed; this file exists so resolve_with_invariants
+# returns Some(ProjectConfig) and the spec_contract runner doesn't panic
+# on a missing-config fixture.

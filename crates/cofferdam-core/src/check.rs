@@ -24,7 +24,7 @@ use crate::corpus::CorpusIndex;
 use crate::edit::TextEdit;
 use crate::issue::{Issue, Severity};
 use crate::options::{CheckOptions, OptionSpec, EMPTY_OPTIONS};
-use crate::source::SourceFile;
+use crate::source::{Language, SourceFile};
 
 /// Process-wide empty corpus, used as a default when callers (mostly tests)
 /// don't supply one. Lazily initialised because `CorpusIndex` is not const-
@@ -237,6 +237,16 @@ impl<'a> FinalizeContext<'a> {
 /// byte-offset order to avoid span-shift bugs.
 pub trait Check: Send + Sync {
     fn meta(&self) -> &'static CheckMeta;
+    /// Source language this check targets. The engine consults this in
+    /// its per-file loop and only invokes `run` / `pass2` / `autofix`
+    /// when `file.language == self.language()`. `finalize` still fires
+    /// unconditionally (cross-file checks read corpus slots, not files).
+    ///
+    /// Defaults to `Language::TypeScript` so every existing built-in
+    /// compiles unchanged — only the Rust adapter's checks override.
+    fn language(&self) -> Language {
+        Language::TypeScript
+    }
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue>;
     /// Per-file second pass. Runs AFTER all checks' first-pass `run`
     /// completes for every file. Use when a check needs to see all files

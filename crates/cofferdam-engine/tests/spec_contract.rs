@@ -71,7 +71,9 @@ fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
             }
             collect_sources(&p, out);
         } else if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
-            if matches!(ext, "ts" | "tsx") {
+            // cd-91zc checkpoint 4: include `.rs` so Rust fixtures
+            // exercise the engine's per-language dispatch path.
+            if matches!(ext, "ts" | "tsx" | "rs") {
                 out.push(p);
             }
         }
@@ -215,4 +217,15 @@ fn spec_contract_require_imports() {
 #[test]
 fn spec_contract_combo_multi_rule() {
     check_fixture("combo-multi-rule");
+}
+
+#[test]
+fn spec_contract_rust_unwrap_mixed() {
+    // cd-91zc checkpoint 4: verifies engine per-language dispatch.
+    // The fixture ships two `.rs` files (one lib unwrap, one test-only
+    // unwrap inside `#[cfg(test)] mod tests`) and a near-empty
+    // cofferdam.toml. The engine must route both files to the Rust
+    // adapter's check; the check's ancestor walk must keep the test
+    // case silent. Net result: exactly one finding on the lib file.
+    check_fixture("rust-unwrap-mixed");
 }

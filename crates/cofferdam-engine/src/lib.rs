@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
-    InvariantsSpec, Issue, LayersConfig, Priority, Severity, SourceFile, Span,
+    InvariantsSpec, Issue, Language, LayersConfig, Priority, Severity, SourceFile, Span,
     ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 
@@ -240,6 +240,26 @@ impl Engine {
             let file = SourceFile::new(path.clone(), text.clone());
             texts.insert(path.clone(), text.clone());
 
+            // Per-language dispatch (cd-91zc checkpoint 4). Non-TS files
+            // skip oxc parsing and graph extraction entirely — their
+            // checks (the Rust adapter, etc.) own their own parser
+            // internally and do not consume the TS-shaped corpus slots.
+            // TS checks gate on `let Some(parsed) = ctx.parsed else { ... };`
+            // so a `None` ParsedView is the canonical "skip this file"
+            // signal — no special-casing required at the check site.
+            if file.language != Language::TypeScript {
+                for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                    if check.language() != file.language {
+                        continue;
+                    }
+                    let mut ctx = CheckContext::new(&file)
+                        .with_options(opts)
+                        .with_corpus(&corpus);
+                    issues.extend(check.run(&file, &mut ctx));
+                }
+                continue;
+            }
+
             // Per-file allocator. Lives until the file's checks finish,
             // then drops with the AST it owns. Bumpalo allocation makes
             // this trivially cheap.
@@ -265,6 +285,9 @@ impl Engine {
             graph_builder.collect(&file, &parsed, &corpus);
 
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                if check.language() != Language::TypeScript {
+                    continue;
+                }
                 let mut ctx = CheckContext::new(&file)
                     .with_parsed(&parsed)
                     .with_options(opts)
@@ -292,6 +315,11 @@ impl Engine {
                     None => continue, // file failed to parse in pass 1 — skip
                 };
                 let file = SourceFile::new(path.clone(), text.clone());
+                // Consistency checks are TS-only today (cd-91zc). Skip
+                // non-TS files so we don't re-parse them with oxc.
+                if file.language != Language::TypeScript {
+                    continue;
+                }
                 let allocator = Allocator::default();
                 let parsed_return = parse_into(&allocator, &file);
                 if parse_fatal(&parsed_return) {

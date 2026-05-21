@@ -378,6 +378,18 @@
       "options": []
     },
     {
+      "id": "Rust.NoUnwrapInLib",
+      "category": "Warning",
+      "base_priority": 12,
+      "default_severity": "Medium",
+      "explanation": "Calling `.unwrap()` or `.expect()` in library code panics on `None`/`Err(_)`. Return `Result` and propagate via `?`, or write a `#[test]` for the call.",
+      "body": "---\nid: Rust.NoUnwrapInLib\ncategory: Warning\nbase_priority: 12\ndefault_severity: Medium\noptions: []\n---\n\nCalling `.unwrap()` or `.expect()` in library code panics on `None` or\n`Err(_)`. Inside `main` or a test harness the panic is acceptable; in\nlibrary code paths the panic surfaces as an opaque crash to whoever is\ncalling the library.\n\nThe check fires on `.unwrap()` and `.expect(...)` call expressions that\nare **not** inside a test context. A call counts as in test context when\nany of its ancestors is:\n\n* a function or item annotated with `#[cfg(test)]`,\n* a function annotated with `#[test]`,\n* or a module named `tests`.\n\nCalls that hit those guards do not fire — assertions like\n`parse(input).unwrap()` inside a `#[test]` are idiomatic and the test\nharness handles the panic correctly.\n\n## Example\n\n```rust\n// FIRES: lib code, no test guard.\npub fn parse_id(s: &str) -> i64 {\n    s.parse::<i64>().unwrap()  // -> Rust.NoUnwrapInLib\n}\n\n// DOES NOT FIRE: enclosing function is #[test].\n#[test]\nfn round_trip() {\n    assert_eq!(parse_id(\"42\"), 42);\n    let parsed: i64 = \"1\".parse().unwrap();  // ok\n}\n\n// DOES NOT FIRE: enclosing module is #[cfg(test)].\n#[cfg(test)]\nmod tests {\n    use super::*;\n    fn helper() -> i64 {\n        \"7\".parse().unwrap()  // ok — inside cfg(test) module\n    }\n}\n```\n\n## What to do\n\n* In library functions, return `Result<T, E>` and propagate via `?`.\n* When the value is actually infallible (you've just checked\n  `Option::is_some` two lines up), use `Option::expect` *with a\n  descriptive message* — the message is the diagnostic when the\n  invariant is later broken.\n* Inside `main()`, prefer `?` and let the program exit with a\n  formatted error rather than the default panic dump.\n\n## Suppression\n\nIf a particular `unwrap()` is provably safe and the refactor isn't\nworth it, narrow the suppression to the specific line:\n\n```rust\n// cofferdam-ignore: Rust.NoUnwrapInLib: provably safe — see invariant in comment above\nlet known_good = parse_input(SAFE_LITERAL).unwrap();\n```\n\nA blanket file-wide suppression masks new unwraps added later; prefer\ninline directives.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": []
+    },
+    {
       "id": "Warning.NoConsoleLog",
       "category": "Warning",
       "base_priority": -10,

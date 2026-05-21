@@ -55,6 +55,7 @@ export const checksItems = [
     text: 'Warning',
     collapsed: true,
     items: [
+      { text: 'NoUnwrapInLib', link: '/checks/Rust.NoUnwrapInLib' },
       { text: 'NoConsoleLog', link: '/checks/Warning.NoConsoleLog' },
       { text: 'NoDebugger', link: '/checks/Warning.NoDebugger' },
       { text: 'NoEval', link: '/checks/Warning.NoEval' },

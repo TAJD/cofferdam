@@ -17,7 +17,13 @@ use ignore::WalkBuilder;
 /// by default in `DiscoveryOptions::skip_declaration_files`. Set that to
 /// `false` to walk them — useful once the type-aware tier (phase 5) wants
 /// to read ambient declarations directly.
-pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts"];
+///
+/// `rs` lands via cd-91zc checkpoint 4 — the Rust adapter. The engine's
+/// per-language dispatch ensures `.rs` files are routed only to checks
+/// declaring `Language::Rust`; the default discovery widening means
+/// `cofferdam check crates/` walks Rust files alongside TS files
+/// without per-call option fiddling.
+pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "rs"];
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryOptions {

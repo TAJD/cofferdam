@@ -5,19 +5,56 @@
 //! `Readability.MaxLineLength`) operate on `text` directly without paying the
 //! parse cost — the engine decides per-check whether to parse.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Source language a `SourceFile` carries — used by the engine to route
+/// per-file dispatch to the right parser and check set (cd-91zc checkpoint 4).
+///
+/// Detection is path-extension based at construction time. New languages
+/// extend this enum; the engine's per-file loop and `Check::language()`
+/// default both gate on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Language {
+    /// TypeScript / TSX / JS / JSX / MJS / CJS — handled by oxc.
+    TypeScript,
+    /// Rust — handled by tree-sitter-rust via `cofferdam-rust` (cd-91zc).
+    Rust,
+}
+
+impl Language {
+    /// Best-effort language guess from a file's path extension.
+    /// Anything we don't recognise falls back to `TypeScript` so existing
+    /// callers (and existing fixtures) keep their current behaviour.
+    pub fn from_path(path: &Path) -> Self {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some(ext) => match ext.to_ascii_lowercase().as_str() {
+                "rs" => Language::Rust,
+                "ts" | "tsx" | "js" | "jsx" | "cjs" | "mjs" | "mts" | "cts" => Language::TypeScript,
+                _ => Language::TypeScript,
+            },
+            None => Language::TypeScript,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SourceFile {
     pub path: PathBuf,
     pub text: String,
+    /// Source language, derived from `path` at construction time. The
+    /// engine reads this to skip oxc parsing for non-TS files and to
+    /// route per-file dispatch to the matching check set.
+    pub language: Language,
 }
 
 impl SourceFile {
     pub fn new(path: impl Into<PathBuf>, text: impl Into<String>) -> Self {
+        let path = path.into();
+        let language = Language::from_path(&path);
         Self {
-            path: path.into(),
+            path,
             text: text.into(),
+            language,
         }
     }
 

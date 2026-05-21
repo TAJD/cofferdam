@@ -54,8 +54,11 @@ pub(crate) fn count_skippable_lines(views: &[LineView<'_>], lo: u32, hi: u32) ->
 /// All built-in checks, ready for the engine to consume.
 ///
 /// Phase 0 returns five entries — one per category. Phase 1+ adds the rest.
+/// The Rust adapter's checks (cd-91zc) are appended at the tail — the
+/// engine's per-language dispatch (`Check::language()` vs
+/// `SourceFile.language`) ensures they only fire on `.rs` files.
 pub fn all_builtins() -> Vec<Box<dyn Check>> {
-    vec![
+    let mut checks: Vec<Box<dyn Check>> = vec![
         Box::new(readability::MaxLineLength::new(120)),
         Box::new(readability::MaxFunctionLength::new(50)),
         Box::new(consistency::QuoteStyle),
@@ -81,7 +84,9 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(warning::NoConsoleLog),
         Box::new(warning::NoDebugger),
         Box::new(warning::NoEval),
-    ]
+    ];
+    checks.extend(cofferdam_rust::all_rust_checks());
+    checks
 }
 
 #[cfg(test)]

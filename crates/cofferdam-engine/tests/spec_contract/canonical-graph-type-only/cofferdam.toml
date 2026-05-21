@@ -1,0 +1,13 @@
+# cd-9hp.9 cp6 — pins canonical-graph consumption semantics for
+# type-only imports.
+#
+# `import type { Widget }` from another file lays down an
+# `EdgeKind::ImportsAsType` edge in the canonical graph (see
+# cofferdam-graph::build). `Design.OrphanExport` must treat that as
+# consumption of the target's `Widget` export — orphan reporting
+# walks both value AND type import edges. Otherwise every project
+# that tightens its type-only imports would suddenly drown in
+# spurious orphan findings.
+#
+# No per-check options needed; this file exists so the
+# spec_contract runner gets a populated ProjectConfig.

@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.OrphanExport",
+      "file": "src/lib.ts",
+      "line": 13,
+      "column": 1,
+      "message": "default export is exported but never imported in the project"
+    }
+  ]
+}

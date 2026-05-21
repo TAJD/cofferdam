@@ -1,0 +1,10 @@
+# cd-9hp.9 cp6 — pins canonical-graph consumption semantics for the
+# `import { default as X } from './m'` rename form.
+#
+# This shape lands in the canonical graph as a Named edge whose
+# `source_name == "default"`. OrphanExport's incoming walk reroutes
+# that into the `consumption.default = true` bucket rather than
+# adding `"default"` to the named-set — mirroring the cd-klp engine
+# fix where `export { default } from './m'` is also a Named edge
+# with source_name `"default"`. Without the reroute, default
+# exports imported via the rename form would always look orphan.

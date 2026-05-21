@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "id": "Design.OrphanExport",
+      "file": "src/polyfill.ts",
+      "line": 8,
+      "column": 14,
+      "message": "`extraneous` is exported but never imported in the project"
+    }
+  ]
+}

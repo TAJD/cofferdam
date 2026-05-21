@@ -1,0 +1,9 @@
+# cd-9hp.9 cp6 — pins canonical-graph consumption semantics for
+# namespace imports (`import * as M from './m'`).
+#
+# A namespace import lays down ONE canonical-graph edge with
+# `import_kind == "namespace"`. OrphanExport's incoming walk treats
+# `ns_touched = true` as shielding every NAMED export on the target
+# (the importer could project any name off the namespace at
+# runtime). Default exports are NOT shielded — namespace-import
+# semantics only expose the named surface.

@@ -1,0 +1,9 @@
+# cd-9hp.9 cp6 — pins canonical-graph consumption semantics for
+# side-effect imports (`import './polyfill'` with no binding list).
+#
+# Side-effect imports lay down a canonical-graph edge with
+# `import_kind == "side_effect"` (see cofferdam-graph::build's
+# bare-edge branch). Those edges signal "this module was touched"
+# but claim no specific export — OrphanExport's incoming-edge walk
+# skips them. A named export in a file that is only side-effect
+# imported should still be flagged as orphan.

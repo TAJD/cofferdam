@@ -246,6 +246,43 @@ fn spec_contract_rust_unwrap_mixed() {
 }
 
 #[test]
+fn spec_contract_canonical_graph_type_only() {
+    // cd-9hp.9 cp6: `import type { X }` from another file must count
+    // as consumption — the canonical graph's `ImportsAsType` edge
+    // variant is read alongside `ImportsAsValue` in OrphanExport's
+    // incoming walk. Otherwise tightening type-only imports would
+    // produce spurious orphan findings.
+    check_fixture("canonical-graph-type-only");
+}
+
+#[test]
+fn spec_contract_canonical_graph_side_effect() {
+    // cd-9hp.9 cp6: `import './polyfill'` lays down a graph edge with
+    // `import_kind == "side_effect"`. OrphanExport must skip those
+    // edges when summarising consumption — a named export in a
+    // file imported only for side effects stays orphan.
+    check_fixture("canonical-graph-side-effect");
+}
+
+#[test]
+fn spec_contract_canonical_graph_namespace() {
+    // cd-9hp.9 cp6: `import * as M from './m'` sets `ns_touched =
+    // true` on the target's incoming summary; every NAMED export on
+    // that file is shielded, but the default export is not (namespace
+    // semantics expose only the named surface).
+    check_fixture("canonical-graph-namespace");
+}
+
+#[test]
+fn spec_contract_canonical_graph_default_rename() {
+    // cd-9hp.9 cp6: `import { default as W } from './m'` lands as a
+    // Named graph edge with `source_name == "default"`. OrphanExport
+    // reroutes it into the default-consumption bucket so `./m`'s
+    // default export is consumed.
+    check_fixture("canonical-graph-default-rename");
+}
+
+#[test]
 fn spec_contract_rust_parse_error() {
     // cd-0039 + followup: malformed `.rs` input surfaces as exactly
     // one `Warning.ParseError` finding pointing at the first ERROR

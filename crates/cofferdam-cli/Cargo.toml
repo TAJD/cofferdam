@@ -24,6 +24,10 @@ path = "tests/explain_plugin.rs"
 name = "advise_diff"
 path = "tests/advise_diff.rs"
 
+[[test]]
+name = "type_host"
+path = "tests/type_host.rs"
+
 [dependencies]
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }
@@ -41,6 +45,7 @@ oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

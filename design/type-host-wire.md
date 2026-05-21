@@ -1,0 +1,195 @@
+# Type-host wire protocol (cd-9hp.2)
+
+The **type host** is a Node-side worker that exposes TypeScript's type system
+to the Rust engine over a stdin/stdout JSON-RPC channel. Built-in checks
+declaring `CheckMeta::requires_types = true` are routed through it instead of
+the Rust pipeline.
+
+This document is the contract between `crates/cofferdam-cli/src/type_host.rs`
+(Rust client) and `crates/cofferdam-cli/scripts/type-host.mjs` (Node worker).
+
+## Why a separate host
+
+cofferdam's TypeScript surface uses [oxc](https://oxc.rs) for parsing —
+fast, native Rust, but no type system. Type-aware checks (unused null
+guards, narrowed-type misuse, branded-type leaks) need TS Compiler API
+output, which lives in Node.
+
+Decision summary (full discussion in cd-9hp.2):
+- **Backend**: ts-morph (TS Compiler API wrapper) — mature, one library
+  surface, ~200MB RAM, real type info.
+- **Transport**: stdin/stdout newline-delimited JSON-RPC. Same pattern as
+  the existing plugin host (cd-81a.7), battle-tested, excellent crash
+  containment (child dies, parent gets EOF, respawn).
+- **v1 scope**: built-in checks only. Plugins declaring `requiresTypes:
+  true` are warned but not routed (cd-9hp.2.B reopens this when a real
+  plugin use case appears).
+
+## Resolution of `ts-morph`
+
+The Node worker uses bare-specifier `import("ts-morph")`. To find the
+package without bundling it into cofferdam itself, the Rust client spawns
+Node with `NODE_PATH=<project-root>/node_modules`, so resolution falls
+back to the project's own `node_modules` after the standard ESM lookup
+fails. Projects that want type-aware checks must `npm install ts-morph`
+(or have it as a transitive dep) in the project root.
+
+Cofferdam ships **without** a bundled ts-morph; cp4 adds a fallback
+"install on first use" path so users don't have to manage the
+dependency themselves. For cp1 a clear error response surfaces when
+ts-morph isn't resolvable.
+
+## Wire framing
+
+Both directions use **newline-delimited JSON** (NDJSON):
+
+- One JSON object per `\n`-terminated line on stdin (Rust → Node).
+- One JSON object per `\n`-terminated line on stdout (Node → Rust).
+- Stderr is free-form diagnostics, never read by the parser.
+
+The Node worker stays alive until stdin closes (EOF), then flushes any
+in-flight responses and exits with code 0. On unrecoverable error the
+worker exits non-zero with a diagnostic on stderr.
+
+## Request shape
+
+```json
+{ "id": "<correlation-id>", "method": "<name>", "params": { ... } }
+```
+
+- `id`: client-chosen string, echoed in the matching response. Used to
+  pair responses when multiple requests are in flight. Required.
+- `method`: one of the named methods below.
+- `params`: method-specific object, may be omitted when empty.
+
+## Response shape
+
+Success:
+
+```json
+{ "id": "<correlation-id>", "ok": true, "result": { ... } }
+```
+
+Error:
+
+```json
+{
+  "id": "<correlation-id>",
+  "ok": false,
+  "error": { "code": "<short-code>", "message": "<human-readable>" }
+}
+```
+
+Error codes (extend as new methods land):
+- `ts_morph_unavailable` — `import("ts-morph")` failed; result is `null`.
+  The Rust client treats this as fatal for the type-host run; built-in
+  checks declaring `requires_types` are skipped and a `Warning.TypeHost*`
+  finding surfaces.
+- `project_init_failed` — `Project` constructor threw (bad tsconfig
+  path, permissions, malformed compiler options).
+- `method_unknown` — the requested `method` is not implemented by this
+  host version. The Rust client treats this as a version mismatch.
+- `internal` — uncaught exception inside the host; `message` carries
+  the JS error string.
+
+## Methods
+
+### `ping` (cp1)
+
+A diagnostic / cold-start measurement method. Available in every host
+version; downstream methods may piggyback its timings via the same
+shape.
+
+**Request `params`:**
+
+```json
+{
+  "loadTsMorph": true,
+  "openProject": { "tsconfigPath": "/abs/path/to/tsconfig.json" }
+}
+```
+
+- `loadTsMorph` (bool, default `true`): if `true`, dynamic-import
+  `ts-morph` and record the elapsed milliseconds. If `false`, skip the
+  import — useful for measuring pure Node spawn cost.
+- `openProject` (object, optional): if present and `loadTsMorph` is
+  `true`, also construct a ts-morph `Project` rooted at `tsconfigPath`
+  and record that timing. The project handle is discarded after timing
+  (cp1 doesn't persist any state between requests).
+
+**Response `result`:**
+
+```json
+{
+  "tsMorphVersion": "21.0.1",
+  "timings": {
+    "tsMorphImportMs": 1234,
+    "projectInitMs": 287,
+    "totalMs": 1521
+  }
+}
+```
+
+- `tsMorphVersion` (string|null): the loaded ts-morph package's
+  `package.json#version`, or `null` if loading was skipped or failed.
+- `timings.tsMorphImportMs` (u64|null): wall-clock ms from request
+  receipt to `import("ts-morph")` resolution. `null` when
+  `loadTsMorph: false`.
+- `timings.projectInitMs` (u64|null): wall-clock ms to construct the
+  `Project`. `null` when `openProject` was omitted or import failed.
+- `timings.totalMs` (u64): wall-clock ms from request receipt to
+  response emission.
+
+## Future methods (cp2+)
+
+Sketched here so the wire shape is forward-compatible; not yet
+implemented.
+
+### `resolveTypes` (cp2)
+
+Given a file path and a list of node selectors (start byte / end byte
+pairs), return the resolved type string and a small set of type
+predicates for each selector. The engine batches selectors per file so
+ts-morph's per-file SourceFile cache amortises.
+
+### `shutdown` (cp2)
+
+Explicit shutdown request. The host flushes pending responses and exits
+0. Without this, closing stdin has the same effect.
+
+## Measured cold-start (cp1 baseline)
+
+Captured on a Windows 11 host (Node 22.20.0, ts-morph 28.0.0) via
+`cofferdam type-host --ping`. All numbers are wall-clock ms from request
+receipt to the relevant boundary.
+
+| Workload | Files | ts-morph import | Project init | Total |
+|---|---|---|---|---|
+| Pure spawn (`--no-load`) | — | n/a | n/a | ~0 |
+| Load ts-morph only | — | 680 (cold) / 190 (warm) | n/a | 680 / 190 |
+| Load + Project init, gistreact tsconfig | 31 | 191 | 2515 | 2706 |
+| Load + Project init, bestefforttools tsconfig | 325 | 195 | 12127 | 12322 |
+
+Implications for cp2+:
+- The 12-second Project-init cost on a 325-file project means the
+  worker MUST be reused across the engine's per-file dispatch, not
+  spawned per check or per file. The cp2 engine routing plans a single
+  long-lived worker per analysis run.
+- The warm-import number (~190ms) reflects Windows file-system caching;
+  the first run of the day pays the cold cost (~680ms).
+- Project init scales roughly linearly with file count. A 10k-file
+  workspace would project ~400s of project-init cost — at that point
+  ts-morph's `useInMemoryFileSystem` + selective `addSourceFileAtPath`
+  becomes worth investigating.
+
+These are intentionally captured as a baseline rather than a regression
+gate; the cp4 CI smoke test will pin a max-acceptable Project-init
+duration against a fixed-size fixture project.
+
+## Versioning
+
+The wire is implicitly v1 for cp1's `ping` shape. When a request adds a
+required field or changes a response shape, bump the wire version by
+adding a `wireVersion` field to every request and response and
+documenting the bump here. The cd-9hp.12 schema-versioning policy
+applies — additive changes are minor, structural changes are major.

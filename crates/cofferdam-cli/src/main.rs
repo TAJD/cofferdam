@@ -10,6 +10,7 @@ mod explain;
 mod gen_docs;
 mod init;
 mod plugins;
+mod type_host;
 mod watch;
 
 use std::collections::HashMap;
@@ -408,6 +409,39 @@ enum Cmd {
     /// Run with no arguments; the LSP transport handles its own
     /// configuration via the standard `initialize` request.
     Lsp,
+    /// Type-host diagnostics (cd-9hp.2 cp1). Spawns the Node-side
+    /// ts-morph worker and issues a `ping` RPC to measure cold-start
+    /// timings — process spawn, ts-morph import, optional Project
+    /// init. Used to verify the wire and to capture the cold-start
+    /// numbers documented in `design/type-host-wire.md`.
+    ///
+    /// Hidden from `--help` until cp4 ships user-facing type-aware
+    /// checks; meanwhile it's the only way to exercise the worker.
+    #[command(hide = true)]
+    TypeHost {
+        /// Ping the worker (the only mode in cp1). Defaults to true.
+        #[arg(long, default_value_t = true)]
+        ping: bool,
+        /// Project root whose `node_modules` resolves `ts-morph`.
+        /// Defaults to the current directory.
+        #[arg(long, value_name = "DIR")]
+        project: Option<PathBuf>,
+        /// Open a ts-morph `Project` against this tsconfig and time
+        /// the init. Omit to skip project init (still loads ts-morph).
+        #[arg(long, value_name = "PATH")]
+        tsconfig: Option<PathBuf>,
+        /// Skip the `ts-morph` import entirely — measure raw Node
+        /// spawn cost only. Useful when ts-morph isn't installed.
+        #[arg(long)]
+        no_load: bool,
+        /// Machine-readable JSON output. Default is human-readable
+        /// timing lines.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -674,6 +708,111 @@ fn main() -> ExitCode {
         }),
         Cmd::GenDocs { out, check } => gen_docs::run(out, check),
         Cmd::Lsp => run_lsp(),
+        Cmd::TypeHost {
+            ping,
+            project,
+            tsconfig,
+            no_load,
+            robot,
+            pretty,
+        } => run_type_host_ping(TypeHostArgs {
+            ping,
+            project,
+            tsconfig,
+            no_load,
+            robot,
+            pretty,
+        }),
+    }
+}
+
+struct TypeHostArgs {
+    ping: bool,
+    project: Option<PathBuf>,
+    tsconfig: Option<PathBuf>,
+    no_load: bool,
+    robot: bool,
+    pretty: bool,
+}
+
+fn run_type_host_ping(args: TypeHostArgs) -> ExitCode {
+    if !args.ping {
+        eprintln!("cofferdam type-host: only --ping mode exists in cp1");
+        return ExitCode::from(2);
+    }
+    let project_root = args
+        .project
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let open_project = args
+        .tsconfig
+        .as_ref()
+        .map(|p| type_host::OpenProjectParams {
+            tsconfig_path: p.to_string_lossy().replace('\\', "/"),
+        });
+    let params = type_host::PingParams {
+        load_ts_morph: !args.no_load,
+        open_project,
+    };
+    match type_host::ping(&project_root, params) {
+        Ok(result) => {
+            if args.robot {
+                let json = if args.pretty {
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "tsMorphVersion": result.ts_morph_version,
+                        "timings": {
+                            "tsMorphImportMs": result.timings.ts_morph_import_ms,
+                            "projectInitMs": result.timings.project_init_ms,
+                            "totalMs": result.timings.total_ms,
+                        },
+                    }))
+                } else {
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": true,
+                        "tsMorphVersion": result.ts_morph_version,
+                        "timings": {
+                            "tsMorphImportMs": result.timings.ts_morph_import_ms,
+                            "projectInitMs": result.timings.project_init_ms,
+                            "totalMs": result.timings.total_ms,
+                        },
+                    }))
+                };
+                println!("{}", json.unwrap_or_default());
+            } else {
+                println!(
+                    "type-host ping ok\n  ts-morph version : {}\n  import           : {} ms\n  project init     : {} ms\n  total            : {} ms",
+                    result.ts_morph_version.as_deref().unwrap_or("<not loaded>"),
+                    fmt_opt_ms(result.timings.ts_morph_import_ms),
+                    fmt_opt_ms(result.timings.project_init_ms),
+                    result.timings.total_ms,
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            if args.robot {
+                let body = serde_json::json!({
+                    "ok": false,
+                    "error": e.to_string(),
+                });
+                let json = if args.pretty {
+                    serde_json::to_string_pretty(&body)
+                } else {
+                    serde_json::to_string(&body)
+                };
+                println!("{}", json.unwrap_or_default());
+            } else {
+                eprintln!("type-host ping failed: {e}");
+            }
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn fmt_opt_ms(v: Option<u64>) -> String {
+    match v {
+        Some(n) => n.to_string(),
+        None => "n/a".into(),
     }
 }
 

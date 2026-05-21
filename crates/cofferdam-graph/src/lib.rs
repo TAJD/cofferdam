@@ -39,15 +39,18 @@
 //!
 //! # What this crate is NOT (yet)
 //!
-//! - No engine wiring — cp3 migrates `Design.OrphanExport`.
 //! - No `schema_version` enforcement at load time — cp5 wires the
 //!   versioning policy through.
 
+pub mod build;
+pub mod corpus_slot;
 pub mod id;
 pub mod schema;
 pub mod store;
 pub mod value;
 
+pub use build::{build_canonical_graph, normalized_file_path};
+pub use corpus_slot::CANONICAL_GRAPH;
 pub use id::{compute_node_id, NodeId};
 pub use schema::{EdgeKind, ExportKind, NodeKind, SymbolKind};
 pub use store::{EdgePayload, Graph};

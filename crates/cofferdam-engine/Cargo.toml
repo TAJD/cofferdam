@@ -10,6 +10,10 @@ description = "Orchestration: discovery, scheduling, baseline, severity gating, 
 
 [dependencies]
 cofferdam-core = { workspace = true }
+# cd-9hp.9 cp3 — engine populates `CANONICAL_GRAPH` from the pass-1
+# IMPORTS/EXPORTS evidence so finalize-stage checks (OrphanExport
+# first) can run graph queries instead of joining flat tables.
+cofferdam-graph = { workspace = true }
 cofferdam-rust = { workspace = true }
 globset = { workspace = true }
 ignore = { workspace = true }

@@ -10,8 +10,13 @@ description = "Built-in checks shipped with cofferdam (Consistency, Design, Read
 
 [dependencies]
 cofferdam-core = { workspace = true }
+# cd-9hp.9 cp3 — Design.OrphanExport reads CANONICAL_GRAPH in
+# finalize. Once DeadExport / ImportCycle / LayerViolation migrate,
+# this dep covers them too.
+cofferdam-graph = { workspace = true }
 cofferdam-rust = { workspace = true }
 globset = { workspace = true }
+smol_str = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }
 oxc_semantic = "0.128.0"

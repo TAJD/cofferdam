@@ -226,6 +226,7 @@ name = "cofferdam-checks"
 version = "0.3.2"
 dependencies = [
  "cofferdam-core",
+ "cofferdam-graph",
  "cofferdam-rust",
  "globset",
  "oxc_ast",
@@ -233,6 +234,7 @@ dependencies = [
  "oxc_semantic",
  "oxc_span",
  "oxc_syntax",
+ "smol_str",
  "unicode-ident",
 ]
 
@@ -282,6 +284,7 @@ version = "0.3.2"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
+ "cofferdam-graph",
  "cofferdam-rust",
  "globset",
  "ignore",

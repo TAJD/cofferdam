@@ -8,8 +8,10 @@ use crate::framework_paths::FRAMEWORK_ENTRY_PATTERNS;
 #[cfg(test)]
 use crate::public_api::is_glob_pattern;
 use crate::public_api::{resolve_public_api, PublicApi};
+#[cfg(test)]
+use cofferdam_core::graph::ImportKind;
 use cofferdam_core::graph::{
-    ExportKind, ExportRecord, ImportKind, ImportRecord, InvariantsRuntime, LayersConfig,
+    ExportKind, ExportRecord, ImportRecord, InvariantsRuntime, LayersConfig,
     EXPORTS as GRAPH_EXPORTS, IMPORTS as GRAPH_IMPORTS, INVARIANTS as GRAPH_INVARIANTS,
     LAYERS as GRAPH_LAYERS,
 };
@@ -18,10 +20,14 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
     OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
 };
+#[cfg(test)]
+use cofferdam_graph::build_canonical_graph;
+use cofferdam_graph::{normalized_file_path, EdgeKind, Graph, Value, CANONICAL_GRAPH};
 use oxc_ast::ast::{
     ArrowFunctionExpression, Declaration, ExportNamedDeclaration, Function, VariableDeclaration,
 };
 use oxc_ast_visit::Visit;
+use smol_str::SmolStr;
 
 /// `Design.MaxParameters` — flag function signatures over `limit` params.
 ///
@@ -362,7 +368,13 @@ impl Check for OrphanExport {
                 .unwrap_or_default(),
         };
 
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
+        // cd-9hp.9 cp3 — graph-backed query path. The engine
+        // populates CANONICAL_GRAPH after pass 1 finishes; OrphanExport
+        // walks it instead of joining the flat IMPORTS / EXPORTS
+        // tables itself. EXPORTS is still consumed here for the
+        // per-export reporting payload (span, file, name) — the graph
+        // doesn't yet carry export sites. DeadExport / ImportCycle /
+        // LayerViolation will migrate behind this check.
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
         // [public_api] from cofferdam.invariants.toml. None when no
         // spec was loaded — the per-export skip below becomes a no-op
@@ -375,7 +387,9 @@ impl Check for OrphanExport {
             .map(|r| resolve_public_api(&r.public_api.exports, &r.project_root))
             .unwrap_or_default();
 
-        compute_orphans(&imports, &exports, &opts, &public_api)
+        ctx.corpus.with_slot(&CANONICAL_GRAPH, |graph| {
+            compute_orphans_on_graph(graph, &exports, &opts, &public_api)
+        })
     }
 }
 
@@ -398,57 +412,102 @@ fn path_key(p: &Path) -> String {
     }
 }
 
+/// Test-only entry point that builds an ephemeral canonical graph
+/// from flat-table records before delegating to the production
+/// graph-query path. Production code (`Design.OrphanExport::finalize`)
+/// reads the engine-built `CANONICAL_GRAPH` slot directly and calls
+/// [`compute_orphans_on_graph`].
+#[cfg(test)]
 fn compute_orphans(
     imports: &[ImportRecord],
     exports: &[ExportRecord],
     opts: &OrphanOptions,
     public_api: &PublicApi,
 ) -> Vec<Issue> {
-    // Set of (resolved_path_key, source_name) tuples: every named touch.
-    let mut touched: HashSet<(String, String)> = HashSet::new();
-    // Set of resolved_path_keys reached via `import * as ns` — these
-    // touch every named export of the target file.
-    let mut namespace_touched: HashSet<String> = HashSet::new();
-    // Set of resolved_path_keys whose default was imported.
-    let mut default_touched: HashSet<String> = HashSet::new();
+    let graph = build_canonical_graph(imports, exports);
+    compute_orphans_on_graph(&graph, exports, opts, public_api)
+}
 
-    // Engine `handle_export_named` records `export { x } from './m'` as
-    // an ImportRecord with `kind: Named` and `source_name: x` — so a
-    // Dialog primitive re-exported through a barrel is reachable via
-    // `touched` without a separate per-file shortcut. Older code carried
-    // a `reexport_sources` HashSet that unconditionally treated every
-    // re-export TARGET as fully consumed; that hid a real false-negative
-    // (a dead barrel still shielded its primitives) and is no longer
-    // needed (cd-klp).
-    for imp in imports {
-        let Some(resolved) = &imp.resolved else {
+/// Per-file consumption summary read off a target file's incoming
+/// import edges. `ns_touched` fires when at least one incoming edge
+/// is a namespace import (consumes every named export); `default`
+/// when an incoming edge claims the default export; `named` is the
+/// set of source-name claims against named exports.
+///
+/// Default-claim routing mirrors the cd-klp engine fix:
+/// `export { default } from './m'` and `import { default as X } from
+/// './m'` both surface as Named edges with `source_name == "default"`
+/// and must be routed into the default bucket rather than the named
+/// bucket.
+struct FileConsumption {
+    ns_touched: bool,
+    default: bool,
+    named: HashSet<SmolStr>,
+}
+
+/// Walk the incoming import edges on a single file node and reduce
+/// them to a [`FileConsumption`] summary. Edge attributes (set by
+/// [`cofferdam_graph::build_canonical_graph`]):
+///
+/// - `import_kind` ∈ `{"default", "named", "namespace",
+///   "side_effect"}` — picks the consumption bucket.
+/// - `source_name` — the binding's name in the target module
+///   (`"default"` for default imports, `"*"` for namespace).
+///
+/// `side_effect` edges contribute nothing — they don't consume any
+/// export.
+fn summarise_incoming(g: &Graph, file_node: cofferdam_graph::NodeId) -> FileConsumption {
+    let mut out = FileConsumption {
+        ns_touched: false,
+        default: false,
+        named: HashSet::new(),
+    };
+    for (_src, kind, attrs) in g.incoming(file_node) {
+        // Only import edges contribute to consumption. ExportsAs /
+        // BelongsToLayer / future Extension edges are noise here.
+        if !matches!(kind, EdgeKind::ImportsAsValue | EdgeKind::ImportsAsType) {
             continue;
+        }
+        let import_kind = match attrs.get(&SmolStr::new_static("import_kind")) {
+            Some(Value::String(s)) => s.as_str(),
+            _ => continue,
         };
-        let key = path_key(resolved);
-        for n in &imp.names {
-            match n.kind {
-                ImportKind::Default => {
-                    default_touched.insert(key.clone());
+        let source_name = match attrs.get(&SmolStr::new_static("source_name")) {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        match import_kind {
+            "namespace" => out.ns_touched = true,
+            "default" => out.default = true,
+            "named" => match source_name {
+                Some(name) if name.as_str() == "default" => out.default = true,
+                Some(name) => {
+                    out.named.insert(name);
                 }
-                ImportKind::Namespace => {
-                    namespace_touched.insert(key.clone());
-                }
-                ImportKind::Named => {
-                    // `export { default } from './m'` and `import { default as X } from './m'`
-                    // both surface as Named with source_name == "default".
-                    // Route those into default_touched so `m`'s default
-                    // export reads as consumed.
-                    if n.source_name == "default" {
-                        default_touched.insert(key.clone());
-                    } else {
-                        touched.insert((key.clone(), n.source_name.clone()));
-                    }
-                }
-            }
+                None => {}
+            },
+            "side_effect" => {}
+            _ => {}
         }
     }
+    out
+}
 
-    // Group exports by file so we can attribute "namespace touched" once.
+/// Walk every exporting file and emit one finding per export that
+/// the canonical graph shows no consumer for. The bulk of the work
+/// is the per-file [`summarise_incoming`] reduction; this function
+/// owns the file-level skip rules (test patterns, framework-entry
+/// patterns, `[public_api]` allowlist) and the per-export
+/// kind-specific consumption rules.
+fn compute_orphans_on_graph(
+    g: &Graph,
+    exports: &[ExportRecord],
+    opts: &OrphanOptions,
+    public_api: &PublicApi,
+) -> Vec<Issue> {
+    // Group exports by normalised file path so each file's
+    // consumption summary is computed once and shared across its
+    // exports.
     let mut by_file: HashMap<String, Vec<&ExportRecord>> = HashMap::new();
     for e in exports {
         by_file.entry(path_key(&e.file)).or_default().push(e);
@@ -456,7 +515,6 @@ fn compute_orphans(
 
     let mut issues = Vec::new();
     for (file_key, file_exports) in by_file {
-        // Sort within file by start_byte for deterministic ordering.
         let mut sorted = file_exports.clone();
         sorted.sort_by_key(|e| e.span.start_byte);
 
@@ -468,24 +526,33 @@ fn compute_orphans(
             continue;
         }
 
-        let ns_seen = namespace_touched.contains(&file_key);
+        let normalised = normalized_file_path(&file_path);
+        let consumption = match g.node_id_for_path(&normalised) {
+            Some(id) => summarise_incoming(g, id),
+            // File never made it into the graph — happens only when
+            // no record at all referenced it. Treat as zero
+            // consumption (every named/default export is orphan).
+            None => FileConsumption {
+                ns_touched: false,
+                default: false,
+                named: HashSet::new(),
+            },
+        };
 
         for exp in sorted {
-            // Re-export records are forwarding nodes, not orphan candidates.
+            // Re-exports are forwarding nodes, not orphan candidates.
             if matches!(exp.kind, ExportKind::ReExport) {
                 continue;
             }
             if exp.type_only && !opts.include_type_only {
                 continue;
             }
-            // Namespace imports (`import * as ns from './m'`, `export *
-            // from './m'`) consume every named export of the target.
-            if ns_seen {
+            if consumption.ns_touched && matches!(exp.kind, ExportKind::Named) {
                 continue;
             }
             let consumed = match exp.kind {
-                ExportKind::Default => default_touched.contains(&file_key),
-                ExportKind::Named => touched.contains(&(file_key.clone(), exp.name.clone())),
+                ExportKind::Default => consumption.default,
+                ExportKind::Named => consumption.named.contains(&SmolStr::new(&exp.name)),
                 ExportKind::ReExport => true,
             };
             if !consumed {

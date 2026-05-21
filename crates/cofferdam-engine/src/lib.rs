@@ -20,12 +20,14 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
 
+use cofferdam_core::graph::{EXPORTS, IMPORTS};
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
     InvariantsSpec, Issue, Language, LayersConfig, Priority, Severity, SourceFile, Span,
     ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
+use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_rust::{parse_rust, RustParseTree};
 
 /// Errors the engine can surface independent of per-check findings —
@@ -409,6 +411,20 @@ impl Engine {
                     issues.extend(check.pass2(&file, &mut ctx));
                 }
             }
+        }
+
+        // Canonical-graph build (cd-9hp.9 cp3). Translates the flat
+        // IMPORTS / EXPORTS slots populated above into the
+        // typed-graph substrate from `cofferdam_graph`. Done once,
+        // after pass 1 + pass 2 finish so every per-file record is in,
+        // and before finalize runs so graph-migrated checks
+        // (Design.OrphanExport first) can query it. The flat slots
+        // stay populated for checks that haven't migrated yet.
+        {
+            let imports = corpus.with_slot(&IMPORTS, |slot| slot.clone());
+            let exports = corpus.with_slot(&EXPORTS, |slot| slot.clone());
+            let graph = build_canonical_graph(&imports, &exports);
+            corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
         }
 
         // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):

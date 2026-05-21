@@ -7,6 +7,7 @@
 pub mod ast;
 pub mod check;
 pub mod corpus;
+pub mod dsl;
 pub mod edit;
 pub mod graph;
 pub mod invariants;

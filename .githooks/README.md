@@ -16,7 +16,7 @@ on every commit / push.
 
 | Hook | Checks | Why here |
 |---|---|---|
-| `pre-commit` | `cargo fmt --all -- --check` + `cofferdam gen-docs --check` | Sub-second on warm cache. The two checks that drift most often. `gen-docs` is the most-forgotten step during releases — see the `cut-release` skill. |
+| `pre-commit` | `cargo fmt --all -- --check` + `cofferdam gen-docs --check` + `node scripts/check-vitepress.mjs` (only when `docs/*.md` changed) | Sub-second on warm cache. The checks that drift most often. `gen-docs` is the most-forgotten step during releases — see the `cut-release` skill. The VitePress check catches the three classes of docs-build failure we've shipped and reverted: bare `<Capital>` tags, literal `{{` template interpolation, and relative links escaping `docs/`. |
 | `pre-push` | `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` | 10s+ on warm cache; too slow per-commit but cheap to run before propagating to origin. Catches the same red-CI cases as the `ci` workflow. |
 
 ## Bypassing

@@ -7,6 +7,11 @@ on:
       - 'docs/**'
       - 'packages/cofferdam/README.md'
       - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'packages/cofferdam/README.md'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -49,6 +54,10 @@ jobs:
           path: docs/.vitepress/dist
 
   deploy:
+    # Only deploy on push to main — PR validation only runs `build`
+    # so a broken docs change fails the PR check without trying to
+    # publish to GitHub Pages from a fork.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:

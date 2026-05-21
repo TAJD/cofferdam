@@ -32,3 +32,14 @@ echo "pre-commit: cofferdam gen-docs --check"
 # cache. `--quiet` keeps Cargo's own chatter out of the hook output —
 # gen-docs itself prints the drift report on failure.
 cargo run -p cofferdam-cli --quiet -- gen-docs --check
+
+# Only runs when docs/*.md is part of the commit — the check is fast
+# (~50 ms) but skipping it when no markdown changed keeps the hook
+# minimal. The script catches the three classes of VitePress build
+# failure we've shipped (and reverted): bare `<Capital>` tags, literal
+# `{{` interpolation, and relative links escaping docs/. The full
+# `pnpm docs:build` remains the authoritative gate in CI (docs.yml).
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^docs/.*\.md$'; then
+    echo "pre-commit: vitepress markdown check"
+    node scripts/check-vitepress.mjs
+fi

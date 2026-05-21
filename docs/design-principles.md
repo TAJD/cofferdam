@@ -4,8 +4,8 @@ A deep-dive on the *why* of cofferdam's architecture — the load-bearing decisi
 
 This document is a companion to:
 
-- [`README.md`](../README.md) — what cofferdam is, what it does.
-- [`CLAUDE.md`](../CLAUDE.md) — the recipe for writing a check.
+- [`README.md`](https://github.com/TAJD/cofferdam/blob/main/README.md) — what cofferdam is, what it does.
+- [`CLAUDE.md`](https://github.com/TAJD/cofferdam/blob/main/CLAUDE.md) — the recipe for writing a check.
 - [`docs/plugin-sdk-guide.md`](./plugin-sdk-guide.md) — the JS plugin author guide.
 - [`docs/invariants.md`](./invariants.md) — the `cofferdam.invariants.toml` spec format.
 

@@ -135,7 +135,14 @@ predicate result. The expression must yield a string; common forms:
 - `{file.layer}` — the current file's resolved layer (or empty)
 - `{basename(file)}` — the file's basename
 
-Curly braces in the literal message are escaped as `{{` and `}}`.
+Curly braces in the literal message are escaped as <code>&#123;&#123;</code> and <code>&#125;&#125;</code>.
+
+<!-- The pair above is written in HTML-entity form because VitePress'
+     Vue compiler scans rendered markdown for literal double-brace
+     template interpolations even inside inline backtick code spans.
+     Entity escapes keep the rendered output identical without tripping
+     Vue. scripts/check-vitepress.mjs enforces this at pre-commit. -->
+
 
 ## Errors
 

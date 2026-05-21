@@ -382,66 +382,13 @@ other's data. The host namespaces every key by the calling
 
 ### Quick example
 
-A check that flags duplicate class names across files:
+A check that flags duplicate class names across files. The snippet is
+imported from the real plugin under `examples-plugins/duplicate-class/`
+— inlining it as a fenced TS block trips VitePress' Vue compiler on
+the TypeScript generic syntax (`ctx.corpus.append<ClassDecl>(...)`,
+`Map<string, ClassDecl[]>`). The snippet import sidesteps that.
 
-```ts
-import { defineCheck, Category, type Span } from "@cofferdam/check-sdk";
-
-interface ClassDecl {
-  readonly file: string;
-  readonly name: string;
-  readonly span: Span;
-}
-
-export default defineCheck({
-  id: "DuplicateClassName",
-  category: Category.Design,
-  basePriority: 8,
-  explanation: "A `class` name is declared in more than one file.",
-  options: {},
-
-  // Per-file pass: collect every class declaration into the corpus.
-  run(file, ctx) {
-    if (!file.ast) return;
-    for (const cls of file.ast.findAll("Class")) {
-      if (!cls.name) continue;
-      ctx.corpus.append<ClassDecl>("classes", {
-        file: file.path,
-        name: cls.name,
-        span: cls.span,
-      });
-    }
-  },
-
-  // Finalize pass: aggregate and emit. Runs once after every file's
-  // run() has completed.
-  finalize(ctx) {
-    const all = ctx.corpus.read<ClassDecl[]>("classes") ?? [];
-    const byName = new Map<string, ClassDecl[]>();
-    for (const decl of all) {
-      const list = byName.get(decl.name);
-      if (list) list.push(decl);
-      else byName.set(decl.name, [decl]);
-    }
-
-    for (const [name, decls] of byName) {
-      const uniqueFiles = new Set(decls.map((d) => d.file));
-      if (uniqueFiles.size < 2) continue;
-
-      const [primary, ...others] = decls;
-      ctx.report({
-        file: primary.file,
-        message: `class "${name}" is declared in ${uniqueFiles.size} files.`,
-        span: primary.span,
-        related: others.map((d) => ({ file: d.file, span: d.span })),
-      });
-    }
-  },
-});
-```
-
-The full example lives in
-[`examples-plugins/duplicate-class/`](../examples-plugins/duplicate-class).
+<<< @/../examples-plugins/duplicate-class/src/index.ts{ts}
 
 ### `ctx.corpus` API
 
@@ -449,7 +396,7 @@ The full example lives in
 |---|---|
 | `read<T>(key)` | Return the last value written, or `undefined`. |
 | `write<T>(key, value)` | Overwrite the slot. `value` must be JSON-serialisable. |
-| `append<T>(key, item)` | Get-or-create-array, push `item`. Optimised for the common Vec<T> aggregation pattern. |
+| `append<T>(key, item)` | Get-or-create-array, push `item`. Optimised for the common `Vec<T>` aggregation pattern. |
 
 The slot value lives in memory for the duration of the analysis run.
 There is no cross-run persistence — `cofferdam --watch` (cd-9hp.4)

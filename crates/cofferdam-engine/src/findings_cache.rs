@@ -150,6 +150,19 @@ impl FindingsCache {
     pub fn is_empty(&self) -> bool {
         self.entries.borrow().is_empty()
     }
+
+    /// Clone every `(key, issues)` pair out for serialisation. Used
+    /// by `crate::disk_cache::save_findings` to persist the cache
+    /// across runs. The map is held under a short-lived borrow so
+    /// the snapshot's allocation cost is paid once, off the hot
+    /// path.
+    pub fn snapshot(&self) -> Vec<(FindingsKey, Vec<Issue>)> {
+        self.entries
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]

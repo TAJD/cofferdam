@@ -99,6 +99,8 @@ Run all checks against files or directories. With no arguments, walks the curren
   Default value: `0`
 * `--quiet` — Suppress informational output: the trailing `N finding(s)` summary line, "no TypeScript files found" hints, and the "(showing N of M)" truncation note. Findings, warnings, and errors still print. Has no effect on JSON output (which is already terse)
 * `--hide-baselined` — Hide baselined findings from text output. The summary line still reports `(N new, M baselined)` counts so the CI gate remains visible. Has no effect on `--format=json` (which always includes the per-finding `baselined` flag) or on the `--fail-on` gate (which already ignores baselined findings). Useful for routine local runs against repos with substantial baselines (cd-k23 / gh #11)
+* `--cache-dir <PATH>` — Directory for the disk-backed findings/run cache (cd-9hp.4 cp4). Defaults to `.cofferdam/cache/` under CWD. Each `cofferdam` build writes to a version-scoped subdir so an upgrade invalidates prior caches automatically. Add the directory to `.gitignore`
+* `--no-cache` — Disable disk caching entirely. Equivalent to deleting the cache directory before each run. Cold cost only; no correctness difference
 
 
 

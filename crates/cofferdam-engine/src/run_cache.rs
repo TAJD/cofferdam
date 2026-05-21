@@ -165,6 +165,17 @@ impl RunCache {
     pub fn is_empty(&self) -> bool {
         self.entries.borrow().is_empty()
     }
+
+    /// Clone every `(key, issues)` pair out for serialisation. Used
+    /// by `crate::disk_cache::save_run` to persist the cache across
+    /// runs. Allocates once per entry; not on the hot path.
+    pub fn snapshot(&self) -> Vec<(RunKey, Vec<Issue>)> {
+        self.entries
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]

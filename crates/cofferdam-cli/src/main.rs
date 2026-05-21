@@ -177,6 +177,18 @@ enum Cmd {
         /// baselines (cd-k23 / gh #11).
         #[arg(long)]
         hide_baselined: bool,
+        /// Directory for the disk-backed findings/run cache (cd-9hp.4
+        /// cp4). Defaults to `.cofferdam/cache/` under CWD. Each
+        /// `cofferdam` build writes to a version-scoped subdir so an
+        /// upgrade invalidates prior caches automatically. Add the
+        /// directory to `.gitignore`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_cache")]
+        cache_dir: Option<PathBuf>,
+        /// Disable disk caching entirely. Equivalent to deleting the
+        /// cache directory before each run. Cold cost only; no
+        /// correctness difference.
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -484,6 +496,8 @@ fn main() -> ExitCode {
             max_issues,
             quiet,
             hide_baselined,
+            cache_dir,
+            no_cache,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -504,6 +518,8 @@ fn main() -> ExitCode {
             max_issues,
             quiet,
             hide_baselined,
+            cache_dir,
+            no_cache,
         }),
         Cmd::Explain {
             check_id,
@@ -668,6 +684,8 @@ struct CheckArgs {
     max_issues: usize,
     quiet: bool,
     hide_baselined: bool,
+    cache_dir: Option<PathBuf>,
+    no_cache: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -687,6 +705,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
         max_issues,
         quiet,
         hide_baselined,
+        cache_dir,
+        no_cache,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -835,8 +855,40 @@ fn run_check(args: CheckArgs) -> ExitCode {
     };
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
 
-    if baseline_active {
-        let mut signed = match engine.analyze_with_signatures(&files) {
+    // Disk-backed findings + run cache (cd-9hp.4 cp4). Resolves to
+    // `Some(dir)` when caching is requested (default on); load
+    // findings.json + run.json into in-memory caches before analyze,
+    // save back after. `parse_cache` stays None — oxc allocators are
+    // not serialisable, and the findings cache already covers most
+    // of the per-file cost.
+    let resolved_cache_dir: Option<PathBuf> = if no_cache {
+        None
+    } else {
+        Some(cache_dir.unwrap_or_else(|| PathBuf::from(".cofferdam").join("cache")))
+    };
+    let findings_cache = cofferdam_engine::findings_cache::FindingsCache::new();
+    let run_cache = cofferdam_engine::run_cache::RunCache::new();
+    if let Some(dir) = resolved_cache_dir.as_deref() {
+        // Map currently-registered check IDs to `&'static str` so the
+        // loader can rehydrate `FindingsKey` with the static slice the
+        // in-memory cache expects. Built-in IDs are always 'static
+        // strings; plugin IDs aren't cached (plugins run outside the
+        // engine).
+        let registered_ids: Vec<&'static str> =
+            all_builtins().iter().map(|c| c.meta().id).collect();
+        // Load failures are silently ignored (corruption-tolerant —
+        // see crate docs on `disk_cache`).
+        let _ = cofferdam_engine::disk_cache::load_findings(dir, &findings_cache, &registered_ids);
+        let _ = cofferdam_engine::disk_cache::load_run(dir, &run_cache);
+    }
+
+    let exit_code = if baseline_active {
+        let mut signed = match engine.analyze_with_signatures_full(
+            &files,
+            None,
+            Some(&findings_cache),
+            Some(&run_cache),
+        ) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -954,7 +1006,10 @@ fn run_check(args: CheckArgs) -> ExitCode {
             ExitCode::from(1)
         }
     } else {
-        match engine.analyze(&files) {
+        match engine
+            .analyze_with_text_full(&files, None, Some(&findings_cache), Some(&run_cache))
+            .map(|(issues, _texts)| issues)
+        {
             Ok(mut issues) => {
                 // Plugin host invocation (cd-7e4 / cd-81a.7 / cd-1c7).
                 // Runs Node-side plugins declared in `cofferdam.toml`'s
@@ -1032,7 +1087,21 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 ExitCode::from(2)
             }
         }
+    };
+
+    // Persist disk cache after analyze (cd-9hp.4 cp4). Save failures
+    // are non-fatal warnings — a corrupted save just means the next
+    // run rebuilds from cold.
+    if let Some(dir) = resolved_cache_dir.as_deref() {
+        if let Err(e) = cofferdam_engine::disk_cache::save_findings(dir, &findings_cache) {
+            eprintln!("warning: failed to save findings cache: {e}");
+        }
+        if let Err(e) = cofferdam_engine::disk_cache::save_run(dir, &run_cache) {
+            eprintln!("warning: failed to save run cache: {e}");
+        }
     }
+
+    exit_code
 }
 
 /// Run Node-side plugins declared in `cofferdam.toml`, then re-apply the

@@ -8,6 +8,7 @@ pub mod baseline;
 pub mod cache;
 pub mod config;
 pub mod discover;
+pub mod disk_cache;
 pub mod findings_cache;
 pub mod graph;
 pub mod run_cache;
@@ -713,6 +714,56 @@ impl Engine {
         });
 
         (issues, texts)
+    }
+
+    /// Cache-aware variant of [`Engine::analyze_with_text`]. Reads
+    /// each path from disk, then routes through
+    /// [`Engine::analyze_with_sources_full`] with the supplied caches.
+    /// Used by the CLI to thread the cd-9hp.4 cp4 disk-backed cache
+    /// into a one-shot `cofferdam check` without duplicating the file-
+    /// reading prelude.
+    pub fn analyze_with_text_full<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+    ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
+        let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(paths.len());
+        for path in paths {
+            let path = path.as_ref();
+            let text = std::fs::read_to_string(path).map_err(|source| EngineError::ReadFile {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            sources.push((path.to_path_buf(), text));
+        }
+        Ok(self.analyze_with_sources_full(sources, parse_cache, findings_cache, run_cache))
+    }
+
+    /// Cache-aware variant of [`Engine::analyze_with_signatures`].
+    /// Mirrors the baseline-signature post-pass on top of
+    /// [`Engine::analyze_with_text_full`] so callers that need both
+    /// caching and baseline signatures get a single call.
+    pub fn analyze_with_signatures_full<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+    ) -> Result<Vec<(Issue, String)>, EngineError> {
+        let (issues, texts) =
+            self.analyze_with_text_full(paths, parse_cache, findings_cache, run_cache)?;
+        let empty = String::new();
+        let out = issues
+            .into_iter()
+            .map(|issue| {
+                let text = texts.get(&issue.file).unwrap_or(&empty);
+                let sig = baseline::signature_for_span(text, &issue.span);
+                (issue, sig)
+            })
+            .collect();
+        Ok(out)
     }
 
     /// Run analysis and emit each issue paired with its baseline

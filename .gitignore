@@ -78,6 +78,11 @@ t9d-corpus/
 /tests/findings-cache-bench-results/
 # cd-9hp.4 cp3 — per-run full-run-cache speedup numbers.
 /tests/run-cache-bench-results/
+# cd-9hp.4 cp4 — disk-backed cache speedup numbers.
+/tests/disk-cache-bench-results/
+# cd-9hp.4 cp4 — runtime cache (gitignored at the user's CWD; the
+# pattern below also covers nested checkouts).
+.cofferdam/cache/
 # bd worktree
 d1y-twopass/
 # bd worktree

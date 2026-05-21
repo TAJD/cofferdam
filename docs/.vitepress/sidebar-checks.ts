@@ -27,6 +27,7 @@ export const checksItems = [
       { text: 'LayerViolation', link: '/checks/Design.LayerViolation' },
       { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },
       { text: 'OrphanExport', link: '/checks/Design.OrphanExport' },
+      { text: 'MissingPubDoc', link: '/checks/Rust.MissingPubDoc' },
     ],
   },
   {
@@ -55,6 +56,7 @@ export const checksItems = [
     text: 'Warning',
     collapsed: true,
     items: [
+      { text: 'NoUnimplementedInNonTest', link: '/checks/Rust.NoUnimplementedInNonTest' },
       { text: 'NoUnwrapInLib', link: '/checks/Rust.NoUnwrapInLib' },
       { text: 'NoConsoleLog', link: '/checks/Warning.NoConsoleLog' },
       { text: 'NoDebugger', link: '/checks/Warning.NoDebugger' },

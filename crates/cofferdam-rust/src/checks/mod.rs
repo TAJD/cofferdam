@@ -7,6 +7,8 @@
 //! dispatch routing). Until then the checks are callable from tests
 //! and from anything that explicitly constructs them.
 
+pub mod missing_pub_doc;
+pub mod no_unimplemented_in_non_test;
 pub mod no_unwrap_in_lib;
 
 use cofferdam_core::Check;
@@ -15,5 +17,9 @@ use cofferdam_core::Check;
 /// source file. Engine wiring in checkpoint 4 calls this from
 /// `cofferdam-engine`'s per-language dispatch.
 pub fn all_rust_checks() -> Vec<Box<dyn Check>> {
-    vec![Box::new(no_unwrap_in_lib::NoUnwrapInLib)]
+    vec![
+        Box::new(no_unwrap_in_lib::NoUnwrapInLib),
+        Box::new(no_unimplemented_in_non_test::NoUnimplementedInNonTest),
+        Box::new(missing_pub_doc::MissingPubDoc),
+    ]
 }

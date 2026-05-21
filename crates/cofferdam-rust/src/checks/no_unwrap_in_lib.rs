@@ -23,7 +23,11 @@ use cofferdam_core::{
 };
 
 use crate::parser::{parse_rust, RustParseTree};
+use crate::tree_walk::in_test_context;
 
+/// `Rust.NoUnwrapInLib` — see the module-level docs for behaviour. The
+/// type is `pub` so `all_rust_checks()` can construct it; users do not
+/// instantiate this directly.
 pub struct NoUnwrapInLib;
 
 const META: CheckMeta = CheckMeta {
@@ -131,149 +135,6 @@ fn unwrap_or_expect_call<'a>(
     } else {
         None
     }
-}
-
-/// Walk ancestors of `node` checking for any of the three test-context
-/// markers: `mod tests`, `#[cfg(test)]`, or `#[test]`. Returns `true`
-/// when any ancestor satisfies one.
-fn in_test_context(node: tree_sitter::Node<'_>, tree: &RustParseTree) -> bool {
-    let mut current = node.parent();
-    while let Some(ancestor) = current {
-        let kind = ancestor.kind();
-        // `mod tests { ... }` — the conventional test-module name.
-        if kind == "mod_item"
-            && ancestor
-                .child_by_field_name("name")
-                .is_some_and(|name| tree.text_of(name) == "tests")
-        {
-            return true;
-        }
-        // `#[test]` only on functions; `#[cfg(test)]` on functions, mods, or impls.
-        if kind == "function_item" && item_has_test_attr(ancestor, tree) {
-            return true;
-        }
-        if matches!(kind, "function_item" | "mod_item" | "impl_item")
-            && item_has_cfg_test(ancestor, tree)
-        {
-            return true;
-        }
-        current = ancestor.parent();
-    }
-    false
-}
-
-/// True when `item` has an outer `#[test]` attribute. In tree-sitter-rust
-/// `attribute_item` is a **preceding sibling** of the decorated item, not
-/// a child — outer attributes attach by adjacency, not by nesting.
-fn item_has_test_attr(item: tree_sitter::Node<'_>, tree: &RustParseTree) -> bool {
-    preceding_attribute_items(item)
-        .any(|attr| attribute_macro_name(attr, tree).as_deref() == Some("test"))
-}
-
-/// True when `item` has an outer `#[cfg(test)]` attribute (or
-/// `#[cfg(any(test, ...))]` / nested forms — the conservative match
-/// is "the `test` identifier appears inside a `cfg(...)` token
-/// tree"). False positive risk: `#[cfg(not(test))]` would also match,
-/// suppressing the check there. Worth refining only if that pattern
-/// becomes load-bearing for a real consumer.
-fn item_has_cfg_test(item: tree_sitter::Node<'_>, tree: &RustParseTree) -> bool {
-    preceding_attribute_items(item).any(|attr| {
-        attribute_macro_name(attr, tree).as_deref() == Some("cfg")
-            && attribute_contains_identifier(attr, "test", tree)
-    })
-}
-
-/// Walk `item`'s preceding siblings collecting `attribute_item` nodes
-/// until we hit a non-attribute sibling (a doc comment, a visibility
-/// modifier, or another item). Outer attributes in tree-sitter-rust
-/// are immediately adjacent to the item they decorate, so the walk
-/// stops at the first gap.
-fn preceding_attribute_items(
-    item: tree_sitter::Node<'_>,
-) -> impl Iterator<Item = tree_sitter::Node<'_>> {
-    let mut current = item.prev_sibling();
-    std::iter::from_fn(move || {
-        while let Some(node) = current {
-            current = node.prev_sibling();
-            match node.kind() {
-                "attribute_item" => return Some(node),
-                // Line comments / doc comments can appear between an
-                // attribute and the item — skip them and keep walking.
-                "line_comment" | "block_comment" => continue,
-                _ => return None,
-            }
-        }
-        None
-    })
-}
-
-/// Extract the macro identifier from an `attribute_item` node. For
-/// `#[test]` returns `Some("test")`; for `#[cfg(test)]` returns
-/// `Some("cfg")`; for `#[derive(Debug)]` returns `Some("derive")`.
-///
-/// tree-sitter-rust 0.23 doesn't field-name the `attribute_item` →
-/// `attribute` edge or the `attribute` → identifier edge; we walk
-/// named children directly. (See the `debug_tree_shape` ignored test
-/// for the actual sexp shape.)
-fn attribute_macro_name(attr_item: tree_sitter::Node<'_>, tree: &RustParseTree) -> Option<String> {
-    // Find the `attribute` child. tree-sitter-rust models the shape as
-    //   attribute_item ::= "#" "[" attribute "]"
-    // where the brackets are anonymous tokens and `attribute` is the
-    // single named child.
-    //
-    // Iterating via `named_children(&mut cursor)` would tie the
-    // returned Node's lifetime to the cursor (the tree-sitter Rust
-    // binding's iterator lifetime quirk). Use indexed access — clean
-    // and the Node's lifetime is the tree's.
-    let attribute = find_named_child(attr_item, "attribute")?;
-    // The first named child of `attribute` is the macro path:
-    // `identifier` for unqualified names (`#[test]`, `#[cfg(...)]`),
-    // `scoped_identifier` for qualified ones (`#[foo::bar]`).
-    let path = find_named_child_matching(attribute, |k| {
-        matches!(k, "identifier" | "scoped_identifier")
-    })?;
-    Some(tree.text_of(path).to_string())
-}
-
-/// Find the first named child with a specific `kind`. Used in lieu of
-/// the borrow-checker-hostile `named_children(&mut cursor).find(...)`
-/// pattern.
-fn find_named_child<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
-    find_named_child_matching(node, |k| k == kind)
-}
-
-fn find_named_child_matching<'a>(
-    node: tree_sitter::Node<'a>,
-    pred: impl Fn(&str) -> bool,
-) -> Option<tree_sitter::Node<'a>> {
-    for i in 0..node.named_child_count() {
-        let child = node.named_child(i)?;
-        if pred(child.kind()) {
-            return Some(child);
-        }
-    }
-    None
-}
-
-/// Whether any identifier-shaped descendant of `attr_item` has the
-/// literal text `name`. Used by `item_has_cfg_test` to look inside
-/// `#[cfg(test)]` / `#[cfg(any(test, ...))]` for the `test` token.
-fn attribute_contains_identifier(
-    attr_item: tree_sitter::Node<'_>,
-    name: &str,
-    tree: &RustParseTree,
-) -> bool {
-    let mut stack = vec![attr_item];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "identifier" && tree.text_of(node) == name {
-            return true;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-    false
 }
 
 #[cfg(test)]

@@ -1,0 +1,69 @@
+---
+id: Rust.NoUnimplementedInNonTest
+category: Warning
+base_priority: 14
+default_severity: High
+options: []
+---
+
+`unimplemented!()` and `todo!()` both expand to a runtime panic. They're
+fine as scaffolding while you sketch a function or stub a trait impl
+during development — but shipping them in library code means any consumer
+who walks that path crashes with no useful diagnostic.
+
+The check fires on `unimplemented!()` and `todo!()` invocations that are
+**not** inside a test context. A call counts as in test context when any
+of its ancestors is:
+
+* a function or module annotated with `#[cfg(test)]`,
+* a function annotated with `#[test]`,
+* or a module named `tests`.
+
+## Example
+
+```rust
+// FIRES: lib code, no test guard.
+pub fn next_step() -> i32 {
+    todo!()  // -> Rust.NoUnimplementedInNonTest
+}
+
+// DOES NOT FIRE: enclosing function is #[test].
+#[test]
+fn placeholder_test() {
+    todo!("fill in once the API stabilises");
+}
+
+// DOES NOT FIRE: enclosing module is #[cfg(test)].
+#[cfg(test)]
+mod tests {
+    fn fixture_helper() -> i32 {
+        unimplemented!()
+    }
+}
+```
+
+## What to do
+
+* Implement the function. If the implementation is genuinely deferred,
+  open an issue and link to it from the surrounding context — but
+  don't ship a panic.
+* If the function is a trait method that doesn't apply, return a
+  default value, return an error, or restructure the trait so the
+  method isn't required for this implementer.
+* If the call is during in-progress scaffolding, move it under a
+  `#[cfg(test)]` gate or behind a feature flag while you work.
+
+## Suppression
+
+Inline directives narrow the suppression to the specific call:
+
+```rust
+// cofferdam-ignore: Rust.NoUnimplementedInNonTest: temporary — tracked in <issue>
+pub fn next_step() -> i32 {
+    todo!()
+}
+```
+
+Suppressions on `unimplemented!()` / `todo!()` should always link to the
+tracking issue. They are by definition known incompleteness — if no issue
+exists, the suppression masks technical debt.

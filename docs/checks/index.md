@@ -23,6 +23,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.LayerViolation`](Design.LayerViolation.md) — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
 - [`Design.MaxParameters`](Design.MaxParameters.md) — Functions with too many parameters are hard to call correctly. Pass an options object instead.
 - [`Design.OrphanExport`](Design.OrphanExport.md) — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
+- [`Rust.MissingPubDoc`](Rust.MissingPubDoc.md) — Public items in a library crate compose the published API surface. Document each `pub fn` / `pub struct` / `pub enum` / `pub trait` with a `///` doc comment so consumers can understand what to call.
 
 ## Readability
 
@@ -42,6 +43,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 ## Warning
 
+- [`Rust.NoUnimplementedInNonTest`](Rust.NoUnimplementedInNonTest.md) — `unimplemented!()` / `todo!()` panic at runtime; calling them outside test code ships a guaranteed crash. Implement the function or move it into a `#[test]`.
 - [`Rust.NoUnwrapInLib`](Rust.NoUnwrapInLib.md) — Calling `.unwrap()` or `.expect()` in library code panics on `None`/`Err(_)`. Return `Result` and propagate via `?`, or write a `#[test]` for the call.
 - [`Warning.NoConsoleLog`](Warning.NoConsoleLog.md) — `console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.
 - [`Warning.NoDebugger`](Warning.NoDebugger.md) — `debugger` statements halt execution under attached devtools. Remove before shipping.

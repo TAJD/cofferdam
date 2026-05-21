@@ -378,6 +378,30 @@
       "options": []
     },
     {
+      "id": "Rust.MissingPubDoc",
+      "category": "Design",
+      "base_priority": 4,
+      "default_severity": "Low",
+      "explanation": "Public items in a library crate compose the published API surface. Document each `pub fn` / `pub struct` / `pub enum` / `pub trait` with a `///` doc comment so consumers can understand what to call.",
+      "body": "---\nid: Rust.MissingPubDoc\ncategory: Design\nbase_priority: 4\ndefault_severity: Low\noptions: []\n---\n\nPublic items in a library crate compose the published API surface.\nConsumers discover what to call by reading the docs; an undocumented\n`pub fn` is a discoverability gap that turns into a support cost the\nfirst time someone has to read the source to figure out what it does.\n\nThe check fires on `pub` declarations of the four item kinds that make\nup the API surface: `fn`, `struct`, `enum`, `trait`. Restricted\nvisibilities (`pub(crate)`, `pub(super)`, `pub(in path)`) are exempt —\nthey're internal API, not the published contract.\n\nWhat counts as documented:\n\n* a preceding `/// ...` line doc comment,\n* a preceding `/** ... */` block doc comment,\n* a preceding `#[doc = \"...\"]` attribute,\n* or `#[doc(hidden)]` (deliberately undocumented — same opt-out as\n  clippy's `missing_docs`).\n\n## Example\n\n```rust\n// FIRES: no doc comment.\npub fn parse_id(s: &str) -> i64 {\n    s.parse::<i64>().unwrap_or(0)\n}\n\n// DOES NOT FIRE: outer doc comment.\n/// Parse `s` as an `i64`, returning 0 on failure.\npub fn parse_id_documented(s: &str) -> i64 {\n    s.parse::<i64>().unwrap_or(0)\n}\n\n// DOES NOT FIRE: restricted visibility (internal API).\npub(crate) fn helper() {}\n\n// DOES NOT FIRE: explicitly hidden.\n#[doc(hidden)]\npub fn internal_thing() {}\n```\n\n## What to do\n\n* Add a `///` doc comment naming what the item does, its arguments, and\n  any non-obvious failure modes. A one-liner is fine for self-evident\n  helpers; longer docs are valuable for anything stateful.\n* If the item shouldn't be part of the public surface, narrow the\n  visibility to `pub(crate)` or remove the `pub` entirely.\n* If the item is part of the public surface but deliberately\n  undocumented (private extension hook, deprecated alias being removed),\n  apply `#[doc(hidden)]` so the suppression is visible in source.\n\n## Suppression\n\nFor items that are temporarily undocumented (work-in-progress trait\nmethods, scaffolding), use an inline directive linked to a tracking\nissue:\n\n```rust\n// cofferdam-ignore: Rust.MissingPubDoc: docs land with <issue>\npub fn next_step() -> i32 { 0 }\n```\n\nA blanket file-wide suppression on this check tends to silently grow as\nnew public items are added; prefer per-item directives.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": []
+    },
+    {
+      "id": "Rust.NoUnimplementedInNonTest",
+      "category": "Warning",
+      "base_priority": 14,
+      "default_severity": "High",
+      "explanation": "`unimplemented!()` / `todo!()` panic at runtime; calling them outside test code ships a guaranteed crash. Implement the function or move it into a `#[test]`.",
+      "body": "---\nid: Rust.NoUnimplementedInNonTest\ncategory: Warning\nbase_priority: 14\ndefault_severity: High\noptions: []\n---\n\n`unimplemented!()` and `todo!()` both expand to a runtime panic. They're\nfine as scaffolding while you sketch a function or stub a trait impl\nduring development — but shipping them in library code means any consumer\nwho walks that path crashes with no useful diagnostic.\n\nThe check fires on `unimplemented!()` and `todo!()` invocations that are\n**not** inside a test context. A call counts as in test context when any\nof its ancestors is:\n\n* a function or module annotated with `#[cfg(test)]`,\n* a function annotated with `#[test]`,\n* or a module named `tests`.\n\n## Example\n\n```rust\n// FIRES: lib code, no test guard.\npub fn next_step() -> i32 {\n    todo!()  // -> Rust.NoUnimplementedInNonTest\n}\n\n// DOES NOT FIRE: enclosing function is #[test].\n#[test]\nfn placeholder_test() {\n    todo!(\"fill in once the API stabilises\");\n}\n\n// DOES NOT FIRE: enclosing module is #[cfg(test)].\n#[cfg(test)]\nmod tests {\n    fn fixture_helper() -> i32 {\n        unimplemented!()\n    }\n}\n```\n\n## What to do\n\n* Implement the function. If the implementation is genuinely deferred,\n  open an issue and link to it from the surrounding context — but\n  don't ship a panic.\n* If the function is a trait method that doesn't apply, return a\n  default value, return an error, or restructure the trait so the\n  method isn't required for this implementer.\n* If the call is during in-progress scaffolding, move it under a\n  `#[cfg(test)]` gate or behind a feature flag while you work.\n\n## Suppression\n\nInline directives narrow the suppression to the specific call:\n\n```rust\n// cofferdam-ignore: Rust.NoUnimplementedInNonTest: temporary — tracked in <issue>\npub fn next_step() -> i32 {\n    todo!()\n}\n```\n\nSuppressions on `unimplemented!()` / `todo!()` should always link to the\ntracking issue. They are by definition known incompleteness — if no issue\nexists, the suppression masks technical debt.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": []
+    },
+    {
       "id": "Rust.NoUnwrapInLib",
       "category": "Warning",
       "base_priority": 12,

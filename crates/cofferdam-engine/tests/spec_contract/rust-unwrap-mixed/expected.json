@@ -3,7 +3,7 @@
     {
       "id": "Rust.NoUnwrapInLib",
       "file": "src/lib_code.rs",
-      "line": 5,
+      "line": 8,
       "column": 22,
       "message": "`.unwrap()` in library code panics on `None`/`Err(_)`; return `Result` and propagate via `?` or move the call into a `#[test]`."
     }

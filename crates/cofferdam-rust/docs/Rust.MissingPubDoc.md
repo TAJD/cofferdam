@@ -1,0 +1,72 @@
+---
+id: Rust.MissingPubDoc
+category: Design
+base_priority: 4
+default_severity: Low
+options: []
+---
+
+Public items in a library crate compose the published API surface.
+Consumers discover what to call by reading the docs; an undocumented
+`pub fn` is a discoverability gap that turns into a support cost the
+first time someone has to read the source to figure out what it does.
+
+The check fires on `pub` declarations of the four item kinds that make
+up the API surface: `fn`, `struct`, `enum`, `trait`. Restricted
+visibilities (`pub(crate)`, `pub(super)`, `pub(in path)`) are exempt —
+they're internal API, not the published contract.
+
+What counts as documented:
+
+* a preceding `/// ...` line doc comment,
+* a preceding `/** ... */` block doc comment,
+* a preceding `#[doc = "..."]` attribute,
+* or `#[doc(hidden)]` (deliberately undocumented — same opt-out as
+  clippy's `missing_docs`).
+
+## Example
+
+```rust
+// FIRES: no doc comment.
+pub fn parse_id(s: &str) -> i64 {
+    s.parse::<i64>().unwrap_or(0)
+}
+
+// DOES NOT FIRE: outer doc comment.
+/// Parse `s` as an `i64`, returning 0 on failure.
+pub fn parse_id_documented(s: &str) -> i64 {
+    s.parse::<i64>().unwrap_or(0)
+}
+
+// DOES NOT FIRE: restricted visibility (internal API).
+pub(crate) fn helper() {}
+
+// DOES NOT FIRE: explicitly hidden.
+#[doc(hidden)]
+pub fn internal_thing() {}
+```
+
+## What to do
+
+* Add a `///` doc comment naming what the item does, its arguments, and
+  any non-obvious failure modes. A one-liner is fine for self-evident
+  helpers; longer docs are valuable for anything stateful.
+* If the item shouldn't be part of the public surface, narrow the
+  visibility to `pub(crate)` or remove the `pub` entirely.
+* If the item is part of the public surface but deliberately
+  undocumented (private extension hook, deprecated alias being removed),
+  apply `#[doc(hidden)]` so the suppression is visible in source.
+
+## Suppression
+
+For items that are temporarily undocumented (work-in-progress trait
+methods, scaffolding), use an inline directive linked to a tracking
+issue:
+
+```rust
+// cofferdam-ignore: Rust.MissingPubDoc: docs land with <issue>
+pub fn next_step() -> i32 { 0 }
+```
+
+A blanket file-wide suppression on this check tends to silently grow as
+new public items are added; prefer per-item directives.

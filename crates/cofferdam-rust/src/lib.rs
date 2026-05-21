@@ -71,6 +71,7 @@
 
 pub mod checks;
 pub mod parser;
+pub(crate) mod tree_walk;
 
 pub use checks::all_rust_checks;
 pub use parser::{parse_rust, RustParseError, RustParseTree};

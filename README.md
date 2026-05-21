@@ -69,6 +69,21 @@ A second-language **Rust adapter** ships under `crates/cofferdam-rust`, exercisi
 
 Future adapters (SQL, IaC, GraphQL) follow the same shape — see [`MAINTAINERS.md`](MAINTAINERS.md#phased-build) for the roadmap.
 
+## Dogfood
+
+Cofferdam runs against its own source on every PR (cd-9tq, cd-91zc):
+
+- **TS SDK** — `packages/check-sdk/src/` is scanned by the `dogfood` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The repo-root [`cofferdam.invariants.toml`](cofferdam.invariants.toml) declares the SDK as `public_api` so leaf-package re-exports aren't flagged as orphans; the three legitimate complexity findings on `plugin-host.ts` ride in [`.cofferdam/baseline.json`](.cofferdam/baseline.json) and are tracked separately. CI fails on any new finding at `--fail-on=high`.
+- **Rust workspace** — the `dogfood-rust` job in the same workflow scans every workspace `src/` against [`.cofferdam/baseline-rust.json`](.cofferdam/baseline-rust.json).
+
+To run the same gate locally before pushing:
+
+```sh
+cargo build --release -p cofferdam-cli
+./target/release/cofferdam check packages/check-sdk/src \
+    --baseline .cofferdam/baseline.json --fail-on=high
+```
+
 ## Status
 
 Phase 4, in progress. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.

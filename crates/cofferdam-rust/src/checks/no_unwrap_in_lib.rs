@@ -22,7 +22,7 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, Issue, Language, Priority, Severity, SourceFile,
 };
 
-use crate::parser::{parse_rust, RustParseTree};
+use crate::parser::RustParseTree;
 use crate::tree_walk::in_test_context;
 
 /// `Rust.NoUnwrapInLib` — see the module-level docs for behaviour. The
@@ -52,26 +52,19 @@ impl Check for NoUnwrapInLib {
         Language::Rust
     }
 
-    fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
-        // Parse with tree-sitter-rust. ctx.parsed (oxc TS AST) is
-        // ignored — this check runs against Rust source. The engine
-        // wiring in checkpoint 4 ensures this check is only dispatched
-        // on `Language::Rust` files, but defensive None-on-failure is
-        // cheap.
-        let Ok(tree) = parse_rust(&file.text) else {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        // cd-0039: the engine parses each `.rs` file once and stashes
+        // the tree on `ctx.parsed_lang`; we just downcast. None here
+        // means the engine already emitted `Warning.ParseError` for
+        // this file — silently skipping mirrors the TS check pattern
+        // (`let Some(parsed) = ctx.parsed else { ... };`).
+        let Some(tree) = ctx.parsed_as::<RustParseTree>() else {
             return Vec::new();
         };
-        // Skip files with parse errors — emitting `NoUnwrapInLib` on a
-        // partial tree risks pointing at recovered-but-wrong nodes.
-        // The engine's `Warning.ParseError` channel surfaces the parse
-        // failure to the user separately.
-        if tree.has_errors() {
-            return Vec::new();
-        }
 
         let mut issues = Vec::new();
         let mut cursor = tree.root_node().walk();
-        collect_findings(&mut cursor, &tree, file, &mut issues);
+        collect_findings(&mut cursor, tree, file, &mut issues);
         issues
     }
 }
@@ -143,10 +136,20 @@ mod tests {
     use cofferdam_core::CorpusIndex;
     use std::path::PathBuf;
 
+    // Mirrors the engine's per-file dispatch (cd-0039): parse the
+    // source once, drop trees with parse errors, install the tree on
+    // `parsed_lang`. Tests that pass malformed sources get an empty
+    // result the same way the engine path does.
     fn run_check(src: &str) -> Vec<Issue> {
         let file = SourceFile::new(PathBuf::from("test.rs"), src);
         let corpus = CorpusIndex::new();
-        let mut ctx = CheckContext::new(&file).with_corpus(&corpus);
+        let tree = match crate::parser::parse_rust(&file.text) {
+            Ok(t) if !t.has_errors() => t,
+            _ => return Vec::new(),
+        };
+        let mut ctx = CheckContext::new(&file)
+            .with_corpus(&corpus)
+            .with_parsed_lang(&tree);
         NoUnwrapInLib.run(&file, &mut ctx)
     }
 

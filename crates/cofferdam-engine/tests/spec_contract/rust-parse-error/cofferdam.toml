@@ -1,0 +1,4 @@
+# cd-0039 — pins the contract that malformed `.rs` files surface as a
+# `Warning.ParseError` finding from the engine. Pre-cd-0039 the Rust
+# checks silently no-op'd on has_errors() trees, leaving the user with
+# zero diagnostic. The engine now mirrors the TS adapter's behaviour.

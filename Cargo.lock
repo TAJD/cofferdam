@@ -260,6 +260,7 @@ version = "0.3.2"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
+ "cofferdam-rust",
  "globset",
  "ignore",
  "oxc_ast",

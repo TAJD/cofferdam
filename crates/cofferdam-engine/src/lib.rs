@@ -26,6 +26,7 @@ use cofferdam_core::{
     InvariantsSpec, Issue, Language, LayersConfig, Priority, Severity, SourceFile, Span,
     ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
+use cofferdam_rust::parse_rust;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -240,13 +241,69 @@ impl Engine {
             let file = SourceFile::new(path.clone(), text.clone());
             texts.insert(path.clone(), text.clone());
 
-            // Per-language dispatch (cd-91zc checkpoint 4). Non-TS files
-            // skip oxc parsing and graph extraction entirely — their
-            // checks (the Rust adapter, etc.) own their own parser
-            // internally and do not consume the TS-shaped corpus slots.
-            // TS checks gate on `let Some(parsed) = ctx.parsed else { ... };`
-            // so a `None` ParsedView is the canonical "skip this file"
-            // signal — no special-casing required at the check site.
+            // Per-language dispatch (cd-91zc checkpoint 4 + cd-0039).
+            // Non-TS files skip oxc parsing and graph extraction
+            // entirely — the engine instead invokes the matching
+            // language adapter's parser ONCE per file and installs the
+            // resulting handle on `CheckContext.parsed_lang`. Each
+            // language check downcasts via `ctx.parsed_as::<T>()` (TS
+            // checks read `ctx.parsed` directly; this branch never
+            // runs for them).
+            //
+            // Fatal parse failures emit a single `Warning.ParseError`
+            // and short-circuit the per-check loop, mirroring TS
+            // behaviour. This eliminated the silent no-op on malformed
+            // .rs files that the pre-cd-0039 per-check `parse_rust` +
+            // `has_errors()` preamble produced.
+            if file.language == Language::Rust {
+                // Three outcomes from parse_rust:
+                //
+                // * `Err(_)`: the parser failed to produce a tree at
+                //   all (grammar load failure / cancellation / timeout).
+                //   Surface as `Warning.ParseError` — this is a real
+                //   tool-level failure the user needs to know about.
+                //
+                // * `Ok(tree)` with `has_errors() == true`: tree-sitter
+                //   recovered with ERROR / MISSING nodes. We do NOT
+                //   emit `Warning.ParseError` here because
+                //   tree-sitter-rust 0.23 has known false positives on
+                //   valid Rust (e.g. `&raw` where `raw` is a variable
+                //   name — the grammar tries to parse it as a raw
+                //   reference expression). Silently skipping mirrors
+                //   the pre-cd-0039 per-check `has_errors()` gate and
+                //   keeps the dogfood baseline stable. Once the
+                //   grammar is more accurate (or we add a quirk
+                //   allowlist), this branch can promote to a real
+                //   emission.
+                //
+                // * `Ok(tree)` clean: install on parsed_lang and run
+                //   the matching checks.
+                let tree = match parse_rust(&file.text) {
+                    Ok(t) if !t.has_errors() => t,
+                    Ok(_) => continue,
+                    Err(e) => {
+                        issues.push(rust_load_error_issue(&file, &e));
+                        continue;
+                    }
+                };
+                for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                    if check.language() != file.language {
+                        continue;
+                    }
+                    let mut ctx = CheckContext::new(&file)
+                        .with_options(opts)
+                        .with_corpus(&corpus)
+                        .with_parsed_lang(&tree);
+                    issues.extend(check.run(&file, &mut ctx));
+                }
+                continue;
+            }
+            // Defensive catch-all for languages we recognise (via
+            // `Language::from_path`) but haven't wired a parser for
+            // yet. Falls through to the TS path so nothing crashes;
+            // matching checks (none today) would see `parsed_lang =
+            // None`.
+            #[allow(clippy::collapsible_if)]
             if file.language != Language::TypeScript {
                 for (check, opts) in self.checks.iter().zip(self.options.iter()) {
                     if check.language() != file.language {
@@ -469,6 +526,30 @@ fn parse_error_issue(file: &SourceFile, diagnostics: &[oxc_diagnostics::OxcDiagn
         // the work in cd-81a.2 / A2). Point at line 1 col 1 so formatters
         // produce something coherent; the exact diagnostic location is
         // already in `message`.
+        span: Span {
+            start_byte: 0,
+            end_byte: 0,
+            line: 1,
+            column: 1,
+        },
+        priority: Priority(20),
+        severity: Severity::Critical,
+        related: Vec::new(),
+    }
+}
+
+/// Build a `Warning.ParseError` for the rare case where tree-sitter
+/// itself fails to produce a tree at all (grammar load failure, parser
+/// cancellation, timeout). Recovered `has_errors()` trees do NOT come
+/// through here — tree-sitter-rust 0.23 has known false positives on
+/// valid Rust (e.g. variables named `raw` adjacent to `&`) that would
+/// produce false `Warning.ParseError` findings on real codebases. See
+/// the dispatch comment in `analyze_with_sources`.
+fn rust_load_error_issue(file: &SourceFile, err: &cofferdam_rust::RustParseError) -> Issue {
+    Issue {
+        check_id: "Warning.ParseError".to_string(),
+        message: format!("parse error: {err}"),
+        file: file.path.clone(),
         span: Span {
             start_byte: 0,
             end_byte: 0,

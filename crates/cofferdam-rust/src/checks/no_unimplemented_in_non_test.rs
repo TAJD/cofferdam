@@ -19,7 +19,7 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, Issue, Language, Priority, Severity, SourceFile,
 };
 
-use crate::parser::{parse_rust, RustParseTree};
+use crate::parser::RustParseTree;
 use crate::tree_walk::in_test_context;
 
 /// `Rust.NoUnimplementedInNonTest` — see the module-level docs for
@@ -49,17 +49,13 @@ impl Check for NoUnimplementedInNonTest {
         Language::Rust
     }
 
-    fn run(&self, file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
-        let Ok(tree) = parse_rust(&file.text) else {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(tree) = ctx.parsed_as::<RustParseTree>() else {
             return Vec::new();
         };
-        if tree.has_errors() {
-            return Vec::new();
-        }
-
         let mut issues = Vec::new();
         let mut cursor = tree.root_node().walk();
-        collect_findings(&mut cursor, &tree, file, &mut issues);
+        collect_findings(&mut cursor, tree, file, &mut issues);
         issues
     }
 }
@@ -129,10 +125,17 @@ mod tests {
     use cofferdam_core::CorpusIndex;
     use std::path::PathBuf;
 
+    // Mirrors engine dispatch (cd-0039).
     fn run_check(src: &str) -> Vec<Issue> {
         let file = SourceFile::new(PathBuf::from("test.rs"), src);
         let corpus = CorpusIndex::new();
-        let mut ctx = CheckContext::new(&file).with_corpus(&corpus);
+        let tree = match crate::parser::parse_rust(&file.text) {
+            Ok(t) if !t.has_errors() => t,
+            _ => return Vec::new(),
+        };
+        let mut ctx = CheckContext::new(&file)
+            .with_corpus(&corpus)
+            .with_parsed_lang(&tree);
         NoUnimplementedInNonTest.run(&file, &mut ctx)
     }
 

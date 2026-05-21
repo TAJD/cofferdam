@@ -141,6 +141,18 @@ pub fn is_finalize_observer(check_id: &str) -> bool {
 pub struct CheckContext<'a> {
     pub file: &'a SourceFile,
     pub parsed: Option<&'a crate::parser::ParsedView<'a>>,
+    /// Per-language parsed handle, type-erased. The engine populates
+    /// this with whatever type the matching language adapter produces
+    /// (the Rust adapter installs a `&RustParseTree`; future SQL /
+    /// IaC adapters install their own handles here). Checks downcast
+    /// via [`CheckContext::parsed_as`].
+    ///
+    /// Stays `None` on `Language::TypeScript` files — TS checks read
+    /// the oxc-typed `parsed` field directly. The Any-slot avoids
+    /// cofferdam-core depending on per-language parser crates and
+    /// keeps the polylingual surface generic over languages we
+    /// haven't shipped yet (cd-0039).
+    pub parsed_lang: Option<&'a dyn std::any::Any>,
     /// Resolved options for the running check, validated against its
     /// schema at engine startup. Defaults to a process-wide empty bag
     /// — useful for tests and for checks that declare no options.
@@ -157,6 +169,7 @@ impl<'a> CheckContext<'a> {
         Self {
             file,
             parsed: None,
+            parsed_lang: None,
             options: &EMPTY_OPTIONS,
             corpus: empty_corpus(),
         }
@@ -164,6 +177,14 @@ impl<'a> CheckContext<'a> {
 
     pub fn with_parsed(mut self, parsed: &'a crate::parser::ParsedView<'a>) -> Self {
         self.parsed = Some(parsed);
+        self
+    }
+
+    /// Install a per-language parsed handle. The engine calls this in
+    /// its non-TS dispatch branch after the language adapter parses
+    /// the file. Checks retrieve the value with [`Self::parsed_as`].
+    pub fn with_parsed_lang(mut self, parsed_lang: &'a dyn std::any::Any) -> Self {
+        self.parsed_lang = Some(parsed_lang);
         self
     }
 
@@ -175,6 +196,14 @@ impl<'a> CheckContext<'a> {
     pub fn with_corpus(mut self, corpus: &'a CorpusIndex) -> Self {
         self.corpus = corpus;
         self
+    }
+
+    /// Typed accessor for `parsed_lang`. Returns `Some(&T)` when the
+    /// installed handle's concrete type matches `T`. The Rust adapter
+    /// reads `ctx.parsed_as::<RustParseTree>()`; the TS adapter does
+    /// not use this method (it reads `ctx.parsed` directly).
+    pub fn parsed_as<T: std::any::Any>(&self) -> Option<&'a T> {
+        self.parsed_lang.and_then(|p| p.downcast_ref::<T>())
     }
 
     /// Plugin-facing AST surface. `None` when the file failed to parse

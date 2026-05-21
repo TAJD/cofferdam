@@ -67,6 +67,10 @@ t9d-corpus/
 # Vendored TS corpus (dev-machine only; populated by scripts/fetch-corpus.sh)
 /tests/corpus/
 /tests/corpus-results/
+# cd-9hp.9 cp4 — per-run graph-build regression numbers. The committed
+# regression budget lives in docs/decisions/0001-canonical-graph-schema.md;
+# runtime rows here are dev-machine snapshots.
+/tests/graph-bench-results/
 # bd worktree
 d1y-twopass/
 # bd worktree

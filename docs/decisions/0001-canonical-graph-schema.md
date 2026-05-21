@@ -98,6 +98,33 @@ specifier as an edge attribute so direct-edge matching is exact.
 **petgraph holds.** Proceed with cd-9hp.9 as scoped. No need to
 re-evaluate Crepe / Ascent / Soufflé at this time.
 
+### Production validation (cd-9hp.9 cp4)
+
+The spike numbers are from a research harness that diverged slightly
+from production semantics (see caveat above). After cp3 wired the
+canonical graph into the real engine, cp4 re-measures the same shape
+through the production path. Numbers from a release build on Windows
+(the dev box), best-of-3 for the translation step:
+
+| Repo | Files | Imports | Exports | Flat extract | Graph translate | Overhead |
+|---|---|---|---|---|---|---|
+| bestefforttools | 186 TS | 649 | 512 | 31.04 ms | 0.86 ms (213 nodes, 1061 edges) | **2.8%** |
+
+The canonical-graph translation adds ~3% on top of the flat-table
+extraction work the engine already does — well under the bead's
+"≤ 1.5× the flat-table baseline" budget (interpreted as: the new
+step adds at most 50% on top). Live regression gate:
+`tests/graph_build_bench.rs` (skipped when `bestefforttools` /
+`COFFERDAM_BENCH_REPO` is absent; asserts a generous 2.0× hard
+ceiling, prints the recorded ratio, and writes a JSON row to
+`tests/graph-bench-results/` for posterity).
+
+The bench measures the *added* step's cost, not the absolute graph
+build cost — that's the regression-budget interpretation that
+matters for users: how much overhead does cp3 add to the existing
+pipeline? Answer: a few percent, not the half-order-of-magnitude
+the budget reserves for.
+
 ## Decision 2 — Schema taxonomy
 
 **Accepted: closed core + namespaced extensions.**

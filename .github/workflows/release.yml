@@ -42,8 +42,34 @@ env:
   ZIG_VERSION: "0.13.0"
 
 jobs:
+  # Version-consistency gate (cd-9hp.2 release tooling). Runs before the
+  # build matrix so a misconfigured tag wastes no CI and — critically —
+  # never reaches the publish jobs. On a tag, asserts every in-repo
+  # version location equals the tag; otherwise just asserts they agree
+  # internally. This is the guard that would have caught the v0.3.3 botch
+  # (tag v0.3.3, repo still 0.3.2, published silently). Always runs (not
+  # tag-gated) so `build`'s `needs: verify` resolves on workflow_dispatch
+  # too.
+  verify:
+    name: verify version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Check version locations
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            node scripts/version.mjs check "${GITHUB_REF_NAME#v}"
+          else
+            node scripts/version.mjs check
+          fi
+
   build:
     name: build ${{ matrix.target }}
+    needs: verify
     runs-on: ${{ matrix.host }}
     strategy:
       fail-fast: false

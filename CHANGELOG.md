@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-21
+
+### Added
+- Type-aware check infrastructure — groundwork only, no user-facing check yet (cd-9hp.2 cp1 + cp2). A Node-side ts-morph "type host" exposes TypeScript's type system to checks that declare `requires_types`, over a stdin/stdout JSON-RPC channel (`design/type-host-wire.md`). The engine routes such checks through a `TypeOracle`; `cofferdam-core` stays Node-free. A hidden `cofferdam type-host --ping` subcommand measures worker cold-start. **No built-in check sets `requires_types` yet**, so this ships entirely dormant — `cofferdam check` behaviour, dependencies, and output are unchanged (no Node or ts-morph required). The first real type-aware check (`Warning.UnusedNullCheck`) lands in a later release (cd-9hp.2.3).
+- `scripts/version.mjs` — deterministic version manager. `check [X.Y.Z]` asserts every in-repo version location agrees (and, with an argument, matches a tag); `set X.Y.Z [--regen]` rewrites them in lockstep with no `cargo-edit` dependency. The release workflow now runs `version.mjs check <tag>` as a hard gate before building, so a forgotten bump fails the release loudly instead of shipping silently (see Fixed).
+
+### Fixed
+- In-repo version realigned with the published release. v0.3.3 shipped to npm under the `v0.3.3` tag without bumping a single in-repo version file — `Cargo.toml`, the internal path-dep pins, both `package.json` files, and `docs/public/checks.json` all stayed at 0.3.2, so `cofferdam --version` reported 0.3.2 while `npm install` served 0.3.3. The cause: `release.yml` derives the published version from the tag and self-heals at build time, so nothing failed when the human-side bump was skipped. 0.3.4 moves every location forward past the published 0.3.3, and the new `verify` job in `release.yml` (backed by `scripts/version.mjs`) makes the tag-vs-repo mismatch a release-blocking error going forward. This also caught a previously-untracked location: `cofferdam-cli` pins `cofferdam-lsp` directly (not via `[workspace.dependencies]`), so it was missed by the documented "six places" and had drifted too.
+
 ## [0.3.3] - 2026-05-20
 
 ### Added

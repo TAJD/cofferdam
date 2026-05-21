@@ -1,61 +1,33 @@
 #!/usr/bin/env bash
-# Bump every version string that ships in a release, in lockstep.
+# Thin wrapper around the canonical deterministic version manager,
+# scripts/version.mjs (cd-9hp.2). Kept for muscle-memory / older docs.
 #
-# Updates:
-#   - [workspace.package].version in Cargo.toml
-#   - [workspace.dependencies] path-dep version pins in Cargo.toml
-#   - packages/cofferdam/package.json
-#   - packages/check-sdk/package.json
-#
-# Single source of truth: the argument you pass in. The Rust workspace
-# and the @cofferdam/* npm packages release in lockstep — see
-# MAINTAINERS.md § Cutting a release for the rationale.
+# version.mjs supersedes the old `cargo set-version` + `npm version`
+# approach: it is self-contained (no cargo-edit dependency), bumps every
+# cofferdam-* path-dep pin across ALL crate Cargo.toml files (the old
+# approach missed the cofferdam-cli -> cofferdam-lsp pin), and also
+# regenerates Cargo.lock + docs/public/checks.json with --regen.
 #
 # Usage:
-#   scripts/bump-version.sh 0.2.3
+#   scripts/bump-version.sh 0.3.4
 #
-# Prereqs:
-#   - cargo-edit installed: `cargo install cargo-edit --locked`
-#   - npm available on PATH
+# Prereqs: node on PATH.
 
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
   echo "usage: $0 <version>" >&2
-  echo "example: $0 0.2.3" >&2
-  exit 2
-fi
-
-version="$1"
-
-# Strip a leading 'v' if the caller forgot — tolerate both `0.2.3` and `v0.2.3`.
-version="${version#v}"
-
-# Validate semver-ish shape so we fail before mutating files.
-if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]; then
-  echo "ERROR: '$version' does not look like a semver (e.g. 0.2.3 or 0.2.3-rc1)" >&2
+  echo "example: $0 0.3.4" >&2
   exit 2
 fi
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$repo_root"
+version="${1#v}"
 
-echo "==> bumping Rust workspace to $version"
-# `cargo set-version --workspace` updates each member crate's version
-# and rewrites matching `[workspace.dependencies]` path-dep pins in
-# one call. Replaces the regex-on-TOML approach release.yml used
-# pre-cd-8rp.
-cargo set-version --workspace "$version"
-
-echo "==> bumping packages/cofferdam to $version"
-(cd packages/cofferdam && npm version "$version" --no-git-tag-version --allow-same-version >/dev/null)
-
-echo "==> bumping packages/check-sdk to $version"
-(cd packages/check-sdk && npm version "$version" --no-git-tag-version --allow-same-version >/dev/null)
+node "$repo_root/scripts/version.mjs" set "$version" --regen
 
 echo
-echo "Done. Review the diff, commit, and tag:"
-echo
-echo "  git diff -- Cargo.toml packages/"
+echo "Verify, then commit + tag:"
+echo "  node scripts/version.mjs check $version"
 echo "  git commit -am \"release: v$version\""
-echo "  git tag v$version && git push --follow-tags"
+echo "  git tag -a v$version -m \"v$version — ...\" && git push --follow-tags"

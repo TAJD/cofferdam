@@ -40,20 +40,18 @@ For air-gapped runners: download the archive for your platform from the GitHub R
 
 ## Cutting a release
 
-The Rust workspace, the `@cofferdam/cofferdam` npm package, and `@cofferdam/check-sdk` ship in lockstep — every `vX.Y.Z` tag publishes all three at the same version. `release.yml` enforces this on the CI side; locally, use the helper so the bump diff is reviewable in one go.
+The Rust workspace, the `@cofferdam/cofferdam` npm package, and `@cofferdam/check-sdk` ship in lockstep — every `vX.Y.Z` tag publishes all three at the same version. `release.yml`'s `verify` job enforces this before building (it runs `version.mjs check <tag>` and fails the release if the repo doesn't match the tag). Locally, use the deterministic script so the bump diff is reviewable in one go.
 
 ```bash
-# Install once per machine
-cargo install cargo-edit --locked
-
-# Bump everything, commit, tag, push
-bash scripts/bump-version.sh 0.2.3
-git diff -- Cargo.toml packages/        # sanity-check the diff
-git commit -am "release: v0.2.3"
-git tag v0.2.3 && git push --follow-tags
+# Bump every version location + regenerate Cargo.lock and checks.json
+node scripts/version.mjs set 0.3.4 --regen
+node scripts/version.mjs check 0.3.4    # confirm all locations agree
+git diff                                # sanity-check the diff
+git commit -am "release: v0.3.4"
+git tag -a v0.3.4 -m "v0.3.4 — ..." && git push --follow-tags
 ```
 
-`bump-version.sh` runs `cargo set-version --workspace` (updates `[workspace.package].version` plus every `[workspace.dependencies]` path-dep pin) and `npm version` against both `packages/cofferdam` and `packages/check-sdk`. Single source of truth; no regex-on-TOML.
+`scripts/version.mjs` is self-contained (no `cargo-edit` dependency). `set` rewrites `[workspace.package].version`, **every** `cofferdam-*` path-dep pin across all crate `Cargo.toml` files (not just `[workspace.dependencies]` — `cofferdam-cli` pins `cofferdam-lsp` directly), and both `package.json` files; `--regen` then refreshes `Cargo.lock` and `docs/public/checks.json`. `check` audits all of them and (with a version arg) asserts they match the tag. The older `bump-version.sh` is a thin wrapper around it. The full sequence, including the v0.3.3 silent-drift post-mortem, lives in `.claude/skills/cut-release`.
 
 Once the tag lands on GitHub, `release.yml` builds the multi-platform binaries, publishes the GitHub Release, and runs `publish-npm` + `publish-check-sdk` via OIDC Trusted Publisher.
 

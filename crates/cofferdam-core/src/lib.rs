@@ -14,6 +14,7 @@ pub mod invariants;
 pub mod issue;
 pub mod layers;
 pub mod lines;
+pub mod location;
 pub mod options;
 pub mod parser;
 pub mod source;
@@ -37,6 +38,7 @@ pub use invariants::{
 };
 pub use issue::{Issue, ParseSeverityError, Priority, RelatedSpan, Severity, Span};
 pub use lines::{LineView, Lines};
+pub use location::{Location, LocationRange, Uri};
 pub use options::{
     validate_options, CheckOptions, OptionDefault, OptionKind, OptionSpec, OptionValue,
     OptionsError, RawOptionValue, EMPTY_OPTIONS,

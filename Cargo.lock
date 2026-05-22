@@ -282,6 +282,8 @@ dependencies = [
  "oxc_syntax",
  "proptest",
  "serde",
+ "serde_json",
+ "smol_str",
  "tempfile",
  "thiserror 1.0.69",
  "toml",

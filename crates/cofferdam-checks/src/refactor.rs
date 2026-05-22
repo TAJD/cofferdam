@@ -9,7 +9,7 @@
 //! Both checks ignore code outside any function (top-level statements
 //! at module scope) — the metrics are designed for callable units.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use std::path::Path;
@@ -2001,11 +2001,16 @@ impl Check for UnusedVariable {
             rest_ranges: Vec::new(),
             ts_signature_ranges: Vec::new(),
             named_expression_id_ranges: Vec::new(),
+            param_property_ranges: Vec::new(),
+            class_stack: Vec::new(),
+            class_this_reads: Vec::new(),
         };
         skip_collector.visit_program(parsed.program);
         let rest_ranges = skip_collector.rest_ranges;
         let ts_signature_ranges = skip_collector.ts_signature_ranges;
         let named_expr_ranges = skip_collector.named_expression_id_ranges;
+        let param_property_ranges = skip_collector.param_property_ranges;
+        let class_this_reads = skip_collector.class_this_reads;
 
         let semantic_return = SemanticBuilder::new().build(parsed.program);
         let scoping = semantic_return.semantic.scoping();
@@ -2047,6 +2052,25 @@ impl Check for UnusedVariable {
                 continue;
             }
 
+            // TS parameter property read via `this.<name>` (cd-sh72 / gh
+            // #44). `constructor(private ctx: T)` is both a parameter and
+            // a class field; oxc resolves `this.ctx` as a member access,
+            // not a reference to the parameter symbol, so
+            // get_resolved_references is empty even when the field is
+            // used. Treat a `this.<name>` read in the enclosing class as
+            // a use. A parameter property never read this way still falls
+            // through and flags (it has no resolved references either).
+            if span_in_any_range(symbol_span.start, symbol_span.end, &param_property_ranges)
+                && class_reads_this_name(
+                    symbol_span.start,
+                    symbol_span.end,
+                    name,
+                    &class_this_reads,
+                )
+            {
+                continue;
+            }
+
             // The actual "is it used" signal.
             if scoping.get_resolved_references(symbol_id).next().is_some() {
                 continue;
@@ -2080,6 +2104,27 @@ struct SkipSpanCollector {
     /// "unused" in any actionable sense if the expression itself flows
     /// somewhere via assignment.
     named_expression_id_ranges: Vec<(u32, u32)>,
+    /// Binding-identifier spans of TS parameter properties
+    /// (`constructor(private ctx: T)`). A parameter property declares a
+    /// class field read via `this.<name>` — which oxc resolves as a
+    /// member access, NOT a reference to the parameter symbol — so the
+    /// plain reference signal misses the read (cd-sh72 / gh #44).
+    param_property_ranges: Vec<(u32, u32)>,
+    /// In-progress stack of enclosing class spans + the `this.<name>`
+    /// member names read inside each. Pushed on class entry, popped into
+    /// `class_this_reads` on exit so the innermost class wins.
+    class_stack: Vec<ClassThisReads>,
+    /// Finalised per-class `this.<name>` read sets.
+    class_this_reads: Vec<ClassThisReads>,
+}
+
+/// A class span paired with the set of `this.<name>` member names read
+/// anywhere inside it. Used to decide whether a parameter property is
+/// actually live (`this.ctx`) versus genuinely unused.
+#[derive(Clone)]
+struct ClassThisReads {
+    span: (u32, u32),
+    names: HashSet<String>,
 }
 
 impl<'a> Visit<'a> for SkipSpanCollector {
@@ -2111,7 +2156,66 @@ impl<'a> Visit<'a> for SkipSpanCollector {
                     .push((id.span.start, id.span.end));
             }
         }
+        // Track this class while we walk it so `this.<name>` reads inside
+        // its methods attribute to it (innermost class wins). Popped and
+        // recorded on exit.
+        self.class_stack.push(ClassThisReads {
+            span: (node.span.start, node.span.end),
+            names: HashSet::new(),
+        });
         oxc_ast_visit::walk::walk_class(self, node);
+        if let Some(done) = self.class_stack.pop() {
+            self.class_this_reads.push(done);
+        }
+    }
+
+    fn visit_formal_parameter(&mut self, node: &oxc_ast::ast::FormalParameter<'a>) {
+        // A constructor parameter carrying an access modifier
+        // (`public`/`private`/`protected`) or `readonly` is a TS
+        // parameter property — it declares a class field, not just a
+        // positional argument. The parser only permits these modifiers on
+        // constructor params, so the modifier presence is a sufficient
+        // signal. Parameter properties are always simple identifiers
+        // (no destructuring), so the binding is a BindingIdentifier.
+        if node.accessibility.is_some() || node.readonly {
+            if let Some(id) = node.pattern.get_binding_identifier() {
+                self.param_property_ranges
+                    .push((id.span.start, id.span.end));
+            }
+        }
+        oxc_ast_visit::walk::walk_formal_parameter(self, node);
+    }
+
+    fn visit_static_member_expression(&mut self, node: &oxc_ast::ast::StaticMemberExpression<'a>) {
+        // `this.ctx` — record `ctx` against the innermost enclosing class.
+        // For `this.ctx.value` the outer member's object is the inner
+        // `this.ctx` member (not `this`), so walking records `ctx` from
+        // the inner node and ignores `value` — exactly the field name we
+        // want.
+        if matches!(node.object, Expression::ThisExpression(_)) {
+            if let Some(top) = self.class_stack.last_mut() {
+                top.names.insert(node.property.name.as_str().to_string());
+            }
+        }
+        oxc_ast_visit::walk::walk_static_member_expression(self, node);
+    }
+
+    fn visit_computed_member_expression(
+        &mut self,
+        node: &oxc_ast::ast::ComputedMemberExpression<'a>,
+    ) {
+        // `this['ctx']` with a string-literal key — same field read,
+        // different syntax. A dynamic key (`this[k]`) can't be resolved
+        // statically; a parameter property reachable only that way is a
+        // rare, accepted false-positive gap.
+        if matches!(node.object, Expression::ThisExpression(_)) {
+            if let Expression::StringLiteral(s) = &node.expression {
+                if let Some(top) = self.class_stack.last_mut() {
+                    top.names.insert(s.value.as_str().to_string());
+                }
+            }
+        }
+        oxc_ast_visit::walk::walk_computed_member_expression(self, node);
     }
 
     fn visit_ts_function_type(&mut self, node: &oxc_ast::ast::TSFunctionType<'a>) {
@@ -2156,6 +2260,20 @@ impl<'a> Visit<'a> for SkipSpanCollector {
 /// sits inside a rest pattern.
 fn span_in_any_range(start: u32, end: u32, ranges: &[(u32, u32)]) -> bool {
     ranges.iter().any(|&(rs, re)| start >= rs && end <= re)
+}
+
+/// True iff the innermost class enclosing `[start, end)` reads a
+/// `this.<name>` member named `name`. Lets a parameter property accessed
+/// through `this` count as a live read even though oxc doesn't resolve
+/// the member access back to the parameter symbol. Scoped per class (the
+/// innermost enclosing one) so the same field name in a sibling class
+/// that never reads it still flags.
+fn class_reads_this_name(start: u32, end: u32, name: &str, classes: &[ClassThisReads]) -> bool {
+    classes
+        .iter()
+        .filter(|c| start >= c.span.0 && end <= c.span.1)
+        .max_by_key(|c| c.span.0)
+        .is_some_and(|c| c.names.contains(name))
 }
 
 // ─── Refactor.DeadExport ───────────────────────────────────────────────────
@@ -2608,5 +2726,100 @@ mod tests {
         let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         // Should not panic; token-mode may or may not produce issues for this source.
         let _ = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
+    }
+
+    // ─── UnusedVariable: TS parameter properties (cd-sh72 / gh #44) ─────────
+    //
+    // A parameter property (`constructor(private ctx: T)`) is both a
+    // constructor param AND a class field. oxc resolves `this.ctx` as a
+    // member access, not a reference to the parameter symbol, so the bare
+    // get_resolved_references signal misses the read and the param is
+    // flagged as unused. These tests pin the fix: a `this.<name>` read in
+    // the enclosing class counts as use of the parameter property.
+
+    fn run_unused_variable(src: &str) -> Vec<Issue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        UnusedVariable.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn param_property_read_via_this_is_not_flagged() {
+        let src = "\
+class Foo {
+  constructor(private ctx: { value: number }) {}
+  getValue(): number {
+    return this.ctx.value;
+  }
+}";
+        let issues = run_unused_variable(src);
+        assert!(
+            issues.iter().all(|i| !i.message.contains("`ctx`")),
+            "param property `ctx` is read via this.ctx and must not flag; got: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn param_property_never_read_is_flagged() {
+        let src = "\
+class Bar {
+  constructor(private unused: number) {}
+}";
+        let issues = run_unused_variable(src);
+        assert!(
+            issues.iter().any(|i| i.message.contains("`unused`")),
+            "param property `unused` is never read and must still flag; got: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn plain_unused_constructor_param_is_flagged() {
+        // No access modifier => not a parameter property => normal
+        // positional-parameter rules apply (flag when unused).
+        let src = "\
+class Baz {
+  constructor(ctx: number) {}
+}";
+        let issues = run_unused_variable(src);
+        assert!(
+            issues.iter().any(|i| i.message.contains("`ctx`")),
+            "plain unused constructor param `ctx` must still flag; got: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn param_property_this_access_is_scoped_per_class() {
+        // Same name `ctx` in two classes: A reads `this.ctx` (used), B never
+        // does (unused). Only B's `ctx` may flag — proves the this-access
+        // set is scoped to the enclosing class, not the whole file. A
+        // file-level set would exempt both (zero flags); the bug flags both.
+        let src = "\
+class A {
+  constructor(private ctx: number) {}
+  read(): number { return this.ctx; }
+}
+class B {
+  constructor(private ctx: number) {}
+}";
+        let issues = run_unused_variable(src);
+        let ctx_issue_count = issues
+            .iter()
+            .filter(|i| i.message.contains("`ctx`"))
+            .count();
+        assert_eq!(
+            ctx_issue_count,
+            1,
+            "exactly one `ctx` (class B's) should flag; got: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
     }
 }

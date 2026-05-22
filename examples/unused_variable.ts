@@ -109,3 +109,46 @@ export function nestedScope() {
 
 const TOP_LEVEL_UNUSED = 42;   // OK in v1 (module scope skipped — see file header)
 void TOP_LEVEL_UNUSED;         // touch it so even a future stricter rule wouldn't flag here
+
+// ─── TS parameter properties (cd-sh72 / gh #44) ────────────────────────────
+//
+// `constructor(private ctx: T)` is both a parameter AND a class field. A
+// read through `this.<name>` counts as use, even though oxc doesn't resolve
+// the member access back to the parameter symbol.
+
+export class ParamPropUsedViaThis {
+  constructor(private ctx: { value: number }) {} // OK — read via this.ctx below
+  getValue(): number {
+    return this.ctx.value;
+  }
+}
+
+export class ParamPropUsedViaBracket {
+  constructor(private store: { count: number }) {} // OK — read via this['store']
+  count(): number {
+    return this["store"].count;
+  }
+}
+
+export class ParamPropNeverRead {
+  constructor(private orphan: number) {} // flag — declared, never read via this
+}
+
+export class PlainUnusedCtorParam {
+  constructor(plain: number) {} // flag — no modifier, so a normal positional param
+}
+
+// Per-class scoping: same field name `dup` in two classes. The first reads
+// it via this (OK); the second never does (flag). Proves the this-read set
+// is scoped to the enclosing class, not the whole file.
+
+export class ReadsDup {
+  constructor(private dup: number) {}
+  read(): number {
+    return this.dup;
+  }
+}
+
+export class NeverReadsDup {
+  constructor(private dup: number) {} // flag
+}

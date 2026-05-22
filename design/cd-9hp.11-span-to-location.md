@@ -399,6 +399,8 @@ git commit -m "feat(core): add Location type + Span bridge (cd-9hp.11 PR1)"
 
 ## PRs 2–4 — Roadmap (detailed plans written as each predecessor lands)
 
+> **Status:** PR 1 + PR 2 shipped on `main` and cd-9hp.11 is **closed**. PR 3 + PR 4 below were deferred into **cd-0gwd** (depends on cd-9hp.10), because no current adapter — TS *or* the Rust adapter — emits non-`Bytes` ranges, so their rendering/syntax can't be validated until a non-byte adapter (SQL migrations, etc.) ships. They ride alongside that adapter rather than being guessed now.
+
 These are intentionally **not** bite-sized yet (see Scope note). Each becomes its own plan doc after the prior PR merges.
 
 ### PR 2 — `Issue` + `RelatedSpan` carry `Location` ✅ DONE (commit on main)

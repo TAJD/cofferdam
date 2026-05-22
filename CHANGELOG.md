@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `[engine] type_aware` opt-out in `cofferdam.toml` (cd-9hp.2.4). Setting `type_aware = false` force-disables type-aware checks (those declaring `requires_types`, today `Warning.UnusedNullCheck`) even when one is registered and a `tsconfig.json` + `ts-morph` install are present — the type host is never spawned and the checks are skipped silently. This is the escape hatch for CI runners with no Node runtime, which would otherwise see a "type host unavailable" warning. The default (key omitted, or `true`) leaves type-aware checks enabled; cofferdam still auto-opts-out when no `requires_types` check is registered, so the worker cost is never paid unless something needs it. New concept doc `docs/type-aware-checks.md` covers the requirements (tsconfig + ts-morph + Node), both opt-out paths, and the cost model.
+- CI smoke test for the ts-morph type host (cd-9hp.2.4): the `type-host-smoke` workflow installs `ts-morph` into the committed fixture project `examples-type-host/unused-null` and asserts the worker pool resolves real TypeScript types end-to-end — flagging every redundant null guard including a **cross-file** case (operand type from an imported interface), proving project-wide resolution — that `[engine] type_aware = false` yields zero findings, and that project-init cold-start stays under a generous ceiling. Kept separate from the always-on `ci.yml` (which stays Node-free and fast), mirroring `plugin-sdk-e2e.yml`.
+
 ## [0.3.4] - 2026-05-21
 
 ### Added

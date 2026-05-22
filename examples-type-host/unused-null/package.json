@@ -1,0 +1,9 @@
+{
+  "name": "@cofferdam/example-type-host-unused-null",
+  "private": true,
+  "version": "0.0.0",
+  "description": "CI smoke fixture exercising the ts-morph type host (cd-9hp.2.4).",
+  "devDependencies": {
+    "ts-morph": "^28.0.0"
+  }
+}

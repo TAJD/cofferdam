@@ -1,0 +1,48 @@
+# cd-9hp.2.4 — ts-morph type-host smoke test.
+#
+# Exercises the type-host worker pool end-to-end on a committed fixture
+# project (examples-type-host/unused-null) with a real ts-morph install:
+#   - type-aware checks resolve TypeScript types through the live Node
+#     worker and flag every redundant null guard, incl. a cross-file case;
+#   - `[engine] type_aware = false` disables them (the Node-free opt-out);
+#   - project-init cold-start is measured and bounded.
+#
+# Separate from ci.yml (which stays Node-free and fast) for the same
+# reason plugin-sdk-e2e.yml is: this job installs Node + ts-morph (~tens
+# of MB), which the always-on workspace CI shouldn't pay on every push.
+#
+# Single host today; fan out across OSes if the ts-morph resolution path
+# starts diverging by platform.
+
+name: type-host-smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Build cofferdam binary
+        run: cargo build --release -p cofferdam-cli
+
+      - name: Install ts-morph into the fixture project
+        working-directory: examples-type-host/unused-null
+        run: npm install --no-audit --no-fund
+
+      - name: Run type-host smoke assertions
+        run: node scripts/check-type-host-smoke.mjs

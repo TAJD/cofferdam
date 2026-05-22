@@ -91,6 +91,23 @@ pub struct ProjectConfig {
     /// `cofferdam.invariants.toml` `[layers]` are populated. Surfaced by
     /// the CLI as a one-line deprecation hint.
     pub layers_double_declaration: bool,
+    /// `[engine] type_aware` — `Some(false)` force-disables type-aware
+    /// checks (those declaring `CheckMeta::requires_types`) even when one
+    /// is registered, so CI machines without a Node runtime don't pay the
+    /// type-host cost or see "type host unavailable" warnings (cd-9hp.2.4).
+    /// `None` (the default) means enabled; the engine still auto-opts-out
+    /// when no `requires_types` check is registered. Read via
+    /// [`ProjectConfig::type_aware_enabled`].
+    pub engine_type_aware: Option<bool>,
+}
+
+impl ProjectConfig {
+    /// Whether type-aware checks may run. `false` only when the user set
+    /// `[engine] type_aware = false`; the default is enabled. The CLI
+    /// consults this before spawning the ts-morph type-host worker.
+    pub fn type_aware_enabled(&self) -> bool {
+        self.engine_type_aware.unwrap_or(true)
+    }
 }
 
 /// Errors that can prevent `cofferdam.toml` from loading. Includes IO
@@ -171,6 +188,19 @@ struct TomlDoc {
     /// Resolved relative to the config file's directory.
     #[serde(default)]
     plugins: Vec<String>,
+    /// `[engine]` — engine-level toggles. Today just `type_aware`
+    /// (cd-9hp.2.4); grows additively.
+    #[serde(default)]
+    engine: EngineSection,
+}
+
+/// `[engine]` table. Unknown keys are ignored (forward-compatible).
+#[derive(Debug, Deserialize, Default)]
+struct EngineSection {
+    /// `type_aware = false` force-disables type-aware checks. Absent
+    /// means enabled (the default).
+    #[serde(default)]
+    type_aware: Option<bool>,
 }
 
 /// Walk up from `start` looking for `cofferdam.toml`. Stops at the
@@ -301,6 +331,7 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         plugins,
         invariants: None,
         layers_double_declaration: false,
+        engine_type_aware: doc.engine.type_aware,
     })
 }
 
@@ -683,6 +714,49 @@ limit = 120
     }
 
     #[test]
+    fn engine_type_aware_defaults_to_enabled() {
+        // No [engine] table → None → enabled.
+        let cfg = parse(Path::new("test.toml"), "").expect("parse");
+        assert_eq!(cfg.engine_type_aware, None);
+        assert!(cfg.type_aware_enabled());
+    }
+
+    #[test]
+    fn engine_type_aware_false_opts_out() {
+        let raw = r#"
+[engine]
+type_aware = false
+"#;
+        let cfg = parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_type_aware, Some(false));
+        assert!(!cfg.type_aware_enabled());
+    }
+
+    #[test]
+    fn engine_type_aware_true_is_enabled() {
+        let raw = r#"
+[engine]
+type_aware = true
+"#;
+        let cfg = parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_type_aware, Some(true));
+        assert!(cfg.type_aware_enabled());
+    }
+
+    #[test]
+    fn engine_unknown_keys_are_ignored() {
+        // Forward-compat: an unrecognised [engine] key must not fail the
+        // parse (the table grows additively).
+        let raw = r#"
+[engine]
+type_aware = false
+future_toggle = 42
+"#;
+        let cfg = parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_type_aware, Some(false));
+    }
+
+    #[test]
     fn meta_keys_are_separated_from_options() {
         let raw = r#"
 [checks."Readability.MaxLineLength"]
@@ -757,6 +831,7 @@ severity = 5
             plugins: Vec::new(),
             invariants: None,
             layers_double_declaration: false,
+            engine_type_aware: None,
         };
 
         let opts = options_for(
@@ -790,6 +865,7 @@ severity = 5
             plugins: Vec::new(),
             invariants: None,
             layers_double_declaration: false,
+            engine_type_aware: None,
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -808,6 +884,7 @@ severity = 5
             plugins: Vec::new(),
             invariants: None,
             layers_double_declaration: false,
+            engine_type_aware: None,
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -883,6 +960,7 @@ severity = 5
             plugins: Vec::new(),
             invariants: None,
             layers_double_declaration: false,
+            engine_type_aware: None,
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

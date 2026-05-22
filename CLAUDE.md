@@ -97,7 +97,7 @@ impl Check for X {
 
 ### Type-aware checks (cd-9hp.2)
 
-A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`. Ships dormant — no built-in sets the flag yet, and a `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on).
+A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`; user-facing concept + opt-out: `docs/type-aware-checks.md`. `Warning.UnusedNullCheck` (`cofferdam-checks/src/warning.rs`) is the first built-in that sets the flag. A `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on). The CLI installs the worker only when a `requires_types` check is registered AND `[engine] type_aware` isn't `false` in `cofferdam.toml` (the opt-out for Node-less CI).
 
 ### Cofferdam-specific gotchas (every agent needs these)
 

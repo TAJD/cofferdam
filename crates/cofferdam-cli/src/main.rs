@@ -1064,15 +1064,28 @@ fn run_check(args: CheckArgs) -> ExitCode {
     };
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
 
-    // cd-9hp.2 cp2: install the ts-morph type oracle when a registered
-    // check needs types. Dormant until cp3 ships the first
-    // `requires_types` built-in — `needs_type_oracle()` is false today,
-    // so no worker is spawned and there's zero added cost. cp4 layers
-    // the `[engine] type_aware = false` opt-out on top of this gate.
+    // cd-9hp.2: install the ts-morph type oracle when a registered check
+    // declares `requires_types` (today: `Warning.UnusedNullCheck`). Two
+    // opt-outs gate worker spawn:
+    //   1. auto: `needs_type_oracle()` is false when no registered check
+    //      needs types — no worker, zero added cost (cp2).
+    //   2. explicit: `[engine] type_aware = false` in cofferdam.toml
+    //      force-disables even when a type-aware check is registered, so
+    //      CI machines without Node pay nothing and see no warning (cp4).
+    // When disabled the engine has no oracle, so `requires_types` checks
+    // are skipped silently in the analyze loop.
+    let type_aware_enabled = project_config
+        .as_ref()
+        .map(cfg::ProjectConfig::type_aware_enabled)
+        .unwrap_or(true);
     let type_root = project_root
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let engine = install_type_oracle_if_needed(engine, &type_root);
+    let engine = if type_aware_enabled {
+        install_type_oracle_if_needed(engine, &type_root)
+    } else {
+        engine
+    };
 
     // Disk-backed findings + run cache (cd-9hp.4 cp4). Resolves to
     // `Some(dir)` when caching is requested (default on); load

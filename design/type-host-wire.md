@@ -34,10 +34,11 @@ back to the project's own `node_modules` after the standard ESM lookup
 fails. Projects that want type-aware checks must `npm install ts-morph`
 (or have it as a transitive dep) in the project root.
 
-Cofferdam ships **without** a bundled ts-morph; cp4 adds a fallback
-"install on first use" path so users don't have to manage the
-dependency themselves. For cp1 a clear error response surfaces when
-ts-morph isn't resolvable.
+Cofferdam ships **without** a bundled ts-morph. A clear error response
+surfaces when ts-morph isn't resolvable; the CLI maps it to a single
+warning and skips type-aware checks rather than failing the run. A
+fallback "install on first use" path is not implemented — projects opt
+in by installing ts-morph themselves (see `docs/type-aware-checks.md`).
 
 ## Wire framing
 
@@ -250,9 +251,13 @@ Implications for cp2+:
   ts-morph's `useInMemoryFileSystem` + selective `addSourceFileAtPath`
   becomes worth investigating.
 
-These are intentionally captured as a baseline rather than a regression
-gate; the cp4 CI smoke test will pin a max-acceptable Project-init
-duration against a fixed-size fixture project.
+These are intentionally captured as a baseline rather than a tight
+regression gate. The cp4 CI smoke test (`.github/workflows/type-host-smoke.yml`,
+driven by `scripts/check-type-host-smoke.mjs`) pins a *generous*
+max-acceptable Project-init duration against the committed fixture
+project `examples-type-host/unused-null` — it catches a hang or a 10x
+regression without flaking on slow runners, rather than asserting a
+precise number.
 
 ## Versioning
 

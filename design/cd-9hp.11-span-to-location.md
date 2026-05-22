@@ -401,12 +401,12 @@ git commit -m "feat(core): add Location type + Span bridge (cd-9hp.11 PR1)"
 
 These are intentionally **not** bite-sized yet (see Scope note). Each becomes its own plan doc after the prior PR merges.
 
-### PR 2 — `Issue` + `RelatedSpan` carry `Location`
-- Add `location: Location` to `Issue` and `RelatedSpan`; decide the `Issue.file` question: **keep `file: PathBuf` alongside `location`** (least disruptive — baseline + JSON keep their current `file` field; `location.uri` is derived) vs. subsume `file` into `location.uri` (cleaner, but a breaking JSON-schema change requiring a cd-9hp.12 version bump). **Recommendation: keep `file` for PR 2; revisit subsumption when a non-`file://` adapter actually ships.**
-- Transitional dual field: keep `span: Span` so existing checks compile; populate `location` via `Location::from_span(&file, span)`. Built-in checks migrate to constructing `location` directly.
-- `Copy → Clone` fallout at every `Issue`/`RelatedSpan` construction site (~30 across `cofferdam-checks`, `cofferdam-rust`, engine).
-- Consumers to read first: `cofferdam-engine/src/baseline.rs` (12 refs — heaviest), `run_cache.rs`, `disk_cache.rs`, `findings_cache.rs`.
-- Verify: full `cargo test --workspace` + real-repo (`bestefforttools`, `gistreact`) — finding output byte-identical.
+### PR 2 — `Issue` + `RelatedSpan` carry `Location` ✅ DONE (commit on main)
+- **Done as a full field replacement** (not a transitional dual field): `Issue.span`/`RelatedSpan.span` removed, replaced by `location: Location`. `file: PathBuf` **kept** on both (readers key on it independently; `location.uri` is dormant — no reader consumes it yet).
+- Recon found **68 Issue + 9 RelatedSpan construction sites** (not ~30) plus 7 readers — all raw struct literals, no constructor. Green build = complete migration (the field no longer exists).
+- Mechanic: constructors → `location: Location::from_span(&<path>, <span>)`; readers → `X.location.line()/column()/start_byte()/end_byte()` accessors added on `Location`. `baseline::signature_for_span` now takes `&Location`.
+- **Output byte-identical**: insta snapshots unchanged, JSON keeps flat `line/column/start_byte/end_byte`, 730 tests pass, gistreact JSON spot-checked (primary + `related`).
+- Note: the `Issue.file` subsumption-into-`location.uri` question is deferred — keep `file` until a non-`file://` adapter ships (would be a cd-9hp.12 schema bump).
 
 ### PR 3 — Formatters + suppression render every variant
 - **Four** formatters, not three: `text.rs`, `json.rs`, `sarif.rs`, **`compact.rs`** (bead missed compact). Each must handle `Bytes` / `LineCol` / `Custom`.

@@ -47,7 +47,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use cofferdam_core::{Issue, Span};
+use cofferdam_core::Issue;
+#[cfg(test)]
+use cofferdam_core::{Location, Span};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -177,9 +179,9 @@ pub enum BaselineError {
 /// Returns hex-encoded SHA-256 (64 chars). We keep the full digest rather
 /// than truncating: collisions on truncated hashes inside a single repo
 /// are unlikely but the cost of avoiding them is one constant.
-pub fn signature_for_span(file_text: &str, span: &Span) -> String {
-    let start = span.start_byte as usize;
-    let end = span.end_byte as usize;
+pub fn signature_for_span(file_text: &str, location: &cofferdam_core::Location) -> String {
+    let start = location.start_byte() as usize;
+    let end = location.end_byte() as usize;
     let snippet = if start <= end && end <= file_text.len() {
         &file_text[start..end]
     } else {
@@ -387,14 +389,17 @@ mod tests {
     #[test]
     fn signature_is_stable_for_same_input() {
         let text = "if (x == y) {}";
-        let span = Span {
-            start_byte: 4,
-            end_byte: 10,
-            line: 1,
-            column: 5,
-        };
-        let s1 = signature_for_span(text, &span);
-        let s2 = signature_for_span(text, &span);
+        let loc = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 4,
+                end_byte: 10,
+                line: 1,
+                column: 5,
+            },
+        );
+        let s1 = signature_for_span(text, &loc);
+        let s2 = signature_for_span(text, &loc);
         assert_eq!(s1, s2);
         assert_eq!(s1.len(), 64);
     }
@@ -403,21 +408,27 @@ mod tests {
     fn signature_ignores_surrounding_whitespace() {
         let s_a = signature_for_span(
             "x === y",
-            &Span {
-                start_byte: 0,
-                end_byte: 7,
-                line: 1,
-                column: 1,
-            },
+            &Location::from_span(
+                std::path::Path::new(""),
+                Span {
+                    start_byte: 0,
+                    end_byte: 7,
+                    line: 1,
+                    column: 1,
+                },
+            ),
         );
         let s_b = signature_for_span(
             "  x === y  ",
-            &Span {
-                start_byte: 0,
-                end_byte: 11,
-                line: 1,
-                column: 1,
-            },
+            &Location::from_span(
+                std::path::Path::new(""),
+                Span {
+                    start_byte: 0,
+                    end_byte: 11,
+                    line: 1,
+                    column: 1,
+                },
+            ),
         );
         assert_eq!(s_a, s_b, "trim should make these equal");
     }
@@ -435,28 +446,37 @@ mod tests {
         // CRLF variant of the post text — should also collapse to the same form.
         let post_crlf = "function foo(a, b) {\r\n  return a + b;\r\n}";
 
-        let span_pre = Span {
-            start_byte: 0,
-            end_byte: pre.len() as u32,
-            line: 1,
-            column: 1,
-        };
-        let span_post = Span {
-            start_byte: 0,
-            end_byte: post.len() as u32,
-            line: 1,
-            column: 1,
-        };
-        let span_crlf = Span {
-            start_byte: 0,
-            end_byte: post_crlf.len() as u32,
-            line: 1,
-            column: 1,
-        };
+        let loc_pre = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 0,
+                end_byte: pre.len() as u32,
+                line: 1,
+                column: 1,
+            },
+        );
+        let loc_post = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 0,
+                end_byte: post.len() as u32,
+                line: 1,
+                column: 1,
+            },
+        );
+        let loc_crlf = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 0,
+                end_byte: post_crlf.len() as u32,
+                line: 1,
+                column: 1,
+            },
+        );
 
-        let s_pre = signature_for_span(pre, &span_pre);
-        let s_post = signature_for_span(post, &span_post);
-        let s_crlf = signature_for_span(post_crlf, &span_crlf);
+        let s_pre = signature_for_span(pre, &loc_pre);
+        let s_post = signature_for_span(post, &loc_post);
+        let s_crlf = signature_for_span(post_crlf, &loc_crlf);
         assert_eq!(
             s_pre, s_post,
             "indentation + alignment shifts must not change the signature"
@@ -470,48 +490,62 @@ mod tests {
     /// canonically anyway, so this never drifts in practice).
     #[test]
     fn signature_distinguishes_glued_tokens_from_spaced() {
-        let span = Span {
-            start_byte: 0,
-            end_byte: 5,
-            line: 1,
-            column: 1,
-        };
-        let glued = signature_for_span("a + b", &span);
+        let glued = signature_for_span(
+            "a + b",
+            &Location::from_span(
+                std::path::Path::new(""),
+                Span {
+                    start_byte: 0,
+                    end_byte: 5,
+                    line: 1,
+                    column: 1,
+                },
+            ),
+        );
         let spaced = signature_for_span(
             "a+b",
-            &Span {
-                start_byte: 0,
-                end_byte: 3,
-                line: 1,
-                column: 1,
-            },
+            &Location::from_span(
+                std::path::Path::new(""),
+                Span {
+                    start_byte: 0,
+                    end_byte: 3,
+                    line: 1,
+                    column: 1,
+                },
+            ),
         );
         assert_ne!(glued, spaced);
     }
 
     #[test]
     fn signature_changes_with_content() {
-        let span = Span {
-            start_byte: 0,
-            end_byte: 7,
-            line: 1,
-            column: 1,
-        };
-        let a = signature_for_span("x === y", &span);
-        let b = signature_for_span("a === b", &span);
+        let loc = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 0,
+                end_byte: 7,
+                line: 1,
+                column: 1,
+            },
+        );
+        let a = signature_for_span("x === y", &loc);
+        let b = signature_for_span("a === b", &loc);
         assert_ne!(a, b);
     }
 
     #[test]
     fn signature_handles_out_of_bounds_span() {
-        let span = Span {
-            start_byte: 100,
-            end_byte: 200,
-            line: 1,
-            column: 1,
-        };
+        let loc = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 100,
+                end_byte: 200,
+                line: 1,
+                column: 1,
+            },
+        );
         // Should not panic; produces the SHA of an empty string.
-        let s = signature_for_span("short", &span);
+        let s = signature_for_span("short", &loc);
         assert_eq!(s.len(), 64);
     }
 

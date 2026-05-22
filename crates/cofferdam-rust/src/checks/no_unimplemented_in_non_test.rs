@@ -16,7 +16,8 @@
 //! match to `scoped_identifier` last-segment.
 
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Language, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, Issue, Language, Location, Priority, Severity,
+    SourceFile,
 };
 
 use crate::parser::RustParseTree;
@@ -77,7 +78,7 @@ fn collect_findings(
                     "`{macro_name}!()` panics at runtime; implement the function or move the call into a `#[test]`."
                 ),
                 file: file.path.clone(),
-                span,
+                location: Location::from_span(&file.path, span),
                 priority: Priority(META.base_priority),
                 severity: META.default_severity,
                 related: Vec::new(),

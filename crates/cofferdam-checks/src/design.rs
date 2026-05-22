@@ -17,8 +17,8 @@ use cofferdam_core::graph::{
 };
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
-    OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
+    OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
 };
 #[cfg(test)]
 use cofferdam_graph::build_canonical_graph;
@@ -111,7 +111,7 @@ impl<'a> Collector<'a> {
                     name, count, self.limit
                 ),
                 file: self.file.path.clone(),
-                span,
+                location: Location::from_span(&self.file.path, span),
                 priority: Priority(META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
@@ -243,15 +243,15 @@ impl Check for DuplicateExportName {
             let related: Vec<RelatedSpan> = occurrences
                 .into_iter()
                 .map(|e| RelatedSpan {
+                    location: Location::from_span(&e.file, e.span),
                     file: e.file,
-                    span: e.span,
                 })
                 .collect();
             issues.push(Issue {
                 check_id: DEN_META.id.to_string(),
                 message: format!("`{}` is exported from {} files", name, related.len() + 1),
-                file: primary.file,
-                span: primary.span,
+                file: primary.file.clone(),
+                location: Location::from_span(&primary.file, primary.span),
                 priority: Priority(DEN_META.base_priority),
                 severity: Severity::Medium,
                 related,
@@ -575,7 +575,7 @@ fn compute_orphans_on_graph(
                         display_name
                     ),
                     file: exp.file.clone(),
-                    span: exp.span,
+                    location: Location::from_span(&exp.file, exp.span),
                     priority: Priority(OE_META.base_priority),
                     severity: OE_META.default_severity,
                     related: Vec::new(),
@@ -587,7 +587,7 @@ fn compute_orphans_on_graph(
     issues.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
-            .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+            .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
     });
     issues
 }
@@ -793,6 +793,7 @@ fn compute_cycles(
         let primary_edge = adj[primary_id]
             .iter()
             .find(|(dst, _, _)| scc_set.contains(dst));
+        let primary_file = display[primary_id].clone();
         let primary_span = primary_edge.map(|(_, span, _)| *span).unwrap_or(Span {
             start_byte: 0,
             end_byte: 0,
@@ -813,9 +814,10 @@ fn compute_cycles(
                         line: 1,
                         column: 1,
                     });
+                let rel_file = display[id].clone();
                 RelatedSpan {
-                    file: display[id].clone(),
-                    span,
+                    location: Location::from_span(&rel_file, span),
+                    file: rel_file,
                 }
             })
             .collect();
@@ -830,8 +832,8 @@ fn compute_cycles(
         issues.push(Issue {
             check_id: IC_META.id.to_string(),
             message,
-            file: display[primary_id].clone(),
-            span: primary_span,
+            file: primary_file.clone(),
+            location: Location::from_span(&primary_file, primary_span),
             priority: Priority(IC_META.base_priority),
             severity: IC_META.default_severity,
             related,
@@ -841,7 +843,7 @@ fn compute_cycles(
     issues.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
-            .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+            .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
     });
     issues
 }
@@ -956,7 +958,7 @@ fn compute_layer_violations(cfg: &LayersConfig, imports: &[ImportRecord]) -> Vec
                 src_layer, dst_layer
             ),
             file: imp.from_file.clone(),
-            span: imp.span,
+            location: Location::from_span(&imp.from_file, imp.span),
             priority: Priority(LV_META.base_priority),
             severity: LV_META.default_severity,
             related: Vec::new(),
@@ -966,7 +968,7 @@ fn compute_layer_violations(cfg: &LayersConfig, imports: &[ImportRecord]) -> Vec
     issues.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
-            .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+            .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
     });
     issues
 }
@@ -1113,12 +1115,15 @@ impl Check for BoundaryFrozen {
                 check_id: BF_META.id.to_string(),
                 message: format!("file is in frozen boundary `{}`{}", glob, reason),
                 file: file.path.clone(),
-                span: Span {
-                    start_byte: 0,
-                    end_byte: 0,
-                    line: 1,
-                    column: 1,
-                },
+                location: Location::from_span(
+                    &file.path,
+                    Span {
+                        start_byte: 0,
+                        end_byte: 0,
+                        line: 1,
+                        column: 1,
+                    },
+                ),
                 priority: Priority(0),
                 severity: Severity::Medium, // engine post-pass overwrites with default_severity
                 related: Vec::new(),
@@ -1227,7 +1232,7 @@ impl Check for InvariantViolation {
                             name, imp.source_specifier, forbidden
                         ),
                         file: imp.from_file.clone(),
-                        span: imp.span,
+                        location: Location::from_span(&imp.from_file, imp.span),
                         priority: Priority(IV_META.base_priority),
                         severity: Severity::Medium,
                         related: Vec::new(),
@@ -1271,7 +1276,7 @@ impl Check for InvariantViolation {
                         name, spec.require_imports
                     ),
                     file: file.clone(),
-                    span: first.span,
+                    location: Location::from_span(file, first.span),
                     priority: Priority(IV_META.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
@@ -1494,12 +1499,15 @@ impl Check for ScriptedInvariant {
                         rule.name, rule.message
                     ),
                     file: file.clone(),
-                    span: Span {
-                        start_byte: 0,
-                        end_byte: 0,
-                        line: 1,
-                        column: 1,
-                    },
+                    location: Location::from_span(
+                        file,
+                        Span {
+                            start_byte: 0,
+                            end_byte: 0,
+                            line: 1,
+                            column: 1,
+                        },
+                    ),
                     priority: Priority(SI_META.base_priority),
                     severity: SI_META.default_severity,
                     related: Vec::new(),

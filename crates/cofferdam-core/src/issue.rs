@@ -10,6 +10,7 @@
 //! shouldn't break the build yet" — a frequent ask on legacy codebases,
 //! and what makes Baselines (decision #1) viable.
 
+use crate::location::Location;
 use serde::{Deserialize, Serialize};
 
 /// Computed priority. Sort order in reports.
@@ -130,9 +131,14 @@ pub struct Span {
 ///
 /// `check_id` matches `CheckMeta.id` so reports can group + filter.
 ///
-/// `related` carries additional spans for findings that span multiple
-/// locations (e.g. duplicate-block detection emits one issue per
-/// duplicate set, with the canonical location in `span` and the other
+/// `location` is where the finding sits (`Location` generalizes the old
+/// byte-only `Span` to non-text artifacts). `file` is kept alongside it
+/// for the many readers that key on the path directly (baseline, JSON,
+/// SARIF); it mirrors `location.uri`'s path for the `file://` scheme.
+///
+/// `related` carries additional locations for findings that span multiple
+/// places (e.g. duplicate-block detection emits one issue per duplicate
+/// set, with the canonical location in `location` and the other
 /// occurrences in `related`). Empty for the common single-location case;
 /// formatters omit it when empty.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,18 +146,17 @@ pub struct Issue {
     pub check_id: String,
     pub message: String,
     pub file: std::path::PathBuf,
-    pub span: Span,
+    pub location: Location,
     pub priority: Priority,
     pub severity: Severity,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedSpan>,
 }
 
-/// A span in another file related to the primary `Issue.span`. Carries
-/// the file path (cross-file checks need it) and the same line/column
-/// info `Span` does.
+/// A location in another file related to the primary `Issue.location`.
+/// Carries the file path (cross-file checks need it) plus the `Location`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RelatedSpan {
     pub file: std::path::PathBuf,
-    pub span: Span,
+    pub location: Location,
 }

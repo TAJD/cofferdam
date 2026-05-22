@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use cofferdam_core::layers::{self, LayerMatcher};
 use cofferdam_core::lines::Lines;
 use cofferdam_core::{
-    parse_into, Allocator, Issue, Priority, RawOptionValue, Severity, SourceFile, Span,
+    parse_into, Allocator, Issue, Location, Priority, RawOptionValue, Severity, SourceFile, Span,
 };
 use serde::{Deserialize, Serialize};
 
@@ -627,18 +627,20 @@ pub fn run_plugins_with_sources(
                         end_byte: rel.span.end_byte,
                     },
                 };
+                let rel_location = Location::from_span(&rel_file, rel_span);
                 cofferdam_core::RelatedSpan {
+                    location: rel_location,
                     file: rel_file,
-                    span: rel_span,
                 }
             })
             .collect();
+        let location = Location::from_span(&file, span);
         issues.push(Issue {
             check_id,
             priority: Priority(15),
             severity,
+            location,
             file,
-            span,
             message: r.message,
             related,
         });
@@ -761,17 +763,21 @@ fn host_failed_issue(detail: &str) -> Issue {
 }
 
 fn synthetic_warning(check_id: &'static str, file: &Path, message: String) -> Issue {
+    let file_buf = file.to_path_buf();
     Issue {
         check_id: check_id.to_string(),
         priority: Priority(20),
         severity: Severity::High,
-        file: file.to_path_buf(),
-        span: Span {
-            line: 1,
-            column: 1,
-            start_byte: 0,
-            end_byte: 0,
-        },
+        location: Location::from_span(
+            &file_buf,
+            Span {
+                line: 1,
+                column: 1,
+                start_byte: 0,
+                end_byte: 0,
+            },
+        ),
+        file: file_buf,
         message,
         related: Vec::new(),
     }

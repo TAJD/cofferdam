@@ -27,9 +27,9 @@ use lsp_types::{
 /// checks (duplicate exports, orphan exports) ship them so the
 /// editor can resolve "where else" jumps natively.
 pub fn issue_to_diagnostic(issue: &Issue, file_url: &Url) -> lsp_types::Diagnostic {
-    let _ = file_url; // primary location uses issue.span; file_url is sent on the publish channel
+    let _ = file_url; // primary location uses issue.location; file_url is sent on the publish channel
     lsp_types::Diagnostic {
-        range: span_to_range(&issue.span),
+        range: location_to_range(&issue.location),
         severity: Some(severity_to_lsp(issue.severity)),
         code: Some(NumberOrString::String(issue.check_id.clone())),
         code_description: None,
@@ -54,6 +54,17 @@ pub fn severity_to_lsp(sev: Severity) -> DiagnosticSeverity {
         Severity::Low => DiagnosticSeverity::INFORMATION,
         Severity::Info => DiagnosticSeverity::HINT,
     }
+}
+
+/// Convert a cofferdam [`cofferdam_core::Location`] (1-based line/column)
+/// to an LSP [`Range`] (0-based). Delegates to [`span_to_range`].
+fn location_to_range(loc: &cofferdam_core::Location) -> Range {
+    span_to_range(&Span {
+        line: loc.line(),
+        column: loc.column(),
+        start_byte: loc.start_byte(),
+        end_byte: loc.end_byte(),
+    })
 }
 
 /// Convert a cofferdam [`Span`] (1-based line/column) to an LSP
@@ -108,7 +119,7 @@ fn related_to_lsp(related: &[RelatedSpan]) -> Option<Vec<DiagnosticRelatedInform
             Some(DiagnosticRelatedInformation {
                 location: Location {
                     uri: url,
-                    range: span_to_range(&r.span),
+                    range: location_to_range(&r.location),
                 },
                 message: String::new(),
             })
@@ -128,16 +139,21 @@ mod tests {
     use std::path::PathBuf;
 
     fn issue(sev: Severity, line: u32, col: u32) -> Issue {
+        use cofferdam_core::Location as CoreLocation;
+        let file = PathBuf::from("a.ts");
         Issue {
             check_id: "Warning.TripleEquals".to_string(),
             message: "use === instead of ==".to_string(),
-            file: PathBuf::from("a.ts"),
-            span: Span {
-                start_byte: 0,
-                end_byte: 2,
-                line,
-                column: col,
-            },
+            location: CoreLocation::from_span(
+                &file,
+                Span {
+                    start_byte: 0,
+                    end_byte: 2,
+                    line,
+                    column: col,
+                },
+            ),
+            file,
             priority: Priority::NORMAL,
             severity: sev,
             related: Vec::new(),
@@ -223,13 +239,16 @@ mod tests {
         };
         let mut i = issue(Severity::Medium, 1, 1);
         i.related.push(RelatedSpan {
+            location: cofferdam_core::Location::from_span(
+                &related_path,
+                Span {
+                    start_byte: 0,
+                    end_byte: 0,
+                    line: 2,
+                    column: 3,
+                },
+            ),
             file: related_path.clone(),
-            span: Span {
-                start_byte: 0,
-                end_byte: 0,
-                line: 2,
-                column: 3,
-            },
         });
         let url = Url::from_file_path(if cfg!(windows) {
             "C:/tmp/a.ts"

@@ -21,7 +21,8 @@
 //! support code isn't part of the published surface.
 
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Language, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, Issue, Language, Location, Priority, Severity,
+    SourceFile,
 };
 
 use crate::parser::RustParseTree;
@@ -88,7 +89,7 @@ fn collect_findings(
                     "public {kind_label} `{item_name}` is missing a `///` doc comment."
                 ),
                 file: file.path.clone(),
-                span,
+                location: Location::from_span(&file.path, span),
                 priority: Priority(META.base_priority),
                 severity: META.default_severity,
                 related: Vec::new(),

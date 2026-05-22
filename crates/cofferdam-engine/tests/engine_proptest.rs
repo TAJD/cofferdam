@@ -82,8 +82,8 @@ fn issue_key(i: &Issue) -> String {
         "{}|{}|{}:{}:{}",
         i.check_id,
         i.file.display(),
-        i.span.line,
-        i.span.column,
+        i.location.line(),
+        i.location.column(),
         i.priority.0
     )
 }

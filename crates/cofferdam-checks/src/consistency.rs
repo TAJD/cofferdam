@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Priority,
-    Severity, SourceFile, Span, ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
+    Priority, Severity, SourceFile, Span, ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
 };
 use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use oxc_ast_visit::Visit;
@@ -120,7 +120,7 @@ impl Check for QuoteStyle {
                         "use {dominant_name} quotes consistently (dominant style in this file)",
                     ),
                     file: file.path.clone(),
-                    span: *span,
+                    location: Location::from_span(&file.path, *span),
                     priority: Priority(META.base_priority),
                     severity: Severity::Info,
                     related: Vec::new(),
@@ -255,12 +255,12 @@ impl Check for BroadSuppression {
                     check_id: BS_META.id.to_string(),
                     message: "Broad `// cofferdam-ignore` (no check id) — narrow it to a specific id. Accepted forms: `// cofferdam-ignore: <CheckId>: <reason>` or `// cofferdam-ignore <CheckId> — <reason>`.".to_string(),
                     file: file.path.clone(),
-                    span: Span {
+                    location: Location::from_span(&file.path, Span {
                         start_byte: start,
                         end_byte: end,
                         line: line_no,
                         column: directive_col as u32 + 1,
-                    },
+                    }),
                     priority: Priority(BS_META.base_priority),
                     severity: BS_META.default_severity,
                     related: Vec::new(),
@@ -451,12 +451,6 @@ impl Check for UnusedSuppression {
                 };
 
                 if !has_match {
-                    let span = Span {
-                        start_byte: directive.start_byte,
-                        end_byte: directive.end_byte,
-                        line: directive.directive_line,
-                        column: 1,
-                    };
                     out.push(Issue {
                         check_id: US_META.id.to_string(),
                         message: format!(
@@ -464,7 +458,12 @@ impl Check for UnusedSuppression {
                             directive.check_id,
                         ),
                         file: file_path.clone(),
-                        span,
+                        location: Location::from_span(file_path, Span {
+                            start_byte: directive.start_byte,
+                            end_byte: directive.end_byte,
+                            line: directive.directive_line,
+                            column: 1,
+                        }),
                         priority: Priority(US_META.base_priority),
                         severity: US_META.default_severity,
                         related: Vec::new(),
@@ -763,7 +762,8 @@ const f = "six";
             .find("\"six\"")
             .expect("test fixture must contain '\"six\"'");
         assert_eq!(
-            issues[0].span.start_byte as usize, idx,
+            issues[0].location.start_byte() as usize,
+            idx,
             "issue should point at the double-quoted string"
         );
     }
@@ -943,7 +943,8 @@ const el = <Foo className="ignored" />;
             issues[0].message
         );
         assert_eq!(
-            issues[0].span.line, 1,
+            issues[0].location.line(),
+            1,
             "issue should point at the directive line"
         );
     }
@@ -978,7 +979,8 @@ const el = <Foo className="ignored" />;
             issues
         );
         assert_eq!(
-            issues[0].span.line, 1,
+            issues[0].location.line(),
+            1,
             "issue should point at the -start line"
         );
         assert!(issues[0].message.contains("Warning.NoEval"));
@@ -995,7 +997,7 @@ const el = <Foo className="ignored" />;
             "should flag the stale file directive; got: {:?}",
             issues
         );
-        assert_eq!(issues[0].span.line, 1);
+        assert_eq!(issues[0].location.line(), 1);
         assert!(issues[0].message.contains("Warning.TripleEquals"));
     }
 

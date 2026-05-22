@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Priority, Severity, Span, TypeFacts,
+    Category, Check, CheckContext, CheckMeta, Issue, Location, Priority, Severity, Span, TypeFacts,
     TypeOracle,
 };
 use cofferdam_engine::Engine;
@@ -74,16 +74,20 @@ impl Check for NullFactCheck {
         if !facts.includes_null {
             return Vec::new();
         }
+        let path = file.path.clone();
         vec![Issue {
             check_id: NULL_FACT_META.id.to_string(),
             message: format!("type `{}` includes null", facts.text),
-            file: file.path.clone(),
-            span: Span {
-                start_byte: 0,
-                end_byte: 1,
-                line: 1,
-                column: 1,
-            },
+            location: Location::from_span(
+                &path,
+                Span {
+                    start_byte: 0,
+                    end_byte: 1,
+                    line: 1,
+                    column: 1,
+                },
+            ),
+            file: path,
             priority: Priority(15),
             severity: Severity::Medium,
             related: Vec::new(),

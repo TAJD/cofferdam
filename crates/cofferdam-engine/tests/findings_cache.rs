@@ -61,8 +61,8 @@ fn finding_keys(issues: &[cofferdam_core::Issue]) -> Vec<(String, String, u32, u
             (
                 i.check_id.clone(),
                 i.file.to_string_lossy().replace('\\', "/"),
-                i.span.line,
-                i.span.column,
+                i.location.line(),
+                i.location.column(),
                 i.message.clone(),
             )
         })

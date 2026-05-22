@@ -1380,8 +1380,8 @@ fn run_plugins_filtered(
                 return true;
             };
             let bare = issue.check_id.rsplit('.').next().unwrap_or(&issue.check_id);
-            !sup.is_suppressed(issue.span.line, &issue.check_id)
-                && !sup.is_suppressed(issue.span.line, bare)
+            !sup.is_suppressed(issue.location.line(), &issue.check_id)
+                && !sup.is_suppressed(issue.location.line(), bare)
         })
         .collect()
 }
@@ -1407,7 +1407,7 @@ fn run_plugins_filtered_with_signatures(
             let text = texts
                 .entry(issue.file.clone())
                 .or_insert_with(|| std::fs::read_to_string(&issue.file).unwrap_or_default());
-            let sig = baseline::signature_for_span(text, &issue.span);
+            let sig = baseline::signature_for_span(text, &issue.location);
             (issue, sig)
         })
         .collect()

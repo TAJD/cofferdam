@@ -325,15 +325,15 @@ fn build_keyed_map(
         .iter()
         .map(|issue| {
             let text = texts.get(&issue.file).unwrap_or(&empty);
-            let sig = signature_for_span(text, &issue.span);
+            let sig = signature_for_span(text, &issue.location);
             let file = normalize_for_key(&issue.file, repo_root);
             let key = (file.clone(), issue.check_id.clone(), sig);
             let value = DiffIssue {
                 file,
                 check_id: issue.check_id.clone(),
                 severity: issue.severity,
-                line: issue.span.line,
-                column: issue.span.column,
+                line: issue.location.line(),
+                column: issue.location.column(),
                 message: issue.message.clone(),
             };
             (key, value)

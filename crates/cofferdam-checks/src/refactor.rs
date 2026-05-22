@@ -16,8 +16,8 @@ use std::path::Path;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, OptionDefault,
-    OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
+    OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
@@ -115,7 +115,7 @@ impl<'a> CycVisitor<'a> {
                     name, count, self.limit
                 ),
                 file: self.file.path.clone(),
-                span,
+                location: Location::from_span(&self.file.path, span),
                 priority: Priority(CYC_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
@@ -309,7 +309,7 @@ impl<'a> CogVisitor<'a> {
                     name, count, self.limit
                 ),
                 file: self.file.path.clone(),
-                span,
+                location: Location::from_span(&self.file.path, span),
                 priority: Priority(COG_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
@@ -640,7 +640,7 @@ impl<'a> LACVisitor<'a> {
                     frame.name, length, frame.cyc, self.length_limit, self.cyclomatic_limit
                 ),
                 file: self.file.path.clone(),
-                span,
+                location: Location::from_span(&self.file.path, span),
                 priority: Priority(LAC_META.base_priority),
                 severity: Severity::High,
                 related: Vec::new(),
@@ -1019,8 +1019,8 @@ impl Check for DuplicateBlock {
             let related: Vec<RelatedSpan> = group[1..]
                 .iter()
                 .map(|fp| RelatedSpan {
+                    location: Location::from_span(&fp.file, fp.span),
                     file: fp.file.clone(),
-                    span: fp.span,
                 })
                 .collect();
             let message = match primary.kind {
@@ -1039,7 +1039,7 @@ impl Check for DuplicateBlock {
                 check_id: DUP_META.id.to_string(),
                 message,
                 file: primary.file.clone(),
-                span: primary.span,
+                location: Location::from_span(&primary.file, primary.span),
                 priority: Priority(DUP_META.base_priority),
                 severity: Severity::Medium,
                 related,
@@ -1766,7 +1766,7 @@ impl<'a> Visit<'a> for OptionalChainVisitor<'a> {
                                 "prefer optional chain `?.` over repeated `&&` on `{l}`"
                             ),
                             file: self.file.path.clone(),
-                            span,
+                            location: Location::from_span(&self.file.path, span),
                             priority: Priority(PREFER_OPTIONAL_CHAIN_META.base_priority),
                             severity: Severity::Medium,
                             related: Vec::new(),
@@ -1882,7 +1882,7 @@ impl<'a> Visit<'a> for NullishVisitor<'a> {
                 check_id: PREFER_NULLISH_META.id.to_string(),
                 message: "prefer nullish coalescing `??` for default values (`||` falls through on `0`/`\"\"`/`false`)".to_string(),
                 file: self.file.path.clone(),
-                span,
+                location: Location::from_span(&self.file.path, span),
                 priority: Priority(PREFER_NULLISH_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
@@ -2059,7 +2059,7 @@ impl Check for UnusedVariable {
                     "`{name}` is declared but never read (prefix with `_` if intentional)"
                 ),
                 file: file.path.clone(),
-                span,
+                location: Location::from_span(&file.path, span),
                 priority: Priority(UNUSED_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),
@@ -2300,7 +2300,7 @@ impl Check for DeadExport {
                     display, total
                 ),
                 file: exp.file.clone(),
-                span: exp.span,
+                location: Location::from_span(&exp.file, exp.span),
                 priority: Priority(DEX_META.base_priority),
                 severity: DEX_META.default_severity,
                 related: Vec::new(),
@@ -2309,7 +2309,7 @@ impl Check for DeadExport {
         issues.sort_by(|a, b| {
             a.file
                 .cmp(&b.file)
-                .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+                .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
         });
         issues
     }

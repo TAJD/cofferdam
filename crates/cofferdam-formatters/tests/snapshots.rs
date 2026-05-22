@@ -14,9 +14,9 @@
 //! changes should be accepted with `cargo insta accept` (or
 //! `INSTA_UPDATE=always cargo test`) and reviewed in the diff before merging.
 
-use cofferdam_core::{Issue, Priority, RelatedSpan, Severity, Span};
+use cofferdam_core::{Issue, Location, Priority, RelatedSpan, Severity, Span};
 use cofferdam_formatters::{CompactFormatter, JsonFormatter, TextFormatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── fixture helpers ──────────────────────────────────────────────────────────
 
@@ -30,9 +30,10 @@ fn span(line: u32, column: u32, start_byte: u32, end_byte: u32) -> Span {
 }
 
 fn related(file: &str, line: u32, column: u32, start_byte: u32, end_byte: u32) -> RelatedSpan {
+    let path = PathBuf::from(file);
     RelatedSpan {
-        file: PathBuf::from(file),
-        span: span(line, column, start_byte, end_byte),
+        location: Location::from_span(Path::new(file), span(line, column, start_byte, end_byte)),
+        file: path,
     }
 }
 
@@ -40,13 +41,18 @@ fn related(file: &str, line: u32, column: u32, start_byte: u32, end_byte: u32) -
 ///
 /// Five categories, mixed priorities, one cross-file finding with `related`.
 fn fixture_issues() -> Vec<Issue> {
+    let app_ts = PathBuf::from("src/app.ts");
+    let components_ts = PathBuf::from("src/components/index.ts");
+    let utils_ts = PathBuf::from("src/utils/format.ts");
+    let orders_ts = PathBuf::from("src/orders/processor.ts");
+    let auth_ts = PathBuf::from("src/auth/validate.ts");
     vec![
         // Consistency — lower priority
         Issue {
             check_id: "Consistency.QuoteStyle".into(),
             message: "use single quotes to match the dominant style in this project".into(),
-            file: PathBuf::from("src/app.ts"),
-            span: span(12, 5, 200, 215),
+            location: Location::from_span(&app_ts, span(12, 5, 200, 215)),
+            file: app_ts,
             priority: Priority::LOW,
             severity: Severity::Low,
             related: Vec::new(),
@@ -55,8 +61,8 @@ fn fixture_issues() -> Vec<Issue> {
         Issue {
             check_id: "Design.DuplicateExportName".into(),
             message: "export `Button` appears in multiple barrel files".into(),
-            file: PathBuf::from("src/components/index.ts"),
-            span: span(3, 1, 40, 56),
+            location: Location::from_span(&components_ts, span(3, 1, 40, 56)),
+            file: components_ts,
             priority: Priority::NORMAL,
             severity: Severity::Medium,
             related: vec![
@@ -68,8 +74,8 @@ fn fixture_issues() -> Vec<Issue> {
         Issue {
             check_id: "Readability.MaxLineLength".into(),
             message: "line is 145 characters, exceeds limit of 120".into(),
-            file: PathBuf::from("src/utils/format.ts"),
-            span: span(88, 121, 3200, 3344),
+            location: Location::from_span(&utils_ts, span(88, 121, 3200, 3344)),
+            file: utils_ts,
             priority: Priority(-3),
             severity: Severity::Info,
             related: Vec::new(),
@@ -79,8 +85,8 @@ fn fixture_issues() -> Vec<Issue> {
             check_id: "Refactor.CyclomaticComplexity".into(),
             message: "function `processOrder` has cyclomatic complexity 14, exceeds limit of 10"
                 .into(),
-            file: PathBuf::from("src/orders/processor.ts"),
-            span: span(22, 1, 580, 620),
+            location: Location::from_span(&orders_ts, span(22, 1, 580, 620)),
+            file: orders_ts,
             priority: Priority::HIGHER,
             severity: Severity::High,
             related: Vec::new(),
@@ -89,8 +95,8 @@ fn fixture_issues() -> Vec<Issue> {
         Issue {
             check_id: "Warning.TripleEquals".into(),
             message: "use `===` instead of `==` to avoid type coercion".into(),
-            file: PathBuf::from("src/auth/validate.ts"),
-            span: span(47, 18, 1402, 1404),
+            location: Location::from_span(&auth_ts, span(47, 18, 1402, 1404)),
+            file: auth_ts,
             priority: Priority::HIGHER,
             severity: Severity::Critical,
             related: Vec::new(),

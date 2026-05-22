@@ -27,7 +27,8 @@
 //! directives uniformly across all checks.
 
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Language, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, Issue, Language, Location, Priority, Severity,
+    SourceFile,
 };
 
 use crate::parser::RustParseTree;
@@ -95,7 +96,7 @@ fn collect_findings(
                      when the value is provably infallible."
                     .to_string(),
                 file: file.path.clone(),
-                span,
+                location: Location::from_span(&file.path, span),
                 priority: Priority(META.base_priority),
                 severity: META.default_severity,
                 related: Vec::new(),
@@ -208,7 +209,11 @@ mod tests {
             1,
             "expected exactly the 1 lib-context unwrap finding; got: {issues:?}",
         );
-        assert_eq!(issues[0].span.line, 5, "unexpected line for lib finding");
+        assert_eq!(
+            issues[0].location.line(),
+            5,
+            "unexpected line for lib finding"
+        );
     }
 
     #[test]

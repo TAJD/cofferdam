@@ -168,7 +168,7 @@ impl FindingsCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Priority, Severity, Span};
+    use cofferdam_core::{Location, Priority, Severity, Span};
     use std::path::PathBuf;
 
     fn key(content: u8, config: u8, check_id: &'static str) -> FindingsKey {
@@ -180,16 +180,20 @@ mod tests {
     }
 
     fn issue(msg: &str) -> Issue {
+        let file = PathBuf::from("a.ts");
         Issue {
             check_id: "Test.Check".to_string(),
             message: msg.to_string(),
-            file: PathBuf::from("a.ts"),
-            span: Span {
-                start_byte: 0,
-                end_byte: 0,
-                line: 1,
-                column: 1,
-            },
+            location: Location::from_span(
+                &file,
+                Span {
+                    start_byte: 0,
+                    end_byte: 0,
+                    line: 1,
+                    column: 1,
+                },
+            ),
+            file,
             priority: Priority(0),
             severity: Severity::Low,
             related: Vec::new(),

@@ -264,10 +264,13 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                         uri: normalize_path(&i.file),
                     },
                     region: SarifRegion {
-                        start_line: i.span.line,
-                        start_column: nonzero(i.span.column),
-                        byte_offset: i.span.start_byte,
-                        byte_length: i.span.end_byte.saturating_sub(i.span.start_byte),
+                        start_line: i.location.line(),
+                        start_column: nonzero(i.location.column()),
+                        byte_offset: i.location.start_byte(),
+                        byte_length: i
+                            .location
+                            .end_byte()
+                            .saturating_sub(i.location.start_byte()),
                     },
                 },
             }],
@@ -300,10 +303,13 @@ fn map_related_location(r: &RelatedSpan) -> SarifLocation {
                 uri: normalize_path(&r.file),
             },
             region: SarifRegion {
-                start_line: r.span.line,
-                start_column: nonzero(r.span.column),
-                byte_offset: r.span.start_byte,
-                byte_length: r.span.end_byte.saturating_sub(r.span.start_byte),
+                start_line: r.location.line(),
+                start_column: nonzero(r.location.column()),
+                byte_offset: r.location.start_byte(),
+                byte_length: r
+                    .location
+                    .end_byte()
+                    .saturating_sub(r.location.start_byte()),
             },
         },
     }
@@ -351,7 +357,7 @@ fn fingerprints_for(issue: &Issue) -> BTreeMap<&'static str, String> {
     let mut h = DefaultHasher::new();
     issue.check_id.hash(&mut h);
     normalize_path(&issue.file).hash(&mut h);
-    issue.span.line.hash(&mut h);
+    issue.location.line().hash(&mut h);
     issue.message.hash(&mut h);
     let mut map = BTreeMap::new();
     map.insert(FINGERPRINT_KEY, format!("{:016x}", h.finish()));
@@ -361,7 +367,7 @@ fn fingerprints_for(issue: &Issue) -> BTreeMap<&'static str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Category, Priority, Severity, Span};
+    use cofferdam_core::{Category, Location, Priority, Severity, Span};
     use std::path::PathBuf;
 
     fn meta(id: &'static str, cat: Category) -> CheckMeta {
@@ -381,14 +387,18 @@ mod tests {
     }
 
     fn issue(file: &str, check_id: &str, sev: Severity) -> Issue {
+        let path = PathBuf::from(file);
         Issue {
-            file: PathBuf::from(file),
-            span: Span {
-                line: 42,
-                column: 7,
-                start_byte: 800,
-                end_byte: 806,
-            },
+            location: Location::from_span(
+                &path,
+                Span {
+                    line: 42,
+                    column: 7,
+                    start_byte: 800,
+                    end_byte: 806,
+                },
+            ),
+            file: path,
             message: "use `===` instead of `==`".into(),
             check_id: check_id.into(),
             severity: sev,

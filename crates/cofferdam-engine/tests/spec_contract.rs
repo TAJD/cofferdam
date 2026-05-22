@@ -113,16 +113,16 @@ fn run_fixture(dir: &Path) -> SpecExpected {
         .map(|i| SpecFinding {
             id: i.check_id,
             file: rel(&i.file, dir),
-            line: i.span.line,
-            column: i.span.column,
+            line: i.location.line(),
+            column: i.location.column(),
             message: i.message,
             related: i
                 .related
                 .into_iter()
                 .map(|r| RelatedRef {
                     file: rel(&r.file, dir),
-                    line: r.span.line,
-                    column: r.span.column,
+                    line: r.location.line(),
+                    column: r.location.column(),
                 })
                 .collect(),
         })

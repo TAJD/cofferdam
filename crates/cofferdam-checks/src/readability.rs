@@ -2,8 +2,8 @@
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, LineView, Lines, OptionDefault, OptionKind,
-    OptionSpec, Priority, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, Issue, LineView, Lines, Location, OptionDefault,
+    OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
 use oxc_ast_visit::Visit;
@@ -75,12 +75,15 @@ impl Check for MaxLineLength {
                     check_id: self.meta.id.to_string(),
                     message: format!("line is {} characters, exceeds limit of {}", len, limit),
                     file: file.path.clone(),
-                    span: Span {
-                        start_byte: byte_offset,
-                        end_byte: byte_offset + len,
-                        line: line_no,
-                        column: limit + 1,
-                    },
+                    location: Location::from_span(
+                        &file.path,
+                        Span {
+                            start_byte: byte_offset,
+                            end_byte: byte_offset + len,
+                            line: line_no,
+                            column: limit + 1,
+                        },
+                    ),
                     priority: Priority(self.meta.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
@@ -200,7 +203,7 @@ impl<'a> MFLCollector<'a> {
                     name, length, self.limit
                 ),
                 file: self.file.path.clone(),
-                span,
+                location: Location::from_span(&self.file.path, span),
                 priority: Priority(MFL_META.base_priority),
                 severity: Severity::Medium,
                 related: Vec::new(),

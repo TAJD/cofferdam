@@ -180,8 +180,8 @@ fn render_row(out: &mut String, issue: &Issue, baselined: bool) {
         issue.priority.0,
         issue.severity.as_str(),
         normalize_path(&issue.file),
-        issue.span.line,
-        issue.span.column,
+        issue.location.line(),
+        issue.location.column(),
         issue.message,
         issue.check_id,
         tag,
@@ -194,8 +194,8 @@ fn render_row(out: &mut String, issue: &Issue, baselined: bool) {
                 format!(
                     "{}:{}:{}",
                     normalize_path(&r.file),
-                    r.span.line,
-                    r.span.column
+                    r.location.line(),
+                    r.location.column()
                 )
             })
             .collect();
@@ -232,18 +232,21 @@ fn normalize_path(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Priority, Severity, Span};
+    use cofferdam_core::{Location, Priority, Severity, Span};
     use std::path::PathBuf;
 
     fn make_issue(file: PathBuf, check_id: &str) -> Issue {
         Issue {
+            location: Location::from_span(
+                &file,
+                Span {
+                    line: 1,
+                    column: 5,
+                    start_byte: 0,
+                    end_byte: 10,
+                },
+            ),
             file,
-            span: Span {
-                line: 1,
-                column: 5,
-                start_byte: 0,
-                end_byte: 10,
-            },
             message: "test message".into(),
             check_id: check_id.into(),
             severity: Severity::Medium,

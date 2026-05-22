@@ -28,7 +28,7 @@ use cofferdam_core::graph::{EXPORTS, IMPORTS};
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
-    InvariantsSpec, Issue, Language, LayersConfig, Priority, Severity, SourceFile, Span,
+    InvariantsSpec, Issue, Language, LayersConfig, Location, Priority, Severity, SourceFile, Span,
     TypeOracle, ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
@@ -709,7 +709,7 @@ impl Engine {
             for issue in &issues {
                 map.entry(issue.file.clone())
                     .or_default()
-                    .push((issue.check_id.clone(), issue.span.line));
+                    .push((issue.check_id.clone(), issue.location.line()));
             }
             corpus.with_slot(&ALL_PRE_FILTER_FINDINGS, |slot| *slot = map);
         }
@@ -733,7 +733,7 @@ impl Engine {
 
         issues.retain(|issue| {
             if let Some(sup) = suppressions_by_file.get(&issue.file) {
-                !sup.is_suppressed(issue.span.line, &issue.check_id)
+                !sup.is_suppressed(issue.location.line(), &issue.check_id)
             } else {
                 true
             }
@@ -757,7 +757,7 @@ impl Engine {
                 .cmp(&a.priority)
                 .then_with(|| a.check_id.cmp(&b.check_id))
                 .then_with(|| a.file.cmp(&b.file))
-                .then_with(|| a.span.line.cmp(&b.span.line))
+                .then_with(|| a.location.line().cmp(&b.location.line()))
         });
 
         (issues, texts)
@@ -806,7 +806,7 @@ impl Engine {
             .into_iter()
             .map(|issue| {
                 let text = texts.get(&issue.file).unwrap_or(&empty);
-                let sig = baseline::signature_for_span(text, &issue.span);
+                let sig = baseline::signature_for_span(text, &issue.location);
                 (issue, sig)
             })
             .collect();
@@ -832,7 +832,7 @@ impl Engine {
             .into_iter()
             .map(|issue| {
                 let text = texts.get(&issue.file).unwrap_or(&empty);
-                let sig = baseline::signature_for_span(text, &issue.span);
+                let sig = baseline::signature_for_span(text, &issue.location);
                 (issue, sig)
             })
             .collect();
@@ -857,12 +857,15 @@ fn parse_error_issue(file: &SourceFile, diagnostics: &[oxc_diagnostics::OxcDiagn
         // the work in cd-81a.2 / A2). Point at line 1 col 1 so formatters
         // produce something coherent; the exact diagnostic location is
         // already in `message`.
-        span: Span {
-            start_byte: 0,
-            end_byte: 0,
-            line: 1,
-            column: 1,
-        },
+        location: Location::from_span(
+            &file.path,
+            Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+        ),
         priority: Priority(20),
         severity: Severity::Critical,
         related: Vec::new(),
@@ -887,7 +890,7 @@ fn rust_parse_error_issue(file: &SourceFile, tree: &RustParseTree) -> Issue {
         message: "parse error: tree-sitter recovered with ERROR / MISSING nodes (Rust adapter)"
             .to_string(),
         file: file.path.clone(),
-        span,
+        location: Location::from_span(&file.path, span),
         priority: Priority(20),
         severity: Severity::Critical,
         related: Vec::new(),
@@ -903,12 +906,15 @@ fn rust_load_error_issue(file: &SourceFile, err: &cofferdam_rust::RustParseError
         check_id: "Warning.ParseError".to_string(),
         message: format!("parse error: {err}"),
         file: file.path.clone(),
-        span: Span {
-            start_byte: 0,
-            end_byte: 0,
-            line: 1,
-            column: 1,
-        },
+        location: Location::from_span(
+            &file.path,
+            Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+        ),
         priority: Priority(20),
         severity: Severity::Critical,
         related: Vec::new(),

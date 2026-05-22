@@ -112,6 +112,44 @@ impl Location {
             span.column,
         )
     }
+
+    /// Byte offset where the range starts, or 0 for ranges with no byte
+    /// representation (`LineCol` / `Custom`). TS findings are always
+    /// `Bytes`, so this is exact for the only adapter shipping today.
+    pub fn start_byte(&self) -> u32 {
+        match &self.range {
+            LocationRange::Bytes { start, .. } => *start,
+            _ => 0,
+        }
+    }
+
+    /// Byte offset where the range ends, or 0 for non-byte ranges.
+    pub fn end_byte(&self) -> u32 {
+        match &self.range {
+            LocationRange::Bytes { end, .. } => *end,
+            _ => 0,
+        }
+    }
+
+    /// 1-based start line. `Bytes` and `LineCol` carry it; `Custom` has no
+    /// line concept and returns 0.
+    pub fn line(&self) -> u32 {
+        match &self.range {
+            LocationRange::Bytes { line, .. } => *line,
+            LocationRange::LineCol { start_line, .. } => *start_line,
+            LocationRange::Custom { .. } => 0,
+        }
+    }
+
+    /// 1-based start column. `Bytes` and `LineCol` carry it; `Custom`
+    /// returns 0.
+    pub fn column(&self) -> u32 {
+        match &self.range {
+            LocationRange::Bytes { column, .. } => *column,
+            LocationRange::LineCol { start_col, .. } => *start_col,
+            LocationRange::Custom { .. } => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +233,43 @@ mod tests {
                 column: 4
             }
         );
+    }
+
+    #[test]
+    fn accessors_extract_bytes_variant_fields() {
+        let loc = Location::bytes(Uri::from_path(Path::new("a.ts")), 3, 7, 2, 5);
+        assert_eq!(loc.start_byte(), 3);
+        assert_eq!(loc.end_byte(), 7);
+        assert_eq!(loc.line(), 2);
+        assert_eq!(loc.column(), 5);
+    }
+
+    #[test]
+    fn accessors_degrade_for_non_byte_variants() {
+        let custom = Location {
+            uri: Uri::new("sql://migrations"),
+            range: LocationRange::Custom {
+                ns: SmolStr::new("sql"),
+                id: SmolStr::new("stmt:3"),
+            },
+        };
+        assert_eq!(custom.start_byte(), 0);
+        assert_eq!(custom.end_byte(), 0);
+        assert_eq!(custom.line(), 0);
+        assert_eq!(custom.column(), 0);
+
+        let linecol = Location {
+            uri: Uri::new("gen://out.ts"),
+            range: LocationRange::LineCol {
+                start_line: 4,
+                start_col: 2,
+                end_line: 4,
+                end_col: 9,
+            },
+        };
+        assert_eq!(linecol.line(), 4);
+        assert_eq!(linecol.column(), 2);
+        assert_eq!(linecol.start_byte(), 0);
     }
 
     #[test]

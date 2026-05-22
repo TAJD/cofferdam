@@ -8,8 +8,8 @@ use crate::framework_paths::is_framework_entry;
 use crate::public_api::{resolve_public_api, PublicApi};
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, OptionDefault, OptionKind,
-    OptionSpec, Priority, Severity, SourceFile, TextEdit,
+    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, OptionDefault,
+    OptionKind, OptionSpec, Priority, Severity, SourceFile, TextEdit,
 };
 use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
@@ -69,8 +69,8 @@ impl Check for TripleEquals {
     /// not. Silently rewriting this changes semantics. We decline to fix those
     /// cases and return `None` so the diagnostic stays but no edit is applied.
     fn autofix(&self, issue: &Issue, source: &SourceFile) -> Option<TextEdit> {
-        let start = issue.span.start_byte as usize;
-        let end = issue.span.end_byte as usize;
+        let start = issue.location.start_byte() as usize;
+        let end = issue.location.end_byte() as usize;
         let slice = source.text.get(start..end)?;
         let bytes = slice.as_bytes();
         let len = bytes.len();
@@ -162,7 +162,7 @@ impl<'a> Visit<'a> for Collector<'a> {
                     check_id: META.id.to_string(),
                     message: format!("use `{}` instead of `{}`", preferred, actual),
                     file: self.file.path.clone(),
-                    span,
+                    location: Location::from_span(&self.file.path, span),
                     priority: Priority(META.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
@@ -314,7 +314,7 @@ impl<'a> NullCheckCollector<'a> {
                 facts.text, excluded
             ),
             file: self.file.path.clone(),
-            span,
+            location: Location::from_span(&self.file.path, span),
             priority: Priority(UNUSED_NULL_CHECK_META.base_priority),
             severity: Severity::Low,
             related: Vec::new(),
@@ -417,7 +417,7 @@ impl<'a> Visit<'a> for ConsoleCollector<'a> {
                                 method
                             ),
                             file: self.file.path.clone(),
-                            span,
+                            location: Location::from_span(&self.file.path, span),
                             priority: Priority(NO_CONSOLE_LOG_META.base_priority),
                             severity: Severity::Medium,
                             related: Vec::new(),
@@ -482,7 +482,7 @@ impl<'a> Visit<'a> for DebuggerCollector<'a> {
             check_id: NO_DEBUGGER_META.id.to_string(),
             message: "remove `debugger` statement".to_string(),
             file: self.file.path.clone(),
-            span,
+            location: Location::from_span(&self.file.path, span),
             priority: Priority(NO_DEBUGGER_META.base_priority),
             severity: Severity::Medium,
             related: Vec::new(),
@@ -552,7 +552,7 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
                     check_id: NO_EVAL_META.id.to_string(),
                     message: "avoid `eval(...)` — executes arbitrary strings as code".to_string(),
                     file: self.file.path.clone(),
-                    span,
+                    location: Location::from_span(&self.file.path, span),
                     priority: Priority(NO_EVAL_META.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
@@ -571,7 +571,7 @@ impl<'a> Visit<'a> for EvalCollector<'a> {
                     message: "avoid `new Function(...)` — eval-equivalent code execution"
                         .to_string(),
                     file: self.file.path.clone(),
-                    span,
+                    location: Location::from_span(&self.file.path, span),
                     priority: Priority(NO_EVAL_META.base_priority),
                     severity: Severity::Medium,
                     related: Vec::new(),
@@ -721,7 +721,7 @@ impl Check for UnusedImport {
                 check_id: UI_META.id.to_string(),
                 message: format!("{} is never imported by another file", display),
                 file: exp.file.clone(),
-                span: exp.span,
+                location: Location::from_span(&exp.file, exp.span),
                 priority: Priority(UI_META.base_priority),
                 severity: UI_META.default_severity,
                 related: Vec::new(),
@@ -730,7 +730,7 @@ impl Check for UnusedImport {
         issues.sort_by(|a, b| {
             a.file
                 .cmp(&b.file)
-                .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+                .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
         });
         issues
     }

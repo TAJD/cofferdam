@@ -138,10 +138,10 @@ impl JsonFormatter {
                 priority: i.priority.0,
                 severity: severity_str(i.severity),
                 file: normalize_path(&i.file),
-                line: i.span.line,
-                column: i.span.column,
-                start_byte: i.span.start_byte,
-                end_byte: i.span.end_byte,
+                line: i.location.line(),
+                column: i.location.column(),
+                start_byte: i.location.start_byte(),
+                end_byte: i.location.end_byte(),
                 message: i.message.as_str(),
                 related: i.related.iter().map(map_related).collect(),
                 baselined: None,
@@ -211,10 +211,10 @@ impl JsonFormatter {
                 priority: i.priority.0,
                 severity: severity_str(i.severity),
                 file: normalize_path(&i.file),
-                line: i.span.line,
-                column: i.span.column,
-                start_byte: i.span.start_byte,
-                end_byte: i.span.end_byte,
+                line: i.location.line(),
+                column: i.location.column(),
+                start_byte: i.location.start_byte(),
+                end_byte: i.location.end_byte(),
                 message: i.message.as_str(),
                 related: i.related.iter().map(map_related).collect(),
                 baselined: Some(*baselined),
@@ -287,28 +287,31 @@ fn normalize_path(path: &std::path::Path) -> String {
 fn map_related(r: &RelatedSpan) -> RelatedFinding {
     RelatedFinding {
         file: normalize_path(&r.file),
-        line: r.span.line,
-        column: r.span.column,
-        start_byte: r.span.start_byte,
-        end_byte: r.span.end_byte,
+        line: r.location.line(),
+        column: r.location.column(),
+        start_byte: r.location.start_byte(),
+        end_byte: r.location.end_byte(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Priority, Severity, Span};
+    use cofferdam_core::{Location, Priority, Severity, Span};
     use std::path::PathBuf;
 
     fn make_issue(file: PathBuf, check_id: &str) -> Issue {
         Issue {
+            location: Location::from_span(
+                &file,
+                Span {
+                    line: 1,
+                    column: 5,
+                    start_byte: 0,
+                    end_byte: 10,
+                },
+            ),
             file,
-            span: Span {
-                line: 1,
-                column: 5,
-                start_byte: 0,
-                end_byte: 10,
-            },
             message: "test message".into(),
             check_id: check_id.into(),
             severity: Severity::Medium,

@@ -76,8 +76,8 @@ fn write_record(out: &mut String, issue: &Issue) {
         category,
         issue.check_id,
         normalize_path(&issue.file),
-        issue.span.line,
-        issue.span.column,
+        issue.location.line(),
+        issue.location.column(),
     );
     write_message(out, &issue.message);
 }
@@ -126,18 +126,21 @@ fn category_str(cat: Option<Category>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Priority, Severity, Span};
+    use cofferdam_core::{Location, Priority, Severity, Span};
     use std::path::PathBuf;
 
     fn make_issue(file: PathBuf, check_id: &str, message: &str) -> Issue {
         Issue {
+            location: Location::from_span(
+                &file,
+                Span {
+                    line: 8,
+                    column: 121,
+                    start_byte: 0,
+                    end_byte: 10,
+                },
+            ),
             file,
-            span: Span {
-                line: 8,
-                column: 121,
-                start_byte: 0,
-                end_byte: 10,
-            },
             message: message.into(),
             check_id: check_id.into(),
             severity: Severity::Low,

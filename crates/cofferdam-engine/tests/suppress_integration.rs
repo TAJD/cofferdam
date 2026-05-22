@@ -19,7 +19,7 @@ fn suppress_next_line_all_checks() {
     // Should have no triple-equals issue on line 2 due to suppression
     let triple_equals_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
         .collect();
     assert!(
         triple_equals_on_line_2.is_empty(),
@@ -41,7 +41,7 @@ fn suppress_next_line_specific_checks() {
     // Should have no TripleEquals on line 2
     let triple_equals_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
         .collect();
     assert!(triple_equals_on_line_2.is_empty());
 }
@@ -61,7 +61,7 @@ fn suppress_next_line_skips_blanks() {
     // Line 3 (first non-blank) should be suppressed
     let triple_equals_on_line_3: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 3)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 3)
         .collect();
     assert!(
         triple_equals_on_line_3.is_empty(),
@@ -83,7 +83,7 @@ fn suppress_block_all_checks() {
     // Line 2 should be suppressed
     let triple_equals_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
         .collect();
     assert!(
         triple_equals_on_line_2.is_empty(),
@@ -93,7 +93,7 @@ fn suppress_block_all_checks() {
     // Line 4 should NOT be suppressed
     let triple_equals_on_line_4: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 4)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 4)
         .collect();
     assert!(
         !triple_equals_on_line_4.is_empty(),
@@ -116,7 +116,7 @@ fn suppress_block_specific_checks() {
     // Line 2 should suppress TripleEquals but not other checks
     let triple_equals_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
         .collect();
     assert!(
         triple_equals_on_line_2.is_empty(),
@@ -138,11 +138,11 @@ fn suppress_block_no_matching_enable() {
     // Both lines 2 and 3 should be suppressed (extends to EOF)
     let triple_equals_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 2)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
         .collect();
     let triple_equals_on_line_3: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.span.line == 3)
+        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 3)
         .collect();
     assert!(
         triple_equals_on_line_2.is_empty(),

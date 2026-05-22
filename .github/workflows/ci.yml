@@ -16,6 +16,23 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  windows-release-build:
+    # Guards release-only breakage on Windows MSVC that the debug
+    # `cargo build`/`cargo test` in `test` can't catch — notably the
+    # rustc 1.95 / LLVM 22 ThinLTO + strip crash tracked in cd-rvn.
+    # `release.yml` only builds `--release` on a tag, so without this a
+    # release-build regression would surface at tag-cut time instead of
+    # on the PR that introduced it. Uses the workspace `[profile.release]`
+    # (thin LTO + codegen-units=1 + strip) exactly as a real release does.
+    name: windows release build (cd-rvn guard)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Release build of cofferdam-cli (MSVC, full release profile)
+        run: cargo build --release -p cofferdam-cli
+
   test:
     runs-on: ubuntu-latest
     steps:

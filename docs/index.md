@@ -3,7 +3,7 @@ layout: home
 
 hero:
   name: cofferdam
-  tagline: A watertight compartment for your codebase. Isolate bad code, measure it against rules, ship a priority-sorted verdict.
+  tagline: A watertight compartment for your codebase. Isolate bad code, measure it against rules, ship a priority-sorted verdict. Code management for the AI age.
   actions:
     - theme: brand
       text: Get started
@@ -13,6 +13,10 @@ hero:
       link: https://github.com/TAJD/cofferdam
 
 features:
+  - title: AI first code management
+    details: Cofferdam documents customs and rules that you want to apply across the codebase. Agents can write code and at compile time ensure it compiles with your wider codebase without having to read the entire context.
+  - title: Code is a commodity
+    details: Cofferdam is how you're able to apply standards on security, architecture and more to your codebase. Apps can be generated rapidly and Cofferdam is how you apply your standards.
   - title: Inspired by Elixir's Credo
     details: Brings the five-category discipline that Credo made popular — Warning, Refactor, Design, Readability, Consistency — to TypeScript. If you've used Credo, the category names and report shape will feel familiar.
   - title: Priority-sorted output

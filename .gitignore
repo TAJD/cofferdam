@@ -107,3 +107,8 @@ cgw-foundation/
 cgw-gen-docs/
 # bd worktree
 cgw-vitepress/
+# bd worktree
+typst-support-spec/
+
+# bv (beads viewer) local config and caches
+.bv/

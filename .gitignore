@@ -112,3 +112,6 @@ typst-support-spec/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# cofferdam scratch dir for ad-hoc CLI runs
+.cd_tmp/

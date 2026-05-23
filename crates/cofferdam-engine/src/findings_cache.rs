@@ -47,8 +47,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::Path;
 
-use cofferdam_core::Issue;
+use cofferdam_core::{Issue, Uri};
 
 use crate::cache::ContentHash;
 
@@ -151,6 +152,21 @@ impl FindingsCache {
         self.entries.borrow().is_empty()
     }
 
+    /// Look up cached findings and re-stamp them onto `path` before
+    /// returning (cd-mwr6). This is the only lookup the per-file engine
+    /// loop should use: the key is `(content, config, check)` with **no
+    /// path**, so two byte-identical files share one entry, and the
+    /// stored `Issue`s carry the path of whichever file populated it.
+    /// Without the re-stamp a cache hit for a different file would report
+    /// the wrong file path — making warm-cache output disagree with
+    /// `--no-cache`.
+    pub fn get_for_path(&self, key: &FindingsKey, path: &Path) -> Option<Vec<Issue>> {
+        self.get(key).map(|mut issues| {
+            restamp_path(&mut issues, path);
+            issues
+        })
+    }
+
     /// Clone every `(key, issues)` pair out for serialisation. Used
     /// by `crate::disk_cache::save_findings` to persist the cache
     /// across runs. The map is held under a short-lived borrow so
@@ -165,10 +181,31 @@ impl FindingsCache {
     }
 }
 
+/// Rewrite every file path on `issues` to `path` (cd-mwr6).
+///
+/// A `pure_run` check has no corpus access, so every path it emits —
+/// `Issue.file`, `Issue.location.uri`, and any `related` spans — refers to
+/// the single file it was handed. When those issues are replayed from the
+/// content-keyed cache against a *different* file with identical content,
+/// overwriting all of them onto the consumer's `path` is both correct and
+/// sufficient. The byte offsets / line / column in each `Location.range`
+/// are unchanged: identical content yields identical ranges.
+pub fn restamp_path(issues: &mut [Issue], path: &Path) {
+    let uri = Uri::from_path(path);
+    for issue in issues.iter_mut() {
+        issue.file = path.to_path_buf();
+        issue.location.uri = uri.clone();
+        for related in issue.related.iter_mut() {
+            related.file = path.to_path_buf();
+            related.location.uri = uri.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Location, Priority, Severity, Span};
+    use cofferdam_core::{Location, Priority, RelatedSpan, Severity, Span};
     use std::path::PathBuf;
 
     fn key(content: u8, config: u8, check_id: &'static str) -> FindingsKey {
@@ -285,5 +322,64 @@ mod tests {
         // non-empty so the disk-backed cache directory in cp3 has a
         // unique prefix per cofferdam build.
         assert!(!ENGINE_VERSION.is_empty());
+    }
+
+    // cd-mwr6: a finding built on `a.ts` must report `b.ts` after a
+    // re-stamp, with its byte range left intact.
+    #[test]
+    fn restamp_rewrites_file_and_uri_preserving_range() {
+        let mut issues = vec![issue("unused")];
+        let range_before = issues[0].location.range.clone();
+        restamp_path(&mut issues, &PathBuf::from("b.ts"));
+        assert_eq!(issues[0].file, PathBuf::from("b.ts"));
+        assert_eq!(issues[0].location.uri.as_str(), "file://b.ts");
+        assert_eq!(
+            issues[0].location.range, range_before,
+            "byte range must survive the re-stamp unchanged"
+        );
+    }
+
+    // Pure checks only ever emit same-file related spans, so those must
+    // follow the primary path on a re-stamp too.
+    #[test]
+    fn restamp_rewrites_related_spans() {
+        let a = PathBuf::from("a.ts");
+        let related_loc = Location::from_span(
+            &a,
+            Span {
+                start_byte: 10,
+                end_byte: 20,
+                line: 2,
+                column: 1,
+            },
+        );
+        let mut issues = vec![Issue {
+            related: vec![RelatedSpan {
+                file: a.clone(),
+                location: related_loc,
+            }],
+            ..issue("dup")
+        }];
+        restamp_path(&mut issues, &PathBuf::from("b.ts"));
+        assert_eq!(issues[0].related[0].file, PathBuf::from("b.ts"));
+        assert_eq!(issues[0].related[0].location.uri.as_str(), "file://b.ts");
+    }
+
+    // The cache entry itself is path-free: one stored entry serves many
+    // identical-content files, each getting its own path on the way out.
+    #[test]
+    fn get_for_path_restamps_without_mutating_the_entry() {
+        let c = FindingsCache::new();
+        let k = key(0, 0, "X");
+        c.insert(k.clone(), vec![issue("shared")]); // built on a.ts
+
+        let from_b = c.get_for_path(&k, &PathBuf::from("b.ts")).unwrap();
+        assert_eq!(from_b[0].file, PathBuf::from("b.ts"));
+
+        // A second consumer of the same entry gets ITS path, proving the
+        // stored copy wasn't mutated to b.ts by the first lookup.
+        let from_c = c.get_for_path(&k, &PathBuf::from("c.ts")).unwrap();
+        assert_eq!(from_c[0].file, PathBuf::from("c.ts"));
+        assert_eq!(from_c[0].location.uri.as_str(), "file://c.ts");
     }
 }

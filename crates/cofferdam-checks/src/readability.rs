@@ -7,16 +7,23 @@ use cofferdam_core::{
 };
 use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
 use oxc_ast_visit::Visit;
+use unicode_width::UnicodeWidthStr;
 
 use crate::count_skippable_lines;
 
 // ---------- Readability.MaxLineLength ----------
 
-/// Phase-0 canary check. Flags any line whose byte length exceeds `limit`.
+/// Flags any line whose display width exceeds `limit`.
 ///
-/// Deliberately byte-based for now — switching to grapheme/column width is
-/// a phase-1 task once we have the unicode crate in the tree. Good enough
-/// to validate the architecture seam end-to-end.
+/// Width is measured in terminal display columns via `unicode-width`
+/// (cd-c8aq): a wide CJK glyph counts as 2, a zero-width combining mark
+/// as 0, and control characters (including tabs and a trailing `\r` on
+/// CRLF files) as 0. This matches what a reader sees in a monospace
+/// editor — earlier we counted raw UTF-8 bytes, so box-drawing art,
+/// em dashes, and accented letters were over-counted ~3x and falsely
+/// flagged. The `Span` byte offsets stay byte-based (the `Span` contract);
+/// only the limit comparison, the reported width, and the column are in
+/// display columns.
 pub struct MaxLineLength {
     limit: u32,
     meta: &'static CheckMeta,
@@ -26,7 +33,7 @@ const MLL_OPTIONS: &[OptionSpec] = &[OptionSpec {
     name: "limit",
     kind: OptionKind::Int,
     default: OptionDefault::Int(120),
-    doc: "maximum line length in bytes",
+    doc: "maximum line length in display columns",
 }];
 
 const MLL_META: CheckMeta = CheckMeta {
@@ -69,18 +76,24 @@ impl Check for MaxLineLength {
         let mut out = Vec::new();
         let mut byte_offset: u32 = 0;
         for (line_no, line) in file.lines() {
-            let len = line.len() as u32;
-            if len > limit {
+            // Byte length advances the span cursor and bounds the `Span`
+            // (which is byte-based by contract). Display width is what we
+            // compare against the limit and report to the user (cd-c8aq).
+            let byte_len = line.len() as u32;
+            let width = UnicodeWidthStr::width(line) as u32;
+            if width > limit {
                 out.push(Issue {
                     check_id: self.meta.id.to_string(),
-                    message: format!("line is {} characters, exceeds limit of {}", len, limit),
+                    message: format!("line is {} columns, exceeds limit of {}", width, limit),
                     file: file.path.clone(),
                     location: Location::from_span(
                         &file.path,
                         Span {
                             start_byte: byte_offset,
-                            end_byte: byte_offset + len,
+                            end_byte: byte_offset + byte_len,
                             line: line_no,
+                            // 1-based display column where the line first
+                            // crosses the limit.
                             column: limit + 1,
                         },
                     ),
@@ -91,8 +104,8 @@ impl Check for MaxLineLength {
             }
             // +1 for the trailing '\n' consumed by `split`. Off-by-one on the
             // final line if the file lacks a trailing newline; cosmetic only,
-            // affects span offsets not line numbers. Fixed in phase 1.
-            byte_offset = byte_offset.saturating_add(len + 1);
+            // affects span offsets not line numbers.
+            byte_offset = byte_offset.saturating_add(byte_len + 1);
         }
         out
     }
@@ -238,5 +251,84 @@ impl<'a> Visit<'a> for MFLCollector<'a> {
             // measure.
         }
         oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::{Check, CheckContext, SourceFile};
+    use std::path::PathBuf;
+
+    /// Run `MaxLineLength` against `src` with the given column limit.
+    fn run_mll(src: &str, limit: u32) -> Vec<Issue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src);
+        let mut ctx = CheckContext::new(&file);
+        MaxLineLength::new(limit).run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn ascii_line_over_limit_flags_with_column_unit() {
+        let src = "a".repeat(130);
+        let issues = run_mll(&src, 120);
+        assert_eq!(issues.len(), 1, "130-col ASCII line should flag at 120");
+        assert_eq!(
+            issues[0].message,
+            "line is 130 columns, exceeds limit of 120"
+        );
+        // Column points at the first over-limit display column (limit + 1).
+        assert_eq!(issues[0].location.column(), 121);
+    }
+
+    #[test]
+    fn ascii_line_under_limit_ok() {
+        let src = "a".repeat(120);
+        assert!(
+            run_mll(&src, 120).is_empty(),
+            "a line exactly at the limit must not flag"
+        );
+    }
+
+    // cd-c8aq regression: the original repro. `// ` + 45 box-drawing chars
+    // (U+2500) is 48 display columns but 138 UTF-8 bytes. The old byte-based
+    // check reported "138 characters" and flagged it; display width must not.
+    #[test]
+    fn box_drawing_banner_under_limit_not_flagged() {
+        let src = format!("// {}", "\u{2500}".repeat(45));
+        assert_eq!(src.len(), 138, "sanity: the line is 138 UTF-8 bytes");
+        assert!(
+            run_mll(&src, 120).is_empty(),
+            "48-column box-drawing banner must not flag at a 120-column limit"
+        );
+    }
+
+    // Wide CJK ideographs are 2 display columns each. 61 ideographs = 61
+    // scalars (a scalar count would NOT flag at 120) but 122 columns (display
+    // width DOES flag) — proving we measure width, not chars and not bytes.
+    #[test]
+    fn wide_cjk_counted_as_two_columns_each() {
+        let src = "\u{4e00}".repeat(61); // 61 × U+4E00 '一'
+        let issues = run_mll(&src, 120);
+        assert_eq!(issues.len(), 1, "122 columns of CJK should flag at 120");
+        assert_eq!(
+            issues[0].message,
+            "line is 122 columns, exceeds limit of 120"
+        );
+    }
+
+    // The `Span` stays byte-based even when display width drives the finding:
+    // 130 ideographs = 260 columns (reported) but 390 bytes (span end_byte).
+    #[test]
+    fn span_byte_offsets_remain_byte_based() {
+        let src = "\u{4e00}".repeat(130);
+        let issues = run_mll(&src, 120);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].location.start_byte(), 0);
+        assert_eq!(
+            issues[0].location.end_byte(),
+            390,
+            "end_byte must be the UTF-8 byte length (130 × 3), not the column count"
+        );
+        assert!(issues[0].message.contains("260 columns"));
     }
 }

@@ -5,6 +5,6 @@ expression: "CompactFormatter::render(&issues)"
 priority|severity|category|id|file|line|column|message
 -5|low|consistency|Consistency.QuoteStyle|src/app.ts|12|5|use single quotes to match the dominant style in this project
 5|medium|design|Design.DuplicateExportName|src/components/index.ts|3|1|export `Button` appears in multiple barrel files
--3|info|readability|Readability.MaxLineLength|src/utils/format.ts|88|121|line is 145 characters, exceeds limit of 120
+-3|info|readability|Readability.MaxLineLength|src/utils/format.ts|88|121|line is 145 columns, exceeds limit of 120
 15|high|refactor|Refactor.CyclomaticComplexity|src/orders/processor.ts|22|1|function `processOrder` has cyclomatic complexity 14, exceeds limit of 10
 15|critical|warning|Warning.TripleEquals|src/auth/validate.ts|47|18|use `===` instead of `==` to avoid type coercion

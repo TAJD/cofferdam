@@ -56,7 +56,7 @@ expression: "JsonFormatter::render_with_baseline_pretty(&tagged)"
       "column": 121,
       "start_byte": 3200,
       "end_byte": 3344,
-      "message": "line is 145 characters, exceeds limit of 120",
+      "message": "line is 145 columns, exceeds limit of 120",
       "baselined": false
     },
     {

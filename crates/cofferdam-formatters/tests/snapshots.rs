@@ -73,7 +73,7 @@ fn fixture_issues() -> Vec<Issue> {
         // Readability — below-normal priority
         Issue {
             check_id: "Readability.MaxLineLength".into(),
-            message: "line is 145 characters, exceeds limit of 120".into(),
+            message: "line is 145 columns, exceeds limit of 120".into(),
             location: Location::from_span(&utils_ts, span(88, 121, 3200, 3344)),
             file: utils_ts,
             priority: Priority(-3),

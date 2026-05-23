@@ -242,6 +242,7 @@ dependencies = [
  "oxc_syntax",
  "smol_str",
  "unicode-ident",
+ "unicode-width",
 ]
 
 [[package]]

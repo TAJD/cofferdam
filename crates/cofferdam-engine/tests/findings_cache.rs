@@ -180,6 +180,50 @@ fn editing_a_file_re_misses_findings_cache_for_that_file_only() {
 }
 
 #[test]
+fn identical_content_files_each_report_their_own_path() {
+    // cd-mwr6 regression. The findings cache is keyed on
+    // (content, config, check) with NO path, so two byte-identical files
+    // share one entry. The second file must still report ITS OWN path —
+    // before the fix it inherited the path of whichever file populated
+    // the entry, so a warm-cache run pointed findings at the wrong file.
+    let engine = engine();
+    // A line well over 120 columns fires Readability.MaxLineLength, which
+    // is a `pure_run` check — exactly the kind the findings cache serves.
+    let body = format!("const x = \"{}\";\n", "a".repeat(130));
+    let sources = vec![
+        (PathBuf::from("alpha.ts"), body.clone()),
+        (PathBuf::from("beta.ts"), body),
+    ];
+
+    let parse_cache = ParseCache::new();
+    let findings_cache = FindingsCache::new();
+    let (issues, _) =
+        engine.analyze_with_sources_caches(sources, Some(&parse_cache), Some(&findings_cache));
+
+    let mll_files: Vec<String> = issues
+        .iter()
+        .filter(|i| i.check_id == "Readability.MaxLineLength")
+        .map(|i| i.file.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    // Paths are absolutized by the engine, so match on the file name.
+    assert!(
+        mll_files.iter().any(|f| f.ends_with("/alpha.ts")),
+        "alpha.ts MaxLineLength finding missing: {mll_files:?}"
+    );
+    assert!(
+        mll_files.iter().any(|f| f.ends_with("/beta.ts")),
+        "beta.ts must report its OWN path, not alpha.ts (cd-mwr6): {mll_files:?}"
+    );
+    // The second identical file must have been served from the cache —
+    // otherwise this test wouldn't exercise the re-stamp path at all.
+    assert!(
+        findings_cache.hits() > 0,
+        "the byte-identical second file should hit the findings cache"
+    );
+}
+
+#[test]
 fn config_hash_changes_when_options_change() {
     // Two engines with default checks but different layers config
     // should produce different config_hash values, so cached

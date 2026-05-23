@@ -160,7 +160,7 @@ mod tests {
         let issue = make_issue(
             PathBuf::from("examples/sample.ts"),
             "Readability.MaxLineLength",
-            "line is 149 characters, exceeds limit of 120",
+            "line is 149 columns, exceeds limit of 120",
         );
         let out = CompactFormatter::render(&[issue]);
         let first_line = out.lines().next().unwrap();
@@ -175,7 +175,7 @@ mod tests {
         let issue = make_issue(
             PathBuf::from("examples/sample.ts"),
             "Readability.MaxLineLength",
-            "line is 149 characters, exceeds limit of 120",
+            "line is 149 columns, exceeds limit of 120",
         );
         let out = CompactFormatter::render(&[issue]);
         let record = out.lines().nth(1).expect("record line exists");
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(parts[4], "examples/sample.ts");
         assert_eq!(parts[5], "8");
         assert_eq!(parts[6], "121");
-        assert_eq!(parts[7], "line is 149 characters, exceeds limit of 120");
+        assert_eq!(parts[7], "line is 149 columns, exceeds limit of 120");
     }
 
     #[test]

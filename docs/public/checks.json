@@ -250,7 +250,7 @@
         {
           "id": "limit",
           "kind": "integer",
-          "doc": "maximum line length in bytes",
+          "doc": "maximum line length in display columns",
           "default": 120
         }
       ]

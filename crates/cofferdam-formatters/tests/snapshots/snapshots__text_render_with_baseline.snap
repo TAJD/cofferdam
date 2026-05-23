@@ -11,7 +11,7 @@ expression: "TextFormatter::render_with_baseline(&tagged)"
         also at: src/ui/index.ts:7:1, src/shared/index.ts:2:1
 
 ── Readability ───────────────
-  [ -3] [    info] src/utils/format.ts:88:121  line is 145 characters, exceeds limit of 120  (Readability.MaxLineLength)
+  [ -3] [    info] src/utils/format.ts:88:121  line is 145 columns, exceeds limit of 120  (Readability.MaxLineLength)
 
 ── Refactor ───────────────
   [ 15] [    high] src/orders/processor.ts:22:1  function `processOrder` has cyclomatic complexity 14, exceeds limit of 10  (Refactor.CyclomaticComplexity)

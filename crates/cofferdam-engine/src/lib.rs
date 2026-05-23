@@ -582,7 +582,12 @@ impl Engine {
                                 config_hash,
                                 check_id: check.meta().id,
                             };
-                            if let Some(cached) = fc.get(&key) {
+                            // Re-stamp the cached findings onto this
+                            // file's path (cd-mwr6): the cache key has no
+                            // path, so a byte-identical sibling file would
+                            // otherwise inherit the path of whichever file
+                            // first populated the entry.
+                            if let Some(cached) = fc.get_for_path(&key, &file.path) {
                                 issues.extend(cached);
                                 continue;
                             }

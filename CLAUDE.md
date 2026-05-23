@@ -226,3 +226,5 @@ When dispatching for parallel check work:
 ## Real-repo validation
 
 Test fixtures in `examples/` are necessary but not sufficient. Run against `C:/Users/tajdi/bestefforttools` (325 TS files) and `C:/Users/tajdi/gistreact` (31) — both known to parse cleanly — to spot-check whether a change introduces unexpected false positives or parse errors. No baseline number is enshrined here; the point is qualitative ("did the top-10 findings shift in ways I can defend?"), not a numeric regression gate.
+
+**Run validation with `--no-cache` (or clear `.cofferdam/cache/` first).** The findings cache is keyed on `(content, config, engine_version)`, so a rebuild under the *same* version replays a prior build's findings from the disk cache — stale entries silently mask the very change you're validating. The cache self-heals on release (the version bump invalidates the cache dir); it only bites developers re-running the same version against an already-cached repo.

@@ -224,6 +224,73 @@ fn identical_content_files_each_report_their_own_path() {
 }
 
 #[test]
+fn file_scoped_suppression_through_cache_not_flagged_stale() {
+    // gh #47 / cd-5dnl regression, exercised through the findings cache.
+    //
+    // Two byte-identical files, each carrying a file-scoped suppression
+    // for a `pure_run` check (Readability.MaxFunctionLength) over a
+    // genuinely-too-long function. The second file is served from the
+    // findings cache. Before cd-mwr6 the cached finding inherited the
+    // FIRST file's path, so the second file's entry vanished from the
+    // ALL_PRE_FILTER_FINDINGS snapshot — and Consistency.UnusedSuppression
+    // (an observer that reads that snapshot) then declared the live
+    // directive "stale", swapping one low finding for another. The
+    // directive demonstrably suppresses a finding, so it must never be
+    // reported as covering nothing.
+    let engine = engine();
+
+    // 60-statement body, well over the default MaxFunctionLength limit
+    // of 50 lines. Identical bytes in both files → shared cache entry.
+    let mut body = String::from(
+        "// cofferdam-ignore-file: Readability.MaxFunctionLength: long fn on purpose\n\
+         export function big() {\n",
+    );
+    for i in 0..60 {
+        body.push_str(&format!("  const v{i} = {i};\n"));
+    }
+    body.push_str("  return v0;\n}\n");
+
+    let sources = vec![
+        (PathBuf::from("alpha.ts"), body.clone()),
+        (PathBuf::from("beta.ts"), body),
+    ];
+
+    let parse_cache = ParseCache::new();
+    let findings_cache = FindingsCache::new();
+    let (issues, _) =
+        engine.analyze_with_sources_caches(sources, Some(&parse_cache), Some(&findings_cache));
+
+    // The directive does its job: no MaxFunctionLength survives on either file.
+    let mfl: Vec<_> = issues
+        .iter()
+        .filter(|i| i.check_id == "Readability.MaxFunctionLength")
+        .collect();
+    assert!(
+        mfl.is_empty(),
+        "file-scoped directive should suppress MaxFunctionLength on both files: {mfl:?}"
+    );
+
+    // And the directive is NOT falsely reported as stale — on EITHER file,
+    // including the cache-served second one.
+    let stale: Vec<String> = issues
+        .iter()
+        .filter(|i| i.check_id == "Consistency.UnusedSuppression")
+        .map(|i| i.file.to_string_lossy().replace('\\', "/"))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "live file-scoped suppression must not be flagged UnusedSuppression (gh #47): {stale:?}"
+    );
+
+    // Guard: the second identical file must actually have hit the cache,
+    // otherwise the test wouldn't exercise the re-stamp / snapshot path.
+    assert!(
+        findings_cache.hits() > 0,
+        "byte-identical second file should hit the findings cache"
+    );
+}
+
+#[test]
 fn config_hash_changes_when_options_change() {
     // Two engines with default checks but different layers config
     // should produce different config_hash values, so cached

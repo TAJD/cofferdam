@@ -27,9 +27,10 @@ use std::collections::BTreeMap;
 use cofferdam_core::graph::{EXPORTS, IMPORTS};
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext, InvariantsRuntime,
-    InvariantsSpec, Issue, Language, LayersConfig, Location, Priority, Severity, SourceFile, Span,
-    TypeOracle, ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
+    validate_options, Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext,
+    InvariantsRuntime, InvariantsSpec, Issue, Language, LayersConfig, Location, OptionSpec,
+    Priority, RawOptionValue, Severity, SourceFile, Span, TypeOracle, ALL_PRE_FILTER_FINDINGS,
+    INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_rust::{parse_rust, RustParseTree};
@@ -83,6 +84,16 @@ pub struct Engine {
     /// disabled `[engine] type_aware`. Not part of `config_hash`: it's
     /// a runtime resource, not configuration.
     type_oracle: Option<Box<dyn TypeOracle>>,
+    /// `[[overrides]]` blocks from the project config (cd-m5tu). Empty
+    /// for `Engine::new` and for configs that declare none — the
+    /// per-file loop then takes a zero-cost fast path. Applied in
+    /// declaration order; the last matching block wins per check+key.
+    overrides: Vec<config::OverrideBlock>,
+    /// Global per-check raw option bags (a clone of `ProjectConfig::checks`),
+    /// retained so an override block's option keys can be overlaid onto
+    /// the global config and re-validated per file. Only consulted when
+    /// `overrides` is non-empty.
+    raw_checks: BTreeMap<String, BTreeMap<String, RawOptionValue>>,
 }
 
 impl Engine {
@@ -108,6 +119,8 @@ impl Engine {
             layers: None,
             invariants: None,
             type_oracle: None,
+            overrides: Vec::new(),
+            raw_checks: BTreeMap::new(),
         }
     }
 
@@ -125,6 +138,10 @@ impl Engine {
     ) -> Result<Self, ConfigError> {
         let mut options = Vec::with_capacity(checks.len());
         let mut severities = BTreeMap::new();
+        // Schema per check id, so we can validate per-glob option
+        // overrides (below) against the same schema the global options
+        // were validated against.
+        let mut schema_by_id: BTreeMap<&str, &'static [OptionSpec]> = BTreeMap::new();
         for check in &checks {
             let meta = check.meta();
             options.push(config::options_for(
@@ -139,7 +156,28 @@ impl Engine {
                 .copied()
                 .unwrap_or(meta.default_severity);
             severities.insert(meta.id.to_string(), sev);
+            schema_by_id.insert(meta.id, meta.options);
         }
+
+        // Validate per-glob override option values eagerly (cd-m5tu) so
+        // a bad `limit = "x"` in an [[overrides]] block fails at load
+        // time with the same diagnostics as the global [checks."X"]
+        // block, rather than silently per file. Overrides naming an
+        // unregistered check id are left to `config::unknown_check_ids`
+        // (a warning, not an error), so they're skipped here.
+        for block in &config.overrides {
+            for (check_id, oc) in &block.checks {
+                if oc.options.is_empty() {
+                    continue;
+                }
+                let Some(schema) = schema_by_id.get(check_id.as_str()) else {
+                    continue;
+                };
+                let merged = merge_raw(config.checks.get(check_id), &oc.options);
+                config::options_for_raw(config_path, check_id, schema, &merged)?;
+            }
+        }
+
         Ok(Self {
             checks,
             options,
@@ -147,6 +185,8 @@ impl Engine {
             layers: config.layers.clone(),
             invariants: config.invariants.clone(),
             type_oracle: None,
+            overrides: config.overrides.clone(),
+            raw_checks: config.checks.clone(),
         })
     }
 
@@ -201,6 +241,14 @@ impl Engine {
         h.update(format!("{:?}", by_id).as_bytes());
         h.update(format!("{:?}", self.layers).as_bytes());
         h.update(format!("{:?}", self.invariants).as_bytes());
+        // Per-glob overrides (cd-m5tu): two configs that differ only in
+        // an [[overrides]] block must hash differently so a toggled
+        // override busts the disk findings cache. Hash the raw patterns
+        // + per-check data (the compiled GlobSet isn't part of the
+        // logical config).
+        for block in &self.overrides {
+            h.update(format!("{:?}", (&block.paths, &block.checks)).as_bytes());
+        }
         h.finalize().into()
     }
 
@@ -441,6 +489,12 @@ impl Engine {
             let file = SourceFile::new(path.clone(), text.clone());
             texts.insert(path.clone(), text.clone());
 
+            // Per-glob override key (cd-m5tu). `None` when no
+            // `[[overrides]]` blocks are configured — the per-check
+            // resolution below then short-circuits to the global config
+            // with zero extra work for the overwhelmingly common case.
+            let file_key = (!self.overrides.is_empty()).then(|| path_key(&file.path));
+
             // Per-language dispatch (cd-91zc checkpoint 4 + cd-0039).
             // Non-TS files skip oxc parsing and graph extraction
             // entirely — the engine instead invokes the matching
@@ -492,6 +546,14 @@ impl Engine {
                     if check.language() != file.language {
                         continue;
                     }
+                    let (disabled, ov_opts) = match &file_key {
+                        Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                        None => (false, None),
+                    };
+                    if disabled {
+                        continue;
+                    }
+                    let opts = ov_opts.as_ref().unwrap_or(opts);
                     let mut ctx = CheckContext::new(&file)
                         .with_options(opts)
                         .with_corpus(&corpus)
@@ -511,6 +573,14 @@ impl Engine {
                     if check.language() != file.language {
                         continue;
                     }
+                    let (disabled, ov_opts) = match &file_key {
+                        Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                        None => (false, None),
+                    };
+                    if disabled {
+                        continue;
+                    }
+                    let opts = ov_opts.as_ref().unwrap_or(opts);
                     let mut ctx = CheckContext::new(&file)
                         .with_options(opts)
                         .with_corpus(&corpus);
@@ -569,13 +639,26 @@ impl Engine {
                     if requires_types && self.type_oracle.is_none() {
                         continue;
                     }
+                    // Per-glob overrides (cd-m5tu). `disabled` skips the
+                    // check on this file; `ov_opts` carries this file's
+                    // effective options when an override changed them.
+                    let (disabled, ov_opts) = match &file_key {
+                        Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                        None => (false, None),
+                    };
+                    if disabled {
+                        continue;
+                    }
+                    let opts = ov_opts.as_ref().unwrap_or(opts);
                     // Findings-cache fast path: skip Check::run when
-                    // (a) the check declares pure_run, and (b) a cache
-                    // entry exists under (content, config, check_id).
-                    // Non-pure checks always run — their findings may
-                    // depend on corpus state, which the cache key
-                    // can't capture today.
-                    if check.meta().pure_run && !requires_types {
+                    // (a) the check declares pure_run, (b) no per-glob
+                    // override changed this file's options (the cache key
+                    // can't capture per-file option deltas — cd-m5tu),
+                    // and (c) a cache entry exists under
+                    // (content, config, check_id). Non-pure checks always
+                    // run — their findings may depend on corpus state,
+                    // which the cache key can't capture today.
+                    if check.meta().pure_run && !requires_types && ov_opts.is_none() {
                         if let (Some(fc), Some(content_hash)) = (findings_cache, content_hash) {
                             let key = findings_cache::FindingsKey {
                                 content_hash,
@@ -752,8 +835,8 @@ impl Engine {
         // severity (Critical, set in `parse_error_issue`) is left
         // untouched.
         for issue in &mut issues {
-            if let Some(sev) = self.severities.get(&issue.check_id) {
-                issue.severity = *sev;
+            if let Some(sev) = self.effective_severity(&issue.check_id, &issue.file) {
+                issue.severity = sev;
             }
         }
 
@@ -842,6 +925,101 @@ impl Engine {
             })
             .collect();
         Ok(out)
+    }
+
+    /// Resolve the effective per-file config for one check (cd-m5tu).
+    /// Returns `(disabled, options)`:
+    /// * `disabled` — true when the last matching `[[overrides]]` block
+    ///   that mentions `disabled` set it to `true` for this check.
+    /// * `options` — `Some` when a matching block sets at least one
+    ///   option key: the global per-check bag overlaid with the override
+    ///   keys (last block wins), re-validated against the check schema.
+    ///   `None` means "use the engine's global options".
+    ///
+    /// `file_key` is a normalised key from [`path_key`]. Callers take a
+    /// fast path when `self.overrides` is empty, so this always walks at
+    /// least one block when reached.
+    fn effective_options(
+        &self,
+        file_key: &str,
+        check_id: &str,
+        schema: &[OptionSpec],
+    ) -> (bool, Option<CheckOptions>) {
+        let mut disabled: Option<bool> = None;
+        let mut merged: Option<BTreeMap<String, RawOptionValue>> = None;
+        for block in &self.overrides {
+            if !block.is_match(file_key) {
+                continue;
+            }
+            let Some(oc) = block.checks.get(check_id) else {
+                continue;
+            };
+            if let Some(d) = oc.disabled {
+                disabled = Some(d);
+            }
+            if !oc.options.is_empty() {
+                let mut base = merged
+                    .take()
+                    .unwrap_or_else(|| self.raw_checks.get(check_id).cloned().unwrap_or_default());
+                for (k, v) in &oc.options {
+                    base.insert(k.clone(), v.clone());
+                }
+                merged = Some(base);
+            }
+        }
+        // Option values were validated at engine-build time, so this
+        // re-validation should not fail; on the impossible error path we
+        // fall back to the engine's global options rather than panic.
+        let options = merged.and_then(|raw| validate_options(check_id, schema, &raw).ok());
+        (disabled.unwrap_or(false), options)
+    }
+
+    /// Effective severity for one finding (cd-m5tu, on top of cd-t1a).
+    /// Global per-check severity first, then any matching `[[overrides]]`
+    /// block that sets `severity` for this check (last match wins).
+    /// `None` only for check ids absent from the global map (e.g. the
+    /// engine-internal `Warning.ParseError`), leaving them untouched.
+    fn effective_severity(&self, check_id: &str, file: &Path) -> Option<Severity> {
+        let mut sev = self.severities.get(check_id).copied();
+        if !self.overrides.is_empty() {
+            let key = path_key(file);
+            for block in &self.overrides {
+                if block.is_match(&key) {
+                    if let Some(oc) = block.checks.get(check_id) {
+                        if let Some(s) = oc.severity {
+                            sev = Some(s);
+                        }
+                    }
+                }
+            }
+        }
+        sev
+    }
+}
+
+/// Overlay an override block's option keys onto the global per-check
+/// raw bag (cd-m5tu). Global keys first; override keys win on conflict.
+fn merge_raw(
+    global: Option<&BTreeMap<String, RawOptionValue>>,
+    overlay: &BTreeMap<String, RawOptionValue>,
+) -> BTreeMap<String, RawOptionValue> {
+    let mut merged = global.cloned().unwrap_or_default();
+    for (k, v) in overlay {
+        merged.insert(k.clone(), v.clone());
+    }
+    merged
+}
+
+/// Forward-slash, lowercase-on-Windows path key for override glob
+/// matching (cd-m5tu). Mirrors `config::path_key` and the checks
+/// crate's `path_key` so the engine's absolute file paths match globs
+/// written project-root-relative.
+fn path_key(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
     }
 }
 

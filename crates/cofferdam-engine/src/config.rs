@@ -99,6 +99,75 @@ pub struct ProjectConfig {
     /// when no `requires_types` check is registered. Read via
     /// [`ProjectConfig::type_aware_enabled`].
     pub engine_type_aware: Option<bool>,
+    /// `[[overrides]]` blocks — per-path-glob check config (cd-m5tu).
+    /// Each block scopes `limit`/`severity`/`disabled` (and any other
+    /// per-check option) to files matching its `paths` globs, while
+    /// every other check keeps running on those files. Empty when none
+    /// are declared. The engine applies them per-file in declaration
+    /// order; the last matching block wins per (check, key).
+    pub overrides: Vec<OverrideBlock>,
+}
+
+/// One `[[overrides]]` block: a set of path globs plus the per-check
+/// config that applies to files matching any of them (cd-m5tu).
+///
+/// Globs are written project-root-relative in forward-slash form
+/// (`**/*.test.tsx`, `src/legacy/**`) and matched the same way
+/// `[public_api].exports` globs are — see [`OverrideBlock::is_match`].
+#[derive(Debug, Clone)]
+pub struct OverrideBlock {
+    /// Raw glob patterns as written, kept for diagnostics and hashing.
+    pub paths: Vec<String>,
+    /// Compiled matcher over `paths`.
+    pub globset: globset::GlobSet,
+    /// Normalised absolute root prefix used to reduce an absolute file
+    /// key to the project-relative form the globs are written against.
+    pub root_key: String,
+    /// Per-check overrides, keyed by check id.
+    pub checks: BTreeMap<String, OverrideCheck>,
+}
+
+/// The config a single `[[overrides]]` block applies to one check on
+/// matching files. Only the fields the block actually sets are
+/// populated; the engine overlays them onto the global per-check
+/// config (cd-m5tu).
+#[derive(Debug, Clone, Default)]
+pub struct OverrideCheck {
+    /// Option keys this block sets (e.g. `limit`). Overlaid over the
+    /// global per-check option bag for matching files.
+    pub options: BTreeMap<String, RawOptionValue>,
+    /// `severity = "..."` for this check on matching files. `None`
+    /// leaves the global severity in place.
+    pub severity: Option<Severity>,
+    /// `disabled = true` skips the check entirely for matching files;
+    /// `disabled = false` re-enables it (so a later block can undo an
+    /// earlier one). `None` leaves the prior decision untouched.
+    pub disabled: Option<bool>,
+}
+
+impl OverrideBlock {
+    /// Test whether `file_key` (a forward-slash, normalised path — may
+    /// be absolute or relative) is matched by this block's globs.
+    /// Mirrors `public_api`'s matcher: strip the absolute root prefix
+    /// (or a leading `./`) so root-relative patterns match an absolute
+    /// engine-promoted path.
+    pub fn is_match(&self, file_key: &str) -> bool {
+        let rel = {
+            let with_slash = if self.root_key.ends_with('/') {
+                self.root_key.clone()
+            } else {
+                format!("{}/", self.root_key)
+            };
+            if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
+                stripped
+            } else if let Some(stripped) = file_key.strip_prefix(&self.root_key) {
+                stripped.trim_start_matches('/')
+            } else {
+                file_key.trim_start_matches("./")
+            }
+        };
+        self.globset.is_match(rel)
+    }
 }
 
 impl ProjectConfig {
@@ -192,6 +261,22 @@ struct TomlDoc {
     /// (cd-9hp.2.4); grows additively.
     #[serde(default)]
     engine: EngineSection,
+    /// `[[overrides]]` — per-path-glob check config (cd-m5tu). Array of
+    /// tables, each with `paths = [...]` and a `[overrides.checks."X"]`
+    /// sub-table.
+    #[serde(default)]
+    overrides: Vec<OverrideTable>,
+}
+
+/// Raw `[[overrides]]` element. `checks` keys are check ids; each value
+/// is a table of option/`severity`/`disabled` entries, parsed the same
+/// way a `[checks."X"]` block is.
+#[derive(Debug, Deserialize, Default)]
+struct OverrideTable {
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    checks: BTreeMap<String, toml::Value>,
 }
 
 /// `[engine]` table. Unknown keys are ignored (forward-compatible).
@@ -324,6 +409,8 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         })
         .collect();
 
+    let overrides = compile_overrides(path, doc.overrides)?;
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
@@ -332,7 +419,147 @@ fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         invariants: None,
         layers_double_declaration: false,
         engine_type_aware: doc.engine.type_aware,
+        overrides,
     })
+}
+
+/// Forward-slash, lowercase-on-Windows path key. Mirrors the
+/// `path_key` helpers in the checks crate so override globs match the
+/// engine's absolute, forward-slashed file keys.
+fn path_key(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+/// Compile `[[overrides]]` tables into matchable [`OverrideBlock`]s.
+/// Glob patterns are normalised to forward slashes and compiled with
+/// `literal_separator(true)` (so `*` doesn't cross `/`), matching the
+/// `[public_api].exports` convention. An individual invalid glob is
+/// skipped rather than failing the whole config — consistent with
+/// public-API glob handling. Per-check option/severity/disabled values
+/// are validated for shape here; type-checking option values against
+/// each check's schema happens in `Engine::with_config`.
+#[allow(clippy::result_large_err)]
+fn compile_overrides(
+    path: &Path,
+    tables: Vec<OverrideTable>,
+) -> Result<Vec<OverrideBlock>, ConfigError> {
+    use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+
+    if tables.is_empty() {
+        return Ok(Vec::new());
+    }
+    let config_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let root_abs = std::path::absolute(&config_dir).unwrap_or(config_dir);
+    let root_key = path_key(&root_abs);
+
+    let mut out = Vec::with_capacity(tables.len());
+    for table in tables {
+        let mut builder = GlobSetBuilder::new();
+        for raw in &table.paths {
+            let normalised = raw.trim_start_matches("./").replace('\\', "/");
+            if let Ok(g) = GlobBuilder::new(&normalised)
+                .literal_separator(true)
+                .build()
+            {
+                builder.add(g);
+            }
+            // Invalid glob syntax is skipped silently (a bad pattern
+            // simply matches nothing) — same as [public_api].exports.
+        }
+        let globset = builder.build().unwrap_or_else(|_| GlobSet::empty());
+
+        let mut checks: BTreeMap<String, OverrideCheck> = BTreeMap::new();
+        for (check_id, value) in table.checks {
+            let oc = parse_override_check(path, &check_id, value)?;
+            checks.insert(check_id, oc);
+        }
+
+        out.push(OverrideBlock {
+            paths: table.paths,
+            globset,
+            root_key: root_key.clone(),
+            checks,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse one `[overrides.checks."X"]` sub-table into an
+/// [`OverrideCheck`]. `severity` and `disabled` are meta-keys; every
+/// other key is a per-check option value (validated against the
+/// check's schema later, in the engine).
+#[allow(clippy::result_large_err)]
+fn parse_override_check(
+    path: &Path,
+    check_id: &str,
+    value: toml::Value,
+) -> Result<OverrideCheck, ConfigError> {
+    let table = match value {
+        toml::Value::Table(t) => t,
+        _ => {
+            return Err(ConfigError::UnsupportedValue {
+                path: path.to_path_buf(),
+                check_id: check_id.to_string(),
+                key: "<root>".to_string(),
+                reason: "expected a table of options",
+            });
+        }
+    };
+    let mut oc = OverrideCheck::default();
+    for (key, val) in table {
+        match key.as_str() {
+            "severity" => {
+                let s = match &val {
+                    toml::Value::String(s) => s.clone(),
+                    other => {
+                        return Err(ConfigError::SeverityNotString {
+                            path: path.to_path_buf(),
+                            check_id: check_id.to_string(),
+                            got: toml_kind(other),
+                        });
+                    }
+                };
+                let sev = Severity::parse(&s).map_err(|source| ConfigError::BadSeverity {
+                    path: path.to_path_buf(),
+                    check_id: check_id.to_string(),
+                    source,
+                })?;
+                oc.severity = Some(sev);
+            }
+            "disabled" => match &val {
+                toml::Value::Boolean(b) => oc.disabled = Some(*b),
+                _ => {
+                    return Err(ConfigError::UnsupportedValue {
+                        path: path.to_path_buf(),
+                        check_id: check_id.to_string(),
+                        key: "disabled".to_string(),
+                        reason: "expected a boolean",
+                    });
+                }
+            },
+            // `enabled` stays a forward-compatible placeholder here too,
+            // for parity with the global [checks."X"] block.
+            "enabled" => {}
+            _ => {
+                let raw = toml_to_raw(&val).ok_or_else(|| ConfigError::UnsupportedValue {
+                    path: path.to_path_buf(),
+                    check_id: check_id.to_string(),
+                    key: key.clone(),
+                    reason: "expected bool, integer, string, or array of those",
+                })?;
+                oc.options.insert(key, raw);
+            }
+        }
+    }
+    Ok(oc)
 }
 
 /// End-to-end config resolution. Looks for `cofferdam.toml` (walking up
@@ -644,34 +871,46 @@ pub fn options_for(
     schema: &[cofferdam_core::OptionSpec],
 ) -> Result<CheckOptions, ConfigError> {
     match project.checks.get(check_id) {
-        Some(raw) => {
-            validate_options(check_id, schema, raw).map_err(|source| {
-                // When `validate_options` rejects a key that looks like a
-                // well-known top-level cofferdam.toml key (plugins, extends,
-                // include), the real cause is TOML lexical scoping — the user
-                // wrote the key after a `[checks."X"]` header and TOML
-                // silently nested it there. Emit a directive error so they
-                // know to move it to the top of the file, rather than
-                // presenting a confusing "check does not declare option '...'"
-                // message.
-                if let OptionsError::UnknownKey { ref key, .. } = source {
-                    if MISPLACED_TOP_LEVEL_KEYS.contains(&key.as_str()) {
-                        return ConfigError::MisplacedTopLevelKey {
-                            path: config_path.to_path_buf(),
-                            intended_key: key.clone(),
-                            nested_under: check_id.to_string(),
-                        };
-                    }
-                }
-                ConfigError::Validate {
-                    path: config_path.to_path_buf(),
-                    check_id: check_id.to_string(),
-                    source,
-                }
-            })
-        }
+        Some(raw) => options_for_raw(config_path, check_id, schema, raw),
         None => Ok(CheckOptions::defaults_from(schema)),
     }
+}
+
+/// Validate an already-assembled raw option bag against a check's
+/// schema. Shared by [`options_for`] (global `[checks."X"]`) and the
+/// engine's per-glob override path (cd-m5tu), so both surface the same
+/// `MisplacedTopLevelKey` / `Validate` diagnostics.
+#[allow(clippy::result_large_err)]
+pub fn options_for_raw(
+    config_path: &Path,
+    check_id: &str,
+    schema: &[cofferdam_core::OptionSpec],
+    raw: &BTreeMap<String, RawOptionValue>,
+) -> Result<CheckOptions, ConfigError> {
+    validate_options(check_id, schema, raw).map_err(|source| {
+        // When `validate_options` rejects a key that looks like a
+        // well-known top-level cofferdam.toml key (plugins, extends,
+        // include), the real cause is TOML lexical scoping — the user
+        // wrote the key after a `[checks."X"]` header and TOML
+        // silently nested it there. Emit a directive error so they
+        // know to move it to the top of the file, rather than
+        // presenting a confusing "check does not declare option '...'"
+        // message.
+        if let OptionsError::UnknownKey { ref key, .. } = source {
+            if MISPLACED_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+                return ConfigError::MisplacedTopLevelKey {
+                    path: config_path.to_path_buf(),
+                    intended_key: key.clone(),
+                    nested_under: check_id.to_string(),
+                };
+            }
+        }
+        ConfigError::Validate {
+            path: config_path.to_path_buf(),
+            check_id: check_id.to_string(),
+            source,
+        }
+    })
 }
 
 /// Return the set of check IDs that the config references but aren't in
@@ -783,6 +1022,107 @@ enabled = true
     }
 
     #[test]
+    fn parse_overrides_block() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.test.ts", "**/*.test.tsx"]
+[overrides.checks."Readability.MaxFunctionLength"]
+limit = 400
+[overrides.checks."Design.OrphanExport"]
+disabled = true
+severity = "info"
+"#;
+        let cfg = parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.overrides.len(), 1);
+        let block = &cfg.overrides[0];
+        assert_eq!(block.paths, vec!["**/*.test.ts", "**/*.test.tsx"]);
+
+        let mfl = block
+            .checks
+            .get("Readability.MaxFunctionLength")
+            .expect("mfl override present");
+        assert_eq!(mfl.options.get("limit"), Some(&RawOptionValue::Int(400)));
+        assert_eq!(mfl.disabled, None, "limit-only override sets no disabled");
+        assert_eq!(mfl.severity, None);
+
+        let orphan = block
+            .checks
+            .get("Design.OrphanExport")
+            .expect("orphan override present");
+        assert_eq!(orphan.disabled, Some(true));
+        assert_eq!(orphan.severity, Some(Severity::Info));
+        assert!(orphan.options.is_empty());
+    }
+
+    #[test]
+    fn parse_multiple_override_blocks_preserve_order() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.test.ts"]
+[overrides.checks."Readability.MaxFunctionLength"]
+limit = 200
+
+[[overrides]]
+paths = ["src/legacy/**"]
+[overrides.checks."Refactor.CyclomaticComplexity"]
+severity = "info"
+"#;
+        let cfg = parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.overrides.len(), 2);
+        assert_eq!(cfg.overrides[0].paths, vec!["**/*.test.ts"]);
+        assert_eq!(cfg.overrides[1].paths, vec!["src/legacy/**"]);
+    }
+
+    #[test]
+    fn override_glob_matches_relative_to_root() {
+        // is_match must reduce an absolute, engine-promoted path to the
+        // project-relative form the globs are written against.
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.test.tsx"]
+[overrides.checks."Readability.MaxFunctionLength"]
+limit = 400
+"#;
+        // Use a path the test controls so root absolutization is stable.
+        let cfg = parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        let block = &cfg.overrides[0];
+        let root = &block.root_key; // absolute, normalised
+        assert!(block.is_match(&format!("{root}/src/Lobby.test.tsx")));
+        assert!(block.is_match(&format!("{root}/Lobby.test.tsx")));
+        assert!(!block.is_match(&format!("{root}/src/Lobby.tsx")));
+    }
+
+    #[test]
+    fn override_bad_severity_is_rejected() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.ts"]
+[overrides.checks."X.Y"]
+severity = "extreme"
+"#;
+        let err = parse(Path::new("cofferdam.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::BadSeverity { .. }));
+    }
+
+    #[test]
+    fn override_non_bool_disabled_is_rejected() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.ts"]
+[overrides.checks."X.Y"]
+disabled = "yes"
+"#;
+        let err = parse(Path::new("cofferdam.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn no_overrides_yields_empty_vec() {
+        let cfg = parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(cfg.overrides.is_empty());
+    }
+
+    #[test]
     fn unsupported_value_errors() {
         let raw = r#"
 [checks."Foo.Bar"]
@@ -832,6 +1172,7 @@ severity = 5
             invariants: None,
             layers_double_declaration: false,
             engine_type_aware: None,
+            overrides: Vec::new(),
         };
 
         let opts = options_for(
@@ -866,6 +1207,7 @@ severity = 5
             invariants: None,
             layers_double_declaration: false,
             engine_type_aware: None,
+            overrides: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -885,6 +1227,7 @@ severity = 5
             invariants: None,
             layers_double_declaration: false,
             engine_type_aware: None,
+            overrides: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -961,6 +1304,7 @@ severity = 5
             invariants: None,
             layers_double_declaration: false,
             engine_type_aware: None,
+            overrides: Vec::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

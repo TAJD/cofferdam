@@ -65,7 +65,7 @@ crossbeam-channel = "0.5"
 # cofferdam-graph; pulled into the workspace deps so its version is
 # pinned alongside the other shared crates.
 smol_str = { version = "0.3", features = ["serde"] }
-thiserror = "1"
+thiserror = "2"
 toml = "0.8"
 insta = "1"
 proptest = "1"

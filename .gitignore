@@ -115,3 +115,6 @@ typst-support-spec/
 
 # cofferdam scratch dir for ad-hoc CLI runs
 .cd_tmp/
+
+# Claude Code local (per-user) settings — settings.json is shareable, .local isn't
+.claude/settings.local.json

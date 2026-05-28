@@ -55,6 +55,13 @@ impl CyclomaticComplexity {
     }
 }
 
+const CYC_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "limit",
+    kind: OptionKind::Int,
+    default: OptionDefault::Int(10),
+    doc: "maximum cyclomatic complexity per function",
+}];
+
 const CYC_META: CheckMeta = CheckMeta {
     id: "Refactor.CyclomaticComplexity",
     category: Category::Refactor,
@@ -64,7 +71,7 @@ const CYC_META: CheckMeta = CheckMeta {
     body: include_str!("../docs/Refactor.CyclomaticComplexity.md"),
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: CYC_OPTIONS,
     autofix: false,
     pure_run: true,
 };
@@ -78,9 +85,14 @@ impl Check for CyclomaticComplexity {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
+        let limit = ctx
+            .options
+            .get_int("limit")
+            .map(|v| v as u32)
+            .unwrap_or(self.limit);
         let mut visitor = CycVisitor {
             file,
-            limit: self.limit,
+            limit,
             issues: Vec::new(),
             stack: Vec::new(),
         };
@@ -231,6 +243,13 @@ impl CognitiveComplexity {
     }
 }
 
+const COG_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "limit",
+    kind: OptionKind::Int,
+    default: OptionDefault::Int(15),
+    doc: "maximum cognitive complexity per function",
+}];
+
 const COG_META: CheckMeta = CheckMeta {
     id: "Refactor.CognitiveComplexity",
     category: Category::Refactor,
@@ -240,7 +259,7 @@ const COG_META: CheckMeta = CheckMeta {
     body: include_str!("../docs/Refactor.CognitiveComplexity.md"),
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: COG_OPTIONS,
     autofix: false,
     pure_run: true,
 };
@@ -254,9 +273,14 @@ impl Check for CognitiveComplexity {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
+        let limit = ctx
+            .options
+            .get_int("limit")
+            .map(|v| v as u32)
+            .unwrap_or(self.limit);
         let mut visitor = CogVisitor {
             file,
-            limit: self.limit,
+            limit,
             issues: Vec::new(),
             stack: Vec::new(),
             name_stack: Vec::new(),

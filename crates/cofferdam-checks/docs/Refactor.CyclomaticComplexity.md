@@ -3,10 +3,14 @@ id: Refactor.CyclomaticComplexity
 category: Refactor
 base_priority: 8
 default_severity: Medium
-options: []
+options:
+  - name: limit
+    kind: int
+    default: 10
+    doc: maximum cyclomatic complexity per function
 ---
 
-McCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`.
+McCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`; override per-project with `[checks."Refactor.CyclomaticComplexity"] limit = N` in `cofferdam.toml`.
 
 Cyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures "how many test cases do I need", cognitive captures "how hard is this to read". Run them together; the worst offenders fail both.
 

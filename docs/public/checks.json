@@ -261,11 +261,18 @@
       "base_priority": 10,
       "default_severity": "Medium",
       "explanation": "Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.",
-      "body": "---\nid: Refactor.CognitiveComplexity\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\nSonar-style cognitive complexity per function — branching breaks plus a nesting penalty. Deeply nested code costs more than a long flat switch. Tracks `if`/`else if`, loops, ternaries, `switch`, `catch`, sequences of `&&`/`||`/`??`, and recursion-by-name. Default limit is `15`.\n\n```ts\n// flagged: nested branches stack a nesting penalty\nfunction classify(record: Record) {\n  if (record.kind === \"user\") {\n    if (record.active) {\n      for (const role of record.roles) {\n        if (role.permissions.includes(\"admin\")) {\n          return \"active-admin\";\n        }\n      }\n    }\n  }\n  return \"other\";\n}\n```\n\n```ts\n// fix: flatten via early returns and helpers\nfunction classify(record: Record) {\n  if (record.kind !== \"user\" || !record.active) return \"other\";\n  return hasAdmin(record.roles) ? \"active-admin\" : \"other\";\n}\n```\n\nThe hardcoded limit will move into `options` once the threshold becomes contentious in practice (no current bead).\n",
+      "body": "---\nid: Refactor.CognitiveComplexity\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions:\n  - name: limit\n    kind: int\n    default: 15\n    doc: maximum cognitive complexity per function\n---\n\nSonar-style cognitive complexity per function — branching breaks plus a nesting penalty. Deeply nested code costs more than a long flat switch. Tracks `if`/`else if`, loops, ternaries, `switch`, `catch`, sequences of `&&`/`||`/`??`, and recursion-by-name. Default limit is `15`; override per-project with `[checks.\"Refactor.CognitiveComplexity\"] limit = N` in `cofferdam.toml`.\n\n```ts\n// flagged: nested branches stack a nesting penalty\nfunction classify(record: Record) {\n  if (record.kind === \"user\") {\n    if (record.active) {\n      for (const role of record.roles) {\n        if (role.permissions.includes(\"admin\")) {\n          return \"active-admin\";\n        }\n      }\n    }\n  }\n  return \"other\";\n}\n```\n\n```ts\n// fix: flatten via early returns and helpers\nfunction classify(record: Record) {\n  if (record.kind !== \"user\" || !record.active) return \"other\";\n  return hasAdmin(record.roles) ? \"active-admin\" : \"other\";\n}\n```\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [
+        {
+          "id": "limit",
+          "kind": "integer",
+          "doc": "maximum cognitive complexity per function",
+          "default": 15
+        }
+      ]
     },
     {
       "id": "Refactor.CyclomaticComplexity",
@@ -273,11 +280,18 @@
       "base_priority": 8,
       "default_severity": "Medium",
       "explanation": "McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.",
-      "body": "---\nid: Refactor.CyclomaticComplexity\ncategory: Refactor\nbase_priority: 8\ndefault_severity: Medium\noptions: []\n---\n\nMcCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`.\n\nCyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures \"how many test cases do I need\", cognitive captures \"how hard is this to read\". Run them together; the worst offenders fail both.\n\n```ts\n// flagged: 11 independent paths via &&/case/if combinations\nfunction dispatch(event: Event) {\n  switch (event.kind) {\n    case \"create\": return event.payload && event.payload.id ? handleCreate(event) : null;\n    case \"update\": return event.payload && event.payload.id ? handleUpdate(event) : null;\n    case \"delete\": return event.payload && event.payload.id ? handleDelete(event) : null;\n    case \"ping\": return null;\n    default: return null;\n  }\n}\n```\n\n```ts\n// fix: dispatch table flattens the case explosion\nconst handlers = { create: handleCreate, update: handleUpdate, delete: handleDelete } as const;\nfunction dispatch(event: Event) {\n  const handler = handlers[event.kind as keyof typeof handlers];\n  if (!handler || !event.payload?.id) return null;\n  return handler(event);\n}\n```\n",
+      "body": "---\nid: Refactor.CyclomaticComplexity\ncategory: Refactor\nbase_priority: 8\ndefault_severity: Medium\noptions:\n  - name: limit\n    kind: int\n    default: 10\n    doc: maximum cyclomatic complexity per function\n---\n\nMcCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`; override per-project with `[checks.\"Refactor.CyclomaticComplexity\"] limit = N` in `cofferdam.toml`.\n\nCyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures \"how many test cases do I need\", cognitive captures \"how hard is this to read\". Run them together; the worst offenders fail both.\n\n```ts\n// flagged: 11 independent paths via &&/case/if combinations\nfunction dispatch(event: Event) {\n  switch (event.kind) {\n    case \"create\": return event.payload && event.payload.id ? handleCreate(event) : null;\n    case \"update\": return event.payload && event.payload.id ? handleUpdate(event) : null;\n    case \"delete\": return event.payload && event.payload.id ? handleDelete(event) : null;\n    case \"ping\": return null;\n    default: return null;\n  }\n}\n```\n\n```ts\n// fix: dispatch table flattens the case explosion\nconst handlers = { create: handleCreate, update: handleUpdate, delete: handleDelete } as const;\nfunction dispatch(event: Event) {\n  const handler = handlers[event.kind as keyof typeof handlers];\n  if (!handler || !event.payload?.id) return null;\n  return handler(event);\n}\n```\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [
+        {
+          "id": "limit",
+          "kind": "integer",
+          "doc": "maximum cyclomatic complexity per function",
+          "default": 10
+        }
+      ]
     },
     {
       "id": "Refactor.DeadExport",

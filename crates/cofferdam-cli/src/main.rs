@@ -144,10 +144,10 @@ enum Cmd {
         /// without a `cofferdam.toml` present.
         #[arg(long)]
         no_config: bool,
-        /// PR mode — only check files changed in `<git-ref>...HEAD`.
-        /// Resolves the repo root via `git rev-parse --show-toplevel`
-        /// and intersects discovery with the diff list. Skipped files
-        /// are silently dropped from the run.
+        /// PR mode — report only findings on files changed in
+        /// `<git-ref>...HEAD`. The full project tree is still analysed
+        /// for cross-file soundness (OrphanExport, DeadExport, import
+        /// cycles); only the reported findings are filtered to the diff.
         #[arg(long, value_name = "GIT-REF")]
         since: Option<String>,
         /// Severity threshold for the exit-1 gate. Findings below this
@@ -963,46 +963,44 @@ fn run_check(args: CheckArgs) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // PR mode (`--since <ref>`): intersect discovery with `git diff
-    // --name-only --diff-filter=AMR <ref>...HEAD`. Empty intersection
-    // exits 0 — no changed TS files means nothing to fail on.
-    let files = match since_ref.as_deref() {
-        Some(git_ref) => match filter_files_since(&files, git_ref) {
-            Ok(filtered) => {
-                if filtered.is_empty() {
-                    match format {
-                        OutputFormat::Json => {
-                            println!(
-                                r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#
-                            )
-                        }
-                        OutputFormat::Compact => print!("{}", CompactFormatter::render(&[])),
-                        OutputFormat::Sarif => {
-                            println!(
-                                "{}",
-                                SarifFormatter::render_with_opts(
-                                    &[],
-                                    &[],
-                                    SarifRenderOpts { pretty }
-                                )
-                            );
-                        }
-                        OutputFormat::Text if !quiet => {
-                            eprintln!("no TypeScript files changed since {git_ref}");
-                        }
-                        OutputFormat::Text => {}
-                    }
-                    return ExitCode::SUCCESS;
+    // PR mode (`--since <ref>`): we do NOT narrow the analysis set —
+    // cross-file checks (OrphanExport, DeadExport, import cycles) need the
+    // full project graph to be sound. Instead we compute the set of changed
+    // files and filter *findings* down to it after analysis (GH #53).
+    let report_scope: Option<HashSet<PathBuf>> = match since_ref.as_deref() {
+        Some(git_ref) => {
+            let changed = match filter_files_since(&files, git_ref) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
                 }
-                filtered
+            };
+            if changed.is_empty() {
+                match format {
+                    OutputFormat::Json => {
+                        println!(r#"{{"findings":[],"summary":{{"total":0,"by_category":{{}}}}}}"#)
+                    }
+                    OutputFormat::Compact => print!("{}", CompactFormatter::render(&[])),
+                    OutputFormat::Sarif => {
+                        println!(
+                            "{}",
+                            SarifFormatter::render_with_opts(&[], &[], SarifRenderOpts { pretty })
+                        );
+                    }
+                    OutputFormat::Text if !quiet => {
+                        eprintln!("no TypeScript files changed since {git_ref}");
+                    }
+                    OutputFormat::Text => {}
+                }
+                return ExitCode::SUCCESS;
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
-            }
-        },
-        None => files,
+            Some(canonical_set(&changed))
+        }
+        None => None,
     };
+    // NOTE: `files` is intentionally NOT reassigned. The engine receives the
+    // full discovered set below.
 
     let baseline_loaded = match resolved_baseline.as_deref().map(load_baseline_with_warning) {
         Some(Ok(b)) => Some(b),
@@ -1140,6 +1138,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 &files,
             ));
         }
+        signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
         let lookup: HashSet<&BaselineEntry> = baseline_loaded
             .as_ref()
             .map(Baseline::lookup_set)
@@ -1262,6 +1261,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                         });
                     }
                 }
+                issues.retain(|i| in_report_scope(&report_scope, &i.file));
                 // CI gate: any finding at or above `--fail-on` triggers
                 // exit 1. Computed from the full set BEFORE truncation
                 // so `--max-issues` cannot hide a failure.
@@ -1664,6 +1664,30 @@ fn filter_files_since(files: &[PathBuf], git_ref: &str) -> Result<Vec<PathBuf>, 
     let root = since::repo_root(&cwd)?;
     let changed = since::changed_files_since(&root, git_ref)?;
     Ok(since::intersect(files, &changed))
+}
+
+/// Canonicalise a path list into a set for report-scope membership tests.
+/// Mirrors `since::intersect`, which canonicalises both sides before
+/// comparing, so a finding's file and a changed-file entry line up
+/// regardless of relative-vs-absolute form or Windows case differences.
+fn canonical_set(paths: &[PathBuf]) -> HashSet<PathBuf> {
+    paths
+        .iter()
+        .filter_map(|p| std::fs::canonicalize(p).ok())
+        .collect()
+}
+
+/// True when `file` should appear in output. Always true outside `--since`
+/// mode (scope is `None`); inside it, true only when the file's canonical
+/// path is in the changed set. A file that fails to canonicalise (deleted
+/// mid-run) is treated as out of scope.
+fn in_report_scope(scope: &Option<HashSet<PathBuf>>, file: &Path) -> bool {
+    match scope {
+        None => true,
+        Some(set) => std::fs::canonicalize(file)
+            .map(|c| set.contains(&c))
+            .unwrap_or(false),
+    }
 }
 
 fn load_baseline_with_warning(path: &Path) -> Result<Baseline, ()> {

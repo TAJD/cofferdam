@@ -1,9 +1,12 @@
 //! `--since <ref>` PR-mode helpers.
 //!
-//! The user wants `cofferdam check --since main` to run only against
-//! files that changed on the current branch since `main`. Mechanism:
-//! shell out to `git diff --name-only --diff-filter=AMR <ref>...HEAD`,
-//! intersect with the file set discovery already produced.
+//! The user wants `cofferdam check --since main` to report findings only
+//! on files that changed on the current branch since `main`. The full
+//! project tree is still analysed (cross-file checks need a complete
+//! graph); this module resolves the *changed-file set* that the CLI uses
+//! to filter findings after analysis. Mechanism: shell out to
+//! `git diff --name-only --diff-filter=AMR <ref>...HEAD`, intersect with
+//! the file set discovery already produced.
 //!
 //! Why subprocess and not libgit2: libgit2's Rust bindings double the
 //! release-mode binary size. For a single `diff --name-only` call we

@@ -89,7 +89,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 * `--fail-on-new` — Only fail (exit 1) on findings absent from the baseline. Implicit when a baseline is active; pass explicitly to document intent in CI scripts. Has no effect without a baseline
 * `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely. Equivalent to running without a `cofferdam.toml` present
-* `--since <GIT-REF>` — PR mode — only check files changed in `<git-ref>...HEAD`. Resolves the repo root via `git rev-parse --show-toplevel` and intersects discovery with the diff list. Skipped files are silently dropped from the run
+* `--since <GIT-REF>` — PR mode — report only findings on files changed in `<git-ref>...HEAD`. The full project tree is still analysed for cross-file soundness (OrphanExport, DeadExport, import cycles); only the reported findings are filtered to the diff
 * `--fail-on <LEVEL>` — Severity threshold for the exit-1 gate. Findings below this level still print; the process only exits 1 if at least one finding is at this level or above. Baselined findings never trigger the gate
 
   Default value: `medium`

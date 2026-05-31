@@ -1131,6 +1131,13 @@ fn run_check(args: CheckArgs) -> ExitCode {
         // can be baselined and only NEW plugin findings trigger the
         // gate. Plugin issues bypass the engine's suppression filter,
         // so the helper re-applies it.
+        //
+        // `--since`: plugins run over the FULL file set (`files`), not the
+        // changed subset. A plugin may do its own cross-file analysis, so
+        // narrowing its input would silently reintroduce the partial-graph
+        // bug this change fixes for built-ins (GH #53). The extra Node cost
+        // is the price of soundness; plugins are opt-in. Their findings are
+        // report-scoped by the `signed.retain` below, same as engine issues.
         if let Some(cfg) = project_config.as_ref() {
             signed.extend(run_plugins_filtered_with_signatures(
                 cfg,
@@ -1247,6 +1254,11 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 // `plugins = [...]` array against the same file set,
                 // merges resulting findings into the engine's stream so
                 // they participate in the `--fail-on` gate.
+                //
+                // `--since`: as in the baseline path above, plugins see the
+                // FULL file set; report-scoping happens via the
+                // `issues.retain` below so a plugin's own cross-file checks
+                // stay sound (GH #53).
                 if let Some(cfg) = project_config.as_ref() {
                     let plugin_filtered =
                         run_plugins_filtered(cfg, resolved_config_path.as_deref(), &files);

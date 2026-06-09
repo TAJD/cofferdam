@@ -18,7 +18,7 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/TAJD/cofferdam"
 authors = ["cofferdam contributors"]
-rust-version = "1.79"
+rust-version = "1.93"
 
 [workspace.dependencies]
 cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.5" }
@@ -69,6 +69,13 @@ thiserror = "1"
 toml = "0.8"
 insta = { version = "1", features = ["filters"] }
 proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
 
 [profile.release]
 lto = "thin"

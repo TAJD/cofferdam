@@ -8,6 +8,9 @@ authors.workspace = true
 rust-version.workspace = true
 description = "Canonical graph schema for cross-file rules (cd-9hp.9). Type-only at checkpoint 1; petgraph backend lands in checkpoint 2."
 
+[lints]
+workspace = true
+
 [dependencies]
 # cd-9hp.9 cp2 — petgraph backend lives behind cofferdam-graph::store
 # so cofferdam-core stays dependency-light per workspace guidance.

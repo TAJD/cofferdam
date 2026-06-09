@@ -28,6 +28,9 @@ path = "tests/advise_diff.rs"
 name = "type_host"
 path = "tests/type_host.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }

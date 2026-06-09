@@ -322,7 +322,11 @@ pub fn query_plugin_metadata(
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(_) => return Vec::new(),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Vec::new();
+            }
         }
     }
 
@@ -543,7 +547,11 @@ pub fn run_plugins_with_sources(
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(e) => return vec![host_failed_issue(&format!("try_wait: {e}"))],
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return vec![host_failed_issue(&format!("try_wait: {e}"))];
+            }
         }
     }
 

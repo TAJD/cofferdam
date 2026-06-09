@@ -295,7 +295,11 @@ impl Worker {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(e) => return Err(TypeHostError::Io(format!("wait worker: {e}"))),
+                Err(e) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(TypeHostError::Io(format!("wait worker: {e}")));
+                }
             }
         }
     }

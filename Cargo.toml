@@ -67,7 +67,7 @@ crossbeam-channel = "0.5"
 smol_str = { version = "0.3", features = ["serde"] }
 thiserror = "1"
 toml = "0.8"
-insta = "1"
+insta = { version = "1", features = ["filters"] }
 proptest = "1"
 
 [profile.release]

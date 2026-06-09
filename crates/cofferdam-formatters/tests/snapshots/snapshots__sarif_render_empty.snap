@@ -1,0 +1,21 @@
+---
+source: crates/cofferdam-formatters/tests/snapshots.rs
+expression: "SarifFormatter::render_pretty(&[], &[])"
+---
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "cofferdam",
+          "version": "[VERSION]",
+          "informationUri": "https://github.com/TAJD/cofferdam",
+          "rules": []
+        }
+      },
+      "results": []
+    }
+  ]
+}

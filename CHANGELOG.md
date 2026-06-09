@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-06-09
+
 ### Added
 - `--fail-on-type-unavailable` flag for `cofferdam check` (cd-260l). By default, when a type-aware check is registered but the ts-morph type host cannot start (no Node, no ts-morph, no tsconfig), cofferdam prints one warning and silently skips type-aware checks — CI that relies on type coverage gets false negatives without noticing. With the flag set, that condition exits with code 2 and a clear diagnostic instead. Default off; no effect when nothing declares `requires_types` or when `[engine] type_aware = false`. Documented in [`docs/type-aware-checks.md`](docs/type-aware-checks.md#enforcing-type-coverage-in-ci).
 - `limit` option for `Refactor.CyclomaticComplexity` and `Refactor.CognitiveComplexity` (cd-yrvl / [gh #50](https://github.com/TAJD/cofferdam/issues/50)). Both checks claimed configurability but shipped `options: &[]`, so the config validator rejected `[checks."Refactor.CyclomaticComplexity"] limit = N`. The thresholds (defaults 10 and 15, unchanged) are now real options.

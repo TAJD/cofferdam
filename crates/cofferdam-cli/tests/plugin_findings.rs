@@ -40,10 +40,14 @@ struct Env {
 
 impl Env {
     fn new() -> Self {
+        Self::with_plugin(ALWAYS_FIRES_PLUGIN)
+    }
+
+    fn with_plugin(plugin_source: &str) -> Self {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let plugin_dir = dir.path().join("plugin");
         std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
-        std::fs::write(plugin_dir.join("index.mjs"), ALWAYS_FIRES_PLUGIN).expect("write plugin");
+        std::fs::write(plugin_dir.join("index.mjs"), plugin_source).expect("write plugin");
         std::fs::write(
             dir.path().join("cofferdam.toml"),
             "plugins = [\"./plugin\"]\n",
@@ -77,6 +81,60 @@ fn node_present() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Plugin whose `finalize` reports one finding on a path that was never
+/// part of the analyzed file set, and one on a real analyzed file (the
+/// path is stashed during `run`). Regression cover for cd-neav: the
+/// out-of-scope report must be dropped and replaced by an aggregated
+/// `Warning.PluginHostFailed`, while the in-scope report survives.
+const OUT_OF_SCOPE_PLUGIN: &str = r#"
+export default {
+  id: "Test.OutOfScope",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "finalize-mode plugin that reports an out-of-scope path",
+  requiresTypes: false,
+  options: {},
+  run(file, ctx) { globalThis.__cofferdamSeenPath = file.path; },
+  finalize(ctx) {
+    ctx.report({
+      message: "bogus out-of-scope finding",
+      file: "/definitely/not/analyzed/evil.ts",
+      span: { start_byte: 0, end_byte: 1 },
+    });
+    ctx.report({
+      message: "legit in-scope finding",
+      file: globalThis.__cofferdamSeenPath,
+      span: { start_byte: 0, end_byte: 1 },
+    });
+  },
+};
+"#;
+
+#[test]
+fn out_of_scope_plugin_report_is_dropped_with_warning() {
+    if !node_present() {
+        return;
+    }
+    let env = Env::with_plugin(OUT_OF_SCOPE_PLUGIN);
+    let out = env.run(&["check", "--no-baseline"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("legit in-scope finding"),
+        "in-scope finalize report must survive; stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("bogus out-of-scope finding"),
+        "out-of-scope finalize report must be dropped; stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.contains("outside the analyzed file set"),
+        "dropped report must surface as an aggregated PluginHostFailed warning; \
+         stdout={stdout}\nstderr={stderr}"
+    );
 }
 
 #[test]

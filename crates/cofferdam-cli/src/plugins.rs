@@ -150,12 +150,12 @@ struct HostRelated {
     span: HostRelatedSpan,
 }
 
+/// Wire shape for a related span. The host may also send `line`/`column`
+/// hints; they are ignored — line/column are always recomputed from the
+/// in-scope file's text via `span_from_bytes` (out-of-scope related files
+/// are rejected, see cd-neav).
 #[derive(Deserialize)]
 struct HostRelatedSpan {
-    #[serde(default)]
-    line: u32,
-    #[serde(default)]
-    column: u32,
     #[serde(default)]
     start_byte: u32,
     #[serde(default)]
@@ -582,17 +582,34 @@ pub fn run_plugins_with_sources(
         .map(|(p, t)| (p.as_path(), t.as_str()))
         .collect();
 
+    // Reject reports whose path is outside the scoped source set (cd-neav).
+    // Per-file `run` reports get their path stamped by the host, but
+    // `finalize` reports carry a plugin-supplied path verbatim — a buggy
+    // (or adversarial) plugin could otherwise inject findings for files
+    // cofferdam never analyzed, and those paths flow into baseline
+    // signatures (which read the file from disk) and formatter output.
+    // Dropped locations surface as one aggregated Warning.PluginHostFailed
+    // per plugin check id.
+    let mut out_of_scope: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut record_out_of_scope = |check_id: &str, path: String| {
+        let shown = if path.is_empty() {
+            "<missing file>".to_string()
+        } else {
+            path
+        };
+        out_of_scope
+            .entry(check_id.to_string())
+            .or_default()
+            .push(shown);
+    };
+
     for r in response.reports {
         let file = PathBuf::from(&r.file);
-        let span = match text_index.get(file.as_path()) {
-            Some(text) => cofferdam_core::span_from_bytes(text, r.start_byte, r.end_byte),
-            None => Span {
-                line: 1,
-                column: 1,
-                start_byte: r.start_byte,
-                end_byte: r.end_byte,
-            },
+        let Some(text) = text_index.get(file.as_path()).copied() else {
+            record_out_of_scope(&r.check_id, r.file);
+            continue;
         };
+        let span = cofferdam_core::span_from_bytes(text, r.start_byte, r.end_byte);
         let severity = parse_severity(&r.severity).unwrap_or(Severity::Medium);
         // Prefix bare plugin IDs with their declared category so the
         // formatter's `category_of(check_id)` derives the right bucket.
@@ -605,35 +622,24 @@ pub fn run_plugins_with_sources(
             let prefix = capitalize_category(&r.category).unwrap_or("Warning");
             format!("{}.{}", prefix, r.check_id)
         };
-        let related = r
-            .related
-            .into_iter()
-            .map(|rel| {
-                let rel_file = PathBuf::from(&rel.file);
-                let rel_span = match text_index.get(rel_file.as_path()) {
-                    Some(text) => cofferdam_core::span_from_bytes(
-                        text,
-                        rel.span.start_byte,
-                        rel.span.end_byte,
-                    ),
-                    None => Span {
-                        line: if rel.span.line == 0 { 1 } else { rel.span.line },
-                        column: if rel.span.column == 0 {
-                            1
-                        } else {
-                            rel.span.column
-                        },
-                        start_byte: rel.span.start_byte,
-                        end_byte: rel.span.end_byte,
-                    },
-                };
-                let rel_location = Location::from_span(&rel_file, rel_span);
-                cofferdam_core::RelatedSpan {
-                    location: rel_location,
-                    file: rel_file,
-                }
-            })
-            .collect();
+        // Same scope rule for secondary locations: an out-of-scope related
+        // span is dropped (the finding itself survives) and counted in the
+        // aggregated warning.
+        let mut related = Vec::with_capacity(r.related.len());
+        for rel in r.related {
+            let rel_file = PathBuf::from(&rel.file);
+            let Some(rel_text) = text_index.get(rel_file.as_path()).copied() else {
+                record_out_of_scope(&check_id, rel.file);
+                continue;
+            };
+            let rel_span =
+                cofferdam_core::span_from_bytes(rel_text, rel.span.start_byte, rel.span.end_byte);
+            let rel_location = Location::from_span(&rel_file, rel_span);
+            related.push(cofferdam_core::RelatedSpan {
+                location: rel_location,
+                file: rel_file,
+            });
+        }
         let location = Location::from_span(&file, span);
         issues.push(Issue {
             check_id,
@@ -644,6 +650,27 @@ pub fn run_plugins_with_sources(
             message: r.message,
             related,
         });
+    }
+
+    for (check_id, paths) in out_of_scope {
+        let total = paths.len();
+        let preview: Vec<String> = paths.into_iter().take(3).collect();
+        let more = if total > preview.len() {
+            format!(" (+{} more)", total - preview.len())
+        } else {
+            String::new()
+        };
+        issues.push(synthetic_warning(
+            "Warning.PluginHostFailed",
+            project_root,
+            format!(
+                "plugin check '{}' reported {} location(s) outside the analyzed file set; dropped: {}{}",
+                check_id,
+                total,
+                preview.join(", "),
+                more
+            ),
+        ));
     }
 
     for err in response.errors {

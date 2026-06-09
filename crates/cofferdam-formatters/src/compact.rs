@@ -33,8 +33,10 @@
 //! Compact mode v1 does not carry baseline information. Use
 //! `--format=json` if you need per-finding `baselined` flags.
 
-use cofferdam_core::{Category, Issue};
+use cofferdam_core::Issue;
 use std::fmt::Write;
+
+use crate::common::{category_of, category_str, normalize_path};
 
 /// Header line, exactly as emitted (no trailing newline).
 pub const COMPACT_HEADER: &str = "priority|severity|category|id|file|line|column|message";
@@ -92,34 +94,6 @@ fn write_message(out: &mut String, message: &str) {
             '\n' | '\r' => out.push(' '),
             other => out.push(other),
         }
-    }
-}
-
-/// Forward-slash normalize. Same convention as the text and JSON
-/// formatters — agent-friendly, copy-paste-able as an editor link.
-fn normalize_path(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn category_of(check_id: &str) -> Option<Category> {
-    match check_id.split('.').next()? {
-        "Consistency" => Some(Category::Consistency),
-        "Design" => Some(Category::Design),
-        "Readability" => Some(Category::Readability),
-        "Refactor" => Some(Category::Refactor),
-        "Warning" => Some(Category::Warning),
-        _ => None,
-    }
-}
-
-fn category_str(cat: Option<Category>) -> &'static str {
-    match cat {
-        Some(Category::Consistency) => "consistency",
-        Some(Category::Design) => "design",
-        Some(Category::Readability) => "readability",
-        Some(Category::Refactor) => "refactor",
-        Some(Category::Warning) => "warning",
-        None => "unknown",
     }
 }
 

@@ -120,3 +120,13 @@ typst-support-spec/
 .claude/settings.local.json
 # bd worktree
 np84-docs-url/
+# bd worktree
+cli-robustness/
+# bd worktree
+build-hygiene/
+# bd worktree
+formatter-dedupe/
+# bd worktree
+checks-structure/
+# bd worktree
+peripheral-tests/

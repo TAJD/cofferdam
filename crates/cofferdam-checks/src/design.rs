@@ -1349,7 +1349,7 @@ fn matches_any_prefix(
 // for `imports` predicates are reserved for a future MINOR bump.
 
 use cofferdam_core::dsl::ast::TopPredicate;
-use cofferdam_core::dsl::evaluator::{eval_predicate, eval_top, EvalCtx};
+use cofferdam_core::dsl::evaluator::{eval_predicate, eval_top, EvalCtx, GlobCache};
 use cofferdam_core::dsl::parser::parse_predicate;
 use cofferdam_core::ScriptedInvariantSpec;
 
@@ -1460,6 +1460,7 @@ impl Check for ScriptedInvariant {
         let project_root = runtime.project_root.clone();
         let empty_imports: Vec<ImportRecord> = Vec::new();
         let empty_exports: Vec<ExportRecord> = Vec::new();
+        let glob_cache = GlobCache::new();
 
         let mut issues = Vec::new();
         for file in &files {
@@ -1471,6 +1472,7 @@ impl Check for ScriptedInvariant {
                 imports: file_imports,
                 exports: file_exports,
                 layers: layers.as_ref(),
+                glob_cache: &glob_cache,
             };
 
             for rule in &compiled {

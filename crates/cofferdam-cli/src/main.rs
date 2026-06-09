@@ -190,6 +190,14 @@ enum Cmd {
         /// correctness difference.
         #[arg(long)]
         no_cache: bool,
+        /// Exit with code 2 when a type-aware check is registered but
+        /// the type oracle could not be started (Node unavailable,
+        /// ts-morph not installed, or no tsconfig.json found). Default
+        /// off: oracle failures print a warning and type-aware checks
+        /// are silently skipped. Use in CI jobs that explicitly rely on
+        /// type-aware coverage to catch silent regressions.
+        #[arg(long)]
+        fail_on_type_unavailable: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -540,6 +548,7 @@ fn main() -> ExitCode {
             hide_baselined,
             cache_dir,
             no_cache,
+            fail_on_type_unavailable,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -562,6 +571,7 @@ fn main() -> ExitCode {
             hide_baselined,
             cache_dir,
             no_cache,
+            fail_on_type_unavailable,
         }),
         Cmd::Explain {
             check_id,
@@ -825,28 +835,31 @@ fn fmt_opt_ms(v: Option<u64>) -> String {
 ///
 /// `project_root` anchors `tsconfig.json` discovery and `node_modules`
 /// resolution for `ts-morph`.
-fn install_type_oracle_if_needed(engine: Engine, project_root: &Path) -> Engine {
+/// Returns `(engine, unavailable_reason)`. When `unavailable_reason` is
+/// `Some`, a type-aware check was registered but the oracle could not be
+/// started; callers that set `--fail-on-type-unavailable` treat this as a
+/// hard error (exit 2) rather than a silent skip.
+fn install_type_oracle_if_needed(engine: Engine, project_root: &Path) -> (Engine, Option<String>) {
     if !engine.needs_type_oracle() {
-        return engine;
+        return (engine, None);
     }
     let Some(tsconfig) = find_tsconfig(project_root) else {
-        eprintln!(
-            "warning: type-aware checks are registered but no tsconfig.json was found near {} — skipping them",
-            project_root.display()
-        );
-        return engine;
+        let reason = format!("no tsconfig.json found near {}", project_root.display());
+        eprintln!("warning: type-aware checks are registered but {reason} — skipping them");
+        return (engine, Some(reason));
     };
     // The directory holding tsconfig.json is the natural root for
     // `node_modules` resolution; fall back to project_root.
     let node_root = tsconfig.parent().unwrap_or(project_root);
     match type_host::build_type_oracle(node_root, &tsconfig) {
-        Ok(oracle) => engine.with_type_oracle(Box::new(oracle)),
+        Ok(oracle) => (engine.with_type_oracle(Box::new(oracle)), None),
         Err(e) => {
+            let reason = e.to_string();
             eprintln!(
-                "warning: type host unavailable ({e}) — skipping type-aware checks. \
+                "warning: type host unavailable ({reason}) — skipping type-aware checks. \
                  Install Node + ts-morph, or set `[engine] type_aware = false` to silence this."
             );
-            engine
+            (engine, Some(reason))
         }
     }
 }
@@ -895,6 +908,7 @@ struct CheckArgs {
     hide_baselined: bool,
     cache_dir: Option<PathBuf>,
     no_cache: bool,
+    fail_on_type_unavailable: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -916,6 +930,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         hide_baselined,
         cache_dir,
         no_cache,
+        fail_on_type_unavailable,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -1079,11 +1094,21 @@ fn run_check(args: CheckArgs) -> ExitCode {
     let type_root = project_root
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let engine = if type_aware_enabled {
+    let (engine, type_oracle_unavailable) = if type_aware_enabled {
         install_type_oracle_if_needed(engine, &type_root)
     } else {
-        engine
+        (engine, None)
     };
+    if fail_on_type_unavailable {
+        if let Some(reason) = type_oracle_unavailable {
+            eprintln!(
+                "error: type host unavailable ({reason}). \
+                 Remove --fail-on-type-unavailable, install Node + ts-morph, \
+                 or set `[engine] type_aware = false` to opt out."
+            );
+            return ExitCode::from(2);
+        }
+    }
 
     // Disk-backed findings + run cache (cd-9hp.4 cp4). Resolves to
     // `Some(dir)` when caching is requested (default on); load

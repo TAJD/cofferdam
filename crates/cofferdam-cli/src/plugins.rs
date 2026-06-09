@@ -38,7 +38,7 @@ use cofferdam_core::{
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/plugin-host.mjs");
-const HOST_SCRIPT_NAME: &str = "cofferdam-plugin-host.mjs";
+const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
 /// Wire shape sent to the Node host on stdin. Field names match
 /// `scripts/plugin-host.mjs`'s `manifest.*` reads (camelCase on the JS
@@ -322,7 +322,11 @@ pub fn query_plugin_metadata(
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(_) => return Vec::new(),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Vec::new();
+            }
         }
     }
 
@@ -543,7 +547,11 @@ pub fn run_plugins_with_sources(
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(e) => return vec![host_failed_issue(&format!("try_wait: {e}"))],
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return vec![host_failed_issue(&format!("try_wait: {e}"))];
+            }
         }
     }
 

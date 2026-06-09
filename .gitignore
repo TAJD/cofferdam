@@ -55,13 +55,9 @@ eyo-github/
 qan-readme/
 qqy-governance/
 rt6-config/
-# bd worktree
 res-coverage/
-# bd worktree
 l32-format-docs/
-# bd worktree
 knj-autofix/
-# bd worktree
 t9d-corpus/
 
 # Vendored TS corpus (dev-machine only; populated by scripts/fetch-corpus.sh)
@@ -87,27 +83,16 @@ t9d-corpus/
 # cd-9hp.4 cp4 — runtime cache (gitignored at the user's CWD; the
 # pattern below also covers nested checkouts).
 .cofferdam/cache/
-# bd worktree
 d1y-twopass/
-# bd worktree
 zaf-suppression-docs/
-# bd worktree
 h1n-action/
-# bd worktree
 mot-changelog/
-# bd worktree
 qzv-ignore-docs/
-# bd worktree
 t6n-vitepress/
-# bd worktree
 oa3-doctor/
-# bd worktree
 cgw-foundation/
-# bd worktree
 cgw-gen-docs/
-# bd worktree
 cgw-vitepress/
-# bd worktree
 typst-support-spec/
 
 # bv (beads viewer) local config and caches
@@ -118,15 +103,4 @@ typst-support-spec/
 
 # Claude Code local (per-user) settings — settings.json is shareable, .local isn't
 .claude/settings.local.json
-# bd worktree
 np84-docs-url/
-# bd worktree
-cli-robustness/
-# bd worktree
-build-hygiene/
-# bd worktree
-formatter-dedupe/
-# bd worktree
-checks-structure/
-# bd worktree
-peripheral-tests/

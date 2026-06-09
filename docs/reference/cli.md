@@ -103,6 +103,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 * `--hide-baselined` — Hide baselined findings from text output. The summary line still reports `(N new, M baselined)` counts so the CI gate remains visible. Has no effect on `--format=json` (which always includes the per-finding `baselined` flag) or on the `--fail-on` gate (which already ignores baselined findings). Useful for routine local runs against repos with substantial baselines (cd-k23 / gh #11)
 * `--cache-dir <PATH>` — Directory for the disk-backed findings/run cache (cd-9hp.4 cp4). Defaults to `.cofferdam/cache/` under CWD. Each `cofferdam` build writes to a version-scoped subdir so an upgrade invalidates prior caches automatically. Add the directory to `.gitignore`
 * `--no-cache` — Disable disk caching entirely. Equivalent to deleting the cache directory before each run. Cold cost only; no correctness difference
+* `--fail-on-type-unavailable` — Exit with code 2 when a type-aware check is registered but the type oracle could not be started (Node unavailable, ts-morph not installed, or no tsconfig.json found). Default off: oracle failures print a warning and type-aware checks are silently skipped. Use in CI jobs that explicitly rely on type-aware coverage to catch silent regressions
 
 
 

@@ -80,6 +80,31 @@ type-aware checks in a separate Node-equipped job — see the
 [CI recipes](/ci-recipes).
 :::
 
+## Enforcing type coverage in CI
+
+By default, if the type host cannot start (Node unavailable, ts-morph not
+installed, no tsconfig found), cofferdam prints a single warning and
+continues — type-aware checks are silently skipped and the run exits 0 on
+findings alone. This preserves current behaviour in environments without
+Node and avoids breaking CI unexpectedly.
+
+In jobs that **explicitly rely on type-aware coverage** you can turn the
+warning into a hard error:
+
+```bash
+cofferdam check --fail-on-type-unavailable
+```
+
+When this flag is set and a type-aware check is registered but the oracle
+could not be installed, cofferdam exits with code 2 and prints a clear
+diagnostic. Use it in a dedicated type-aware CI job (one that has Node and
+ts-morph available) to catch silent regressions early.
+
+The flag has no effect when:
+- No registered check declares `requires_types` (oracle was never needed).
+- `[engine] type_aware = false` is set — type-aware checks are explicitly
+  disabled, so there is no oracle to fail.
+
 ## Disabling a single type-aware check
 
 To keep the type host but silence one check, raise or lower it like any

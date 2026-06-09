@@ -88,3 +88,49 @@ fn type_host_ping_without_ts_morph_surfaces_clear_error() {
         "error must carry the ts_morph_unavailable wire code; got {err}"
     );
 }
+
+/// When --fail-on-type-unavailable is passed and a type-aware check is
+/// registered but the oracle can't start (no tsconfig near the temp dir),
+/// cofferdam check must exit with code 2. Does NOT require Node on PATH —
+/// the no-tsconfig path is short-circuited before Node is ever spawned.
+#[test]
+fn check_fail_on_type_unavailable_exits_2_when_oracle_missing() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    std::fs::write(dir.path().join("a.ts"), b"const x: string | null = null;\n")
+        .expect("write a.ts");
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--fail-on-type-unavailable", "--no-cache"])
+        .arg(dir.path())
+        .output()
+        .expect("spawn cofferdam check");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "--fail-on-type-unavailable should exit 2 when oracle unavailable; \
+         stdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// Without --fail-on-type-unavailable the oracle failure is a warning only.
+/// The process must NOT exit with code 2 on oracle unavailability alone.
+#[test]
+fn check_without_fail_flag_does_not_exit_2_when_oracle_missing() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    std::fs::write(dir.path().join("a.ts"), b"const x: string | null = null;\n")
+        .expect("write a.ts");
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-cache"])
+        .arg(dir.path())
+        .output()
+        .expect("spawn cofferdam check");
+    assert_ne!(
+        out.status.code(),
+        Some(2),
+        "without --fail-on-type-unavailable, oracle failure must not exit 2; \
+         stdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

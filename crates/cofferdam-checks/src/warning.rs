@@ -2,14 +2,13 @@
 //! category once the per-category severity defaults wire up (phase 3).
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use crate::framework_paths::is_framework_entry;
 use crate::public_api::{resolve_public_api, PublicApi};
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, OptionDefault,
-    OptionKind, OptionSpec, Priority, Severity, SourceFile, TextEdit,
+    path_key, Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location,
+    OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile, TextEdit,
 };
 use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, CallExpression, DebuggerStatement, Expression, NewExpression,
@@ -804,15 +803,6 @@ fn operand_is_null(bytes: &[u8], from: usize, to: usize) -> bool {
     slice == b"null"
 }
 
-fn path_key(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) {
-        s.to_lowercase()
-    } else {
-        s
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,7 +811,7 @@ mod tests {
         validate_options, Allocator, Check, CheckContext, CheckOptions, RawOptionValue, SourceFile,
     };
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// Parse `src` as TypeScript, run `TripleEquals`, and return all issues.
     fn run_triple_equals(src: &str) -> Vec<Issue> {

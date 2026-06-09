@@ -12,12 +12,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
-use std::path::Path;
-
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
-    OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    path_key, Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue,
+    Location, OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile,
+    Span,
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
@@ -2454,15 +2453,6 @@ impl Check for DeadExport {
                 .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
         });
         issues
-    }
-}
-
-fn path_key(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) {
-        s.to_lowercase()
-    } else {
-        s
     }
 }
 

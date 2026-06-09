@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
-    Priority, Severity, SourceFile, Span, ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
+    looks_like_check_id, Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext,
+    Issue, Location, Priority, Severity, SourceFile, Span, ALL_PRE_FILTER_FINDINGS,
+    REGISTERED_CHECK_IDS,
 };
 use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use oxc_ast_visit::Visit;
@@ -320,24 +321,6 @@ fn find_broad_suppression(line: &str) -> Option<usize> {
 
     let comment_marker_len = trimmed.len() - after_marker.len();
     Some(leading_ws + comment_marker_len + directive_offset_in_inner)
-}
-
-/// See `cofferdam_engine::suppress::looks_like_check_id` — duplicated
-/// here because the cofferdam-checks crate can't depend on cofferdam-engine
-/// (the engine consumes the checks). Behaviour must stay in sync; tests
-/// in both crates cover the same expectations.
-fn looks_like_check_id(s: &str) -> bool {
-    if s.is_empty() || !s.contains('.') {
-        return false;
-    }
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
 }
 
 // ─── Consistency.UnusedSuppression ─────────────────────────────────────────
@@ -1091,7 +1074,8 @@ const el = <Foo className="ignored" />;
 
     #[test]
     fn looks_like_check_id_matches_suppress_crate() {
-        // Behaviour parity with cofferdam_engine::suppress::looks_like_check_id.
+        // Canonical implementation lives in cofferdam_core::util; both this
+        // crate and the engine now call the same function.
         assert!(looks_like_check_id("Design.OrphanExport"));
         assert!(looks_like_check_id("Plugin.Custom.Subcheck"));
         assert!(!looks_like_check_id("please"));

@@ -27,6 +27,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use cofferdam_core::looks_like_check_id;
+
 /// Parsed suppression state for a file.
 ///
 /// Tracks which checks (or all checks) are suppressed on each line,
@@ -254,24 +256,6 @@ fn first_token_as_id(stripped: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-/// Heuristic: a token is plausibly a `Category.Name`-style check id if
-/// it contains at least one dot, starts with an ASCII letter, and only
-/// uses ASCII identifier chars / dots / underscores. Conservative —
-/// avoids binding random English words as ids.
-pub(crate) fn looks_like_check_id(s: &str) -> bool {
-    if s.is_empty() || !s.contains('.') {
-        return false;
-    }
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
 }
 
 /// Combined next-line parser: tries Biome form first, falls back to ESLint

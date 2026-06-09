@@ -20,6 +20,7 @@ pub mod parser;
 pub mod source;
 pub mod span_util;
 pub mod types;
+pub mod util;
 
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{
@@ -47,6 +48,7 @@ pub use parser::{parse_into, source_type_for, ParsedView};
 pub use source::{Language, SourceFile};
 pub use span_util::span_from_bytes;
 pub use types::{TypeFacts, TypeOracle};
+pub use util::{looks_like_check_id, path_key};
 
 // Re-export the oxc bits checks will commonly reach for, so plugin and
 // built-in check authors don't all add direct oxc deps.

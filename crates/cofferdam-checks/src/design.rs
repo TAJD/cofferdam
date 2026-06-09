@@ -17,8 +17,9 @@ use cofferdam_core::graph::{
 };
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
-    OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    path_key, Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue,
+    Location, OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile,
+    Span,
 };
 #[cfg(test)]
 use cofferdam_graph::build_canonical_graph;
@@ -404,19 +405,6 @@ fn matches_substring(path: &Path, patterns: &[String]) -> bool {
     let s = path.to_string_lossy();
     let normalized = s.replace('\\', "/");
     patterns.iter().any(|p| normalized.contains(p))
-}
-
-/// Build a normalized path key by lowercasing on Windows (case-insensitive
-/// filesystem) and using as-is on case-sensitive platforms. Avoids spurious
-/// orphans when oxc_resolver returns `C:\Foo` and discovery returned
-/// `C:\foo`.
-fn path_key(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) {
-        s.to_lowercase()
-    } else {
-        s
-    }
 }
 
 /// Test-only entry point that builds an ephemeral canonical graph

@@ -22,3 +22,5 @@ smol_str = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+cofferdam-core = { workspace = true }
+smol_str = { workspace = true }

@@ -17,12 +17,14 @@ use std::time::Duration;
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
-    DidOpenTextDocument, Exit, Initialized, Notification as _, PublishDiagnostics,
+    DidOpenTextDocument, DidSaveTextDocument, Exit, Initialized, Notification as _,
+    PublishDiagnostics,
 };
 use lsp_types::request::{Initialize, Shutdown};
 use lsp_types::{
-    ClientCapabilities, DidOpenTextDocumentParams, InitializeParams, InitializedParams,
-    PublishDiagnosticsParams, TextDocumentItem, Url, WorkspaceFolder,
+    ClientCapabilities, DidOpenTextDocumentParams, DidSaveTextDocumentParams, InitializeParams,
+    InitializedParams, PublishDiagnosticsParams, TextDocumentIdentifier, TextDocumentItem, Url,
+    WorkspaceFolder,
 };
 use tempfile::tempdir;
 
@@ -246,4 +248,223 @@ fn empty_workspace_initializes_without_diagnostics() {
     // Suppress unused warnings on PathBuf import when we don't need to
     // reach into the workspace beyond using its url.
     let _ = PathBuf::new();
+}
+
+// ---------------------------------------------------------------------------
+// didSave triggers re-analysis (cache-reuse path)
+//
+// NOTE: malformed cofferdam.toml handling is not tested here. As of
+// cp5, build_engine() in server.rs does not load cofferdam.toml — it
+// always falls back to Engine::new(checks). Config loading is wired in
+// a follow-up bead. Testing a malformed config through the existing
+// harness would only test default-config behavior (server would not
+// crash, but not because of config recovery). Recorded in cd-4z8r notes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn did_save_triggers_re_analysis_with_updated_content() {
+    // Start with a clean file (no triple equals → no Warning.TripleEquals).
+    // After sending didSave with dirty text, the server must re-analyze
+    // and publish Warning.TripleEquals for the same file.
+    let workspace = tempdir().expect("tempdir");
+    let ts = workspace.path().join("a.ts");
+    std::fs::write(&ts, "export const x = 1;\n").unwrap();
+    let workspace_path = workspace.path().to_path_buf();
+
+    let (server, client) = Connection::memory();
+    let server_thread = thread::spawn(move || {
+        cofferdam_lsp::run_server(server, workspace_path).expect("server exits cleanly");
+    });
+
+    let init_params = InitializeParams {
+        capabilities: ClientCapabilities::default(),
+        workspace_folders: Some(vec![WorkspaceFolder {
+            uri: Url::from_file_path(workspace.path()).unwrap(),
+            name: "save-test".to_string(),
+        }]),
+        ..Default::default()
+    };
+    send_request::<Initialize>(&client, 1, init_params);
+
+    // Drain until initialize response received, discarding initial-scan
+    // diagnostics (clean file → empty diagnostics array).
+    let mut init_seen = false;
+    for _ in 0..16 {
+        let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
+            break;
+        };
+        if let Message::Response(Response { id, error, .. }) = msg {
+            if id == RequestId::from(1) {
+                assert!(error.is_none(), "initialize error: {error:?}");
+                init_seen = true;
+                break;
+            }
+        }
+    }
+    assert!(init_seen, "did not receive initialize response");
+    send_notification::<Initialized>(&client, InitializedParams {});
+
+    // Drain any remaining initial-scan messages with a short timeout.
+    for _ in 0..8 {
+        if recv_with_timeout(&client, Duration::from_millis(100)).is_none() {
+            break;
+        }
+    }
+
+    // Send didSave with text that now contains a triple equals.
+    let uri = Url::from_file_path(&ts).unwrap();
+    send_notification::<DidSaveTextDocument>(
+        &client,
+        DidSaveTextDocumentParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            text: Some("export const x: any = 1;\nif (x == 1) {}\n".to_string()),
+        },
+    );
+
+    // Collect diagnostics until we see Warning.TripleEquals on a.ts.
+    let mut got_triple_equals = false;
+    for _ in 0..32 {
+        let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
+            break;
+        };
+        if let Message::Notification(notif) = msg {
+            if notif.method == PublishDiagnostics::METHOD {
+                let p: PublishDiagnosticsParams =
+                    serde_json::from_value(notif.params).expect("publish params");
+                if p.uri == uri
+                    && p.diagnostics.iter().any(|d| {
+                        d.source.as_deref() == Some("cofferdam")
+                            && matches!(
+                                &d.code,
+                                Some(lsp_types::NumberOrString::String(s))
+                                    if s == "Warning.TripleEquals"
+                            )
+                    })
+                {
+                    got_triple_equals = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        got_triple_equals,
+        "expected Warning.TripleEquals after didSave with triple-equals content"
+    );
+
+    send_request::<Shutdown>(&client, 2, ());
+    for _ in 0..8 {
+        let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
+            break;
+        };
+        if let Message::Response(Response { id, .. }) = msg {
+            if id == RequestId::from(2) {
+                break;
+            }
+        }
+    }
+    send_notification::<Exit>(&client, ());
+    drop(client);
+    server_thread.join().expect("server thread joined");
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-root discovery with a nested layout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn nested_workspace_discovers_subdirectory_files() {
+    // Workspace:
+    //   workspace/
+    //     src/
+    //       nested/
+    //         b.ts  (has triple equals → Warning.TripleEquals fires)
+    //
+    // Verifies that the engine's discover() walk reaches files in
+    // subdirectories, not just the workspace root.
+    let workspace = tempdir().expect("tempdir");
+    let nested_dir = workspace.path().join("src").join("nested");
+    std::fs::create_dir_all(&nested_dir).unwrap();
+    let ts = nested_dir.join("b.ts");
+    std::fs::write(&ts, "export const y: any = 2;\nif (y == 2) {}\n").unwrap();
+    let workspace_path = workspace.path().to_path_buf();
+
+    let (server, client) = Connection::memory();
+    let server_thread = thread::spawn(move || {
+        cofferdam_lsp::run_server(server, workspace_path).expect("server exits cleanly");
+    });
+
+    let init_params = InitializeParams {
+        capabilities: ClientCapabilities::default(),
+        workspace_folders: Some(vec![WorkspaceFolder {
+            uri: Url::from_file_path(workspace.path()).unwrap(),
+            name: "nested-discovery".to_string(),
+        }]),
+        ..Default::default()
+    };
+    send_request::<Initialize>(&client, 1, init_params);
+
+    // Drain until initialize response is seen.
+    let mut init_seen = false;
+    for _ in 0..16 {
+        let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
+            break;
+        };
+        if let Message::Response(Response { id, error, .. }) = msg {
+            if id == RequestId::from(1) {
+                assert!(error.is_none(), "initialize error: {error:?}");
+                init_seen = true;
+                break;
+            }
+        }
+    }
+    assert!(init_seen, "did not receive initialize response");
+    send_notification::<Initialized>(&client, InitializedParams {});
+
+    // Collect diagnostics from the initial scan.
+    let nested_uri = Url::from_file_path(&ts).unwrap();
+    let mut got_nested_diag = false;
+    for _ in 0..32 {
+        let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
+            break;
+        };
+        if let Message::Notification(notif) = msg {
+            if notif.method == PublishDiagnostics::METHOD {
+                let p: PublishDiagnosticsParams =
+                    serde_json::from_value(notif.params).expect("publish params");
+                if p.uri == nested_uri
+                    && p.diagnostics.iter().any(|d| {
+                        d.source.as_deref() == Some("cofferdam")
+                            && matches!(
+                                &d.code,
+                                Some(lsp_types::NumberOrString::String(s))
+                                    if s == "Warning.TripleEquals"
+                            )
+                    })
+                {
+                    got_nested_diag = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        got_nested_diag,
+        "expected Warning.TripleEquals for nested file src/nested/b.ts"
+    );
+
+    send_request::<Shutdown>(&client, 2, ());
+    for _ in 0..8 {
+        let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
+            break;
+        };
+        if let Message::Response(Response { id, .. }) = msg {
+            if id == RequestId::from(2) {
+                break;
+            }
+        }
+    }
+    send_notification::<Exit>(&client, ());
+    drop(client);
+    server_thread.join().expect("server thread joined");
 }

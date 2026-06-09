@@ -11,6 +11,8 @@ use std::fmt::Write;
 
 use cofferdam_core::{Category, Issue};
 
+use crate::common::{category_of, normalize_path};
+
 /// Options for the text formatter. Defaults match the historical
 /// behavior — full output with the trailing summary line.
 #[derive(Copy, Clone, Debug, Default)]
@@ -207,26 +209,6 @@ fn render_row(out: &mut String, issue: &Issue, baselined: bool) {
 struct BaselineCounts {
     baselined: usize,
     new: usize,
-}
-
-/// Parse the leading category from a dotted check ID. Cheap, allocation-free.
-/// We don't store the category on every `Issue` to keep that struct lean —
-/// it's reconstructable from `check_id` and reports are the only consumer.
-fn category_of(check_id: &str) -> Option<Category> {
-    match check_id.split('.').next()? {
-        "Consistency" => Some(Category::Consistency),
-        "Design" => Some(Category::Design),
-        "Readability" => Some(Category::Readability),
-        "Refactor" => Some(Category::Refactor),
-        "Warning" => Some(Category::Warning),
-        _ => None,
-    }
-}
-
-/// Forward-slash normalize. Windows native paths use `\`, but this ensures
-/// consistent output across all platforms for better readability and copy-paste compatibility.
-fn normalize_path(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 #[cfg(test)]

@@ -38,10 +38,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
-use std::path::Path;
 
-use cofferdam_core::{Category, CheckMeta, Issue, RelatedSpan, Severity};
+use cofferdam_core::{CheckMeta, Issue, RelatedSpan, Severity};
 use serde::Serialize;
+
+use crate::common::{category_str, normalize_path};
 
 const SARIF_SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 const SARIF_VERSION: &str = "2.1.0";
@@ -225,9 +226,9 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                     level: severity_to_sarif(meta.default_severity),
                 },
                 properties: SarifRuleProperties {
-                    category: category_str(meta.category),
+                    category: category_str(Some(meta.category)),
                     priority: meta.base_priority,
-                    tags: vec![category_str(meta.category)],
+                    tags: vec![category_str(Some(meta.category))],
                 },
             },
             None => SarifRule {
@@ -334,22 +335,8 @@ fn severity_to_sarif(sev: Severity) -> &'static str {
     }
 }
 
-fn category_str(cat: Category) -> &'static str {
-    match cat {
-        Category::Consistency => "consistency",
-        Category::Design => "design",
-        Category::Readability => "readability",
-        Category::Refactor => "refactor",
-        Category::Warning => "warning",
-    }
-}
-
 fn short_name(check_id: &str) -> &str {
     check_id.rsplit('.').next().unwrap_or(check_id)
-}
-
-fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 fn fingerprints_for(issue: &Issue) -> BTreeMap<&'static str, String> {

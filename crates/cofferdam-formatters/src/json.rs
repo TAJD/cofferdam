@@ -16,8 +16,10 @@
 //! switch. Sibling formatters (`compact`, `sarif`) live next door and
 //! share the same `Issue` input.
 
-use cofferdam_core::{Category, Issue, RelatedSpan, Severity};
+use cofferdam_core::{Issue, RelatedSpan, Severity};
 use serde::Serialize;
+
+use crate::common::{category_of, category_str, normalize_path};
 
 #[derive(Serialize)]
 pub(crate) struct RobotReport<'a> {
@@ -251,37 +253,8 @@ impl JsonFormatter {
     }
 }
 
-fn category_of(check_id: &str) -> Option<Category> {
-    match check_id.split('.').next()? {
-        "Consistency" => Some(Category::Consistency),
-        "Design" => Some(Category::Design),
-        "Readability" => Some(Category::Readability),
-        "Refactor" => Some(Category::Refactor),
-        "Warning" => Some(Category::Warning),
-        _ => None,
-    }
-}
-
-fn category_str(cat: Option<Category>) -> &'static str {
-    match cat {
-        Some(Category::Consistency) => "consistency",
-        Some(Category::Design) => "design",
-        Some(Category::Readability) => "readability",
-        Some(Category::Refactor) => "refactor",
-        Some(Category::Warning) => "warning",
-        None => "unknown",
-    }
-}
-
 fn severity_str(sev: Severity) -> &'static str {
     sev.as_str()
-}
-
-/// Forward-slash normalize. Windows native paths use `\`, but agents and
-/// editor protocols universally accept `/` and that's what cd-ose wants
-/// from the text formatter too.
-fn normalize_path(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 fn map_related(r: &RelatedSpan) -> RelatedFinding {

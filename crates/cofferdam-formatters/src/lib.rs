@@ -9,6 +9,8 @@ pub mod json;
 pub mod sarif;
 pub mod text;
 
+pub(crate) mod common;
+
 pub use compact::{CompactFormatter, COMPACT_HEADER};
 pub use json::{JsonFormatter, JsonRenderOpts};
 pub use sarif::{SarifFormatter, SarifRenderOpts};

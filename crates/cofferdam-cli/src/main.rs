@@ -1112,40 +1112,39 @@ fn run_check(args: CheckArgs) -> ExitCode {
         let _ = cofferdam_engine::disk_cache::load_run(dir, &run_cache);
     }
 
-    let exit_code = if baseline_active {
-        let mut signed = match engine.analyze_with_signatures_full(
-            &files,
-            None,
-            Some(&findings_cache),
-            Some(&run_cache),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        // Plugin host invocation (cd-1c7). Plugin findings flow through
-        // the baseline pipeline as first-class peers: signatures are
-        // computed against the same source text, so existing tech debt
-        // can be baselined and only NEW plugin findings trigger the
-        // gate. Plugin issues bypass the engine's suppression filter,
-        // so the helper re-applies it.
-        //
-        // `--since`: plugins run over the FULL file set (`files`), not the
-        // changed subset. A plugin may do its own cross-file analysis, so
-        // narrowing its input would silently reintroduce the partial-graph
-        // bug this change fixes for built-ins (GH #53). The extra Node cost
-        // is the price of soundness; plugins are opt-in. Their findings are
-        // report-scoped by the `signed.retain` below, same as engine issues.
-        if let Some(cfg) = project_config.as_ref() {
-            signed.extend(run_plugins_filtered_with_signatures(
-                cfg,
-                resolved_config_path.as_deref(),
-                &files,
-            ));
+    // COMMON: analyze with signatures. Both paths use signatures here; the
+    // baseline path matches them against the stored lookup, while the
+    // no-baseline path discards them after plugin merging. This unifies
+    // the engine call, plugin merge, and scope filter for both paths.
+    let mut signed = match engine.analyze_with_signatures_full(
+        &files,
+        None,
+        Some(&findings_cache),
+        Some(&run_cache),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
         }
-        signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
+    };
+
+    // COMMON: plugin host invocation (cd-1c7 / GH #53). Plugins run over
+    // the full file set so cross-file analysis stays sound; findings are
+    // report-scoped below. Both paths use the signed-pair variant so the
+    // merge step is shared.
+    if let Some(cfg) = project_config.as_ref() {
+        signed.extend(run_plugins_filtered_with_signatures(
+            cfg,
+            resolved_config_path.as_deref(),
+            &files,
+        ));
+    }
+    // COMMON: report scope filter (--since). Applied after plugin merge so
+    // both engine and plugin findings respect the narrowed output window.
+    signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
+
+    let exit_code = if baseline_active {
         let lookup: HashSet<&BaselineEntry> = baseline_loaded
             .as_ref()
             .map(Baseline::lookup_set)
@@ -1162,8 +1161,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 (issue, baselined)
             })
             .collect();
-        // Re-sort because plugin issues were appended after the engine's
-        // own priority/check_id/file ordering.
+        // Re-sort after plugin merge (plugin issues appended after engine output).
         tagged.sort_by(|(a, _), (b, _)| {
             b.priority
                 .0
@@ -1173,19 +1171,14 @@ fn run_check(args: CheckArgs) -> ExitCode {
         });
 
         // CI gate: only NEW (un-baselined) findings at or above
-        // `--fail-on` trigger exit 1. Computed from the full set BEFORE
-        // truncation so `--max-issues` cannot hide a failure.
+        // `--fail-on` trigger exit 1. Computed before truncation.
         let triggering = tagged
             .iter()
             .filter(|(issue, baselined)| !*baselined && issue.severity >= fail_on)
             .count();
 
-        let truncated_from = apply_max_issues_tagged(&mut tagged, max_issues);
-        if !quiet && format == OutputFormat::Text {
-            if let Some(orig) = truncated_from {
-                eprintln!("(showing {} of {} findings)", tagged.len(), orig);
-            }
-        }
+        let truncated_from = apply_max_issues(&mut tagged, max_issues);
+        print_truncation_warning(quiet, format, tagged.len(), truncated_from);
 
         match format {
             OutputFormat::Text => {
@@ -1217,12 +1210,9 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 print!("{}", CompactFormatter::render(&issues_only));
             }
             OutputFormat::Sarif => {
-                // SARIF v1 doesn't carry baseline tags either; the SARIF
-                // spec has no native field for "this finding was already
-                // present at baseline write time". GitHub Code Scanning
-                // tracks new vs. acknowledged via its own UI on top of
-                // `partialFingerprints`. Use --format=json when you need
-                // the per-finding `baselined` flag in the output.
+                // SARIF v1 doesn't carry baseline tags either. Use
+                // --format=json when you need the per-finding `baselined`
+                // flag in the output.
                 let issues_only: Vec<cofferdam_core::Issue> =
                     tagged.iter().map(|(i, _)| i.clone()).collect();
                 let metas: Vec<cofferdam_core::CheckMeta> =
@@ -1244,92 +1234,59 @@ fn run_check(args: CheckArgs) -> ExitCode {
             ExitCode::from(1)
         }
     } else {
-        match engine
-            .analyze_with_text_full(&files, None, Some(&findings_cache), Some(&run_cache))
-            .map(|(issues, _texts)| issues)
-        {
-            Ok(mut issues) => {
-                // Plugin host invocation (cd-7e4 / cd-81a.7 / cd-1c7).
-                // Runs Node-side plugins declared in `cofferdam.toml`'s
-                // `plugins = [...]` array against the same file set,
-                // merges resulting findings into the engine's stream so
-                // they participate in the `--fail-on` gate.
-                //
-                // `--since`: as in the baseline path above, plugins see the
-                // FULL file set; report-scoping happens via the
-                // `issues.retain` below so a plugin's own cross-file checks
-                // stay sound (GH #53).
-                if let Some(cfg) = project_config.as_ref() {
-                    let plugin_filtered =
-                        run_plugins_filtered(cfg, resolved_config_path.as_deref(), &files);
-                    if !plugin_filtered.is_empty() {
-                        issues.extend(plugin_filtered);
-                        issues.sort_by(|a, b| {
-                            b.priority
-                                .0
-                                .cmp(&a.priority.0)
-                                .then_with(|| a.check_id.cmp(&b.check_id))
-                                .then_with(|| a.file.cmp(&b.file))
-                        });
-                    }
-                }
-                issues.retain(|i| in_report_scope(&report_scope, &i.file));
-                // CI gate: any finding at or above `--fail-on` triggers
-                // exit 1. Computed from the full set BEFORE truncation
-                // so `--max-issues` cannot hide a failure.
-                let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+        // Drop signatures: the no-baseline path renders plain Issues.
+        let mut issues: Vec<cofferdam_core::Issue> =
+            signed.into_iter().map(|(i, _sig)| i).collect();
+        // Re-sort after plugin merge. Engine output is already sorted;
+        // this is idempotent when no plugins were added.
+        issues.sort_by(|a, b| {
+            b.priority
+                .0
+                .cmp(&a.priority.0)
+                .then_with(|| a.check_id.cmp(&b.check_id))
+                .then_with(|| a.file.cmp(&b.file))
+        });
 
-                let truncated_from = apply_max_issues(&mut issues, max_issues);
-                if !quiet && format == OutputFormat::Text {
-                    if let Some(orig) = truncated_from {
-                        eprintln!("(showing {} of {} findings)", issues.len(), orig);
-                    }
-                }
+        // CI gate: any finding at or above `--fail-on` triggers exit 1.
+        // Computed before truncation so `--max-issues` cannot hide a failure.
+        let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
 
-                match format {
-                    OutputFormat::Text => {
-                        // No-baseline path: --hide-baselined is a no-op
-                        // here because nothing is baselined; preserve
-                        // historical output verbatim.
-                        let opts = TextRenderOpts {
-                            quiet,
-                            ..Default::default()
-                        };
-                        print!("{}", TextFormatter::render_with_opts(&issues, opts));
-                    }
-                    OutputFormat::Json => {
-                        let opts = JsonRenderOpts {
-                            pretty,
-                            truncated_from,
-                        };
-                        println!("{}", JsonFormatter::render_with_opts(&issues, opts));
-                    }
-                    OutputFormat::Compact => {
-                        print!("{}", CompactFormatter::render(&issues));
-                    }
-                    OutputFormat::Sarif => {
-                        let metas: Vec<cofferdam_core::CheckMeta> =
-                            all_builtins().iter().map(|c| *c.meta()).collect();
-                        println!(
-                            "{}",
-                            SarifFormatter::render_with_opts(
-                                &issues,
-                                &metas,
-                                SarifRenderOpts { pretty }
-                            )
-                        );
-                    }
-                }
-                if triggering == 0 {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::from(1)
-                }
+        let truncated_from = apply_max_issues(&mut issues, max_issues);
+        print_truncation_warning(quiet, format, issues.len(), truncated_from);
+
+        match format {
+            OutputFormat::Text => {
+                // --hide-baselined is a no-op here (nothing is baselined).
+                let opts = TextRenderOpts {
+                    quiet,
+                    ..Default::default()
+                };
+                print!("{}", TextFormatter::render_with_opts(&issues, opts));
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(2)
+            OutputFormat::Json => {
+                let opts = JsonRenderOpts {
+                    pretty,
+                    truncated_from,
+                };
+                println!("{}", JsonFormatter::render_with_opts(&issues, opts));
             }
+            OutputFormat::Compact => {
+                print!("{}", CompactFormatter::render(&issues));
+            }
+            OutputFormat::Sarif => {
+                let metas: Vec<cofferdam_core::CheckMeta> =
+                    all_builtins().iter().map(|c| *c.meta()).collect();
+                println!(
+                    "{}",
+                    SarifFormatter::render_with_opts(&issues, &metas, SarifRenderOpts { pretty })
+                );
+            }
+        }
+
+        if triggering == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
         }
     };
 
@@ -1425,29 +1382,32 @@ fn run_plugins_filtered_with_signatures(
         .collect()
 }
 
-/// Truncate `issues` to the first `max` entries (engine output is
-/// already sorted by priority then check_id, so "first N" == "top N by
-/// priority"). Returns `Some(original_len)` when truncation happened,
-/// `None` otherwise. `max == 0` disables the cap.
-fn apply_max_issues(issues: &mut Vec<cofferdam_core::Issue>, max: usize) -> Option<usize> {
-    if max == 0 || issues.len() <= max {
+/// Truncate `items` to the first `max` entries (engine output is already
+/// sorted by priority then check_id, so "first N" == "top N by priority").
+/// Returns `Some(original_len)` when truncation happened, `None` otherwise.
+/// `max == 0` disables the cap. Generic so both `Vec<Issue>` (no-baseline
+/// path) and `Vec<(Issue, bool)>` (baseline path) can share the helper.
+fn apply_max_issues<T>(items: &mut Vec<T>, max: usize) -> Option<usize> {
+    if max == 0 || items.len() <= max {
         return None;
     }
-    let original = issues.len();
-    issues.truncate(max);
+    let original = items.len();
+    items.truncate(max);
     Some(original)
 }
 
-fn apply_max_issues_tagged(
-    tagged: &mut Vec<(cofferdam_core::Issue, bool)>,
-    max: usize,
-) -> Option<usize> {
-    if max == 0 || tagged.len() <= max {
-        return None;
+/// Emit the truncation warning line when output was capped by `--max-issues`.
+fn print_truncation_warning(
+    quiet: bool,
+    format: OutputFormat,
+    after_len: usize,
+    truncated_from: Option<usize>,
+) {
+    if !quiet && format == OutputFormat::Text {
+        if let Some(orig) = truncated_from {
+            eprintln!("(showing {} of {} findings)", after_len, orig);
+        }
     }
-    let original = tagged.len();
-    tagged.truncate(max);
-    Some(original)
 }
 
 struct BaselineWriteArgs {

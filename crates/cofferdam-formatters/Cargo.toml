@@ -8,6 +8,9 @@ authors.workspace = true
 rust-version.workspace = true
 description = "Output formatters — text, JSON, SARIF, GitHub annotations."
 
+[lints]
+workspace = true
+
 [dependencies]
 cofferdam-core = { workspace = true }
 serde = { workspace = true }

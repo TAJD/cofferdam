@@ -70,6 +70,13 @@ toml = "0.8"
 insta = { version = "1", features = ["filters"] }
 proptest = "1"
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

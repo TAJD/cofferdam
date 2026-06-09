@@ -8,6 +8,9 @@ authors.workspace = true
 rust-version.workspace = true
 description = "Rust source-code adapter for cofferdam — tree-sitter-rust + checks specific to Rust crates"
 
+[lints]
+workspace = true
+
 [dependencies]
 cofferdam-core = { workspace = true }
 # tree-sitter pin: bump together with tree-sitter-rust to keep ABI in sync.

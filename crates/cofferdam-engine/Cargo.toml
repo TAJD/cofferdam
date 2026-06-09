@@ -8,6 +8,9 @@ authors.workspace = true
 rust-version.workspace = true
 description = "Orchestration: discovery, scheduling, baseline, severity gating, and project-graph passes."
 
+[lints]
+workspace = true
+
 [dependencies]
 cofferdam-core = { workspace = true }
 # cd-9hp.9 cp3 — engine populates `CANONICAL_GRAPH` from the pass-1

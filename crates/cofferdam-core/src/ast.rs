@@ -337,6 +337,7 @@ impl<'a> Visit<'a> for FindAllCollector<'a> {
 // reference as `&'a T<'a>` is sound: the arena owns the data, and we
 // only ever store it inside `Vec<NodeRef<'a>>` which is tied to the
 // `AstView<'a>` borrow of the arena.
+#[allow(unsafe_code)]
 fn unsafe_extend<'a, T>(r: &T) -> &'a T {
     // Safety: see comment above. The arena owning `T` lives at least as
     // long as `'a`, the lifetime of the `AstView` we're walking.

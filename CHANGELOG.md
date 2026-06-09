@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--fail-on-type-unavailable` flag for `cofferdam check` (cd-260l). By default, when a type-aware check is registered but the ts-morph type host cannot start (no Node, no ts-morph, no tsconfig), cofferdam prints one warning and silently skips type-aware checks — CI that relies on type coverage gets false negatives without noticing. With the flag set, that condition exits with code 2 and a clear diagnostic instead. Default off; no effect when nothing declares `requires_types` or when `[engine] type_aware = false`. Documented in [`docs/type-aware-checks.md`](docs/type-aware-checks.md#enforcing-type-coverage-in-ci).
+- `limit` option for `Refactor.CyclomaticComplexity` and `Refactor.CognitiveComplexity` (cd-yrvl / [gh #50](https://github.com/TAJD/cofferdam/issues/50)). Both checks claimed configurability but shipped `options: &[]`, so the config validator rejected `[checks."Refactor.CyclomaticComplexity"] limit = N`. The thresholds (defaults 10 and 15, unchanged) are now real options.
+- Supply-chain and toolchain CI gates: `cargo-deny` runs on every push/PR plus a weekly cron against the policy in `deny.toml` (cd-othw), and an MSRV job compiles the workspace on the declared minimum Rust version (cd-4kfk). Repo CI only — no effect on installed binaries.
+
+### Changed
+- Declared Rust toolchain floor corrected to 1.93 and now enforced in CI (cd-4kfk). The previous `rust-version = "1.79"` was fiction — transitive dependencies (oxc_syntax, smol_str, edition-2024 crates) already required 1.93. Only affects building from source; npm/prebuilt-binary users are untouched.
+- Plugin host reports that reference files outside the analyzed set are now rejected (cd-neav). Per-file `run()` reports were never affected (the host stamps their path), but `finalize()` reports carry a plugin-supplied `file` verbatim — a buggy plugin could inject findings for paths cofferdam never analyzed, which then flowed into baselines and formatter output. Out-of-scope reports (and out-of-scope `related` entries, which are dropped individually while the finding survives) now surface as one aggregated `Warning.PluginHostFailed` per plugin check id naming the dropped paths. Plugin authors: `finalize` must report against files that were part of the run — see the [finalize contract](docs/plugin-sdk-guide.md#finalizectx-opts).
+
+### Fixed
+- `--since` no longer narrows the *analysis* file set, only the *reported* one (cd-aksx / [gh #53](https://github.com/TAJD/cofferdam/issues/53)). Cross-file checks (`Design.OrphanExport`, `Refactor.DeadExport`, import cycles) previously built a partial project graph from just the changed files, so consumers living in unchanged files were invisible and exports were falsely flagged orphaned/dead. The engine now always analyzes the full discovered set; `--since` filters findings down to changed files after analysis.
+- The embedded Node host scripts (plugin host, type host) are now materialized to version-stamped temp filenames (`cofferdam-plugin-host-<version>.mjs`) so concurrent or interleaved runs of different cofferdam versions can never execute each other's host script (cd-8bmz).
+- The plugin-host and type-host shutdown paths always attempt to kill the child Node process when the wait loop errors or times out; previously an early-return on a `try_wait` error could leak an orphaned Node process (cd-pj1t).
+
+### Performance
+- Glob patterns in the invariants DSL evaluator are compiled once per analysis pass instead of once per file × pattern (cd-3kxc). Layer membership (`compute_layer`), import-specifier matching, and `matches` predicates previously rebuilt their `GlobSet` on every evaluation — O(files × patterns) compilations on real repos with `[layers]` configured.
+
 ## [0.3.5] - 2026-05-23
 
 ### Added

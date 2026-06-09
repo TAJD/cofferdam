@@ -26,6 +26,8 @@ yarn add --dev @cofferdam/cofferdam
 
 The `postinstall` script downloads the matching prebuilt binary for your platform (Linux x64/arm64 glibc + musl, macOS x64/arm64, Windows x64). Node 16+ required.
 
+Building from source instead requires Rust 1.93+ (enforced in CI): `cargo install --path crates/cofferdam-cli` from a checkout.
+
 ## Usage
 
 ```sh

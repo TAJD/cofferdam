@@ -416,6 +416,16 @@ declaration order. The context exposes:
   findings typically attach to one canonical location and use
   `related` for the other implicated files.
 
+**The `file` (and every `related` entry's `file`) must be a path that
+was part of the analyzed set** — i.e. one of the paths your `run`
+hook saw as `file.path`. The CLI rejects reports for any other path:
+the finding is dropped and replaced by one aggregated
+`Warning.PluginHostFailed` naming your check id and the offending
+paths. An out-of-scope `related` entry is dropped individually while
+its finding survives. The reliable pattern is to record `file.path`
+into `ctx.corpus` during `run` and read it back in `finalize`, rather
+than reconstructing paths by hand.
+
 A `finalize` crash is surfaced as
 `Warning.PluginCrashed` with the message `plugin '<id>' threw in
 finalize(): …`; the rest of the run is unaffected.

@@ -27,7 +27,7 @@ use cofferdam_core::{TypeFacts, TypeOracle};
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/type-host.mjs");
-const HOST_SCRIPT_NAME: &str = "cofferdam-type-host.mjs";
+const HOST_SCRIPT_NAME: &str = concat!("cofferdam-type-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
 /// Materialise the embedded host script to the OS temp dir on first
 /// call, reuse the path on subsequent calls in this process. Same

@@ -38,7 +38,7 @@ use cofferdam_core::{
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/plugin-host.mjs");
-const HOST_SCRIPT_NAME: &str = "cofferdam-plugin-host.mjs";
+const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
 /// Wire shape sent to the Node host on stdin. Field names match
 /// `scripts/plugin-host.mjs`'s `manifest.*` reads (camelCase on the JS

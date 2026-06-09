@@ -1,0 +1,702 @@
+//! Project config loader — `cofferdam.toml`.
+//!
+//! Per-check option overrides for the engine, sourced from a TOML file
+//! at the project root. The schema is deliberately small in v0:
+//!
+//! ```toml
+//! [checks."Readability.MaxLineLength"]
+//! limit = 120
+//! severity = "warning"   # phase-3 (cd-t1a) — accepted, not yet enforced
+//! enabled = true         # phase-3 — accepted, not yet enforced
+//!
+//! [checks."Readability.MaxFunctionLength"]
+//! limit = 50
+//!
+//! [checks."Design.MaxParameters"]
+//! limit = 5
+//! ```
+//!
+//! ## Discovery
+//!
+//! `discover()` walks up from the starting directory until either
+//! `cofferdam.toml` is found or a `.git` directory is reached (i.e. the
+//! repo root). Stopping at `.git` keeps a stray `cofferdam.toml` in a
+//! parent directory from accidentally configuring an unrelated repo.
+//!
+//! ## Precedence
+//!
+//! Values cascade through CLI flag > env var > config file > schema
+//! default. Today only file > default is wired; the CLI and env layers
+//! plug in above this loader without changing it.
+//!
+//! ## Why `toml` and not `figment`
+//!
+//! cofferdam-core deliberately stays dep-light. `toml` alone is enough
+//! for v0 (single file, no env/cli layering at this seam yet). Upgrade
+//! to figment if/when env-var support lands and the layering matters at
+//! this layer.
+
+pub mod loader;
+pub mod options;
+pub mod resolution;
+
+use std::collections::BTreeMap;
+use std::io;
+use std::path::PathBuf;
+
+use cofferdam_core::graph::LayersConfig;
+use cofferdam_core::invariants::InvariantsError;
+use cofferdam_core::OptionsError;
+
+// Re-export all public types and functions from submodules
+pub use loader::{discover, load, FILE_NAME};
+pub use options::{options_for, options_for_raw, unknown_check_ids};
+pub use resolution::{resolve_with_invariants, LoadDiagnostics};
+
+/// Parsed project config: per-check raw option bags + per-check
+/// severity overrides. Unknown check IDs are stored verbatim and
+/// surfaced via `unknown_check_ids` so the CLI can warn without
+/// failing the build over a typo.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectConfig {
+    pub checks: BTreeMap<String, BTreeMap<String, cofferdam_core::RawOptionValue>>,
+    /// Per-check severity overrides parsed from `[checks."X.Y"] severity = "..."`.
+    /// Keyed by check_id. Engine consults this in its severity post-pass.
+    pub severity_overrides: BTreeMap<String, cofferdam_core::Severity>,
+    /// `[layers]` block. `None` when the table is missing — keeps the
+    /// `Design.LayerViolation` check a no-op for projects that haven't
+    /// declared an architecture. The `project_root` field is filled in
+    /// after parsing (load knows the path; parse doesn't).
+    pub layers: Option<LayersConfig>,
+    /// `plugins = [...]` array — paths (or package specifiers) that
+    /// resolve to local Node.js plugin modules implementing the
+    /// `@cofferdam/check-sdk` `defineCheck` shape. Resolved relative to
+    /// the config file's directory. Empty when no plugins declared.
+    pub plugins: Vec<PathBuf>,
+    /// Parsed `cofferdam.invariants.toml` spec, when one was discovered
+    /// alongside the cofferdam.toml. Layers from this spec take
+    /// precedence over the cofferdam.toml `[layers]` block; the engine
+    /// merges before publishing into the LAYERS corpus slot.
+    pub invariants: Option<cofferdam_core::invariants::InvariantsSpec>,
+    /// Set when both `cofferdam.toml` `[layers]` AND
+    /// `cofferdam.invariants.toml` `[layers]` are populated. Surfaced by
+    /// the CLI as a one-line deprecation hint.
+    pub layers_double_declaration: bool,
+    /// `[engine] type_aware` — `Some(false)` force-disables type-aware
+    /// checks (those declaring `CheckMeta::requires_types`) even when one
+    /// is registered, so CI machines without a Node runtime don't pay the
+    /// type-host cost or see "type host unavailable" warnings (cd-9hp.2.4).
+    /// `None` (the default) means enabled; the engine still auto-opts-out
+    /// when no `requires_types` check is registered. Read via
+    /// [`ProjectConfig::type_aware_enabled`].
+    pub engine_type_aware: Option<bool>,
+    /// `[[overrides]]` blocks — per-path-glob check config (cd-m5tu).
+    /// Each block scopes `limit`/`severity`/`disabled` (and any other
+    /// per-check option) to files matching its `paths` globs, while
+    /// every other check keeps running on those files. Empty when none
+    /// are declared. The engine applies them per-file in declaration
+    /// order; the last matching block wins per (check, key).
+    pub overrides: Vec<OverrideBlock>,
+}
+
+/// One `[[overrides]]` block: a set of path globs plus the per-check
+/// config that applies to files matching any of them (cd-m5tu).
+///
+/// Globs are written project-root-relative in forward-slash form
+/// (`**/*.test.tsx`, `src/legacy/**`) and matched the same way
+/// `[public_api].exports` globs are — see [`OverrideBlock::is_match`].
+#[derive(Debug, Clone)]
+pub struct OverrideBlock {
+    /// Raw glob patterns as written, kept for diagnostics and hashing.
+    pub paths: Vec<String>,
+    /// Compiled matcher over `paths`.
+    pub globset: globset::GlobSet,
+    /// Normalised absolute root prefix used to reduce an absolute file
+    /// key to the project-relative form the globs are written against.
+    pub root_key: String,
+    /// Per-check overrides, keyed by check id.
+    pub checks: BTreeMap<String, OverrideCheck>,
+}
+
+/// The config a single `[[overrides]]` block applies to one check on
+/// matching files. Only the fields the block actually sets are
+/// populated; the engine overlays them onto the global per-check
+/// config (cd-m5tu).
+#[derive(Debug, Clone, Default)]
+pub struct OverrideCheck {
+    /// Option keys this block sets (e.g. `limit`). Overlaid over the
+    /// global per-check option bag for matching files.
+    pub options: BTreeMap<String, cofferdam_core::RawOptionValue>,
+    /// `severity = "..."` for this check on matching files. `None`
+    /// leaves the global severity in place.
+    pub severity: Option<cofferdam_core::Severity>,
+    /// `disabled = true` skips the check entirely for matching files;
+    /// `disabled = false` re-enables it (so a later block can undo an
+    /// earlier one). `None` leaves the prior decision untouched.
+    pub disabled: Option<bool>,
+}
+
+impl OverrideBlock {
+    /// Test whether `file_key` (a forward-slash, normalised path — may
+    /// be absolute or relative) is matched by this block's globs.
+    /// Mirrors `public_api`'s matcher: strip the absolute root prefix
+    /// (or a leading `./`) so root-relative patterns match an absolute
+    /// engine-promoted path.
+    pub fn is_match(&self, file_key: &str) -> bool {
+        let rel = {
+            let with_slash = if self.root_key.ends_with('/') {
+                self.root_key.clone()
+            } else {
+                format!("{}/", self.root_key)
+            };
+            if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
+                stripped
+            } else if let Some(stripped) = file_key.strip_prefix(&self.root_key) {
+                stripped.trim_start_matches('/')
+            } else {
+                file_key.trim_start_matches("./")
+            }
+        };
+        self.globset.is_match(rel)
+    }
+}
+
+impl ProjectConfig {
+    /// Whether type-aware checks may run. `false` only when the user set
+    /// `[engine] type_aware = false`; the default is enabled. The CLI
+    /// consults this before spawning the ts-morph type-host worker.
+    pub fn type_aware_enabled(&self) -> bool {
+        self.engine_type_aware.unwrap_or(true)
+    }
+}
+
+/// Errors that can prevent `cofferdam.toml` from loading. Includes IO
+/// failure, malformed TOML, and schema-validation failures (each
+/// variant carries the source path so the CLI can format actionable
+/// diagnostics).
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("failed to read config {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to parse config {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error(
+        "config {path}: in [checks.\"{check_id}\"], option `{key}` has unsupported type ({reason})"
+    )]
+    UnsupportedValue {
+        path: PathBuf,
+        check_id: String,
+        key: String,
+        reason: &'static str,
+    },
+    #[error("config {path}: in [checks.\"{check_id}\"], severity must be a string but got {got}")]
+    SeverityNotString {
+        path: PathBuf,
+        check_id: String,
+        got: &'static str,
+    },
+    #[error("config {path}: in [checks.\"{check_id}\"], {source}")]
+    BadSeverity {
+        path: PathBuf,
+        check_id: String,
+        #[source]
+        source: cofferdam_core::ParseSeverityError,
+    },
+    #[error("config {path}: option validation failed for [checks.\"{check_id}\"]: {source}")]
+    Validate {
+        path: PathBuf,
+        check_id: String,
+        #[source]
+        source: OptionsError,
+    },
+    #[error(
+        "config {path}: `{intended_key}` looks like a top-level cofferdam.toml key, \
+but it appears nested under [checks.\"{nested_under}\"] because TOML treats keys after a \
+table header as belonging to that table. \
+Move `{intended_key} = ...` ABOVE the first [checks.\"...\"] table (or to the top of the \
+file) and re-run."
+    )]
+    MisplacedTopLevelKey {
+        path: PathBuf,
+        intended_key: String,
+        nested_under: String,
+    },
+    #[error(transparent)]
+    Invariants(#[from] InvariantsError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::{OptionDefault, OptionKind, OptionSpec, RawOptionValue, Severity};
+    use std::fs;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    const SCHEMA: &[OptionSpec] = &[OptionSpec {
+        name: "limit",
+        kind: OptionKind::Int,
+        default: OptionDefault::Int(80),
+        doc: "max line length",
+    }];
+
+    #[test]
+    fn parse_minimal_config() {
+        let raw = r#"
+[checks."Readability.MaxLineLength"]
+limit = 120
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        let bag = cfg
+            .checks
+            .get("Readability.MaxLineLength")
+            .expect("present");
+        assert_eq!(bag.get("limit"), Some(&RawOptionValue::Int(120)));
+    }
+
+    #[test]
+    fn engine_type_aware_defaults_to_enabled() {
+        // No [engine] table → None → enabled.
+        let cfg = loader::parse(Path::new("test.toml"), "").expect("parse");
+        assert_eq!(cfg.engine_type_aware, None);
+        assert!(cfg.type_aware_enabled());
+    }
+
+    #[test]
+    fn engine_type_aware_false_opts_out() {
+        let raw = r#"
+[engine]
+type_aware = false
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_type_aware, Some(false));
+        assert!(!cfg.type_aware_enabled());
+    }
+
+    #[test]
+    fn engine_type_aware_true_is_enabled() {
+        let raw = r#"
+[engine]
+type_aware = true
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_type_aware, Some(true));
+        assert!(cfg.type_aware_enabled());
+    }
+
+    #[test]
+    fn engine_unknown_keys_are_ignored() {
+        // Forward-compat: an unrecognised [engine] key must not fail the
+        // parse (the table grows additively).
+        let raw = r#"
+[engine]
+type_aware = false
+future_toggle = 42
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_type_aware, Some(false));
+    }
+
+    #[test]
+    fn meta_keys_are_separated_from_options() {
+        let raw = r#"
+[checks."Readability.MaxLineLength"]
+limit = 120
+severity = "high"
+enabled = true
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        let bag = cfg
+            .checks
+            .get("Readability.MaxLineLength")
+            .expect("present");
+        // `limit` flows through to the per-check option bag; `severity`
+        // goes to `severity_overrides`; `enabled` is silently accepted
+        // (no behaviour wired today).
+        assert_eq!(bag.len(), 1);
+        assert!(bag.contains_key("limit"));
+        assert!(!bag.contains_key("severity"));
+        assert!(!bag.contains_key("enabled"));
+        assert_eq!(
+            cfg.severity_overrides.get("Readability.MaxLineLength"),
+            Some(&Severity::High)
+        );
+    }
+
+    #[test]
+    fn parse_overrides_block() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.test.ts", "**/*.test.tsx"]
+[overrides.checks."Readability.MaxFunctionLength"]
+limit = 400
+[overrides.checks."Design.OrphanExport"]
+disabled = true
+severity = "info"
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.overrides.len(), 1);
+        let block = &cfg.overrides[0];
+        assert_eq!(block.paths, vec!["**/*.test.ts", "**/*.test.tsx"]);
+
+        let mfl = block
+            .checks
+            .get("Readability.MaxFunctionLength")
+            .expect("mfl override present");
+        assert_eq!(mfl.options.get("limit"), Some(&RawOptionValue::Int(400)));
+        assert_eq!(mfl.disabled, None, "limit-only override sets no disabled");
+        assert_eq!(mfl.severity, None);
+
+        let orphan = block
+            .checks
+            .get("Design.OrphanExport")
+            .expect("orphan override present");
+        assert_eq!(orphan.disabled, Some(true));
+        assert_eq!(orphan.severity, Some(Severity::Info));
+        assert!(orphan.options.is_empty());
+    }
+
+    #[test]
+    fn parse_multiple_override_blocks_preserve_order() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.test.ts"]
+[overrides.checks."Readability.MaxFunctionLength"]
+limit = 200
+
+[[overrides]]
+paths = ["src/legacy/**"]
+[overrides.checks."Refactor.CyclomaticComplexity"]
+severity = "info"
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.overrides.len(), 2);
+        assert_eq!(cfg.overrides[0].paths, vec!["**/*.test.ts"]);
+        assert_eq!(cfg.overrides[1].paths, vec!["src/legacy/**"]);
+    }
+
+    #[test]
+    fn override_glob_matches_relative_to_root() {
+        // is_match must reduce an absolute, engine-promoted path to the
+        // project-relative form the globs are written against.
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.test.tsx"]
+[overrides.checks."Readability.MaxFunctionLength"]
+limit = 400
+"#;
+        // Use a path the test controls so root absolutization is stable.
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        let block = &cfg.overrides[0];
+        let root = &block.root_key; // absolute, normalised
+        assert!(block.is_match(&format!("{root}/src/Lobby.test.tsx")));
+        assert!(block.is_match(&format!("{root}/Lobby.test.tsx")));
+        assert!(!block.is_match(&format!("{root}/src/Lobby.tsx")));
+    }
+
+    #[test]
+    fn override_bad_severity_is_rejected() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.ts"]
+[overrides.checks."X.Y"]
+severity = "extreme"
+"#;
+        let err = loader::parse(Path::new("cofferdam.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::BadSeverity { .. }));
+    }
+
+    #[test]
+    fn override_non_bool_disabled_is_rejected() {
+        let raw = r#"
+[[overrides]]
+paths = ["**/*.ts"]
+[overrides.checks."X.Y"]
+disabled = "yes"
+"#;
+        let err = loader::parse(Path::new("cofferdam.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn no_overrides_yields_empty_vec() {
+        let cfg = loader::parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(cfg.overrides.is_empty());
+    }
+
+    #[test]
+    fn unsupported_value_errors() {
+        let raw = r#"
+[checks."Foo.Bar"]
+weird = 1.5
+"#;
+        let err = loader::parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn bad_severity_string_is_rejected() {
+        let raw = r#"
+[checks."X.Y"]
+severity = "extreme"
+"#;
+        let err = loader::parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::BadSeverity { .. }));
+    }
+
+    #[test]
+    fn non_string_severity_is_rejected() {
+        let raw = r#"
+[checks."X.Y"]
+severity = 5
+"#;
+        let err = loader::parse(Path::new("test.toml"), raw).unwrap_err();
+        assert!(matches!(err, ConfigError::SeverityNotString { .. }));
+    }
+
+    #[test]
+    fn missing_top_level_checks_yields_empty_config() {
+        let cfg = loader::parse(Path::new("test.toml"), "").expect("parse");
+        assert!(cfg.checks.is_empty());
+    }
+
+    #[test]
+    fn options_for_uses_overrides() {
+        let mut bag = BTreeMap::new();
+        bag.insert("limit".to_string(), RawOptionValue::Int(120));
+        let mut checks = BTreeMap::new();
+        checks.insert("Readability.MaxLineLength".to_string(), bag);
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+            layers: None,
+            plugins: Vec::new(),
+            invariants: None,
+            layers_double_declaration: false,
+            engine_type_aware: None,
+            overrides: Vec::new(),
+        };
+
+        let opts = options_for(
+            &project,
+            Path::new("test.toml"),
+            "Readability.MaxLineLength",
+            SCHEMA,
+        )
+        .expect("validate");
+        assert_eq!(opts.get_int("limit"), Some(120));
+    }
+
+    #[test]
+    fn options_for_unknown_check_uses_defaults() {
+        let project = ProjectConfig::default();
+        let opts =
+            options_for(&project, Path::new("test.toml"), "Missing.Check", SCHEMA).expect("ok");
+        assert_eq!(opts.get_int("limit"), Some(80));
+    }
+
+    #[test]
+    fn options_for_validation_error_propagates() {
+        let mut bag = BTreeMap::new();
+        bag.insert("limit".to_string(), RawOptionValue::String("nope".into()));
+        let mut checks = BTreeMap::new();
+        checks.insert("X.Y".to_string(), bag);
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+            layers: None,
+            plugins: Vec::new(),
+            invariants: None,
+            layers_double_declaration: false,
+            engine_type_aware: None,
+            overrides: Vec::new(),
+        };
+
+        let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
+        assert!(matches!(err, ConfigError::Validate { .. }));
+    }
+
+    #[test]
+    fn unknown_check_ids_lists_strays() {
+        let mut checks = BTreeMap::new();
+        checks.insert("Readability.MaxLineLength".to_string(), BTreeMap::new());
+        checks.insert("Bogus.NotReal".to_string(), BTreeMap::new());
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+            layers: None,
+            plugins: Vec::new(),
+            invariants: None,
+            layers_double_declaration: false,
+            engine_type_aware: None,
+            overrides: Vec::new(),
+        };
+
+        let registered = ["Readability.MaxLineLength"];
+        let unknown = unknown_check_ids(&project, &registered);
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0], "Bogus.NotReal");
+    }
+
+    #[test]
+    fn discover_walks_up_to_find_config() {
+        let dir = tempdir().expect("tempdir");
+        let nested = dir.path().join("a/b/c");
+        fs::create_dir_all(&nested).expect("create dirs");
+        let cfg_path = dir.path().join(FILE_NAME);
+        fs::write(&cfg_path, "").expect("write config");
+
+        let found = discover(&nested).expect("found");
+        // Compare canonicalised paths — tempdir on macOS lives under /var
+        // which symlinks to /private/var; canonicalise both sides.
+        assert_eq!(
+            std::fs::canonicalize(&found).unwrap(),
+            std::fs::canonicalize(&cfg_path).unwrap()
+        );
+    }
+
+    #[test]
+    fn discover_stops_at_git_root() {
+        let dir = tempdir().expect("tempdir");
+        let outer_cfg = dir.path().join(FILE_NAME);
+        fs::write(&outer_cfg, "").expect("write outer");
+
+        // .git below the outer config — discover() should stop here and
+        // not return the outer config.
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).expect("create .git");
+        let nested = repo.join("src");
+        fs::create_dir_all(&nested).expect("create nested");
+
+        assert_eq!(discover(&nested), None);
+    }
+
+    #[test]
+    fn discover_finds_inside_repo() {
+        let dir = tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).expect("create .git");
+        let cfg_path = repo.join(FILE_NAME);
+        fs::write(&cfg_path, "").expect("write config");
+        let nested = repo.join("src/deep");
+        fs::create_dir_all(&nested).expect("create nested");
+
+        let found = discover(&nested).expect("found");
+        assert_eq!(
+            std::fs::canonicalize(&found).unwrap(),
+            std::fs::canonicalize(&cfg_path).unwrap()
+        );
+    }
+
+    // --- MisplacedTopLevelKey detection tests ---
+
+    /// Helper: build a ProjectConfig that has `key` as an unknown option
+    /// nested under the given check_id, then call options_for with an
+    /// empty schema (so every key is unknown).
+    fn options_for_with_raw_key(check_id: &str, key: &str, val: RawOptionValue) -> ConfigError {
+        let mut bag = BTreeMap::new();
+        bag.insert(key.to_string(), val);
+        let mut checks = BTreeMap::new();
+        checks.insert(check_id.to_string(), bag);
+        let project = ProjectConfig {
+            checks,
+            severity_overrides: BTreeMap::new(),
+            layers: None,
+            plugins: Vec::new(),
+            invariants: None,
+            layers_double_declaration: false,
+            engine_type_aware: None,
+            overrides: Vec::new(),
+        };
+        // Empty schema → every key is unknown to validate_options.
+        options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()
+    }
+
+    #[test]
+    fn misplaced_plugins_after_checks_table_emits_directive_error() {
+        // Simulates:
+        //   [checks."Readability.MaxLineLength"]
+        //   limit = 120
+        //   plugins = ["./my-plugin.mjs"]
+        //
+        // The parse() step strips `limit` into the raw bag before
+        // reaching options_for, but `plugins` (an array) would be kept
+        // as-is if it weren't in META_KEYS — so we test options_for
+        // directly with `plugins` in the raw bag.
+        let err = options_for_with_raw_key(
+            "Readability.MaxLineLength",
+            "plugins",
+            RawOptionValue::List(vec![RawOptionValue::String("./my-plugin.mjs".into())]),
+        );
+
+        assert!(
+            matches!(
+                &err,
+                ConfigError::MisplacedTopLevelKey {
+                    ref intended_key,
+                    ref nested_under,
+                    ..
+                } if intended_key == "plugins" && nested_under == "Readability.MaxLineLength"
+            ),
+            "expected MisplacedTopLevelKey, got: {err:?}"
+        );
+
+        // Display must mention the key and the directive word "Move".
+        let msg = err.to_string();
+        assert!(msg.contains("plugins"), "missing key name: {msg}");
+        assert!(
+            msg.contains("Move") || msg.contains("move"),
+            "missing directive: {msg}"
+        );
+        assert!(msg.contains("[checks."), "missing table hint: {msg}");
+    }
+
+    #[test]
+    fn misplaced_extends_emits_directive_error() {
+        let err = options_for_with_raw_key(
+            "Refactor.CyclomaticComplexity",
+            "extends",
+            RawOptionValue::String("./base.toml".into()),
+        );
+        assert!(
+            matches!(&err, ConfigError::MisplacedTopLevelKey { ref intended_key, .. } if intended_key == "extends"),
+            "expected MisplacedTopLevelKey for extends, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn misplaced_include_emits_directive_error() {
+        let err = options_for_with_raw_key(
+            "Design.MaxParameters",
+            "include",
+            RawOptionValue::List(vec![RawOptionValue::String("src/**".into())]),
+        );
+        assert!(
+            matches!(&err, ConfigError::MisplacedTopLevelKey { ref intended_key, .. } if intended_key == "include"),
+            "expected MisplacedTopLevelKey for include, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_check_option_typo_still_errors_normally() {
+        // Regression: a genuine typo in a checks table option (limitt = 120)
+        // must still produce ConfigError::Validate, not MisplacedTopLevelKey.
+        let err = options_for_with_raw_key(
+            "Readability.MaxLineLength",
+            "limitt",
+            RawOptionValue::Int(120),
+        );
+        assert!(
+            matches!(err, ConfigError::Validate { .. }),
+            "expected Validate for a typo'd option key, got: {err:?}"
+        );
+    }
+}

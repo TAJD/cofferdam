@@ -38,7 +38,7 @@ git config core.hooksPath .githooks
 crates/
   cofferdam-core/         # Check trait, Issue, Span, parser, AST surface
   cofferdam-engine/       # discovery, orchestration, parse loop, sort
-  cofferdam-checks/       # built-in checks (one file per category)
+  cofferdam-checks/       # built-in checks (one file per check, grouped in category subdirs)
   cofferdam-formatters/   # text + json output, future compact/SARIF
   cofferdam-cli/          # `cofferdam` binary
   cofferdam-graph/        # canonical cross-file graph schema (cd-9hp.9)
@@ -51,15 +51,15 @@ examples/                 # fixture .ts files exercised by checks
 
 ## Writing a check (the recipe)
 
-Almost every new check is one file in `cofferdam-checks/src/<category>.rs`, one fixture in `examples/`, and one line in `cofferdam-checks/src/lib.rs::all_builtins()`. Pattern by category:
+Almost every new check is one file in `cofferdam-checks/src/<category>/<check_name>.rs`, re-exported from `<category>/mod.rs`, plus one fixture in `examples/`, and one line in `cofferdam-checks/src/lib.rs::all_builtins()`. The `readability` and `warning` categories still use single files (`readability.rs`, `warning.rs`); `design/`, `refactor/`, and `consistency/` are directory modules. Pattern by category:
 
 | Pattern | Reference | What it does |
 |---|---|---|
 | Text-line scan | `readability.rs::MaxLineLength` | Iterate `file.lines()`, no AST |
 | AST visitor (single node) | `warning.rs::TripleEquals` | `oxc_ast_visit::Visit`, match nodes |
-| AST visitor (function-shape) | `design.rs::MaxParameters` | Walk `Function` + `ArrowFunctionExpression` |
-| Per-function score stack | `refactor.rs::CyclomaticComplexity` | Push on function entry, walk + tally, pop, emit if over limit |
-| Cross-file (corpus API) | `design.rs::DuplicateExportName` | Per-file `run` writes into `ctx.corpus`; `finalize` reads back and emits one `Issue` per match with `related: Vec<RelatedSpan>` |
+| AST visitor (function-shape) | `design/max_parameters.rs::MaxParameters` | Walk `Function` + `ArrowFunctionExpression` |
+| Per-function score stack | `refactor/cyclomatic_complexity.rs::CyclomaticComplexity` | Push on function entry, walk + tally, pop, emit if over limit |
+| Cross-file (corpus API) | `design/duplicate_export_name.rs::DuplicateExportName` | Per-file `run` writes into `ctx.corpus`; `finalize` reads back and emits one `Issue` per match with `related: Vec<RelatedSpan>` |
 | Configurable check | `warning.rs::NoConsoleLog` | Define a `&[OptionSpec]` constant, reference it from `CheckMeta.options`, read values via `ctx.options.get_string_list("...")` (or matching getter). User config lands in `[checks."Category.Name"]` in `cofferdam.invariants.toml`. |
 
 ### Required scaffolding for any AST check
@@ -76,7 +76,7 @@ const META: CheckMeta = CheckMeta {
     base_priority: 15,            // -20..=20. Warning=15, Refactor=10, Design=5, Readability=-5, etc.
     default_severity: Severity::High,  // engine stamps this onto every emitted Issue
     explanation: "...",
-    body: include_str!("../docs/Category.Name.md"),  // long-form catalog entry; file must exist (compile-time include)
+    body: include_str!("../../docs/Category.Name.md"),  // long-form catalog entry; file must exist (compile-time include); ../../ because checks live in src/<category>/<check>.rs
     requires_types: false,        // true → routes through the ts-morph type host (cd-9hp.2); see design/type-host-wire.md
     consistency: false,           // true → engine runs in two-pass mode
     options: &[],                 // or a `&[OptionSpec]` const for a configurable check
@@ -202,7 +202,7 @@ Two checks share storage by referencing the same `CorpusKey<T>` constant (same n
 
 Cofferdam's structure is parallel-friendly because most checks are one self-contained file. Safe to fan out:
 
-- New checks under `cofferdam-checks/src/<category>.rs` (each agent picks an unused name)
+- New checks under `cofferdam-checks/src/<category>/<check_name>.rs` + re-export in `<category>/mod.rs` (each agent picks an unused name)
 - New formatters under `cofferdam-formatters/src/<format>.rs`
 - New examples / fixtures
 - Documentation pages under `docs/`

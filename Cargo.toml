@@ -18,7 +18,7 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/TAJD/cofferdam"
 authors = ["cofferdam contributors"]
-rust-version = "1.79"
+rust-version = "1.93"
 
 [workspace.dependencies]
 cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.5" }

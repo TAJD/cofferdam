@@ -1,0 +1,30 @@
+# Supply-chain policy gate (cd-othw): cargo-deny over advisories, licenses,
+# bans, and sources, per the policy in deny.toml at the repo root.
+#
+# Runs on every push/PR (a new dependency must clear the gate on the PR
+# that introduces it) AND on a weekly cron — advisories are published
+# against existing lockfiles, so a repo with no commits can still go red.
+
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays 06:30 UTC — early enough to land before the work week starts.
+    - cron: "30 6 * * 1"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          # all-features matches the [graph] setting in deny.toml; the
+          # action reads deny.toml from the repo root automatically.

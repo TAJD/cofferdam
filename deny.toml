@@ -1,0 +1,38 @@
+# cargo-deny policy (cd-othw). Run locally with `cargo deny check`;
+# CI runs it in .github/workflows/security.yml on every push/PR plus a
+# weekly cron (advisories rot without code changes).
+
+[graph]
+all-features = true
+
+[advisories]
+# A yanked crate in the lockfile is always a mistake.
+yanked = "deny"
+
+[licenses]
+# Permissive-only allowlist. Extend deliberately — a new license here is
+# a policy decision, not a build fix.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions are noise we tolerate (oxc/tree-sitter pull large
+# trees); flag but don't fail.
+multiple-versions = "warn"
+# A wildcard version requirement in our own manifests is always wrong.
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

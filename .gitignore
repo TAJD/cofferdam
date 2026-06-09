@@ -120,9 +120,3 @@ typst-support-spec/
 .claude/settings.local.json
 # bd worktree
 np84-docs-url/
-# bd worktree
-glob-precompile/
-# bd worktree
-snapshot-tests/
-# bd worktree
-runcheck-split/

@@ -15,7 +15,7 @@
 //! `INSTA_UPDATE=always cargo test`) and reviewed in the diff before merging.
 
 use cofferdam_core::{Issue, Location, Priority, RelatedSpan, Severity, Span};
-use cofferdam_formatters::{CompactFormatter, JsonFormatter, TextFormatter};
+use cofferdam_formatters::{CompactFormatter, JsonFormatter, SarifFormatter, TextFormatter};
 use std::path::{Path, PathBuf};
 
 // ── fixture helpers ──────────────────────────────────────────────────────────
@@ -194,4 +194,38 @@ fn compact_render_contract() {
 #[test]
 fn compact_render_empty() {
     insta::assert_snapshot!(CompactFormatter::render(&[]));
+}
+
+// ── SarifFormatter ────────────────────────────────────────────────────────────
+//
+// Two non-deterministic values are redacted so snapshots are stable across
+// Rust versions and machines:
+//   * tool version  — changes on every release; replaced with "[VERSION]"
+//   * fingerprints  — DefaultHasher seed varies; replaced with "[FINGERPRINT]"
+
+#[test]
+fn sarif_render_contract() {
+    let issues = fixture_issues();
+    // Pass &[] for metas → synthesised stub rules (one per unique check id).
+    // This keeps the test self-contained (no cofferdam-checks dep) while still
+    // exercising the full result/relatedLocations/partialFingerprints output.
+    insta::with_settings!({
+        filters => vec![
+            (env!("CARGO_PKG_VERSION"), "[VERSION]"),
+            (r#""cofferdam/v1": "[0-9a-f]{16}""#, r#""cofferdam/v1": "[FINGERPRINT]""#),
+        ]
+    }, {
+        insta::assert_snapshot!(SarifFormatter::render_pretty(&issues, &[]));
+    });
+}
+
+#[test]
+fn sarif_render_empty() {
+    insta::with_settings!({
+        filters => vec![
+            (env!("CARGO_PKG_VERSION"), "[VERSION]"),
+        ]
+    }, {
+        insta::assert_snapshot!(SarifFormatter::render_pretty(&[], &[]));
+    });
 }

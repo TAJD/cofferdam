@@ -1,0 +1,276 @@
+---
+source: crates/cofferdam-formatters/tests/snapshots.rs
+expression: "SarifFormatter::render_pretty(&issues, &[])"
+---
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "cofferdam",
+          "version": "[VERSION]",
+          "informationUri": "https://github.com/TAJD/cofferdam",
+          "rules": [
+            {
+              "id": "Consistency.QuoteStyle",
+              "name": "QuoteStyle",
+              "shortDescription": {
+                "text": "(no metadata available)"
+              },
+              "fullDescription": {
+                "text": "(no metadata available)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "unknown",
+                "priority": 0,
+                "tags": [
+                  "unknown"
+                ]
+              }
+            },
+            {
+              "id": "Design.DuplicateExportName",
+              "name": "DuplicateExportName",
+              "shortDescription": {
+                "text": "(no metadata available)"
+              },
+              "fullDescription": {
+                "text": "(no metadata available)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "unknown",
+                "priority": 0,
+                "tags": [
+                  "unknown"
+                ]
+              }
+            },
+            {
+              "id": "Readability.MaxLineLength",
+              "name": "MaxLineLength",
+              "shortDescription": {
+                "text": "(no metadata available)"
+              },
+              "fullDescription": {
+                "text": "(no metadata available)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "unknown",
+                "priority": 0,
+                "tags": [
+                  "unknown"
+                ]
+              }
+            },
+            {
+              "id": "Refactor.CyclomaticComplexity",
+              "name": "CyclomaticComplexity",
+              "shortDescription": {
+                "text": "(no metadata available)"
+              },
+              "fullDescription": {
+                "text": "(no metadata available)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "unknown",
+                "priority": 0,
+                "tags": [
+                  "unknown"
+                ]
+              }
+            },
+            {
+              "id": "Warning.TripleEquals",
+              "name": "TripleEquals",
+              "shortDescription": {
+                "text": "(no metadata available)"
+              },
+              "fullDescription": {
+                "text": "(no metadata available)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "unknown",
+                "priority": 0,
+                "tags": [
+                  "unknown"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "Consistency.QuoteStyle",
+          "level": "note",
+          "message": {
+            "text": "use single quotes to match the dominant style in this project"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app.ts"
+                },
+                "region": {
+                  "startLine": 12,
+                  "startColumn": 5,
+                  "byteOffset": 200,
+                  "byteLength": 15
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "cofferdam/v1": "[FINGERPRINT]"
+          }
+        },
+        {
+          "ruleId": "Design.DuplicateExportName",
+          "level": "warning",
+          "message": {
+            "text": "export `Button` appears in multiple barrel files"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/components/index.ts"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 1,
+                  "byteOffset": 40,
+                  "byteLength": 16
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/ui/index.ts"
+                },
+                "region": {
+                  "startLine": 7,
+                  "startColumn": 1,
+                  "byteOffset": 120,
+                  "byteLength": 16
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shared/index.ts"
+                },
+                "region": {
+                  "startLine": 2,
+                  "startColumn": 1,
+                  "byteOffset": 18,
+                  "byteLength": 16
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "cofferdam/v1": "[FINGERPRINT]"
+          }
+        },
+        {
+          "ruleId": "Readability.MaxLineLength",
+          "level": "note",
+          "message": {
+            "text": "line is 145 columns, exceeds limit of 120"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/utils/format.ts"
+                },
+                "region": {
+                  "startLine": 88,
+                  "startColumn": 121,
+                  "byteOffset": 3200,
+                  "byteLength": 144
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "cofferdam/v1": "[FINGERPRINT]"
+          }
+        },
+        {
+          "ruleId": "Refactor.CyclomaticComplexity",
+          "level": "error",
+          "message": {
+            "text": "function `processOrder` has cyclomatic complexity 14, exceeds limit of 10"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/orders/processor.ts"
+                },
+                "region": {
+                  "startLine": 22,
+                  "startColumn": 1,
+                  "byteOffset": 580,
+                  "byteLength": 40
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "cofferdam/v1": "[FINGERPRINT]"
+          }
+        },
+        {
+          "ruleId": "Warning.TripleEquals",
+          "level": "error",
+          "message": {
+            "text": "use `===` instead of `==` to avoid type coercion"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/auth/validate.ts"
+                },
+                "region": {
+                  "startLine": 47,
+                  "startColumn": 18,
+                  "byteOffset": 1402,
+                  "byteLength": 2
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "cofferdam/v1": "[FINGERPRINT]"
+          }
+        }
+      ]
+    }
+  ]
+}

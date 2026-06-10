@@ -15,6 +15,7 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 - [Ignore syntax](docs/ignore.md) — `.cofferdamignore` rules
 - [Output formats](docs/output-formats.md) — text, JSON, compact, SARIF
 - [Architectural specs](docs/invariants.md) — `cofferdam.invariants.toml`, `Design.LayerViolation`, `Design.BoundaryFrozen`
+- [AI agent workflow](docs/agents.md) — `cofferdam agents` onboarding prompt
 
 ## Install
 

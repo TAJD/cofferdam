@@ -2,6 +2,7 @@
 
 mod advise;
 mod advise_diff;
+mod agents;
 mod ast_wire;
 mod baseline_diff;
 mod baseline_lint;
@@ -338,6 +339,15 @@ enum Cmd {
         #[arg(long)]
         pretty: bool,
     },
+    /// Print the agent-onboarding prompt — a ready-to-paste markdown block
+    /// that tells an AI coding agent how to use cofferdam in this repository.
+    /// Covers `advise`, `advise --diff`, `check --robot`, and the
+    /// `cofferdam.invariants.toml` contract. Output is version-pinned so
+    /// AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a
+    /// file to create or refresh an agent context fragment:
+    ///
+    ///   cofferdam agents >> AGENTS.md
+    Agents,
     /// JIT architectural advisory for agents — emit the rules that apply
     /// to a given file or directory, INDEPENDENT of whether any current
     /// code violates them. Designed for agentic edit loops: an LLM agent
@@ -670,6 +680,7 @@ fn main() -> ExitCode {
             robot,
             pretty,
         }),
+        Cmd::Agents => agents::run(),
         Cmd::Advise {
             paths,
             format: _,

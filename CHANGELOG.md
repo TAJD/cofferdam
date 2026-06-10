@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `cofferdam agents` subcommand (cd-l4se). Prints a version-pinned markdown prompt that tells an AI coding agent how to use cofferdam in the current project: when to reach for `cofferdam advise`, how to pre-flight changes with `advise --diff`, how to consume machine-readable findings via `check --robot`, what `cofferdam.invariants.toml` governs, and where to report misbehaviour. Pipe the output into `AGENTS.md` / `CLAUDE.md` to keep agent context files in sync with the installed version. New doc [`docs/agents.md`](docs/agents.md).
+
 ## [0.3.6] - 2026-06-09
 
 ### Added

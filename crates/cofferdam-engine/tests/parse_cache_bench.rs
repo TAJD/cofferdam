@@ -1,8 +1,16 @@
 //! cd-9hp.4 cp1 — parse-cache no-op-re-run regression budget.
 //!
-//! Measures the wall-clock speedup of a no-op re-run of
-//! [`cofferdam_engine::Engine::analyze_with_sources_cached`] against
-//! the equivalent cold run.
+//! ## Timing-assertion convention (cd-mhks)
+//!
+//! Wall-clock ratio assertions in this file are tagged `#[ignore]` so they
+//! are excluded from the default test run (and from the pre-push hook, which
+//! runs `cargo clippy -D warnings` concurrently with `cargo test` and can
+//! cause spurious timing failures under CPU contention). Run them explicitly:
+//!
+//!   cargo test -p cofferdam-engine -- --ignored
+//!
+//! Functional assertions (findings parity, cache hit/miss counters) remain
+//! in the default run via `parse_cache_correctness` and are NOT ignored.
 //!
 //! ## What the bead expected vs reality
 //!
@@ -91,14 +99,17 @@ fn results_dir() -> PathBuf {
         .join("parse-cache-bench-results")
 }
 
-#[test]
-fn parse_cache_no_op_rerun_within_budget() {
+/// Run the parse-cache bench. Returns `None` when no target repo is available.
+///
+/// Runs all functional assertions inline (findings parity, hit/miss counters).
+/// Timing data is returned so the `#[ignore]` timing test can assert against it.
+fn run_parse_cache_bench() -> Option<BenchResult> {
     let Some(repo) = target_repo() else {
         println!(
             "[parse_cache_bench] no bench repo found; set COFFERDAM_BENCH_REPO \
              or place a TS repo at C:/Users/tajdi/bestefforttools. Skipping."
         );
-        return;
+        return None;
     };
 
     let discovery_opts = DiscoveryOptions::default();
@@ -206,14 +217,36 @@ fn parse_cache_no_op_rerun_within_budget() {
         );
     }
 
+    Some(result)
+}
+
+/// Functional correctness: findings parity and cache hit/miss counters.
+///
+/// Wall-clock timing gate lives in [`parse_cache_no_op_rerun_within_budget`]
+/// (`#[ignore]`), excluded from the default run to avoid pre-push hook flakes.
+#[test]
+fn parse_cache_correctness() {
+    run_parse_cache_bench();
+}
+
+// cd-mhks: timing assertion excluded from the default run — flakes when the
+// pre-push hook runs cargo clippy concurrently with cargo test (CPU contention
+// causes the warm pass to occasionally be slower than cold).
+// Run explicitly: cargo test -p cofferdam-engine -- --ignored
+#[test]
+#[ignore]
+fn parse_cache_no_op_rerun_within_budget() {
+    let Some(result) = run_parse_cache_bench() else {
+        return;
+    };
     assert!(
-        speedup_ratio >= HARD_FLOOR,
+        result.speedup_ratio >= HARD_FLOOR,
         "[parse_cache_bench] regression: warm pass slower than cold ({:.2}× < {:.1}× floor, \
          documented budget {:.1}×); cold={:.2}ms warm={:.2}ms",
-        speedup_ratio,
+        result.speedup_ratio,
         HARD_FLOOR,
         DOCUMENTED_BUDGET,
-        cold_ms,
-        warm_ms
+        result.cold_ms,
+        result.warm_ms
     );
 }

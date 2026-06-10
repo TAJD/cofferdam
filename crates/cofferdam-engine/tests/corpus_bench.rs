@@ -19,6 +19,10 @@
 //! to be under 5 s per repo. If a repo genuinely approaches 30 s, raise the
 //! bound here and document the actual time.
 //!
+//! The perf assertion lives in `corpus_smoke_timing` (`#[ignore]`) so it is
+//! excluded from the default test run and the pre-push hook (cd-mhks). Run it
+//! explicitly: `cargo test -p cofferdam-engine -- --ignored`
+//!
 //! # Panics
 //! Any panic during per-repo analysis is caught via `catch_unwind`, reported
 //! to stdout, and re-panicked at the end so the test fails. We never swallow
@@ -30,6 +34,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cofferdam_checks::all_builtins;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine};
 use serde::Serialize;
+
+// Per-repo wall-clock limit used by the `#[ignore]` timing test.
+const WALL_MS_LIMIT: u128 = 30_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,26 +109,22 @@ fn now_unix_ms() -> u128 {
         .as_millis()
 }
 
-// ---------------------------------------------------------------------------
-// Test
-// ---------------------------------------------------------------------------
-
-#[test]
-fn corpus_smoke() {
+/// Run the corpus bench. Returns `None` when the corpus directory is absent.
+///
+/// Collects per-repo results (including wall_ms) without asserting on timing.
+/// Timing assertions live in the `#[ignore]` test. The returned `panicked` list
+/// is non-empty if any repo caused a panic — callers should re-panic on it.
+fn run_corpus_bench() -> Option<(Vec<RepoResult>, Vec<String>)> {
     let corpus = corpus_dir();
 
-    // --- Early exit when corpus is absent -----------------------------------
     let repos = corpus_repos(&corpus);
     if repos.is_empty() {
         println!(
             "[corpus_smoke] corpus not present, skipping \
              (run scripts/fetch-corpus.sh)"
         );
-        return;
+        return None;
     }
-
-    // Performance bound per repo (ms). See module-level doc for rationale.
-    const WALL_MS_LIMIT: u128 = 30_000;
 
     let engine = Engine::new(all_builtins());
     let discovery_opts = DiscoveryOptions::default();
@@ -175,12 +178,6 @@ fn corpus_smoke() {
                 });
             }
             Ok((ts_files, findings, parse_errors, wall_ms)) => {
-                // Perf assertion — generous bound to catch catastrophic regressions.
-                assert!(
-                    wall_ms < WALL_MS_LIMIT,
-                    "[corpus_smoke] {repo_name}: analysis took {wall_ms} ms, \
-                     limit is {WALL_MS_LIMIT} ms"
-                );
                 results.push(RepoResult {
                     name: repo_name,
                     ts_files,
@@ -244,12 +241,57 @@ fn corpus_smoke() {
         }
     }
 
-    // --- Re-panic if any repo panicked -------------------------------------
+    Some((results, panicked))
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/// Correctness smoke: engine must not panic on any corpus repo.
+///
+/// Wall-clock timing gate lives in [`corpus_smoke_timing`] (`#[ignore]`),
+/// excluded from the default run to avoid pre-push hook flakes (cd-mhks).
+#[test]
+fn corpus_smoke() {
+    let Some((_results, panicked)) = run_corpus_bench() else {
+        return;
+    };
+
     if !panicked.is_empty() {
         panic!(
             "[corpus_smoke] {} repo(s) panicked: {}",
             panicked.len(),
             panicked.join(", ")
+        );
+    }
+}
+
+// cd-mhks: timing assertion excluded from the default run — flakes under CPU
+// load (pre-push hook runs cargo clippy concurrently with cargo test).
+// Run explicitly: cargo test -p cofferdam-engine -- --ignored
+#[test]
+#[ignore]
+fn corpus_smoke_timing() {
+    let Some((results, panicked)) = run_corpus_bench() else {
+        return;
+    };
+
+    if !panicked.is_empty() {
+        panic!(
+            "[corpus_smoke_timing] {} repo(s) panicked: {}",
+            panicked.len(),
+            panicked.join(", ")
+        );
+    }
+
+    for r in &results {
+        assert!(
+            r.wall_ms < WALL_MS_LIMIT,
+            "[corpus_smoke_timing] {}: analysis took {} ms, limit is {} ms",
+            r.name,
+            r.wall_ms,
+            WALL_MS_LIMIT
         );
     }
 }

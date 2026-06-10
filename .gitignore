@@ -104,3 +104,7 @@ typst-support-spec/
 # Claude Code local (per-user) settings — settings.json is shareable, .local isn't
 .claude/settings.local.json
 np84-docs-url/
+# bd worktree
+l4se-agents/
+# bd worktree
+mhks-bench-flake/

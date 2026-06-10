@@ -4,7 +4,7 @@ This file covers build setup, toolchain quirks, release procedures, and project 
 
 ## Building from source
 
-Requires Rust 1.78+. With [rustup](https://rustup.rs/) installed:
+Requires Rust 1.93+ (the declared MSRV, enforced by the CI `msrv` job). With [rustup](https://rustup.rs/) installed:
 
 ```bash
 cargo build --workspace
@@ -17,16 +17,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 `rust-toolchain.toml` pins the channel to `stable` (host-portable). On Windows, prefer the default MSVC toolchain. If the MSVC C++ workload is installed, do **not** set a GNU `RUSTUP_TOOLCHAIN` override — mixing GNU-built artifacts with MSVC-built ones (including git hooks' cargo runs) fails with LNK1103 link errors. The GNU override (`RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`) is a last resort only for hosts that cannot install the MSVC workload, and must be used consistently for every cargo invocation on that host.
 
-Linux and macOS pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI. MSRV is 1.93, declared in `Cargo.toml` and enforced by the CI `msrv` job.
+Linux and macOS pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI.
 
 ## Binary overrides (npm postinstall)
 
-The `@cofferdam/cofferdam` npm package downloads a prebuilt binary on `postinstall`. Two escape hatches:
-
-- `COFFERDAM_BINARY_PATH=/abs/path` — skip the download and use this binary instead (useful for testing a local build).
-- `COFFERDAM_SKIP_DOWNLOAD=1` — skip postinstall entirely (CI / Docker layers where you supply the binary another way).
-
-For air-gapped runners: download the archive for your platform from the GitHub Release, extract it, then point `COFFERDAM_BINARY_PATH` at the extracted binary and run `npm rebuild @cofferdam/cofferdam`.
+User-facing install mechanics — `COFFERDAM_BINARY_PATH`, `COFFERDAM_SKIP_DOWNLOAD`, air-gapped installs — live in [docs/install.md](docs/install.md) (published on the docs site).
 
 ## Cutting a release
 
@@ -66,29 +61,16 @@ The unscoped legacy name `cofferdam` (binary wrapper, owned by user `tajdickson`
 
 ## Phased build
 
-1. Rust engine + `Issue` + priority + report formatter + built-in checks across all 5 categories
-2. Two-pass consistency mode with `Consistency.QuoteStyle` as the canary
-3. Baseline + severity-axis + `--since` — biggest adoption-unlock
-4. napi-rs FFI + JS plugin host, ship `@cofferdam/cofferdam`, `@cofferdam/check-sdk`, and `@cofferdam/recommended`
-5. `@cofferdam/types-aware` package with `ts-morph` checks
-6. LSP server + SARIF + GitHub Code Scanning
-
-Phase 1 is in progress. Phases 3–6 are planned.
+1. Rust engine + `Issue` + priority + report formatter + built-in checks across all 5 categories — **shipped**
+2. Two-pass consistency mode with `Consistency.QuoteStyle` as the canary — **shipped**
+3. Baseline + severity-axis + `--since` — biggest adoption-unlock — **shipped**
+4. napi-rs FFI + JS plugin host, ship `@cofferdam/cofferdam`, `@cofferdam/check-sdk`, and `@cofferdam/recommended` — **in progress** (plugin host + both npm packages shipped; napi FFI and `@cofferdam/recommended` outstanding)
+5. `@cofferdam/types-aware` package with `ts-morph` checks — type-host infrastructure + first type-aware check shipped early (cd-9hp.2); standalone package outstanding
+6. LSP server + SARIF + GitHub Code Scanning — SARIF and a workspace-aware LSP shipped early; Code Scanning integration outstanding
 
 ## Project structure
 
-```
-crates/
-  cofferdam-core/         # Check trait, Issue, Span, parser, AST surface
-  cofferdam-engine/       # discovery, orchestration, parse loop, sort
-  cofferdam-checks/       # built-in checks (one file per category)
-  cofferdam-formatters/   # text + json output, future compact/SARIF
-  cofferdam-cli/          # `cofferdam` binary
-  cofferdam-lsp/          # LSP server (phase 6, stub today)
-  cofferdam-napi/         # napi-rs FFI surface (phase 4, stub today)
-packages/                 # @cofferdam/* npm packages (phase 4+)
-examples/                 # fixture .ts files exercised by checks
-```
+The canonical, kept-current crate map lives in [CLAUDE.md § Project structure](CLAUDE.md#project-structure) — one source of truth, used by both humans and agents.
 
 ## Real-world corpus
 

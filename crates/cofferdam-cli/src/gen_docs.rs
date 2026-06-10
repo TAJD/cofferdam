@@ -310,38 +310,90 @@ fn build_index_md(metas: &[&'static CheckMeta]) -> String {
 
 fn build_llms_txt() -> String {
     // URL is locked at https://tajd.github.io/cofferdam per spec (cd-t6n + cd-m77).
-    concat!(
-        "# Cofferdam\n",
-        "\n",
-        "> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. \
-         Five-category model: Consistency, Design, Readability, Refactor, Warning. \
-         Priority-sorted output, baseline workflow, CI-friendly.\n",
-        "\n",
-        "## Install\n",
-        "\n",
-        "`npm install --save-dev cofferdam`\n",
-        "\n",
-        "## Catalog\n",
-        "\n",
-        "- [Machine-readable index](https://tajd.github.io/cofferdam/checks.json): \
-         the canonical artifact. JSON, schema_version 1, sorted by check id. \
-         AI agents should consume this.\n",
-        "- [Human-readable catalog](https://tajd.github.io/cofferdam/checks/): \
-         grouped by category, with prose, examples, and configuration.\n",
-        "- [CLI reference](https://tajd.github.io/cofferdam/reference/cli): \
-         every flag of every subcommand.\n",
-        "\n",
-        "## Subcommands\n",
-        "\n",
-        "- `cofferdam check [paths...]`: run all checks. The default workflow.\n",
-        "- `cofferdam baseline write|check`: snapshot accepted findings; gate CI on new ones only.\n",
-        "- `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.\n",
-        "- `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.\n",
-        "- `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.\n",
-        "- `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.\n",
-        "- `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).\n",
+    // The `Current version:` line is audited by `scripts/version.mjs check`
+    // (cd-54sh) — keep its exact shape if you edit this.
+    format!(
+        concat!(
+            "# Cofferdam\n",
+            "\n",
+            "> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. \
+             Five-category model: Consistency, Design, Readability, Refactor, Warning. \
+             Priority-sorted output, baseline workflow, CI-friendly. \
+             Current version: {version}.\n",
+            "\n",
+            "## Install\n",
+            "\n",
+            "`npm install --save-dev @cofferdam/cofferdam`\n",
+            "\n",
+            "Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64/arm64, \
+             Windows x64; Node 16+). Escape hatches and air-gapped installs: \
+             [install guide](https://tajd.github.io/cofferdam/install).\n",
+            "\n",
+            "## Catalog\n",
+            "\n",
+            "- [Machine-readable index](https://tajd.github.io/cofferdam/checks.json): \
+             the canonical artifact. JSON, schema_version 1, sorted by check id. \
+             AI agents should consume this.\n",
+            "- [Human-readable catalog](https://tajd.github.io/cofferdam/checks/): \
+             grouped by category, with prose, examples, and configuration.\n",
+            "- [CLI reference](https://tajd.github.io/cofferdam/reference/cli): \
+             every flag of every subcommand.\n",
+            "\n",
+            "## Docs\n",
+            "\n",
+            "- [Agent advisory](https://tajd.github.io/cofferdam/reference/advise): \
+             `cofferdam advise` — the rules that apply to a file, before you edit it.\n",
+            "- [Output formats](https://tajd.github.io/cofferdam/output-formats): \
+             text, JSON, compact, SARIF.\n",
+            "- [CI recipes](https://tajd.github.io/cofferdam/ci-recipes): \
+             GitHub Actions, GitLab, CircleCI, Drone, pre-commit.\n",
+            "- [Suppression directives](https://tajd.github.io/cofferdam/suppression): \
+             `// cofferdam-ignore` syntax.\n",
+            "- [Ignoring files](https://tajd.github.io/cofferdam/ignore): \
+             `.cofferdamignore` rules.\n",
+            "- [Per-path overrides](https://tajd.github.io/cofferdam/overrides): \
+             retune or disable single checks on matching globs.\n",
+            "- [Type-aware checks](https://tajd.github.io/cofferdam/type-aware-checks): \
+             checks backed by the TypeScript type system; requirements and opt-out.\n",
+            "- [Architectural invariants](https://tajd.github.io/cofferdam/invariants): \
+             `cofferdam.invariants.toml`, layering rules, frozen boundaries.\n",
+            "- [Plugin SDK](https://tajd.github.io/cofferdam/plugin-sdk-guide): \
+             write custom checks in TypeScript with `@cofferdam/check-sdk`.\n",
+            "- [Doctor](https://tajd.github.io/cofferdam/doctor): \
+             diagnose install/config issues.\n",
+            "\n",
+            "## Subcommands\n",
+            "\n",
+            "- `cofferdam check [paths...]`: run all checks. The default workflow. \
+             `--robot` switches to token-economical machine-readable output.\n",
+            "- `cofferdam advise <file>`: print the rules and constraints that apply to a file \
+             — run this BEFORE editing.\n",
+            "- `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports \
+             `would_fire` / `would_clear` against the working tree.\n",
+            "- `cofferdam baseline write|check`: snapshot accepted findings; gate CI on new ones only.\n",
+            "- `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.\n",
+            "- `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.\n",
+            "- `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.\n",
+            "- `cofferdam watch [paths...]`: re-run checks on file change.\n",
+            "- `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.\n",
+            "- `cofferdam lsp`: LSP server over stdio for editor integration.\n",
+            "- `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).\n",
+            "\n",
+            "## Agent workflow\n",
+            "\n",
+            "1. `cofferdam advise <file>` before editing — learn the layering, complexity, and \
+             style constraints that apply to that file.\n",
+            "2. Make the change.\n",
+            "3. `cofferdam advise --diff <base-ref>` to pre-flight — `would_fire` should be empty \
+             or justified.\n",
+            "4. `cofferdam check --robot` for machine-readable findings; fix them, or suppress \
+             with a reasoned `// cofferdam-ignore: <CheckId>: <reason>`.\n",
+            "\n",
+            "`cofferdam.invariants.toml` at the repo root is the source of architectural truth — \
+             read it before structural changes.\n",
+        ),
+        version = env!("CARGO_PKG_VERSION"),
     )
-    .to_string()
 }
 
 // ---------------------------------------------------------------------------

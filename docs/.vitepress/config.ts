@@ -29,7 +29,11 @@ export default defineConfig({
     sidebar: [
       {
         text: 'Getting started',
-        items: [{ text: 'Introduction', link: '/' }],
+        items: [
+          { text: 'Introduction', link: '/' },
+          { text: 'Install', link: '/install' },
+          { text: 'Language support', link: '/languages' },
+        ],
       },
       { text: 'Built-in checks', collapsed: false, items: checksItems },
       {

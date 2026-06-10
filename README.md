@@ -10,6 +10,8 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 
 - [Check catalog](https://tajd.github.io/cofferdam/checks/) — every built-in check with bad/good examples
 - [CLI reference](https://tajd.github.io/cofferdam/reference/cli/) — flags and exit codes
+- [llms.txt](https://tajd.github.io/cofferdam/llms.txt) — the entrypoint for LLM agents: version, subcommands, agent workflow, docs links
+- [Install guide](docs/install.md) — binary overrides, air-gapped installs, building from source
 - [CI recipes](docs/ci-recipes.md) — GitHub Actions, GitLab, CircleCI, Drone, pre-commit
 - [Suppression syntax](docs/suppression.md) — `// cofferdam-ignore` directives
 - [Ignore syntax](docs/ignore.md) — `.cofferdamignore` rules
@@ -26,9 +28,7 @@ pnpm add -D @cofferdam/cofferdam
 yarn add --dev @cofferdam/cofferdam
 ```
 
-The `postinstall` script downloads the matching prebuilt binary for your platform (Linux x64/arm64 glibc + musl, macOS x64/arm64, Windows x64). Node 16+ required.
-
-Building from source instead requires Rust 1.93+ (enforced in CI): `cargo install --path crates/cofferdam-cli` from a checkout.
+The `postinstall` script downloads the matching prebuilt binary for your platform (Linux x64/arm64 glibc + musl, macOS x64/arm64, Windows x64). Node 16+ required. Binary overrides, air-gapped installs, and building from source (Rust 1.93+): [install guide](docs/install.md).
 
 ## Usage
 
@@ -49,29 +49,17 @@ The first column is the priority score; the second is severity. Priority sorts t
 
 ## CI
 
-```yaml
-# .github/workflows/cofferdam.yml
-name: cofferdam
-on: [push, pull_request]
-jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npx --yes @cofferdam/cofferdam check
+One command in any runner with Node:
+
+```sh
+npx --yes @cofferdam/cofferdam check
 ```
 
-For PR-only mode, baselines, and other CI integrations: see **[`docs/ci-recipes.md`](docs/ci-recipes.md)**.
+Ready-made workflows (GitHub Actions, GitLab, CircleCI, Drone, pre-commit), PR-only mode, and baselines: **[`docs/ci-recipes.md`](docs/ci-recipes.md)**.
 
 ## Languages
 
-TypeScript is the primary surface: every flagship check (orphan exports, layering, complexity, suppression hygiene) targets TS / TSX / JS / JSX / MJS / CJS via the `oxc` parser.
-
-A second-language **Rust adapter** ships under `crates/cofferdam-rust`, exercising the engine's per-language dispatch (cd-91zc). Three checks today — `Rust.NoUnwrapInLib`, `Rust.NoUnimplementedInNonTest`, `Rust.MissingPubDoc` — and a CI dogfood job that runs cofferdam against its own Rust workspace. The Rust adapter is load-bearing for the polylingual architecture pledge: until a second domain existed, "framework, not TS-tool" was theory; it now ships as a working second parser feeding the same `Check` trait the TS adapter uses.
-
-Future adapters (SQL, IaC, GraphQL) follow the same shape — see [`MAINTAINERS.md`](MAINTAINERS.md#phased-build) for the roadmap.
+TypeScript (TS / TSX / JS / JSX / MJS / CJS via `oxc`) is the primary surface. A Rust adapter ships as the second language and polylingual proof; SQL, IaC, and GraphQL adapters follow the same shape. Details: [language support](docs/languages.md).
 
 ## Dogfood
 

@@ -16,7 +16,7 @@
 //! switch. Sibling formatters (`compact`, `sarif`) live next door and
 //! share the same `Issue` input.
 
-use cofferdam_core::{Issue, RelatedSpan, Severity};
+use cofferdam_core::{docs_url, Issue, RelatedSpan, Severity};
 use serde::Serialize;
 
 use crate::common::{category_of, category_str, normalize_path};
@@ -33,6 +33,8 @@ pub(crate) struct RobotFinding<'a> {
     pub id: &'a str,
     /// Lowercase category name (`"warning"`, `"refactor"`, ...).
     pub category: &'static str,
+    /// Link to the docs-catalog page for this check.
+    pub docs_url: String,
     /// Computed sort priority (-20..=20). Higher fixes first.
     pub priority: i8,
     /// Configured severity (`"info"`, `"warning"`, `"error"`).
@@ -137,6 +139,7 @@ impl JsonFormatter {
             .map(|i| RobotFinding {
                 id: i.check_id.as_str(),
                 category: category_str(category_of(&i.check_id)),
+                docs_url: docs_url(i.check_id.as_str()),
                 priority: i.priority.0,
                 severity: severity_str(i.severity),
                 file: normalize_path(&i.file),
@@ -210,6 +213,7 @@ impl JsonFormatter {
             .map(|(i, baselined)| RobotFinding {
                 id: i.check_id.as_str(),
                 category: category_str(category_of(&i.check_id)),
+                docs_url: docs_url(i.check_id.as_str()),
                 priority: i.priority.0,
                 severity: severity_str(i.severity),
                 file: normalize_path(&i.file),
@@ -291,6 +295,28 @@ mod tests {
             priority: Priority(10),
             related: Vec::new(),
         }
+    }
+
+    #[test]
+    fn json_finding_docs_url_is_correct() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.TripleEquals");
+        let output = JsonFormatter::render(&[issue]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(
+            parsed["findings"][0]["docs_url"],
+            "https://tajd.github.io/cofferdam/checks/Warning.TripleEquals"
+        );
+    }
+
+    #[test]
+    fn json_baseline_finding_docs_url_is_correct() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Refactor.CyclomaticComplexity");
+        let output = JsonFormatter::render_with_baseline(&[(issue, false)]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(
+            parsed["findings"][0]["docs_url"],
+            "https://tajd.github.io/cofferdam/checks/Refactor.CyclomaticComplexity"
+        );
     }
 
     #[test]

@@ -39,7 +39,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
-use cofferdam_core::{CheckMeta, Issue, RelatedSpan, Severity};
+use cofferdam_core::{docs_url, CheckMeta, Issue, RelatedSpan, Severity};
 use serde::Serialize;
 
 use crate::common::{category_str, normalize_path};
@@ -91,6 +91,7 @@ pub(crate) struct SarifRule<'a> {
     pub full_description: SarifText<'a>,
     pub default_configuration: SarifLevel,
     pub properties: SarifRuleProperties,
+    pub help_uri: String,
 }
 
 #[derive(Serialize)]
@@ -230,6 +231,7 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                     priority: meta.base_priority,
                     tags: vec![category_str(Some(meta.category))],
                 },
+                help_uri: docs_url(meta.id),
             },
             None => SarifRule {
                 id,
@@ -246,6 +248,7 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                     priority: 0,
                     tags: vec!["unknown"],
                 },
+                help_uri: docs_url(id),
             },
         };
         rules.push(rule);
@@ -444,6 +447,23 @@ mod tests {
         let rules = v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0]["id"], "Custom.Plugin");
+        assert_eq!(
+            rules[0]["helpUri"],
+            "https://tajd.github.io/cofferdam/checks/Custom.Plugin"
+        );
+    }
+
+    #[test]
+    fn sarif_rule_help_uri_points_at_docs_catalog() {
+        let issues = [issue("src/auth.ts", "Warning.TripleEquals", Severity::High)];
+        let metas = [meta("Warning.TripleEquals", Category::Warning)];
+        let out = SarifFormatter::render(&issues, &metas);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let rules = v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
+        assert_eq!(
+            rules[0]["helpUri"],
+            "https://tajd.github.io/cofferdam/checks/Warning.TripleEquals"
+        );
     }
 
     #[test]

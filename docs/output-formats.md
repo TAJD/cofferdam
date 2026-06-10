@@ -80,6 +80,7 @@ Every field listed below is **stable** — field names and types are part of the
 |-------|------|----------------|-------------|
 | `id` | `string` | Yes | Dotted check ID, e.g. `Warning.TripleEquals`. Stable — safe to use as a map key or filter. |
 | `category` | `string` | Yes | Lowercase category: `consistency` \| `design` \| `readability` \| `refactor` \| `warning`. |
+| `docs_url` | `string` | Yes | Canonical docs-catalog URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Warning.TripleEquals`. Derived from `id` — no per-check configuration needed. |
 | `priority` | `integer` | Yes | Computed sort priority in the range `-20..=20`. Higher value = surfaces first. Not configurable; derived by the engine. |
 | `severity` | `string` | Yes | Configured severity: `info` \| `low` \| `medium` \| `high` \| `critical`. Matches `--fail-on=<level>` threshold values. |
 | `file` | `string` | Yes | Path to the file containing the finding. Forward-slash normalized (even on Windows) so it is safe to use as an editor link or CLI argument on any platform. |

@@ -7,6 +7,7 @@ expression: "JsonFormatter::render_with_opts(&issues, cofferdam_formatters::Json
     {
       "id": "Consistency.QuoteStyle",
       "category": "consistency",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Consistency.QuoteStyle",
       "priority": -5,
       "severity": "low",
       "file": "src/app.ts",
@@ -19,6 +20,7 @@ expression: "JsonFormatter::render_with_opts(&issues, cofferdam_formatters::Json
     {
       "id": "Design.DuplicateExportName",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.DuplicateExportName",
       "priority": 5,
       "severity": "medium",
       "file": "src/components/index.ts",
@@ -47,6 +49,7 @@ expression: "JsonFormatter::render_with_opts(&issues, cofferdam_formatters::Json
     {
       "id": "Readability.MaxLineLength",
       "category": "readability",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Readability.MaxLineLength",
       "priority": -3,
       "severity": "info",
       "file": "src/utils/format.ts",
@@ -59,6 +62,7 @@ expression: "JsonFormatter::render_with_opts(&issues, cofferdam_formatters::Json
     {
       "id": "Refactor.CyclomaticComplexity",
       "category": "refactor",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Refactor.CyclomaticComplexity",
       "priority": 15,
       "severity": "high",
       "file": "src/orders/processor.ts",
@@ -71,6 +75,7 @@ expression: "JsonFormatter::render_with_opts(&issues, cofferdam_formatters::Json
     {
       "id": "Warning.TripleEquals",
       "category": "warning",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.TripleEquals",
       "priority": 15,
       "severity": "critical",
       "file": "src/auth/validate.ts",

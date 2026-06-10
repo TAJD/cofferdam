@@ -153,6 +153,20 @@ pub fn is_finalize_observer(check_id: &str) -> bool {
     FINALIZE_OBSERVER_CHECK_IDS.contains(&check_id)
 }
 
+/// Base URL of the hosted cofferdam docs site. Matches the base used by
+/// the README, `doctor.rs`, and `gen-docs`. A custom domain
+/// (`cofferdam.dev`) redirects here; this is the codebase-canonical base.
+pub const DOCS_BASE_URL: &str = "https://tajd.github.io/cofferdam";
+
+/// Canonical docs-catalog URL for a check id (`Category.Name`). The
+/// hosted catalog serves one clean-URL page per check at
+/// `{DOCS_BASE_URL}/checks/{id}` (no `.html`, no trailing slash). The
+/// id is used verbatim — case-sensitive, dot included — because that is
+/// exactly the page slug `gen-docs` emits.
+pub fn docs_url(check_id: &str) -> String {
+    format!("{DOCS_BASE_URL}/checks/{check_id}")
+}
+
 /// Mutable per-file scratch passed to `Check::run`. Carries the
 /// SourceFile and (when available) the parsed AST.
 ///
@@ -355,5 +369,18 @@ pub trait Check: Send + Sync {
     /// bytes at `issue.span` without re-reading from disk.
     fn autofix(&self, _issue: &Issue, _source: &SourceFile) -> Option<TextEdit> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docs_url_produces_correct_url() {
+        assert_eq!(
+            docs_url("Warning.TripleEquals"),
+            "https://tajd.github.io/cofferdam/checks/Warning.TripleEquals"
+        );
     }
 }

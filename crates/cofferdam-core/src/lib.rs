@@ -24,8 +24,8 @@ pub mod util;
 
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{
-    is_finalize_observer, Category, Check, CheckContext, CheckMeta, FinalizeContext,
-    FINALIZE_OBSERVER_CHECK_IDS,
+    docs_url, is_finalize_observer, Category, Check, CheckContext, CheckMeta, FinalizeContext,
+    DOCS_BASE_URL, FINALIZE_OBSERVER_CHECK_IDS,
 };
 pub use corpus::{CorpusError, CorpusIndex, CorpusKey};
 pub use edit::TextEdit;

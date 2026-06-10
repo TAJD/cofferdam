@@ -30,6 +30,7 @@ Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64
 ## Subcommands
 
 - `cofferdam check [paths...]`: run all checks. The default workflow. `--robot` switches to token-economical machine-readable output.
+- `cofferdam agents`: print a version-pinned onboarding prompt for AI coding agents — pipe into AGENTS.md / CLAUDE.md.
 - `cofferdam advise <file>`: print the rules and constraints that apply to a file — run this BEFORE editing.
 - `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports `would_fire` / `would_clear` against the working tree.
 - `cofferdam baseline write|check`: snapshot accepted findings; gate CI on new ones only.
@@ -42,6 +43,8 @@ Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64
 - `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).
 
 ## Agent workflow
+
+Run `cofferdam agents` for the full onboarding prompt. The short version:
 
 1. `cofferdam advise <file>` before editing — learn the layering, complexity, and style constraints that apply to that file.
 2. Make the change.

@@ -366,6 +366,8 @@ fn build_llms_txt() -> String {
             "\n",
             "- `cofferdam check [paths...]`: run all checks. The default workflow. \
              `--robot` switches to token-economical machine-readable output.\n",
+            "- `cofferdam agents`: print a version-pinned onboarding prompt for AI coding agents \
+             — pipe into AGENTS.md / CLAUDE.md.\n",
             "- `cofferdam advise <file>`: print the rules and constraints that apply to a file \
              — run this BEFORE editing.\n",
             "- `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports \
@@ -380,6 +382,8 @@ fn build_llms_txt() -> String {
             "- `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).\n",
             "\n",
             "## Agent workflow\n",
+            "\n",
+            "Run `cofferdam agents` for the full onboarding prompt. The short version:\n",
             "\n",
             "1. `cofferdam advise <file>` before editing — learn the layering, complexity, and \
              style constraints that apply to that file.\n",

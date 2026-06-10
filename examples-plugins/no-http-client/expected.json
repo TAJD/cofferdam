@@ -3,6 +3,7 @@
     {
       "id": "Warning.NoHttpClient",
       "category": "warning",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.NoHttpClient",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/no-http-client/fixture.ts",
@@ -15,6 +16,7 @@
     {
       "id": "Warning.NoHttpClient",
       "category": "warning",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.NoHttpClient",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/no-http-client/fixture.ts",
@@ -27,6 +29,7 @@
     {
       "id": "Warning.NoHttpClient",
       "category": "warning",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.NoHttpClient",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/no-http-client/fixture.ts",
@@ -39,6 +42,7 @@
     {
       "id": "Warning.NoHttpClient",
       "category": "warning",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.NoHttpClient",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/no-http-client/fixture.ts",
@@ -51,6 +55,7 @@
     {
       "id": "Design.OrphanExport",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.OrphanExport",
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/no-http-client/fixture.ts",
@@ -63,6 +68,7 @@
     {
       "id": "Design.OrphanExport",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.OrphanExport",
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/no-http-client/fixture.ts",

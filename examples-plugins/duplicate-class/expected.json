@@ -3,6 +3,7 @@
     {
       "id": "Design.DuplicateClassName",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.DuplicateClassName",
       "priority": 15,
       "severity": "medium",
       "file": "examples-plugins/duplicate-class/fixture/a.ts",
@@ -24,6 +25,7 @@
     {
       "id": "Design.DuplicateExportName",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.DuplicateExportName",
       "priority": 6,
       "severity": "medium",
       "file": "examples-plugins/duplicate-class/fixture/a.ts",
@@ -45,6 +47,7 @@
     {
       "id": "Design.OrphanExport",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.OrphanExport",
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/duplicate-class/fixture/a.ts",
@@ -57,6 +60,7 @@
     {
       "id": "Design.OrphanExport",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.OrphanExport",
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/duplicate-class/fixture/a.ts",
@@ -69,6 +73,7 @@
     {
       "id": "Design.OrphanExport",
       "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.OrphanExport",
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/duplicate-class/fixture/b.ts",

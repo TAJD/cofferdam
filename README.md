@@ -13,6 +13,8 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 - [CI recipes](docs/ci-recipes.md) — GitHub Actions, GitLab, CircleCI, Drone, pre-commit
 - [Suppression syntax](docs/suppression.md) — `// cofferdam-ignore` directives
 - [Ignore syntax](docs/ignore.md) — `.cofferdamignore` rules
+- [Per-path overrides](docs/overrides.md) — retune or disable single checks on matching globs via `[[overrides]]`
+- [Type-aware checks](docs/type-aware-checks.md) — checks backed by the TypeScript type system (requires Node + ts-morph; opt out with `[engine] type_aware = false`)
 - [Output formats](docs/output-formats.md) — text, JSON, compact, SARIF
 - [Architectural specs](docs/invariants.md) — `cofferdam.invariants.toml`, `Design.LayerViolation`, `Design.BoundaryFrozen`
 

@@ -15,19 +15,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Windows toolchain note
 
-`rust-toolchain.toml` pins the channel to `stable` (host-portable). On a Windows host without the MSVC C++ workload, override the host triple before running cargo:
+`rust-toolchain.toml` pins the channel to `stable` (host-portable). On Windows, prefer the default MSVC toolchain. If the MSVC C++ workload is installed, do **not** set a GNU `RUSTUP_TOOLCHAIN` override — mixing GNU-built artifacts with MSVC-built ones (including git hooks' cargo runs) fails with LNK1103 link errors. The GNU override (`RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`) is a last resort only for hosts that cannot install the MSVC workload, and must be used consistently for every cargo invocation on that host.
 
-```pwsh
-# PowerShell
-$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
-```
-
-```bash
-# bash / zsh
-export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu
-```
-
-Linux and macOS pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI.
+Linux and macOS pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI. MSRV is 1.93, declared in `Cargo.toml` and enforced by the CI `msrv` job.
 
 ## Binary overrides (npm postinstall)
 

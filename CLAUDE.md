@@ -13,14 +13,11 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`rust-toolchain.toml` pins `channel = "stable"` (host-portable for CI). On a Windows box without the MSVC C++ workload, local builds need:
+`rust-toolchain.toml` pins `channel = "stable"` (host-portable for CI). MSRV is **1.93**, declared in `Cargo.toml` `rust-version` and enforced by a dedicated CI job (cd-4kfk) — don't use newer-than-MSRV language features without bumping it deliberately.
 
-```bash
-export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu   # bash
-$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu" # PowerShell
-```
+**Windows: use the default MSVC toolchain. Do NOT set `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`.** This machine has the MSVC C++ workload installed; a GNU override mixes GNU-built artifacts with MSVC-built ones (including the git hooks' cargo runs) and fails with LNK1103 link errors, blocking pushes. CI runners pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI.
 
-CI runners pick up their native host triple and need no override. Never edit `rust-toolchain.toml` to pin a Windows-specific channel — that breaks Linux/macOS CI.
+Lints are centralised in the root `Cargo.toml` `[workspace.lints]` table; every crate inherits via `[lints] workspace = true` in its own `Cargo.toml`. A new crate MUST include that stanza or clippy behavior diverges from the workspace.
 
 ## Git hooks (opt-in)
 
@@ -39,19 +36,21 @@ crates/
   cofferdam-core/         # Check trait, Issue, Span, parser, AST surface
   cofferdam-engine/       # discovery, orchestration, parse loop, sort
   cofferdam-checks/       # built-in checks (one file per check, grouped in category subdirs)
-  cofferdam-formatters/   # text + json output, future compact/SARIF
+  cofferdam-formatters/   # text, json, compact, SARIF output
   cofferdam-cli/          # `cofferdam` binary
   cofferdam-graph/        # canonical cross-file graph schema (cd-9hp.9)
   cofferdam-rust/         # Rust source adapter — cofferdam's polylingual proof (cd-91zc)
   cofferdam-lsp/          # workspace-aware LSP server over stdio (cd-9hp.4 cp5)
   cofferdam-napi/         # napi-rs FFI surface (phase 4, stub today)
-packages/                 # @cofferdam/* npm packages (phase 4+)
+packages/                 # @cofferdam/cofferdam + @cofferdam/check-sdk (published on npm, versioned in lockstep)
 examples/                 # fixture .ts files exercised by checks
+examples-plugins/         # plugin SDK e2e fixtures
+examples-type-host/       # ts-morph type-host CI fixtures
 ```
 
 ## Writing a check (the recipe)
 
-Almost every new check is one file in `cofferdam-checks/src/<category>/<check_name>.rs`, re-exported from `<category>/mod.rs`, plus one fixture in `examples/`, and one line in `cofferdam-checks/src/lib.rs::all_builtins()`. The `readability` and `warning` categories still use single files (`readability.rs`, `warning.rs`); `design/`, `refactor/`, and `consistency/` are directory modules. Pattern by category:
+Almost every new check is one file in `cofferdam-checks/src/<category>/<check_name>.rs`, re-exported from `<category>/mod.rs`, plus one fixture in `examples/`, and one line in `cofferdam-checks/src/lib.rs::all_builtins()`. The `readability`, `warning`, and `consistency` categories still use single files (`readability.rs`, `warning.rs`, `consistency.rs`); `design/` and `refactor/` are directory modules. Pattern by category:
 
 | Pattern | Reference | What it does |
 |---|---|---|
@@ -97,7 +96,7 @@ impl Check for X {
 
 ### Type-aware checks (cd-9hp.2)
 
-A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`; user-facing concept + opt-out: `docs/type-aware-checks.md`. `Warning.UnusedNullCheck` (`cofferdam-checks/src/warning.rs`) is the first built-in that sets the flag. A `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on). The CLI installs the worker only when a `requires_types` check is registered AND `[engine] type_aware` isn't `false` in `cofferdam.toml` (the opt-out for Node-less CI).
+A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`; user-facing concept + opt-out: `docs/type-aware-checks.md`. `Warning.UnusedNullCheck` (`cofferdam-checks/src/warning.rs`) is the first built-in that sets the flag. A `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on). The CLI installs the worker only when a `requires_types` check is registered AND `[engine] type_aware` isn't `false` in `cofferdam.toml` (the opt-out for Node-less CI). When the host can't start (no Node / ts-morph / tsconfig), type-aware checks are skipped with one warning; `--fail-on-type-unavailable` (cd-260l) turns that into exit code 2 for CI that must not get silent false negatives.
 
 ### Cofferdam-specific gotchas (every agent needs these)
 

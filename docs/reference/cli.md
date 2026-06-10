@@ -22,6 +22,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam doctor`↴](#cofferdam-doctor)
 * [`cofferdam watch`↴](#cofferdam-watch)
 * [`cofferdam fix`↴](#cofferdam-fix)
+* [`cofferdam agents`↴](#cofferdam-agents)
 * [`cofferdam advise`↴](#cofferdam-advise)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
 * [`cofferdam lsp`↴](#cofferdam-lsp)
@@ -42,6 +43,7 @@ TypeScript code-quality analyzer
 * `doctor` — Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗ with a one-line remediation hint on failure. Exit 0 on all-pass, 1 if any check fails. Diagnostic only — never modifies files
 * `watch` — Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
+* `agents` — Print the agent-onboarding prompt — a ready-to-paste markdown block that tells an AI coding agent how to use cofferdam in this repository. Covers `advise`, `advise --diff`, `check --robot`, and the `cofferdam.invariants.toml` contract. Output is version-pinned so AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a file to create or refresh an agent context fragment:
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
 * `lsp` — Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
@@ -273,6 +275,16 @@ Apply mechanical autofixes for supported checks. Runs the engine against the giv
 * `--dry-run` — Preview mode — discover all fixable findings and print what WOULD be changed, but do not modify any file. Exits 0. Use this to audit autofix coverage before committing to a write
 * `--robot` — Machine-readable JSON output. Emits a structured report instead of human-readable lines. With `--dry-run`, no files are written; the JSON describes what would change
 * `--pretty` — Pretty-print JSON output. No effect without `--robot`
+
+
+
+## `cofferdam agents`
+
+Print the agent-onboarding prompt — a ready-to-paste markdown block that tells an AI coding agent how to use cofferdam in this repository. Covers `advise`, `advise --diff`, `check --robot`, and the `cofferdam.invariants.toml` contract. Output is version-pinned so AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a file to create or refresh an agent context fragment:
+
+cofferdam agents >> AGENTS.md
+
+**Usage:** `cofferdam agents`
 
 
 

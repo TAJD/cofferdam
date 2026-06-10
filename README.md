@@ -19,6 +19,7 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 - [Type-aware checks](docs/type-aware-checks.md) — checks backed by the TypeScript type system (requires Node + ts-morph; opt out with `[engine] type_aware = false`)
 - [Output formats](docs/output-formats.md) — text, JSON, compact, SARIF
 - [Architectural specs](docs/invariants.md) — `cofferdam.invariants.toml`, `Design.LayerViolation`, `Design.BoundaryFrozen`
+- [AI agent workflow](docs/agents.md) — `cofferdam agents` onboarding prompt
 
 ## Install
 

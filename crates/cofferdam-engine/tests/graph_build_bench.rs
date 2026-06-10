@@ -1,5 +1,13 @@
 //! cd-9hp.9 cp4 — graph-build regression budget.
 //!
+//! ## Timing-assertion convention (cd-mhks)
+//!
+//! This test is purely a timing/overhead ratio measurement with no functional
+//! correctness assertions. It is tagged `#[ignore]` to exclude it from the
+//! default test run (and the pre-push hook). Run it explicitly:
+//!
+//!   cargo test -p cofferdam-engine -- --ignored
+//!
 //! Measures the cost of the new canonical-graph build step against
 //! the existing flat-table (`IMPORTS` / `EXPORTS`) extraction pass.
 //! The bead's acceptance criterion is *"graph build cost ≤ 1.5× the
@@ -91,7 +99,11 @@ fn results_dir() -> PathBuf {
     workspace_root.join("tests").join("graph-bench-results")
 }
 
+// cd-mhks: purely a timing ratio test; no functional correctness assertions.
+// Excluded from the default run to avoid pre-push hook flakes.
+// Run explicitly: cargo test -p cofferdam-engine -- --ignored
 #[test]
+#[ignore]
 fn graph_build_overhead_within_budget() {
     let Some(repo) = target_repo() else {
         println!(

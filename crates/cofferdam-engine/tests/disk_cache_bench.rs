@@ -17,6 +17,17 @@
 //!   run time" — equivalent to ~3.3× speedup. We set the hard floor
 //!   at 3.0× to absorb CI noise + disk variability.
 //!
+//! ## Timing-assertion convention (cd-mhks)
+//!
+//! The wall-clock ratio assertion is tagged `#[ignore]` so it is
+//! excluded from the default test run (and the pre-push hook, which
+//! runs `cargo clippy -D warnings` concurrently with `cargo test`).
+//! Functional assertions (run-cache hits, findings parity) remain
+//! in `disk_cache_correctness` and run by default.
+//! Run the timing gate explicitly:
+//!
+//!   cargo test -p cofferdam-engine -- --ignored
+//!
 //! ## Target repo
 //!
 //! Configurable via `COFFERDAM_BENCH_REPO`. Falls back to
@@ -76,14 +87,17 @@ fn results_dir() -> PathBuf {
         .join("disk-cache-bench-results")
 }
 
-#[test]
-fn disk_cache_warm_pass_hits_acceptance_gate() {
+/// Run the disk-cache bench. Returns `None` when no target repo is available.
+///
+/// Runs all functional assertions inline (run-cache hits, findings parity).
+/// Timing data is returned so the `#[ignore]` timing test can assert against it.
+fn run_disk_cache_bench() -> Option<BenchResult> {
     let Some(repo) = target_repo() else {
         println!(
             "[disk_cache_bench] no bench repo found; set COFFERDAM_BENCH_REPO \
              or place a TS repo at C:/Users/tajdi/bestefforttools. Skipping."
         );
-        return;
+        return None;
     };
 
     let discovery_opts = DiscoveryOptions::default();
@@ -205,15 +219,37 @@ fn disk_cache_warm_pass_hits_acceptance_gate() {
         );
     }
 
+    Some(result)
+}
+
+/// Functional correctness: disk-loaded run-cache hits and findings parity.
+///
+/// Wall-clock timing gate lives in [`disk_cache_warm_pass_hits_acceptance_gate`]
+/// (`#[ignore]`), excluded from the default run to avoid pre-push hook flakes.
+#[test]
+fn disk_cache_correctness() {
+    run_disk_cache_bench();
+}
+
+// cd-mhks: timing assertion excluded from the default run — flakes when the
+// pre-push hook runs cargo clippy concurrently with cargo test (CPU contention
+// causes the warm pass to occasionally miss the speedup floor).
+// Run explicitly: cargo test -p cofferdam-engine -- --ignored
+#[test]
+#[ignore]
+fn disk_cache_warm_pass_hits_acceptance_gate() {
+    let Some(result) = run_disk_cache_bench() else {
+        return;
+    };
     assert!(
-        speedup_ratio >= HARD_FLOOR,
+        result.speedup_ratio >= HARD_FLOOR,
         "[disk_cache_bench] regression: speedup {:.2}× < {:.1}× floor \
          (acceptance gate {:.1}×); cold={:.2}ms load={:.2}ms warm={:.2}ms",
-        speedup_ratio,
+        result.speedup_ratio,
         HARD_FLOOR,
         ACCEPTANCE_GATE,
-        cold_ms,
-        load_ms,
-        warm_ms
+        result.cold_ms,
+        result.load_ms,
+        result.warm_ms
     );
 }

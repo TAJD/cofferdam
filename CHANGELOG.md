@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Plugin-check findings no longer carry a `docs_url` (JSON) or `helpUri` (SARIF) that points at a non-existent hosted catalog page. Only built-in checks with a registered `CheckMeta` receive the URL; plugin checks omit the field entirely (cd-fbl7).
+
 ### Added
 - `cofferdam agents` subcommand (cd-l4se). Prints a version-pinned markdown prompt that tells an AI coding agent how to use cofferdam in the current project: when to reach for `cofferdam advise`, how to pre-flight changes with `advise --diff`, how to consume machine-readable findings via `check --robot`, what `cofferdam.invariants.toml` governs, and where to report misbehaviour. Pipe the output into `AGENTS.md` / `CLAUDE.md` to keep agent context files in sync with the installed version. New doc [`docs/agents.md`](docs/agents.md).
 - Docs site pages `install.md` (binary overrides, air-gapped installs, build-from-source — moved out of MAINTAINERS) and `languages.md` (TypeScript surface, Rust adapter, future-adapter shape — moved out of README), both in the Getting started sidebar (cd-9rxx).

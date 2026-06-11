@@ -3,7 +3,6 @@
     {
       "id": "Warning.BrandCasing",
       "category": "warning",
-      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.BrandCasing",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/brand-casing/fixture.ts",
@@ -16,7 +15,6 @@
     {
       "id": "Warning.BrandCasing",
       "category": "warning",
-      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.BrandCasing",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/brand-casing/fixture.ts",

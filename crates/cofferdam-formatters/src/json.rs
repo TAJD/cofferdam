@@ -16,7 +16,9 @@
 //! switch. Sibling formatters (`compact`, `sarif`) live next door and
 //! share the same `Issue` input.
 
-use cofferdam_core::{docs_url, Issue, RelatedSpan, Severity};
+use std::collections::HashSet;
+
+use cofferdam_core::{docs_url, CheckMeta, Issue, RelatedSpan, Severity};
 use serde::Serialize;
 
 use crate::common::{category_of, category_str, normalize_path};
@@ -33,8 +35,10 @@ pub(crate) struct RobotFinding<'a> {
     pub id: &'a str,
     /// Lowercase category name (`"warning"`, `"refactor"`, ...).
     pub category: &'static str,
-    /// Link to the docs-catalog page for this check.
-    pub docs_url: String,
+    /// Link to the docs-catalog page for this check. Omitted for plugin
+    /// checks that have no hosted catalog page (to avoid emitting 404 URLs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs_url: Option<String>,
     /// Computed sort priority (-20..=20). Higher fixes first.
     pub priority: i8,
     /// Configured severity (`"info"`, `"warning"`, `"error"`).
@@ -111,14 +115,20 @@ pub struct JsonFormatter;
 
 impl JsonFormatter {
     /// Render findings as compact JSON (one line, no whitespace).
+    ///
+    /// No builtin-metas are provided; `docs_url` is omitted from all findings.
+    /// Use `render_with_opts` with the builtin metas to emit URLs for built-in checks.
     pub fn render(issues: &[Issue]) -> String {
-        Self::render_with_opts(issues, JsonRenderOpts::default())
+        Self::render_with_opts(issues, &[], JsonRenderOpts::default())
     }
 
     /// Render findings as pretty-printed JSON. Use for human inspection.
+    ///
+    /// No builtin-metas are provided; `docs_url` is omitted from all findings.
     pub fn render_pretty(issues: &[Issue]) -> String {
         Self::render_with_opts(
             issues,
+            &[],
             JsonRenderOpts {
                 pretty: true,
                 truncated_from: None,
@@ -129,17 +139,25 @@ impl JsonFormatter {
     /// Render findings honouring the supplied `JsonRenderOpts`
     /// (compact vs pretty, truncation metadata). The JSON schema is
     /// part of the stable surface — additive changes only.
-    pub fn render_with_opts(issues: &[Issue], opts: JsonRenderOpts) -> String {
-        Self::render_inner(issues, opts)
+    ///
+    /// `metas` is the set of registered builtin check metas. Only findings
+    /// whose `check_id` matches an entry in `metas` receive a `docs_url`;
+    /// plugin checks (no matching meta) omit the field so callers never see
+    /// a URL that 404s.
+    pub fn render_with_opts(issues: &[Issue], metas: &[CheckMeta], opts: JsonRenderOpts) -> String {
+        let builtin_ids: HashSet<&str> = metas.iter().map(|m| m.id).collect();
+        Self::render_inner(issues, opts, &builtin_ids)
     }
 
-    fn render_inner(issues: &[Issue], opts: JsonRenderOpts) -> String {
+    fn render_inner(issues: &[Issue], opts: JsonRenderOpts, builtin_ids: &HashSet<&str>) -> String {
         let findings: Vec<RobotFinding<'_>> = issues
             .iter()
             .map(|i| RobotFinding {
                 id: i.check_id.as_str(),
                 category: category_str(category_of(&i.check_id)),
-                docs_url: docs_url(i.check_id.as_str()),
+                docs_url: builtin_ids
+                    .contains(i.check_id.as_str())
+                    .then(|| docs_url(i.check_id.as_str())),
                 priority: i.priority.0,
                 severity: severity_str(i.severity),
                 file: normalize_path(&i.file),
@@ -181,14 +199,19 @@ impl JsonFormatter {
     /// engine's output: each `(Issue, bool)` pair carries `true` when the
     /// finding matched the active baseline. Adds `baselined` per finding
     /// and `new` / `baselined` totals on the summary.
+    ///
+    /// No builtin-metas are provided; `docs_url` is omitted from all findings.
     pub fn render_with_baseline(tagged: &[(Issue, bool)]) -> String {
-        Self::render_with_baseline_with_opts(tagged, JsonRenderOpts::default())
+        Self::render_with_baseline_with_opts(tagged, &[], JsonRenderOpts::default())
     }
 
     /// Pretty-printed variant of `render_with_baseline`.
+    ///
+    /// No builtin-metas are provided; `docs_url` is omitted from all findings.
     pub fn render_with_baseline_pretty(tagged: &[(Issue, bool)]) -> String {
         Self::render_with_baseline_with_opts(
             tagged,
+            &[],
             JsonRenderOpts {
                 pretty: true,
                 truncated_from: None,
@@ -200,20 +223,31 @@ impl JsonFormatter {
     /// Each finding gains a `baselined: bool` field; the document
     /// gains `summary.new` and `summary.baselined` counts so CI can
     /// gate on the new total alone.
+    ///
+    /// `metas` is the set of registered builtin check metas. Only findings
+    /// whose `check_id` matches an entry in `metas` receive a `docs_url`.
     pub fn render_with_baseline_with_opts(
         tagged: &[(Issue, bool)],
+        metas: &[CheckMeta],
         opts: JsonRenderOpts,
     ) -> String {
-        Self::render_with_baseline_inner(tagged, opts)
+        let builtin_ids: HashSet<&str> = metas.iter().map(|m| m.id).collect();
+        Self::render_with_baseline_inner(tagged, opts, &builtin_ids)
     }
 
-    fn render_with_baseline_inner(tagged: &[(Issue, bool)], opts: JsonRenderOpts) -> String {
+    fn render_with_baseline_inner(
+        tagged: &[(Issue, bool)],
+        opts: JsonRenderOpts,
+        builtin_ids: &HashSet<&str>,
+    ) -> String {
         let findings: Vec<RobotFinding<'_>> = tagged
             .iter()
             .map(|(i, baselined)| RobotFinding {
                 id: i.check_id.as_str(),
                 category: category_str(category_of(&i.check_id)),
-                docs_url: docs_url(i.check_id.as_str()),
+                docs_url: builtin_ids
+                    .contains(i.check_id.as_str())
+                    .then(|| docs_url(i.check_id.as_str())),
                 priority: i.priority.0,
                 severity: severity_str(i.severity),
                 file: normalize_path(&i.file),
@@ -297,10 +331,42 @@ mod tests {
         }
     }
 
+    // Minimal CheckMeta for testing — only the id field matters for docs_url routing.
+    const TRIPLE_EQUALS_META: cofferdam_core::CheckMeta = cofferdam_core::CheckMeta {
+        id: "Warning.TripleEquals",
+        category: cofferdam_core::Category::Warning,
+        base_priority: 15,
+        default_severity: cofferdam_core::Severity::High,
+        explanation: "",
+        body: "",
+        requires_types: false,
+        consistency: false,
+        options: &[],
+        autofix: false,
+        pure_run: true,
+    };
+    const CYCLOMATIC_META: cofferdam_core::CheckMeta = cofferdam_core::CheckMeta {
+        id: "Refactor.CyclomaticComplexity",
+        category: cofferdam_core::Category::Refactor,
+        base_priority: 10,
+        default_severity: cofferdam_core::Severity::High,
+        explanation: "",
+        body: "",
+        requires_types: false,
+        consistency: false,
+        options: &[],
+        autofix: false,
+        pure_run: true,
+    };
+
     #[test]
-    fn json_finding_docs_url_is_correct() {
+    fn json_builtin_finding_has_docs_url() {
         let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.TripleEquals");
-        let output = JsonFormatter::render(&[issue]);
+        let output = JsonFormatter::render_with_opts(
+            &[issue],
+            &[TRIPLE_EQUALS_META],
+            JsonRenderOpts::default(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
         assert_eq!(
             parsed["findings"][0]["docs_url"],
@@ -309,13 +375,49 @@ mod tests {
     }
 
     #[test]
-    fn json_baseline_finding_docs_url_is_correct() {
+    fn json_plugin_finding_has_no_docs_url() {
+        // A plugin check id not in the metas set must not emit a docs_url
+        // (the generated URL would 404 — there is no hosted catalog page).
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.TenantIsolation");
+        let output = JsonFormatter::render_with_opts(
+            &[issue],
+            &[TRIPLE_EQUALS_META],
+            JsonRenderOpts::default(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert!(
+            parsed["findings"][0]["docs_url"].is_null(),
+            "plugin checks must not receive a docs_url"
+        );
+    }
+
+    #[test]
+    fn json_baseline_builtin_finding_has_docs_url() {
         let issue = make_issue(PathBuf::from("src/foo.ts"), "Refactor.CyclomaticComplexity");
-        let output = JsonFormatter::render_with_baseline(&[(issue, false)]);
+        let output = JsonFormatter::render_with_baseline_with_opts(
+            &[(issue, false)],
+            &[CYCLOMATIC_META],
+            JsonRenderOpts::default(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
         assert_eq!(
             parsed["findings"][0]["docs_url"],
             "https://tajd.github.io/cofferdam/checks/Refactor.CyclomaticComplexity"
+        );
+    }
+
+    #[test]
+    fn json_baseline_plugin_finding_has_no_docs_url() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.TenantIsolation");
+        let output = JsonFormatter::render_with_baseline_with_opts(
+            &[(issue, false)],
+            &[],
+            JsonRenderOpts::default(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert!(
+            parsed["findings"][0]["docs_url"].is_null(),
+            "plugin checks must not receive a docs_url in baseline mode"
         );
     }
 
@@ -357,6 +459,7 @@ mod tests {
         let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
         let output = JsonFormatter::render_with_opts(
             &[issue],
+            &[],
             JsonRenderOpts {
                 pretty: false,
                 truncated_from: Some(42),
@@ -372,6 +475,7 @@ mod tests {
         let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
         let output = JsonFormatter::render_with_baseline_with_opts(
             &[(issue, false)],
+            &[],
             JsonRenderOpts {
                 pretty: false,
                 truncated_from: Some(99),

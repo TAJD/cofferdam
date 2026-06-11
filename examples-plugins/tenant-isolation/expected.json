@@ -3,7 +3,6 @@
     {
       "id": "Warning.TenantIsolation",
       "category": "warning",
-      "docs_url": "https://tajd.github.io/cofferdam/checks/Warning.TenantIsolation",
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/tenant-isolation/fixture.ts",

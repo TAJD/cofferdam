@@ -1232,9 +1232,11 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     pretty,
                     truncated_from,
                 };
+                let metas: Vec<cofferdam_core::CheckMeta> =
+                    all_builtins().iter().map(|c| *c.meta()).collect();
                 println!(
                     "{}",
-                    JsonFormatter::render_with_baseline_with_opts(&tagged, opts)
+                    JsonFormatter::render_with_baseline_with_opts(&tagged, &metas, opts)
                 );
             }
             OutputFormat::Compact => {
@@ -1304,7 +1306,9 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     pretty,
                     truncated_from,
                 };
-                println!("{}", JsonFormatter::render_with_opts(&issues, opts));
+                let metas: Vec<cofferdam_core::CheckMeta> =
+                    all_builtins().iter().map(|c| *c.meta()).collect();
+                println!("{}", JsonFormatter::render_with_opts(&issues, &metas, opts));
             }
             OutputFormat::Compact => {
                 print!("{}", CompactFormatter::render(&issues));

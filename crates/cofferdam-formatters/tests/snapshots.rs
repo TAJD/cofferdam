@@ -176,6 +176,7 @@ fn json_render_truncated() {
     let issues = fixture_issues();
     insta::assert_snapshot!(JsonFormatter::render_with_opts(
         &issues,
+        &[],
         cofferdam_formatters::JsonRenderOpts {
             pretty: true,
             truncated_from: Some(42),

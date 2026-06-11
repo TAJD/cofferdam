@@ -31,8 +31,7 @@ expression: "SarifFormatter::render_pretty(&issues, &[])"
                 "tags": [
                   "unknown"
                 ]
-              },
-              "helpUri": "https://tajd.github.io/cofferdam/checks/Consistency.QuoteStyle"
+              }
             },
             {
               "id": "Design.DuplicateExportName",
@@ -52,8 +51,7 @@ expression: "SarifFormatter::render_pretty(&issues, &[])"
                 "tags": [
                   "unknown"
                 ]
-              },
-              "helpUri": "https://tajd.github.io/cofferdam/checks/Design.DuplicateExportName"
+              }
             },
             {
               "id": "Readability.MaxLineLength",
@@ -73,8 +71,7 @@ expression: "SarifFormatter::render_pretty(&issues, &[])"
                 "tags": [
                   "unknown"
                 ]
-              },
-              "helpUri": "https://tajd.github.io/cofferdam/checks/Readability.MaxLineLength"
+              }
             },
             {
               "id": "Refactor.CyclomaticComplexity",
@@ -94,8 +91,7 @@ expression: "SarifFormatter::render_pretty(&issues, &[])"
                 "tags": [
                   "unknown"
                 ]
-              },
-              "helpUri": "https://tajd.github.io/cofferdam/checks/Refactor.CyclomaticComplexity"
+              }
             },
             {
               "id": "Warning.TripleEquals",
@@ -115,8 +111,7 @@ expression: "SarifFormatter::render_pretty(&issues, &[])"
                 "tags": [
                   "unknown"
                 ]
-              },
-              "helpUri": "https://tajd.github.io/cofferdam/checks/Warning.TripleEquals"
+              }
             }
           ]
         }

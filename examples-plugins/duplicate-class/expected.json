@@ -3,7 +3,6 @@
     {
       "id": "Design.DuplicateClassName",
       "category": "design",
-      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.DuplicateClassName",
       "priority": 15,
       "severity": "medium",
       "file": "examples-plugins/duplicate-class/fixture/a.ts",

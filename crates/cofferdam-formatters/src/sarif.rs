@@ -91,7 +91,8 @@ pub(crate) struct SarifRule<'a> {
     pub full_description: SarifText<'a>,
     pub default_configuration: SarifLevel,
     pub properties: SarifRuleProperties,
-    pub help_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help_uri: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -231,7 +232,7 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                     priority: meta.base_priority,
                     tags: vec![category_str(Some(meta.category))],
                 },
-                help_uri: docs_url(meta.id),
+                help_uri: Some(docs_url(meta.id)),
             },
             None => SarifRule {
                 id,
@@ -248,7 +249,7 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                     priority: 0,
                     tags: vec!["unknown"],
                 },
-                help_uri: docs_url(id),
+                help_uri: None,
             },
         };
         rules.push(rule);
@@ -447,9 +448,10 @@ mod tests {
         let rules = v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0]["id"], "Custom.Plugin");
-        assert_eq!(
-            rules[0]["helpUri"],
-            "https://tajd.github.io/cofferdam/checks/Custom.Plugin"
+        // Plugin checks have no catalog page — helpUri must be absent.
+        assert!(
+            rules[0]["helpUri"].is_null(),
+            "plugin rules must not emit a helpUri that 404s"
         );
     }
 

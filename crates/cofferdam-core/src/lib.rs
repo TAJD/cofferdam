@@ -4,6 +4,7 @@
 //! CLI, LSP, and the napi FFI surface all depend on it; it depends on none of
 //! them. Adding a heavy dep here ripples through the whole workspace.
 
+pub mod adapter;
 pub mod ast;
 pub mod check;
 pub mod corpus;
@@ -22,6 +23,7 @@ pub mod span_util;
 pub mod types;
 pub mod util;
 
+pub use adapter::{Adapter, TypeScriptAdapter};
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
 pub use check::{
     docs_url, is_finalize_observer, Category, Check, CheckContext, CheckMeta, FinalizeContext,

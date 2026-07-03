@@ -76,6 +76,47 @@ pub(crate) mod tree_walk;
 pub use checks::all_rust_checks;
 pub use parser::{parse_rust, RustParseError, RustParseTree};
 
+use cofferdam_core::{Adapter, Language};
+
 /// Identifier the engine uses to route per-file dispatch (cd-91zc).
 /// Lifts to a `Language` enum on `SourceFile` in checkpoint 4.
 pub const LANGUAGE_TAG: &str = "rust";
+
+/// Adapter impl describing this crate's Rust pipeline (tree-sitter-based).
+/// See `cofferdam_core::adapter` for the (unenforced) one-way contract this
+/// documents.
+pub struct RustAdapter;
+
+impl Adapter for RustAdapter {
+    fn language(&self) -> Language {
+        Language::Rust
+    }
+
+    fn file_globs(&self) -> &[&str] {
+        &["*.rs"]
+    }
+
+    fn schema_namespace(&self) -> &str {
+        "rust"
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+
+    #[test]
+    fn rust_adapter_language() {
+        assert_eq!(RustAdapter.language(), Language::Rust);
+    }
+
+    #[test]
+    fn rust_adapter_file_globs() {
+        assert_eq!(RustAdapter.file_globs(), &["*.rs"]);
+    }
+
+    #[test]
+    fn rust_adapter_schema_namespace() {
+        assert_eq!(RustAdapter.schema_namespace(), "rust");
+    }
+}

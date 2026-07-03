@@ -150,6 +150,29 @@ impl Location {
             LocationRange::Custom { .. } => 0,
         }
     }
+
+    /// `Some((start, end))` byte offsets for `Bytes` ranges, `None`
+    /// otherwise. Formatters use this instead of `start_byte()`/
+    /// `end_byte()` when they need to distinguish "no byte data" from
+    /// "byte data happens to be 0".
+    pub fn byte_range(&self) -> Option<(u32, u32)> {
+        match &self.range {
+            LocationRange::Bytes { start, end, .. } => Some((*start, *end)),
+            _ => None,
+        }
+    }
+
+    /// `Some((end_line, end_col))` for `LineCol` ranges, `None` otherwise
+    /// (`Bytes` has no separate end line/column; `Custom` has none at
+    /// all).
+    pub fn end_line_col(&self) -> Option<(u32, u32)> {
+        match &self.range {
+            LocationRange::LineCol {
+                end_line, end_col, ..
+            } => Some((*end_line, *end_col)),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

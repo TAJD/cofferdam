@@ -153,8 +153,17 @@ pub(crate) struct SarifRegion {
     pub start_line: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_column: Option<u32>,
-    pub byte_offset: u32,
-    pub byte_length: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<u32>,
+    /// Byte offset/length, present only for `Bytes` locations. `LineCol`
+    /// and `Custom` locations have no byte representation — omit rather
+    /// than emit a fake `0`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_length: Option<u32>,
 }
 
 /// Options for the SARIF formatter. `pretty` controls whether the JSON
@@ -268,15 +277,7 @@ fn build_report<'a>(issues: &'a [Issue], metas: &'a [CheckMeta]) -> SarifReport<
                     artifact_location: SarifArtifactLocation {
                         uri: normalize_path(&i.file),
                     },
-                    region: SarifRegion {
-                        start_line: i.location.line(),
-                        start_column: nonzero(i.location.column()),
-                        byte_offset: i.location.start_byte(),
-                        byte_length: i
-                            .location
-                            .end_byte()
-                            .saturating_sub(i.location.start_byte()),
-                    },
+                    region: region_for(&i.location),
                 },
             }],
             related_locations: i.related.iter().map(map_related_location).collect(),
@@ -307,14 +308,44 @@ fn map_related_location(r: &RelatedSpan) -> SarifLocation {
             artifact_location: SarifArtifactLocation {
                 uri: normalize_path(&r.file),
             },
-            region: SarifRegion {
-                start_line: r.location.line(),
-                start_column: nonzero(r.location.column()),
-                byte_offset: r.location.start_byte(),
-                byte_length: r
-                    .location
-                    .end_byte()
-                    .saturating_sub(r.location.start_byte()),
+            region: region_for(&r.location),
+        },
+    }
+}
+
+/// Build a SARIF `region` from a `Location`, matching on its
+/// `LocationRange` variant so each renders coherently: `Bytes` keeps the
+/// historical `byteOffset`/`byteLength` shape; `LineCol` emits
+/// `startLine`/`startColumn`/`endLine`/`endColumn` and omits the byte
+/// fields (there is no byte data to report); `Custom` has neither byte
+/// nor line data and degrades to `startLine: 0` with everything else
+/// omitted.
+fn region_for(location: &cofferdam_core::Location) -> SarifRegion {
+    match location.byte_range() {
+        Some((start, end)) => SarifRegion {
+            start_line: location.line(),
+            start_column: nonzero(location.column()),
+            end_line: None,
+            end_column: None,
+            byte_offset: Some(start),
+            byte_length: Some(end.saturating_sub(start)),
+        },
+        None => match location.end_line_col() {
+            Some((end_line, end_col)) => SarifRegion {
+                start_line: location.line(),
+                start_column: nonzero(location.column()),
+                end_line: Some(end_line),
+                end_column: nonzero(end_col),
+                byte_offset: None,
+                byte_length: None,
+            },
+            None => SarifRegion {
+                start_line: location.line(),
+                start_column: nonzero(location.column()),
+                end_line: None,
+                end_column: None,
+                byte_offset: None,
+                byte_length: None,
             },
         },
     }
@@ -511,5 +542,72 @@ mod tests {
         assert_eq!(region["startColumn"], 7);
         assert_eq!(region["byteOffset"], 800);
         assert_eq!(region["byteLength"], 6);
+        assert!(region["endLine"].is_null());
+        assert!(region["endColumn"].is_null());
+    }
+
+    #[test]
+    fn sarif_linecol_region_uses_start_end_line_col_and_omits_byte_fields() {
+        let loc = Location {
+            uri: cofferdam_core::Uri::new("gen://out.ts"),
+            range: cofferdam_core::LocationRange::LineCol {
+                start_line: 4,
+                start_col: 2,
+                end_line: 6,
+                end_col: 9,
+            },
+        };
+        let path = PathBuf::from("out.ts");
+        let i = Issue {
+            location: loc,
+            file: path,
+            message: "generated finding".into(),
+            check_id: "Warning.X".into(),
+            severity: Severity::Medium,
+            priority: Priority(10),
+            related: Vec::new(),
+        };
+        let out = SarifFormatter::render(&[i], &[]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let region = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(region["startLine"], 4);
+        assert_eq!(region["startColumn"], 2);
+        assert_eq!(region["endLine"], 6);
+        assert_eq!(region["endColumn"], 9);
+        assert!(
+            region["byteOffset"].is_null(),
+            "LineCol region must not fabricate a byte offset, got:\n{out}"
+        );
+        assert!(region["byteLength"].is_null());
+    }
+
+    #[test]
+    fn sarif_custom_region_degrades_without_panicking_or_fabricating_data() {
+        let loc = Location {
+            uri: cofferdam_core::Uri::new("sql://migrations"),
+            range: cofferdam_core::LocationRange::Custom {
+                ns: "sql".into(),
+                id: "stmt:3".into(),
+            },
+        };
+        let path = PathBuf::from("migrations.sql");
+        let i = Issue {
+            location: loc,
+            file: path,
+            message: "custom finding".into(),
+            check_id: "Warning.X".into(),
+            severity: Severity::Medium,
+            priority: Priority(10),
+            related: Vec::new(),
+        };
+        let out = SarifFormatter::render(&[i], &[]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let region = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(region["startLine"], 0);
+        assert!(region["startColumn"].is_null());
+        assert!(region["endLine"].is_null());
+        assert!(region["endColumn"].is_null());
+        assert!(region["byteOffset"].is_null());
+        assert!(region["byteLength"].is_null());
     }
 }

@@ -48,9 +48,20 @@ pub(crate) struct RobotFinding<'a> {
     pub file: String,
     pub line: u32,
     pub column: u32,
-    /// Byte offsets into the file's text. Useful for span-based fixers.
-    pub start_byte: u32,
-    pub end_byte: u32,
+    /// 1-based end line/column, present only for locations that carry a
+    /// distinct end position (`LineCol` ranges). Omitted for `Bytes`
+    /// (whose end is captured by `end_byte`) and `Custom`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_col: Option<u32>,
+    /// Byte offsets into the file's text. Omitted (not zeroed) for
+    /// locations with no byte representation (`LineCol` / `Custom`) so
+    /// consumers can't mistake "no data" for "offset 0".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
     pub message: &'a str,
     /// Other locations participating in the same finding (e.g. duplicate
     /// blocks). Omitted entirely when the finding is single-location.
@@ -69,8 +80,14 @@ pub(crate) struct RelatedFinding {
     pub file: String,
     pub line: u32,
     pub column: u32,
-    pub start_byte: u32,
-    pub end_byte: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_col: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -163,8 +180,10 @@ impl JsonFormatter {
                 file: normalize_path(&i.file),
                 line: i.location.line(),
                 column: i.location.column(),
-                start_byte: i.location.start_byte(),
-                end_byte: i.location.end_byte(),
+                end_line: i.location.end_line_col().map(|(l, _)| l),
+                end_col: i.location.end_line_col().map(|(_, c)| c),
+                start_byte: i.location.byte_range().map(|(s, _)| s),
+                end_byte: i.location.byte_range().map(|(_, e)| e),
                 message: i.message.as_str(),
                 related: i.related.iter().map(map_related).collect(),
                 baselined: None,
@@ -253,8 +272,10 @@ impl JsonFormatter {
                 file: normalize_path(&i.file),
                 line: i.location.line(),
                 column: i.location.column(),
-                start_byte: i.location.start_byte(),
-                end_byte: i.location.end_byte(),
+                end_line: i.location.end_line_col().map(|(l, _)| l),
+                end_col: i.location.end_line_col().map(|(_, c)| c),
+                start_byte: i.location.byte_range().map(|(s, _)| s),
+                end_byte: i.location.byte_range().map(|(_, e)| e),
                 message: i.message.as_str(),
                 related: i.related.iter().map(map_related).collect(),
                 baselined: Some(*baselined),
@@ -300,8 +321,10 @@ fn map_related(r: &RelatedSpan) -> RelatedFinding {
         file: normalize_path(&r.file),
         line: r.location.line(),
         column: r.location.column(),
-        start_byte: r.location.start_byte(),
-        end_byte: r.location.end_byte(),
+        end_line: r.location.end_line_col().map(|(l, _)| l),
+        end_col: r.location.end_line_col().map(|(_, c)| c),
+        start_byte: r.location.byte_range().map(|(s, _)| s),
+        end_byte: r.location.byte_range().map(|(_, e)| e),
     }
 }
 
@@ -468,6 +491,80 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
         assert_eq!(parsed["summary"]["truncated_from"], 42);
         assert_eq!(parsed["summary"]["total"], 1);
+    }
+
+    #[test]
+    fn json_bytes_issue_renders_start_and_end_byte() {
+        let issue = make_issue(PathBuf::from("src/foo.ts"), "Warning.Test");
+        let output = JsonFormatter::render(&[issue]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(parsed["findings"][0]["start_byte"], 0);
+        assert_eq!(parsed["findings"][0]["end_byte"], 10);
+        assert!(parsed["findings"][0]["end_line"].is_null());
+        assert!(parsed["findings"][0]["end_col"].is_null());
+    }
+
+    #[test]
+    fn json_linecol_issue_omits_byte_fields_and_carries_end_line_col() {
+        let loc = Location {
+            uri: cofferdam_core::Uri::new("gen://out.ts"),
+            range: cofferdam_core::LocationRange::LineCol {
+                start_line: 4,
+                start_col: 2,
+                end_line: 6,
+                end_col: 9,
+            },
+        };
+        let issue = Issue {
+            location: loc,
+            file: PathBuf::from("out.ts"),
+            message: "generated finding".into(),
+            check_id: "Warning.Test".into(),
+            severity: Severity::Medium,
+            priority: Priority(10),
+            related: Vec::new(),
+        };
+        let output = JsonFormatter::render(&[issue]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        let finding = &parsed["findings"][0];
+        assert_eq!(finding["line"], 4);
+        assert_eq!(finding["column"], 2);
+        assert_eq!(finding["end_line"], 6);
+        assert_eq!(finding["end_col"], 9);
+        assert!(
+            finding["start_byte"].is_null(),
+            "LineCol must not fabricate a byte offset, got:\n{output}"
+        );
+        assert!(finding["end_byte"].is_null());
+    }
+
+    #[test]
+    fn json_custom_issue_degrades_without_panicking_or_fabricating_data() {
+        let loc = Location {
+            uri: cofferdam_core::Uri::new("sql://migrations"),
+            range: cofferdam_core::LocationRange::Custom {
+                ns: "sql".into(),
+                id: "stmt:3".into(),
+            },
+        };
+        let issue = Issue {
+            location: loc,
+            file: PathBuf::from("migrations.sql"),
+            message: "custom finding".into(),
+            check_id: "Warning.Test".into(),
+            severity: Severity::Medium,
+            priority: Priority(10),
+            related: Vec::new(),
+        };
+        let output = JsonFormatter::render(&[issue]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        let finding = &parsed["findings"][0];
+        assert_eq!(finding["line"], 0);
+        assert_eq!(finding["column"], 0);
+        assert!(finding["start_byte"].is_null());
+        assert!(finding["end_byte"].is_null());
+        assert!(finding["end_line"].is_null());
+        assert!(finding["end_col"].is_null());
     }
 
     #[test]

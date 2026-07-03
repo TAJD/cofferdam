@@ -156,7 +156,7 @@ the script does — prefer the script.
 ```bash
 # Drift check — run BEFORE step 4 to confirm step 2 was complete
 git grep -nE '"OLD\.VER\.SION"|version = "OLD\.VER\.SION"' \
-    -- ':!CHANGELOG.md' ':!.beads/'
+    -- ':!CHANGELOG.md'
 
 # Last released tag
 git describe --tags --abbrev=0

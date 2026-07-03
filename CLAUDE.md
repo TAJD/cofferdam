@@ -115,50 +115,11 @@ A check with `requires_types: true` is routed through a Node ts-morph "type host
   cargo run -p cofferdam-cli -- check examples/<your-fixture>.ts
   ```
 
-## Issue tracking — beads (bd)
+## Issue tracking — Projektor
 
-`.beads/` at repo root. Prefix `cd-`. Use `bd` (the Go reference implementation, v1.0.3+). The `.beads/issues.jsonl` file is the canonical export and is committed; the working DB under `.beads/embeddeddolt/` is gitignored.
+Cofferdam issues live in the **Cofferdam** project (key `CD`) on Projektor (MCP-native issue tracker), not beads. Use the `mcp__projektor__*` tools directly (`get_prioritized_issues` for "what's next", `search_issues` / `list_issues` to look things up, `create_issue` / `update_issue` to file and close work).
 
-```bash
-bd ready                         # next unblocked work
-bd show <id>                     # full issue body + deps
-bd update <id> --status in_progress
-bd create "Title" --type feature --priority 2 --labels phase-1 -d "..."
-bd dep add <issue> <depends-on>
-bd close <id>                    # mark complete
-bd export                        # write .beads/issues.jsonl
-```
-
-bd auto-syncs the JSONL on most write operations (the `--sandbox` flag disables this). If a manual flush is needed before a git operation, run `bd export`. One-time setup on a fresh checkout: `git config beads.role maintainer` (suppresses the role-not-configured warning).
-
-### When `bd` "stops working"
-
-`bd doctor` is **not yet supported in embedded mode** (current bd 1.0.3 limitation). Use these for diagnostics instead:
-
-```bash
-bd ping                          # confirm DB connectivity (round-trips in ~20ms)
-bd info                          # show issue count + database path
-```
-
-Common failure modes, cheapest fixes first:
-
-1. **`Error: import failed: database not initialized: issue_prefix config is missing`** — fresh DB without bootstrapping. Run any `bd info` or `bd list` command and bd will auto-import from `.beads/issues.jsonl` if present, initializing `issue_prefix` from the JSONL header. The explicit `bd import` requires `bd init --prefix <prefix>` first; auto-import does not.
-
-2. **Stale `.beads/dolt-server.*` files** (`.lock`, `.pid`, `.port`, `.log`) — leftovers from a previous server-mode invocation. Embedded mode doesn't use them. Safe to delete when no bd process is running.
-
-3. **`.beads/embeddeddolt/` corruption** — rare, usually from a killed mid-write process. Recovery rebuilds from the JSONL:
-
-   ```bash
-   mv .beads/embeddeddolt .beads/embeddeddolt.bad
-   bd info                                         # creates fresh DB, auto-imports from .beads/issues.jsonl
-   bd info | grep "Issue Count"                    # must match JSONL line count: wc -l .beads/issues.jsonl
-   # ...if counts match:
-   rm -rf .beads/embeddeddolt.bad
-   ```
-
-   Keep the `.bad` directory until you've confirmed the rebuild — JSONL is the recovery-of-last-resort source, but if the JSONL itself is stale you'll need the prior DB.
-
-4. **JSONL drift from the DB** — happens if a script edited `.beads/issues.jsonl` directly without going through bd. Fix: `bd export --force` to overwrite JSONL from DB, or `bd import` to overwrite DB from JSONL. Check direction first with `git diff .beads/issues.jsonl`.
+Migrated 2026-07-03 from the prior beads (`bd`) tracker — old `cd-*` beads IDs are preserved as a `beads:cd-*` label on each migrated Projektor issue for traceability. `.beads/issues.jsonl` remains in the repo as a historical archive of closed work; do not add new issues to it.
 
 ## Output formats (when adding a new one)
 
@@ -169,7 +130,7 @@ Common failure modes, cheapest fixes first:
 - **Never `git config`** to change the user's identity or hooks. The author info is already configured.
 - **Never `--no-verify`** on commits or pushes. Hooks exist for a reason; if they fail, fix the underlying issue.
 - **Never amend a previously-pushed commit.** Add a new commit instead.
-- **You may close beads** once you've finished the work and the full verification block passes (build, test, clippy, fmt, fixture run). Use `bd close <id>` and include a short reason for non-trivial work. Do NOT close without verification, and do NOT close work that's still uncommitted — close after the commit so the issue lifecycle and git history align.
+- **You may close Projektor issues** once you've finished the work and the full verification block passes (build, test, clippy, fmt, fixture run). Use `mcp__projektor__update_issue` (status: `done`) and include a short reason for non-trivial work. Do NOT close without verification, and do NOT close work that's still uncommitted — close after the commit so the issue lifecycle and git history align.
 - **Don't commit** when running as a subagent — leave staging + commit to the controller.
 - **Validate against real repos.** Fixtures in `examples/` are necessary but not sufficient. See the "Real-repo validation" section below for the known-good repos.
 - **Do not add a check whose `meta().id` collides with an existing one.** Grep `crates/cofferdam-checks` for the proposed ID first.
@@ -214,11 +175,11 @@ NOT safe to parallelize — sequential single-agent only:
 - The `OutputFormat` enum + `Cmd::Check` glue in `cofferdam-cli/src/main.rs` (multiple agents will conflict on the same lines)
 
 When dispatching for parallel check work:
-1. One git worktree per agent (`bd worktree create check-<name>`).
+1. One git worktree per agent (`git worktree add ../cofferdam-check-<name> -b check-<name>`).
 2. Inline the recipe above in the prompt — don't say "see CLAUDE.md", subagents don't auto-load it. Or do, but include the gotchas section verbatim.
 3. Tell the agent the exact file path + the existing check it should model on.
-4. End with: "Do NOT commit. Do NOT close beads. Run the verification block; paste the last 20 lines."
-5. Controller pulls each branch, verifies independently, merges (resolves only `lib.rs` registration conflicts), closes the bead.
+4. End with: "Do NOT commit. Do NOT close the Projektor issue. Run the verification block; paste the last 20 lines."
+5. Controller pulls each branch, verifies independently, merges (resolves only `lib.rs` registration conflicts), closes the Projektor issue.
 
 **Windows caveat:** the Agent tool's `isolation: "worktree"` has been observed to silently fall back to the main working tree on this host — agent edits show up directly in `git status` of the controller, with no per-agent branch to pull. When that happens, agents touching the same lines will overwrite each other with no merge step. Mitigations: only fan out when each agent's edits target disjoint methods/files (different `Check` structs, different `visit_X` methods on the same struct); have each agent run the full verification block before reporting back so the resulting tree is at least internally consistent; controller spot-checks `git status` after dispatch instead of trusting the worktree-list output.
 

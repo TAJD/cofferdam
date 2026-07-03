@@ -87,7 +87,7 @@ To add a new repo to the corpus: append an entry to the three parallel arrays at
 
 - Agent / contributor instructions: [CLAUDE.md](CLAUDE.md)
 - Check-writing recipe: [CLAUDE.md § Writing a check](CLAUDE.md#writing-a-check-the-recipe)
-- Issue tracking (beads): run `bd prime` in the repo root
+- Issue tracking: Cofferdam project (key `CD`) on Projektor
 - CI recipes (user-facing): [docs/ci-recipes.md](docs/ci-recipes.md)
 - Check catalog: [docs/checks/](docs/checks/) (auto-generated from `crates/cofferdam-checks/docs/<id>.md` via `cofferdam gen-docs`)
 - Output formats: [docs/output-formats.md](docs/output-formats.md)

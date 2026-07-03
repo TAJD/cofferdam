@@ -499,6 +499,64 @@ fn is_ident_continue(c: char) -> bool {
 // statements that differ ONLY in those nodes can hash equal. Acceptable
 // trade-off; cd-mti follow-ups can extend the visitor.
 
+/// Delimits fields within a single hashed node so that concatenated tag
+/// bytes can't collide across a boundary (e.g. `"ab"+"c"` hashing the
+/// same as `"a"+"bc"`). Written after every tag/value via `tag()`,
+/// `ident_tag()`, and the string/numeric literal visitors below.
+///
+/// Footgun: changing this value changes every `hash_ast_window` output,
+/// which silently invalidates every previously-cached/compared
+/// `DuplicateBlock` fingerprint. Do not change casually.
+const HASH_SEPARATOR: u8 = 0x01;
+
+/// Tag → AST node type registry. Every tag below is written via
+/// `hasher.write` / `write_all` (directly or through `tag()`/`ident_tag()`)
+/// before a node's contents are hashed, so a block and an
+/// expression-statement with byte-identical contents still hash
+/// differently. Adding, removing, or renaming ANY tag changes every
+/// existing `DuplicateBlock` hash — treat this table as append-only in
+/// practice (don't recycle a retired tag for a different node type).
+///
+/// | Tag      | AST node type                                    |
+/// |----------|---------------------------------------------------|
+/// | `Blk`    | `BlockStatement`                                   |
+/// | `ExpS`   | `ExpressionStatement`                               |
+/// | `If`     | `IfStatement`                                       |
+/// | `+E`     | `IfStatement` with an `alternate` (else branch)     |
+/// | `For`    | `ForStatement`                                      |
+/// | `ForIn`  | `ForInStatement`                                    |
+/// | `ForOf`  | `ForOfStatement`                                    |
+/// | `Whl`    | `WhileStatement`                                    |
+/// | `Do`     | `DoWhileStatement`                                  |
+/// | `Sw`     | `SwitchStatement`                                   |
+/// | `Try`    | `TryStatement`                                      |
+/// | `+C`     | `TryStatement` with a `handler` (catch clause)      |
+/// | `+F`     | `TryStatement` with a `finalizer` (finally block)   |
+/// | `Ret`    | `ReturnStatement`                                   |
+/// | `Thr`    | `ThrowStatement`                                    |
+/// | `Brk`    | `BreakStatement`                                    |
+/// | `Cnt`    | `ContinueStatement`                                 |
+/// | `Var:`   | `VariableDeclaration` (followed by `kind`, e.g. `let`/`const`/`var`) |
+/// | `Fn`     | `Function`                                          |
+/// | `Arrow`  | `ArrowFunctionExpression`                           |
+/// | `Cls`    | `Class`                                             |
+/// | `Bin:`   | `BinaryExpression` (followed by the operator string) |
+/// | `Log:`   | `LogicalExpression` (followed by the operator string) |
+/// | `Una:`   | `UnaryExpression` (followed by the operator string) |
+/// | `Upd:`   | `UpdateExpression` (followed by the operator string, then `P`/`S` for prefix/postfix) |
+/// | `Asn:`   | `AssignmentExpression` (followed by the operator string) |
+/// | `Tern`   | `ConditionalExpression`                             |
+/// | `Call`   | `CallExpression`                                    |
+/// | `New`    | `NewExpression`                                     |
+/// | `Id:`    | `IdentifierReference` (followed by its local index) |
+/// | `Bid:`   | `BindingIdentifier` (followed by its local index)   |
+/// | `Idn:`   | `IdentifierName` (followed by its local index)      |
+/// | `Str:`   | `StringLiteral` (followed by the literal's value)   |
+/// | `Num:`   | `NumericLiteral` (followed by the literal's little-endian f64 bytes) |
+/// | `T`      | `BooleanLiteral` with value `true`                  |
+/// | `F`      | `BooleanLiteral` with value `false`                 |
+/// | `Nul`    | `NullLiteral`                                       |
+/// | `Tmpl`   | `TemplateLiteral`                                   |
 pub struct AstHashWalker {
     hasher: std::collections::hash_map::DefaultHasher,
     locals: HashMap<String, u32>,
@@ -517,7 +575,7 @@ impl AstHashWalker {
     fn tag(&mut self, bytes: &[u8]) {
         use std::hash::Hasher;
         self.hasher.write(bytes);
-        self.hasher.write_u8(0x01);
+        self.hasher.write_u8(HASH_SEPARATOR);
     }
 
     fn ident_index(&mut self, name: &str) -> u32 {
@@ -535,7 +593,7 @@ impl AstHashWalker {
         let i = self.ident_index(name);
         self.hasher.write(prefix);
         self.hasher.write_u32(i);
-        self.hasher.write_u8(0x01);
+        self.hasher.write_u8(HASH_SEPARATOR);
     }
 
     pub fn finish(self) -> u64 {
@@ -709,14 +767,14 @@ impl<'a> Visit<'a> for AstHashWalker {
         use std::hash::Hasher;
         self.hasher.write(b"Str:");
         self.hasher.write(lit.value.as_bytes());
-        self.hasher.write_u8(0x01);
+        self.hasher.write_u8(HASH_SEPARATOR);
     }
 
     fn visit_numeric_literal(&mut self, lit: &NumericLiteral<'a>) {
         use std::hash::Hasher;
         self.hasher.write(b"Num:");
         self.hasher.write(&lit.value.to_le_bytes());
-        self.hasher.write_u8(0x01);
+        self.hasher.write_u8(HASH_SEPARATOR);
     }
 
     fn visit_boolean_literal(&mut self, lit: &BooleanLiteral) {
@@ -887,7 +945,7 @@ pub fn hash_token_window(window: &[TokenInfo]) -> u64 {
         h.write(t.canon.as_bytes());
         // Separator so adjacent tokens can't collide with a longer one
         // (e.g. `[` `]` should not hash like `[]`).
-        h.write_u8(0x01);
+        h.write_u8(HASH_SEPARATOR);
     }
     h.finish()
 }

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cofferdam_checks::all_builtins;
-use cofferdam_core::{Check, SourceFile, TextEdit};
+use cofferdam_core::{Check, SourceFile, Span, TextEdit};
 use cofferdam_engine::Engine;
 use tempfile::TempDir;
 
@@ -232,4 +232,53 @@ fn dry_run_does_not_modify_file() {
         on_disk, original_content,
         "dry-run must not modify the source file"
     );
+}
+
+/// Mirrors the apply loop's span-validity guard in `run_fix` (main.rs):
+/// an edit with an invalid byte span (here, `start > end`) is skipped
+/// rather than applied, and the skip is counted separately from `applied`.
+#[test]
+fn apply_edits_skips_invalid_spans_and_counts_them() {
+    let original_text = "const a = x == 5;\n".to_string();
+
+    let valid_edit = TextEdit {
+        span: Span {
+            start_byte: 12,
+            end_byte: 14,
+            line: 1,
+            column: 13,
+        },
+        replacement: "===".to_string(),
+    };
+    // Deliberately invalid: start > end.
+    let invalid_edit = TextEdit {
+        span: Span {
+            start_byte: 14,
+            end_byte: 12,
+            line: 1,
+            column: 13,
+        },
+        replacement: "===".to_string(),
+    };
+
+    let mut sorted_edits = vec![valid_edit, invalid_edit];
+    sorted_edits.sort_by_key(|e| Reverse(e.span.start_byte));
+
+    let mut text = original_text.clone();
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    for edit in &sorted_edits {
+        let start = edit.span.start_byte as usize;
+        let end = edit.span.end_byte as usize;
+        if start > text.len() || end > text.len() || start > end {
+            skipped += 1;
+            continue;
+        }
+        text.replace_range(start..end, &edit.replacement);
+        applied += 1;
+    }
+
+    assert_eq!(applied, 1, "expected exactly one valid edit applied");
+    assert_eq!(skipped, 1, "expected exactly one invalid edit skipped");
+    assert_eq!(text, "const a = x === 5;\n");
 }

@@ -1827,7 +1827,7 @@ fn run_fix(args: FixArgs) -> ExitCode {
         if robot {
             let summary = serde_json::json!({
                 "files": [],
-                "summary": { "files": 0, "edits": 0 }
+                "summary": { "files": 0, "edits": 0, "skipped": 0 }
             });
             let s = if pretty {
                 serde_json::to_string_pretty(&summary)
@@ -1844,6 +1844,7 @@ fn run_fix(args: FixArgs) -> ExitCode {
 
     let mut total_fixes: usize = 0;
     let mut total_files: usize = 0;
+    let mut total_skipped: usize = 0;
     let mut had_error = false;
 
     for (path, file_edits) in edits_by_file {
@@ -1859,11 +1860,13 @@ fn run_fix(args: FixArgs) -> ExitCode {
 
         let mut text = original_text.clone();
         let mut applied = 0usize;
+        let mut skipped = 0usize;
         for edit in &sorted_edits {
             let start = edit.span.start_byte as usize;
             let end = edit.span.end_byte as usize;
             if start > text.len() || end > text.len() || start > end {
                 // Guard against stale or invalid spans — skip rather than panic.
+                skipped += 1;
                 continue;
             }
             text.replace_range(start..end, &edit.replacement);
@@ -1891,11 +1894,12 @@ fn run_fix(args: FixArgs) -> ExitCode {
 
         total_fixes += applied;
         total_files += 1;
+        total_skipped += skipped;
     }
 
     if robot {
         let summary = serde_json::json!({
-            "summary": { "files": total_files, "edits": total_fixes }
+            "summary": { "files": total_files, "edits": total_fixes, "skipped": total_skipped }
         });
         let s = if pretty {
             serde_json::to_string_pretty(&summary)
@@ -1905,7 +1909,12 @@ fn run_fix(args: FixArgs) -> ExitCode {
         .expect("summary serializes infallibly");
         println!("{s}");
     } else {
-        eprintln!("Applied {total_fixes} fix(es) across {total_files} file(s).");
+        let skip_suffix = if total_skipped > 0 {
+            format!(" ({total_skipped} edit(s) skipped — invalid byte span).")
+        } else {
+            String::new()
+        };
+        eprintln!("Applied {total_fixes} fix(es) across {total_files} file(s).{skip_suffix}");
     }
 
     if had_error {

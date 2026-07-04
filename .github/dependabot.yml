@@ -16,6 +16,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # dtolnay/rust-toolchain's @<ref> selects the Rust TOOLCHAIN, not the
+      # action version. A "version" bump (@1.93 -> @1.100) installs a
+      # nonexistent Rust and reddens the MSRV job. Pin it by hand.
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       minor-and-patch:
         update-types:

@@ -52,7 +52,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.100
+      # The @<ref> here selects the Rust TOOLCHAIN, not the action version.
+      # Keep it pinned to the declared MSRV; dependabot is told to leave it
+      # alone (see .github/dependabot.yml) so it can't bump @1.93 -> @1.100.
+      - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 

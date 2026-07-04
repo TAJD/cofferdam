@@ -83,6 +83,22 @@ fn node_present() -> bool {
         .unwrap_or(false)
 }
 
+/// Serialize the plugin-host tests. Each spawns a `cofferdam` process
+/// that launches a Node plugin host plus a type-host worker pool;
+/// cargo runs the tests in this file concurrently by default, so on a
+/// constrained CI runner several node hosts start at once, starve, and
+/// intermittently return zero findings with no error surfaced. Holding
+/// this lock for the body of each test keeps exactly one host live at a
+/// time. `into_inner` recovers from a poisoned lock (a panicking test)
+/// so one failure doesn't cascade into the rest.
+static PLUGIN_HOST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serialize_plugin_host() -> std::sync::MutexGuard<'static, ()> {
+    PLUGIN_HOST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Plugin whose `finalize` reports one finding on a path that was never
 /// part of the analyzed file set, and one on a real analyzed file (the
 /// path is stashed during `run`). Regression cover for cd-neav: the
@@ -118,6 +134,7 @@ fn out_of_scope_plugin_report_is_dropped_with_warning() {
     if !node_present() {
         return;
     }
+    let _host = serialize_plugin_host();
     let env = Env::with_plugin(OUT_OF_SCOPE_PLUGIN);
     let out = env.run(&["check", "--no-baseline"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -142,6 +159,7 @@ fn plugin_finding_appears_in_default_text_output() {
     if !node_present() {
         return;
     }
+    let _host = serialize_plugin_host();
     let env = Env::new();
     let out = env.run(&["check", "--no-baseline"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -157,6 +175,7 @@ fn plugin_finding_triggers_fail_on_gate() {
     if !node_present() {
         return;
     }
+    let _host = serialize_plugin_host();
     let env = Env::new();
     // Plugin finding is severity=medium; --fail-on=medium should fail.
     let out = env.run(&["check", "--no-baseline", "--fail-on", "medium"]);
@@ -174,6 +193,7 @@ fn plugin_finding_lands_in_baseline_write() {
     if !node_present() {
         return;
     }
+    let _host = serialize_plugin_host();
     let env = Env::new();
     let out = env.run(&["baseline", "write"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -193,6 +213,7 @@ fn plugin_finding_baselined_is_not_a_new_failure() {
     if !node_present() {
         return;
     }
+    let _host = serialize_plugin_host();
     let env = Env::new();
     // Write the baseline first so the plugin finding is acknowledged...
     let out = env.run(&["baseline", "write"]);

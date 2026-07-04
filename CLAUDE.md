@@ -29,6 +29,23 @@ git config core.hooksPath .githooks
 
 `pre-commit` runs `cargo fmt --check` + `cofferdam gen-docs --check` (sub-second on warm cache). `pre-push` runs `cargo clippy -D warnings` + `cargo test --workspace` (10s+ but only fires before publishing). See `.githooks/README.md` for details. Don't bypass with `--no-verify` — fix the underlying issue.
 
+## Cutting a release
+
+The release is **tag-triggered**: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the 7-platform binary matrix and publishes everything automatically — GitHub Releases (binaries + sha256), npm `@cofferdam/cofferdam` and `@cofferdam/check-sdk` (both via OIDC Trusted Publisher, no token), then install-smoke-tests the published packages on Linux/macOS/Windows. There is no manual publish step; the tag is the whole trigger.
+
+Versions bump by patch digit even for features pre-1.0 (0.3.x → 0.3.(x+1)); reserve minor bumps for breaking changes. All 24 version locations must agree — `scripts/version.mjs` owns them.
+
+```bash
+# 1. from a clean, green main:
+node scripts/release.mjs 0.3.8          # bump+regen all 24 version locations, roll CHANGELOG [Unreleased] -> [0.3.8]
+git diff                                # review
+git commit -am "chore(release): prepare v0.3.8" && git push origin main
+# 2. WAIT for CI to go fully green (this gate caught the MSRV break + a plugin flake — don't skip it)
+git tag -a v0.3.8 -m "cofferdam 0.3.8" && git push origin v0.3.8
+```
+
+`release.mjs` refuses a dirty tree and an empty `[Unreleased]` (pass `--allow-empty-changelog` to override). `release.yml`'s `verify` job re-checks version consistency **and** the CHANGELOG roll *before* any build, so a slip can't leave you half-published. The tag push is the irreversible step (npm versions are immutable) — that's why it's deliberately separate from prep and gated on green CI. Never let AI agents cut the tag without explicit go-ahead.
+
 ## Project structure
 
 ```

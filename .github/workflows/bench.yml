@@ -1,0 +1,120 @@
+# CD-35 — locks in the CD-28 epic's performance wins (CD-29 pass-2
+# parse reuse, CD-30 rayon parallel run loop) so they can't regress
+# silently. Two independent gates:
+#
+# 1. `bench-compare` — runs the criterion suite (crates/cofferdam-engine/benches)
+#    on the PR head, saves it as a baseline, then re-runs the same
+#    binary against a baseline captured on the PR's merge-base and
+#    fails if criterion's own change-point detection reports a
+#    regression. This is a manual equivalent of criterion-compare-action:
+#    two `cargo bench --save-baseline` runs plus one `--baseline`
+#    comparison run, all against the same PR-head binary so build
+#    variance doesn't leak into the comparison.
+# 2. `memory-gate` — the RSS baseline gate from `scripts/smoke.ps1 -Memory`,
+#    run on both Linux and Windows (pwsh ships on both GitHub-hosted
+#    runners; `Process.PeakWorkingSet64` is backed by `/proc/<pid>/status`
+#    on Linux and the native working-set counter on Windows).
+
+name: bench
+
+on:
+  pull_request:
+    paths:
+      - "crates/cofferdam-engine/**"
+      - "crates/cofferdam-checks/**"
+      - "crates/cofferdam-core/**"
+      - "examples/**"
+      - "scripts/smoke.ps1"
+      - "scripts/smoke-baseline.json"
+      - ".github/workflows/bench.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  bench-compare:
+    name: criterion compare vs base branch
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bench PR head, save as baseline "pr"
+        run: cargo bench -p cofferdam-engine --bench engine_bench -- --save-baseline pr
+
+      - name: Check out merge-base of the PR
+        run: |
+          git checkout "$(git merge-base HEAD "origin/${{ github.base_ref }}")"
+
+      - name: Bench merge-base, save as baseline "base"
+        run: cargo bench -p cofferdam-engine --bench engine_bench -- --save-baseline base
+
+      - name: Check out PR head again
+        run: git checkout "${{ github.event.pull_request.head.sha }}"
+
+      - name: Compare PR head against base-branch baseline
+        id: compare
+        run: |
+          set -o pipefail
+          cargo bench -p cofferdam-engine --bench engine_bench -- --baseline base 2>&1 | tee bench-compare.txt
+
+      - name: Fail on detected regression
+        if: always()
+        run: |
+          if grep -q "Performance has regressed" bench-compare.txt; then
+            echo "::error::Criterion detected a statistically significant regression vs the base branch — see the job log / PR comment."
+            exit 1
+          fi
+          echo "No regression detected."
+
+      - name: Post comparison as a PR comment
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('bench-compare.txt', 'utf8');
+            const body = [
+              '### Criterion benchmark comparison (PR head vs base branch)',
+              '',
+              '```',
+              output.slice(-60000),
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  memory-gate:
+    name: memory gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: memory-gate-${{ matrix.os }}
+      - name: Build cofferdam-cli (release)
+        run: cargo build --release -p cofferdam-cli
+      - name: Run memory baseline gate
+        shell: pwsh
+        run: ./scripts/smoke.ps1 -Memory

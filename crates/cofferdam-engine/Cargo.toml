@@ -43,3 +43,9 @@ proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
+# CD-35 — criterion bench harness, see benches/engine_bench.rs.
+criterion = { workspace = true }
+
+[[bench]]
+name = "engine_bench"
+harness = false

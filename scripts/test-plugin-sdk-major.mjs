@@ -3,9 +3,9 @@
 //
 // Builds a synthetic plugin tree where node_modules/@cofferdam/check-sdk
 // claims a future-major SDK version, drives the plugin host directly
-// with a one-file manifest, and asserts the host emits a load_failed
-// error mentioning "incompatible". This proves SDK major-version
-// rejection lands at load time, not deep inside run().
+// with a streamed header/end manifest (no files), and asserts the host
+// emits a load_failed error mentioning "incompatible". This proves SDK
+// major-version rejection lands at load time, not deep inside run().
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
@@ -40,20 +40,21 @@ try {
     JSON.stringify({ name: "@cofferdam/check-sdk", version: "99.0.0" }),
   );
 
-  const manifest = {
-    cwd: work,
-    plugins: [pluginDir],
-    files: [],
-    options: {},
-  };
+  const header = { type: "header", wireVersion: 2, cwd: work, plugins: [pluginDir], options: {} };
+  const input = `${JSON.stringify(header)}\n${JSON.stringify({ type: "end" })}\n`;
 
   const out = execFileSync("node", [HOST], {
-    input: JSON.stringify(manifest),
+    input,
     encoding: "utf8",
   });
 
-  const response = JSON.parse(out);
-  const failure = (response.errors ?? []).find((e) => e.kind === "load_failed");
+  const records = out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  const errors = records.filter((r) => r.type === "error");
+  const failure = errors.find((e) => e.kind === "load_failed");
   if (!failure) {
     console.error("FAIL: expected load_failed error, got response:");
     console.error(out);

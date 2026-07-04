@@ -441,3 +441,71 @@ above; final v0 wire shape:
 
 Reviewable as a doc PR. Implementation lands as a separate bead once
 this is approved.
+
+## Transport streaming (CD-33, wireVersion 2)
+
+The per-node `AstWire` shape above (kind/span/firstChild/nextSibling +
+per-kind extras) is unchanged. What changed is *how many manifests* cross
+the stdin/stdout boundary per `cofferdam check` run: originally one, now
+one NDJSON record per file.
+
+**Before (v1, one-shot):** the Rust client serialised every file's
+`{path, text, lineViews, layer, ast}` into a single `PluginManifest`
+JSON object, wrote it once to the child's stdin, and read one JSON
+object (`{reports, errors}`) back from stdout after EOF. Peak memory on
+both sides was O(repo) — the "cost reference" table above (~15 MB for
+the bestefforttools corpus) is the size of that one blob.
+
+**After (v2, streamed):** both directions are NDJSON, matching the
+type-host's framing (`design/type-host-wire.md`). Stdin carries:
+
+```json
+{"type":"header","wireVersion":2,"cwd":"...","plugins":[...],"options":{...}}
+{"type":"file","path":"...","text":"...","lineViews":[...],"layer":null,"ast":{...}}
+... (one "file" record per source file, in order) ...
+{"type":"end"}
+```
+
+Stdout carries, streamed as each file is processed:
+
+```json
+{"type":"report","checkId":"...","message":"...","file":"...","startByte":0,"endByte":0,"severity":"..."}
+{"type":"error","kind":"load_failed"|"run_threw"|"finalize_threw","plugin":"...","file":"...","message":"..."}
+{"type":"done"}
+```
+
+Peak memory is now O(one file) on both sides instead of O(repo) — each
+`ManifestFile` (with its `AstWire`) is built, written, and dropped
+before the next file starts (`crates/cofferdam-cli/src/plugins.rs`).
+
+**Deadlock avoidance.** Streaming means Node may start writing `report`/
+`error` records before Rust has finished writing all `file` records —
+a naive single-threaded write-then-read loop risks the classic
+bidirectional-pipe deadlock if stdout fills the OS pipe buffer while
+the writer side is still blocked on stdin. The Rust client dedicates a
+background thread to draining stdout (and a second for stderr)
+concurrently with the main thread's writes, joining both after the
+`try_wait()` timeout loop determines the child has exited or been
+killed.
+
+**Ordering + finding parity.** The Node host (`plugin-host.mjs`)
+processes `file` records strictly in arrival order via a serialized
+async chain (each line's handler must finish — including any
+in-flight plugin dynamic `import()`s from a `header` record — before
+the next line is handled), preserving the original file-outer/
+plugin-inner report ordering. This is the exact-parity gate: every
+`examples-plugins/*/expected.json` golden must match byte-for-byte
+against the streamed path (verified via `scripts/check-plugin-fixtures.mjs`).
+
+**Unaffected paths.** `query_plugin_metadata`'s one-shot
+`{"mode":"metadata",...}` request (small, no per-file data) keeps its
+original one-shot request/response shape — streaming buys nothing
+there. The `COFFERDAM_PLUGIN_HOST_DUMP_WIRE` debug dump (consumed by
+`scripts/check-ast-spans.mjs`) still writes one combined
+`[{path, text, ast}]` array at `end` time, accumulated across `file`
+records — this re-introduces O(repo) memory deliberately, but only
+when the debug env var is set.
+
+**Versioning.** `WIRE_VERSION: u32 = 2` in `plugins.rs` marks this as a
+structural (major) change per the cd-9hp.12 schema-versioning policy —
+the framing changed even though the AST node payload didn't.

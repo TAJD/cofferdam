@@ -1,48 +1,40 @@
 #!/usr/bin/env node
-// cofferdam plugin host (cd-81a.7 / cd-7e4).
+// cofferdam plugin host (cd-81a.7 / cd-7e4 / CD-33).
 //
 // Spawned by the cofferdam Rust CLI when `cofferdam.toml` declares a
-// non-empty `plugins = [...]` array. Reads a JSON manifest from stdin,
-// dynamic-imports each plugin's default export, runs every plugin
-// against every file, and emits the merged report set as JSON on
-// stdout.
+// non-empty `plugins = [...]` array. Streams an NDJSON manifest on
+// stdin (one record per line), dynamic-imports each plugin's default
+// export, runs every plugin against each file as it arrives, and
+// streams the merged report/error set back as NDJSON on stdout. This
+// keeps both sides at O(one file) peak memory instead of O(repo) — see
+// `design/sdk-ast-wire.md` for the wire spec (wireVersion 2).
 //
-// MANIFEST shape (Rust side: PluginManifest in plugins.rs):
-//   {
-//     "cwd": "/abs/path/to/project-root",
-//     "plugins": ["./examples-plugins/brand-casing"],
-//     "files": [
-//       {
-//         "path": "/abs/path/to/file.ts",
-//         "text": "...",
-//         "lineViews": [
-//           { "lineNo": 1, "text": "...", "isComment": false,
-//             "isDocComment": false, "isStringLiteral": true,
-//             "isJsxText": false, "isPragma": false, "lineStart": 0 },
-//           ...
-//         ]
-//       }
-//     ],
-//     "options": { "<checkId>": { "<key>": <RawOptionValue> } }
-//   }
+// STREAMED MANIFEST (Rust side: HeaderRecord/ManifestFile/EndRecord in
+// plugins.rs), one JSON object per stdin line:
+//   {"type":"header","wireVersion":2,"cwd":"/abs/project-root",
+//    "plugins":["./examples-plugins/brand-casing"],
+//    "options":{"<checkId>":{"<key>":<RawOptionValue>}}}
+//   {"type":"file","path":"/abs/file.ts","text":"...",
+//    "lineViews":[{...}],"layer":null,"ast":{...}}
+//   ... (one "file" record per source file, in order) ...
+//   {"type":"end"}
 //
-// OUTPUT shape (parsed by plugins.rs::parse_host_response):
-//   {
-//     "reports": [
-//       { "checkId": "BrandCasing", "message": "...",
-//         "file": "/abs/.../file.ts",
-//         "startByte": 123, "endByte": 131,
-//         "severity": "high",
-//         "fix": { "span": {...}, "replacement": "..." }   // optional
-//       }
-//     ],
-//     "errors": [
-//       { "kind": "load_failed" | "run_threw",
-//         "plugin": "./examples-plugins/brand-casing",
-//         "file": "/abs/.../foo.ts",   // empty for load_failed
-//         "message": "..." }
-//     ]
-//   }
+// STREAMED OUTPUT (Rust side: StreamRecord in plugins.rs), one JSON
+// object per stdout line, in the same order the old one-shot `reports`/
+// `errors` arrays would have held them:
+//   {"type":"report","checkId":"BrandCasing","message":"...",
+//    "file":"/abs/.../file.ts","startByte":123,"endByte":131,
+//    "severity":"high","fix":{...}}   // fix optional
+//   {"type":"error","kind":"load_failed"|"run_threw"|"finalize_threw",
+//    "plugin":"./examples-plugins/brand-casing",
+//    "file":"/abs/.../foo.ts","message":"..."}   // file empty for load_failed
+//   {"type":"done"}
+//
+// A separate, still one-shot METADATA mode (`query_plugin_metadata` in
+// plugins.rs) sends a single `{"mode":"metadata","cwd":...,"plugins":[...]}`
+// object (no streamed files) and gets back one
+// `{"checks":[...],"errors":[...]}` object — small enough that
+// streaming buys nothing there, so it's untouched by CD-33.
 //
 // Self-contained on purpose: imports nothing from @cofferdam/check-sdk
 // at the host level so it runs even when the SDK isn't hoisted at the
@@ -52,6 +44,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve as resolvePath, join as joinPath } from "node:path";
+import { createInterface } from "node:readline";
 
 // SDK major versions this host knows how to drive (cd-b1q). Plugins
 // vendor their own `@cofferdam/check-sdk` via their package.json, so
@@ -76,50 +69,174 @@ const VISITOR_METHODS = {
   IdentifierReference: "visitIdentifierReference",
 };
 
-const manifest = readManifest();
-const reports = [];
-const errors = [];
-
+// State for the streaming run — populated by the "header" record,
+// mutated per "file" record, read by "end"'s finalize pass.
+let cwd = "";
+let optionsCfg = {};
 const loadedPlugins = [];
-for (const pluginPath of manifest.plugins) {
-  try {
-    const pluginDir = resolvePath(manifest.cwd, pluginPath);
-    const sdkCheck = checkPluginSdkMajor(pluginDir);
-    if (sdkCheck.kind === "incompatible") {
-      throw new Error(sdkCheck.message);
+const corpusStores = new Map();
+// Dump the wire payload as JSON to a file when COFFERDAM_PLUGIN_HOST_DUMP_WIRE
+// is set — used by scripts/check-ast-spans.mjs to verify byte-range
+// round-trip without instrumenting the host script's main path. cd-svf
+// span round-trip CI guardrail. Accumulated across "file" records and
+// flushed at "end" (this is a debug-only path; it re-introduces O(repo)
+// memory deliberately, gated behind the env var).
+const dumpEntries = process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE ? [] : null;
+
+function writeRecord(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+// cd-9hp.6: per-plugin corpus stores survive every per-file `run` and
+// are reused by the optional `finalize` hook. Storage is plugin-private
+// — two plugins picking the same slot key cannot see each other's data.
+async function loadPlugins(pluginPaths) {
+  const errors = [];
+  for (const pluginPath of pluginPaths) {
+    try {
+      const pluginDir = resolvePath(cwd, pluginPath);
+      const sdkCheck = checkPluginSdkMajor(pluginDir);
+      if (sdkCheck.kind === "incompatible") {
+        throw new Error(sdkCheck.message);
+      }
+      const resolved = resolveEntryPoint(pluginDir);
+      const url = pathToFileURL(resolved).href;
+      const mod = await import(url);
+      const check = mod.default;
+      if (!check || typeof check.run !== "function" || typeof check.id !== "string") {
+        throw new Error(
+          `module's default export is not a Check object (missing id/run). Got keys: ${
+            check ? Object.keys(check).join(", ") : "no default export"
+          }`,
+        );
+      }
+      if (check.requiresTypes === true) {
+        process.stderr.write(
+          `[cofferdam] plugin "${check.id}" sets requiresTypes:true — type-aware routing` +
+            ` (ts-morph) is not yet wired in 0.2.x; the check will run without type information.` +
+            ` Track cd-l58 / gh #16 for status.\n`,
+        );
+      }
+      loadedPlugins.push({ pluginPath, check });
+      corpusStores.set(check.id, buildCorpusStore());
+    } catch (err) {
+      errors.push({
+        kind: "load_failed",
+        plugin: pluginPath,
+        file: "",
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
-    const resolved = resolveEntryPoint(pluginDir);
-    const url = pathToFileURL(resolved).href;
-    const mod = await import(url);
-    const check = mod.default;
-    if (!check || typeof check.run !== "function" || typeof check.id !== "string") {
-      throw new Error(
-        `module's default export is not a Check object (missing id/run). Got keys: ${
-          check ? Object.keys(check).join(", ") : "no default export"
-        }`,
-      );
+  }
+  return errors;
+}
+
+function processFile(rec) {
+  if (dumpEntries) dumpEntries.push({ path: rec.path, text: rec.text, ast: rec.ast ?? null });
+  if (process.env.COFFERDAM_PLUGIN_HOST_DEBUG) {
+    process.stderr.write(
+      `[host] file=${rec.path} lines=${rec.lineViews.length} ` +
+        `astNodes=${rec.ast?.nodes?.length ?? 0} plugins=${loadedPlugins.length}\n`,
+    );
+  }
+  const sourceFile = buildSourceFile(rec);
+  for (const { pluginPath, check } of loadedPlugins) {
+    if (!fileMatchesScope(rec.path, check.files, rec.layer ?? null)) continue;
+
+    const opts = resolveOptions(check, optionsCfg);
+    const corpusStore = corpusStores.get(check.id);
+    const ctx = {
+      report(args) {
+        if (!args || typeof args !== "object") return;
+        const span = args.span;
+        if (!span) return;
+        const out = {
+          type: "report",
+          checkId: check.id,
+          category: check.category ?? "warning",
+          message: String(args.message ?? ""),
+          file: rec.path,
+          startByte: Number(span.start_byte ?? 0) | 0,
+          endByte: Number(span.end_byte ?? 0) | 0,
+          severity: args.severity ?? check.defaultSeverity ?? "medium",
+        };
+        if (args.fix) out.fix = args.fix;
+        if (args.related) out.related = args.related;
+        writeRecord(out);
+      },
+      corpus: corpusStore.view(),
+    };
+
+    try {
+      check.run(sourceFile, ctx, opts);
+    } catch (err) {
+      writeRecord({
+        type: "error",
+        kind: "run_threw",
+        plugin: pluginPath,
+        file: rec.path,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
-    if (check.requiresTypes === true) {
-      process.stderr.write(
-        `[cofferdam] plugin "${check.id}" sets requiresTypes:true — type-aware routing` +
-          ` (ts-morph) is not yet wired in 0.2.x; the check will run without type information.` +
-          ` Track cd-l58 / gh #16 for status.\n`,
-      );
-    }
-    loadedPlugins.push({ pluginPath, check });
-  } catch (err) {
-    errors.push({
-      kind: "load_failed",
-      plugin: pluginPath,
-      file: "",
-      message: err instanceof Error ? err.message : String(err),
-    });
   }
 }
 
+// cd-9hp.6: finalize pass. After every per-file run has completed,
+// invoke each plugin's optional `finalize(ctx, opts)` once. Findings
+// emitted here attach to whatever file the plugin supplies via
+// `args.file`; the host does not infer a primary file.
+async function finalizeAndEmit() {
+  for (const { pluginPath, check } of loadedPlugins) {
+    if (typeof check.finalize !== "function") continue;
+    const opts = resolveOptions(check, optionsCfg);
+    const corpusStore = corpusStores.get(check.id);
+    const ctx = {
+      report(args) {
+        if (!args || typeof args !== "object") return;
+        const span = args.span;
+        if (!span) return;
+        const out = {
+          type: "report",
+          checkId: check.id,
+          category: check.category ?? "warning",
+          message: String(args.message ?? ""),
+          file: typeof args.file === "string" ? args.file : "",
+          startByte: Number(span.start_byte ?? 0) | 0,
+          endByte: Number(span.end_byte ?? 0) | 0,
+          severity: args.severity ?? check.defaultSeverity ?? "medium",
+        };
+        if (args.fix) out.fix = args.fix;
+        if (args.related) out.related = args.related;
+        writeRecord(out);
+      },
+      corpus: corpusStore.view(),
+    };
+
+    try {
+      check.finalize(ctx, opts);
+    } catch (err) {
+      writeRecord({
+        type: "error",
+        kind: "finalize_threw",
+        plugin: pluginPath,
+        file: "",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (dumpEntries) {
+    const dumpPath = process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE;
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(dumpPath, JSON.stringify(dumpEntries, null, 2));
+  }
+
+  writeRecord({ type: "done" });
+}
+
 // Metadata mode: return check metadata without processing any files.
-// Manifest shape: { "mode": "metadata", "cwd": "...", "plugins": [...] }
-// Output shape:   {
+// Request shape: { "mode": "metadata", "cwd": "...", "plugins": [...] }
+// Response shape: {
 //   "checks": [{
 //     id, category, basePriority, defaultSeverity, explanation, body,
 //     requiresTypes, files,
@@ -127,7 +244,9 @@ for (const pluginPath of manifest.plugins) {
 //   }],
 //   "errors": [...]
 // }
-if (manifest.mode === "metadata") {
+async function runMetadataMode(rec) {
+  cwd = rec.cwd;
+  const errors = await loadPlugins(rec.plugins ?? []);
   const checks = loadedPlugins.map(({ check }) => ({
     id: check.id,
     category: check.category ?? "warning",
@@ -150,123 +269,55 @@ if (manifest.mode === "metadata") {
   process.exit(0);
 }
 
-if (process.env.COFFERDAM_PLUGIN_HOST_DEBUG) {
-  for (const file of manifest.files) {
-    process.stderr.write(
-      `[host] file=${file.path} lines=${file.lineViews.length} ` +
-        `astNodes=${file.ast?.nodes?.length ?? 0} plugins=${loadedPlugins.length}\n`,
-    );
+async function handleRecord(rec) {
+  if (rec.mode === "metadata") {
+    await runMetadataMode(rec);
+    return;
   }
-}
-
-// Dump the wire payload as JSON to a file when COFFERDAM_PLUGIN_HOST_DUMP_WIRE
-// is set — used by scripts/check-ast-spans.mjs to verify byte-range
-// round-trip without instrumenting the host script's main path. cd-svf
-// span round-trip CI guardrail.
-if (process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE) {
-  const dumpPath = process.env.COFFERDAM_PLUGIN_HOST_DUMP_WIRE;
-  const { writeFileSync } = await import("node:fs");
-  writeFileSync(
-    dumpPath,
-    JSON.stringify(
-      manifest.files.map((f) => ({ path: f.path, text: f.text, ast: f.ast })),
-      null,
-      2,
-    ),
-  );
-}
-
-// cd-9hp.6: per-plugin corpus stores survive every per-file `run` and
-// are reused by the optional `finalize` hook. Storage is plugin-private
-// — two plugins picking the same slot key cannot see each other's data.
-const corpusStores = new Map();
-for (const { check } of loadedPlugins) {
-  corpusStores.set(check.id, buildCorpusStore());
-}
-
-for (const file of manifest.files) {
-  for (const { pluginPath, check } of loadedPlugins) {
-    if (!fileMatchesScope(file.path, check.files, file.layer ?? null)) continue;
-
-    const opts = resolveOptions(check, manifest.options ?? {});
-    const sourceFile = buildSourceFile(file);
-    const corpusStore = corpusStores.get(check.id);
-    const ctx = {
-      report(args) {
-        if (!args || typeof args !== "object") return;
-        const span = args.span;
-        if (!span) return;
-        const out = {
-          checkId: check.id,
-          category: check.category ?? "warning",
-          message: String(args.message ?? ""),
-          file: file.path,
-          startByte: Number(span.start_byte ?? 0) | 0,
-          endByte: Number(span.end_byte ?? 0) | 0,
-          severity: args.severity ?? check.defaultSeverity ?? "medium",
-        };
-        if (args.fix) out.fix = args.fix;
-        if (args.related) out.related = args.related;
-        reports.push(out);
-      },
-      corpus: corpusStore.view(),
-    };
-
-    try {
-      check.run(sourceFile, ctx, opts);
-    } catch (err) {
-      errors.push({
-        kind: "run_threw",
-        plugin: pluginPath,
-        file: file.path,
-        message: err instanceof Error ? err.message : String(err),
-      });
+  switch (rec.type) {
+    case "header": {
+      cwd = rec.cwd;
+      optionsCfg = rec.options ?? {};
+      const errors = await loadPlugins(rec.plugins ?? []);
+      for (const e of errors) writeRecord({ type: "error", ...e });
+      break;
     }
+    case "file":
+      processFile(rec);
+      break;
+    case "end":
+      await finalizeAndEmit();
+      process.exit(0);
+      break;
+    default:
+      process.stderr.write(`plugin-host: unknown stream record type: ${rec.type}\n`);
   }
 }
 
-// cd-9hp.6: finalize pass. After every per-file run has completed,
-// invoke each plugin's optional `finalize(ctx, opts)` once. Findings
-// emitted here attach to whatever file the plugin supplies via
-// `args.file`; the host does not infer a primary file.
-for (const { pluginPath, check } of loadedPlugins) {
-  if (typeof check.finalize !== "function") continue;
-  const opts = resolveOptions(check, manifest.options ?? {});
-  const corpusStore = corpusStores.get(check.id);
-  const ctx = {
-    report(args) {
-      if (!args || typeof args !== "object") return;
-      const span = args.span;
-      if (!span) return;
-      const out = {
-        checkId: check.id,
-        category: check.category ?? "warning",
-        message: String(args.message ?? ""),
-        file: typeof args.file === "string" ? args.file : "",
-        startByte: Number(span.start_byte ?? 0) | 0,
-        endByte: Number(span.end_byte ?? 0) | 0,
-        severity: args.severity ?? check.defaultSeverity ?? "medium",
-      };
-      if (args.fix) out.fix = args.fix;
-      if (args.related) out.related = args.related;
-      reports.push(out);
-    },
-    corpus: corpusStore.view(),
-  };
-
-  try {
-    check.finalize(ctx, opts);
-  } catch (err) {
-    errors.push({
-      kind: "finalize_threw",
-      plugin: pluginPath,
-      file: "",
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-process.stdout.write(JSON.stringify({ reports, errors }) + "\n");
+// Records are processed strictly in arrival order — each line's handler
+// (which may be async, e.g. the header's dynamic `import()`s) must
+// finish before the next line is handled, or a "file" record could run
+// against a not-yet-loaded plugin list.
+let chain = Promise.resolve();
+const rl = createInterface({ input: process.stdin, terminal: false });
+rl.on("line", (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  chain = chain.then(async () => {
+    let rec;
+    try {
+      rec = JSON.parse(trimmed);
+    } catch (e) {
+      process.stderr.write(`plugin-host: bad record JSON: ${e.message}\n`);
+      return;
+    }
+    await handleRecord(rec);
+  });
+  chain = chain.catch((e) => {
+    process.stderr.write(`plugin-host: internal error: ${e instanceof Error ? e.stack : e}\n`);
+    process.exitCode = 1;
+  });
+});
 
 // ---- helpers --------------------------------------------------------
 
@@ -363,16 +414,6 @@ function pickEntry(pkg) {
     }
   }
   return null;
-}
-
-function readManifest() {
-  const raw = readFileSync(0, "utf8");
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    process.stderr.write(`plugin-host: failed to parse manifest JSON: ${e.message}\n`);
-    process.exit(2);
-  }
 }
 
 function buildSourceFile(file) {

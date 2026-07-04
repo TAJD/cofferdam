@@ -393,7 +393,7 @@ version = "0.3.6"
 dependencies = [
  "cofferdam-core",
  "serde",
- "thiserror 1.0.69",
+ "thiserror",
  "toml",
  "toml_edit",
 ]

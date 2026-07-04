@@ -208,6 +208,33 @@ treat as "can't conclude — emit nothing".
   bail on this — the compiler can't prove a guard redundant against a
   type it knows nothing about.
 
+## Worker pool (CD-31)
+
+The Rust client no longer holds a single worker. `build_type_oracle` spawns a
+**pool of N Node worker processes**, each an independent instance of this
+wire protocol — same request/response shapes, same methods, no framing
+change. N defaults to the host's available parallelism (`pool_size()` in
+`type_host.rs`), overridable via `COFFERDAM_TYPE_HOST_POOL_SIZE`. Each
+worker opens the same tsconfig independently (its own in-process ts-morph
+`Project` cache — workers do not share memory), so pool startup cost is
+roughly N × one worker's `openProject` cost; workers are opened concurrently
+(one thread per worker) so wall-clock cost stays close to a single worker's
+init time rather than N times it.
+
+`WorkerTypeOracle::type_at` dispatches to a worker round-robin via an atomic
+counter. This is what keeps type-aware check throughput from serialising
+back onto one process once the per-file engine loop is parallelized
+(CD-30) — each concurrent caller gets a (probabilistically) different
+worker instead of blocking on a single mutex. A pool of size 1 (forced via
+`COFFERDAM_TYPE_HOST_POOL_SIZE=1`, or the default on a single-core host)
+behaves identically to the pre-CD-31 single-worker design.
+
+Graceful degradation is unchanged: if any worker in the pool fails to spawn
+or fails `openProject` (Node missing, ts-morph not installed, bad
+tsconfig), `build_type_oracle` tears down every worker it already started
+and returns the error — the CLI's existing single-clear-diagnostic /
+no-type-aware-checks fallback applies to the whole pool, not per-worker.
+
 ## Future methods
 
 Sketched for forward-compatibility; not yet implemented.

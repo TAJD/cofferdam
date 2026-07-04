@@ -274,7 +274,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cofferdam-checks"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "cofferdam-graph",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-cli"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-core"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "globset",
  "oxc_allocator",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-engine"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-formatters"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "insta",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-graph"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "petgraph",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-lsp"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-mcp"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-napi"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-rust"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "thiserror",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "cofferdam-typst"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "serde",

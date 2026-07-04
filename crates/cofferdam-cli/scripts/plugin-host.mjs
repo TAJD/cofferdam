@@ -266,7 +266,13 @@ async function runMetadataMode(rec) {
       : [],
   }));
   process.stdout.write(JSON.stringify({ checks, errors }) + "\n");
-  process.exit(0);
+  // cd-41: don't force-exit right after the write. On Windows, writes to
+  // a piped stdout are asynchronous — process.exit() can outrun the OS
+  // flush and truncate the very output we just wrote, especially under
+  // the CPU contention of several concurrent hosts. Setting exitCode and
+  // letting the event loop drain naturally means the process only exits
+  // once the write (and everything else pending) has actually completed.
+  process.exitCode = 0;
 }
 
 async function handleRecord(rec) {
@@ -287,7 +293,10 @@ async function handleRecord(rec) {
       break;
     case "end":
       await finalizeAndEmit();
-      process.exit(0);
+      // cd-41: see the comment in runMetadataMode — avoid forcing exit
+      // right after finalizeAndEmit's final `done` write so it can't be
+      // truncated by an async pipe flush racing process.exit().
+      process.exitCode = 0;
       break;
     default:
       process.stderr.write(`plugin-host: unknown stream record type: ${rec.type}\n`);

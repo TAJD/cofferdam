@@ -509,3 +509,20 @@ when the debug env var is set.
 **Versioning.** `WIRE_VERSION: u32 = 2` in `plugins.rs` marks this as a
 structural (major) change per the cd-9hp.12 schema-versioning policy —
 the framing changed even though the AST node payload didn't.
+
+**Completion handshake (cd-41).** `{"type":"done"}` is not just the
+loop-exit signal for the Rust reader — it's the only thing that
+distinguishes "the host legitimately found nothing" from "the host's
+output was lost." On a constrained machine running several plugin
+hosts concurrently, `process.exit()` called immediately after a stdout
+write can outrun the OS pipe flush (observed on Windows, where piped
+stdout writes are asynchronous) and truncate output, including the
+final `done` line — the child still exits 0. `plugin-host.mjs` now
+sets `process.exitCode` and lets the event loop drain naturally instead
+of forcing exit, so the buffered write actually completes first. As
+defense in depth, `read_stream_records` in `plugins.rs` also tracks
+whether `done` was actually observed; if the child exits successfully
+but the stream ends without it, that's surfaced as
+`Warning.PluginHostFailed` rather than treated as an empty finding
+set — see `crates/cofferdam-cli/tests/plugin_findings.rs`'s
+`host_exit_without_completion_marker_surfaces_as_plugin_host_failed`.

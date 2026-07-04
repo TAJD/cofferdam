@@ -27,6 +27,12 @@
 //!     `Warning.PluginCrashed` for that file; other files continue.
 //!   - Host script malformed JSON or non-zero exit: returns
 //!     `Warning.PluginHostFailed` with the captured stderr.
+//!   - Host exits successfully but the stdout stream ends without ever
+//!     emitting the closing `done` record (stdout truncated under load,
+//!     or the process terminated mid-finalize): treated as
+//!     `Warning.PluginHostFailed`, NOT as an empty finding set (cd-41).
+//!     `done` is the completion handshake — its absence is the only
+//!     reliable signal that the host didn't actually finish.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -615,11 +621,12 @@ pub fn run_plugins_with_sources(
         }
     };
 
-    let (reports, errors, malformed) = reader_handle.join().unwrap_or_else(|_| {
+    let (reports, errors, malformed, saw_done) = reader_handle.join().unwrap_or_else(|_| {
         (
             Vec::new(),
             Vec::new(),
             vec!["reader thread panicked".to_string()],
+            false,
         )
     });
     let stderr_text = stderr_handle.join().unwrap_or_default();
@@ -638,6 +645,27 @@ pub fn run_plugins_with_sources(
             "host exited with status {:?}: {}",
             status.code(),
             stderr_text.trim()
+        ))];
+    }
+    if !saw_done {
+        // cd-41: the child exited successfully but its stdout stream
+        // ended without the closing `done` record ever arriving —
+        // truncated output or a mid-stream death that still returned
+        // exit code 0. Whatever reports/errors were collected up to
+        // that point are unreliable (we can't know what else was lost),
+        // so surface one clear failure instead of a silent (and
+        // possibly empty) result.
+        return vec![host_failed_issue(&format!(
+            "host exited successfully but never emitted its completion marker \
+             (stdout truncated or process terminated mid-run); \
+             {} report(s) and {} error(s) seen before the stream ended{}",
+            reports.len(),
+            errors.len(),
+            if stderr_text.trim().is_empty() {
+                String::new()
+            } else {
+                format!("; stderr: {}", stderr_text.trim())
+            }
         ))];
     }
 
@@ -846,11 +874,20 @@ fn write_record<T: Serialize>(stdin: &mut impl Write, record: &T) -> std::io::Re
 /// recorded in the third return slot rather than aborting the whole
 /// read — one bad record shouldn't discard every finding streamed
 /// before or after it.
-fn read_stream_records(stdout: ChildStdout) -> (Vec<HostReport>, Vec<HostError>, Vec<String>) {
+///
+/// The final `bool` reports whether a `done` record was actually
+/// observed before the stream ended (cd-41). EOF without `done` means
+/// the host's output was truncated or the process died mid-stream —
+/// the caller must not treat that the same as a legitimate empty
+/// result, even when the child's exit status is success.
+fn read_stream_records(
+    stdout: ChildStdout,
+) -> (Vec<HostReport>, Vec<HostError>, Vec<String>, bool) {
     let mut reader = BufReader::new(stdout);
     let mut reports = Vec::new();
     let mut errors = Vec::new();
     let mut malformed = Vec::new();
+    let mut saw_done = false;
     let mut line = String::new();
     loop {
         line.clear();
@@ -864,7 +901,10 @@ fn read_stream_records(stdout: ChildStdout) -> (Vec<HostReport>, Vec<HostError>,
                 match serde_json::from_str::<StreamRecord>(trimmed) {
                     Ok(StreamRecord::Report(r)) => reports.push(r),
                     Ok(StreamRecord::Error(e)) => errors.push(e),
-                    Ok(StreamRecord::Done) => break,
+                    Ok(StreamRecord::Done) => {
+                        saw_done = true;
+                        break;
+                    }
                     Err(e) => malformed.push(format!(
                         "{e}: {}",
                         trimmed.chars().take(200).collect::<String>()
@@ -874,7 +914,7 @@ fn read_stream_records(stdout: ChildStdout) -> (Vec<HostReport>, Vec<HostError>,
             Err(_) => break,
         }
     }
-    (reports, errors, malformed)
+    (reports, errors, malformed, saw_done)
 }
 
 /// Wall-clock budget for one invocation of the plugin host. Default 60s;

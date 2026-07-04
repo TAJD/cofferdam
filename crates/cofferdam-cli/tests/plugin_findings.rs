@@ -154,6 +154,50 @@ fn out_of_scope_plugin_report_is_dropped_with_warning() {
     );
 }
 
+/// Plugin that calls `process.exit(0)` from inside `run()`, before the
+/// host ever reaches `finalizeAndEmit`'s closing `{"type":"done"}`
+/// record. Reproduces the cd-41 gap directly through the real host
+/// contract: the child exits with status 0 and an empty/truncated
+/// stdout, exactly the "successful exit, no completion marker" case
+/// that used to be indistinguishable from a legitimate empty result.
+const EXITS_WITHOUT_DONE_MARKER_PLUGIN: &str = r#"
+export default {
+  id: "Test.ExitsWithoutDoneMarker",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "exits the host process before the completion marker is emitted",
+  requiresTypes: false,
+  options: {},
+  run(file, ctx) {
+    process.exit(0);
+  },
+};
+"#;
+
+#[test]
+fn host_exit_without_completion_marker_surfaces_as_plugin_host_failed() {
+    if !node_present() {
+        return;
+    }
+    let _host = serialize_plugin_host();
+    let env = Env::with_plugin(EXITS_WITHOUT_DONE_MARKER_PLUGIN);
+    let out = env.run(&["check", "--no-baseline"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("PluginHostFailed"),
+        "host exiting cleanly without ever emitting `done` must surface as \
+         Warning.PluginHostFailed rather than a silent empty result; \
+         stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.contains("completion marker"),
+        "the failure message should name the actual gap (missing completion \
+         marker), not a generic host error; stdout={stdout}\nstderr={stderr}"
+    );
+}
+
 #[test]
 fn plugin_finding_appears_in_default_text_output() {
     if !node_present() {

@@ -78,7 +78,7 @@ fn incremental_initial_population_matches_from_scratch() {
 
     let incremental_engine = engine();
     let mut state = AnalysisState::new();
-    let (incremental, _) = incremental_engine.analyze_incremental(&mut state, &sources, &[]);
+    let incremental = incremental_engine.analyze_incremental(&mut state, &sources, &[]);
 
     assert_eq!(
         full_identity(&from_scratch),
@@ -102,7 +102,7 @@ fn incremental_single_file_edit_matches_from_scratch() {
     let (mutated_path, original_text) = sources.first().expect("at least one fixture").clone();
     let mutated_text = format!("{original_text}\nconst __cd32_incremental_marker = 1;\n");
 
-    let (incremental, _) = incremental_engine.analyze_incremental(
+    let incremental = incremental_engine.analyze_incremental(
         &mut state,
         &[(mutated_path.clone(), mutated_text.clone())],
         &[],
@@ -131,7 +131,7 @@ fn incremental_file_removal_matches_from_scratch() {
     let _ = incremental_engine.analyze_incremental(&mut state, &sources, &[]);
 
     let (removed_path, _) = sources.first().expect("at least one fixture").clone();
-    let (incremental, _) = incremental_engine.analyze_incremental(
+    let incremental = incremental_engine.analyze_incremental(
         &mut state,
         &[],
         std::slice::from_ref(&removed_path),
@@ -168,7 +168,7 @@ fn incremental_file_addition_matches_from_scratch() {
     let mut state = AnalysisState::new();
     let _ = incremental_engine.analyze_incremental(&mut state, &seed_sources, &[]);
 
-    let (incremental, _) =
+    let incremental =
         incremental_engine.analyze_incremental(&mut state, &[(added_path, added_text)], &[]);
 
     let (from_scratch, _) = engine().analyze_with_sources(sources);

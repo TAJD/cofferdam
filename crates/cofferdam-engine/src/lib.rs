@@ -124,6 +124,10 @@ pub struct AnalysisState {
     /// file, so an incremental call can reuse the ones whose file
     /// didn't change instead of re-running `Check::run`.
     pass1_issues: HashMap<PathBuf, Vec<Issue>>,
+    /// Parsed inline suppression directives per file. Re-parsed only
+    /// for changed files each incremental call — parsing every file's
+    /// directives in finalize dominated the incremental cost (cd-32).
+    suppressions: HashMap<PathBuf, suppress::Suppressions>,
 }
 
 impl AnalysisState {
@@ -692,7 +696,11 @@ impl Engine {
             t.record_phase("pass2", pass2_start.elapsed());
         }
 
-        let issues = self.finalize_and_filter(&corpus, issues, &texts, timing);
+        let suppressions_by_file: HashMap<PathBuf, suppress::Suppressions> = texts
+            .iter()
+            .map(|(path, text)| (path.clone(), suppress::Suppressions::parse(text)))
+            .collect();
+        let issues = self.finalize_and_filter(&corpus, issues, &suppressions_by_file, timing);
         (issues, texts)
     }
 
@@ -747,7 +755,7 @@ impl Engine {
         &self,
         corpus: &CorpusIndex,
         mut issues: Vec<Issue>,
-        texts: &HashMap<PathBuf, String>,
+        suppressions_by_file: &HashMap<PathBuf, suppress::Suppressions>,
         timing: Option<&TimingCollector>,
     ) -> Vec<Issue> {
         // Canonical-graph build (cd-9hp.9 cp3). Translates the flat
@@ -784,14 +792,29 @@ impl Engine {
         // If a second observer use case appears, extend
         // `FINALIZE_OBSERVER_CHECK_IDS` in cofferdam-core.
         let finalize_a_start = Instant::now();
-        for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-            if !cofferdam_core::is_finalize_observer(check.meta().id) {
+        // Cross-file finalize emitters are independent (each only reads
+        // the corpus and returns its findings) so they run in parallel.
+        // `collect` is index-ordered, so the emitted sequence is
+        // identical to the sequential order regardless of thread timing
+        // — the deterministic sort below still normalises, but this keeps
+        // the pre-sort snapshot stable too (cd-32 perf: finalize_a was
+        // ~5ms, the largest remaining whole-corpus cost per edit).
+        let phase_a_checks: Vec<_> = self
+            .checks
+            .iter()
+            .zip(self.options.iter())
+            .filter(|(check, _)| !cofferdam_core::is_finalize_observer(check.meta().id))
+            .collect();
+        let phase_a: Vec<Issue> = phase_a_checks
+            .par_iter()
+            .flat_map_iter(|(check, opts)| {
                 let mut finalize_ctx = FinalizeContext::new(corpus).with_options(opts);
-                issues.extend(timed_run(timing, check.meta().id, || {
+                timed_run(timing, check.meta().id, || {
                     check.finalize(&mut finalize_ctx)
-                }));
-            }
-        }
+                })
+            })
+            .collect();
+        issues.extend(phase_a);
         if let Some(t) = timing {
             t.record_phase("finalize_a", finalize_a_start.elapsed());
         }
@@ -829,13 +852,12 @@ impl Engine {
             t.record_phase("finalize_b", finalize_b_start.elapsed());
         }
 
-        // Post-collection filter (cd-5t7): suppress findings based on inline directives.
-        // Build a suppression map for each file and filter issues.
-        let suppressions_by_file: HashMap<PathBuf, suppress::Suppressions> = texts
-            .iter()
-            .map(|(path, text)| (path.clone(), suppress::Suppressions::parse(text)))
-            .collect();
-
+        // Post-collection filter (cd-5t7): suppress findings based on
+        // inline directives. The per-file suppression map is built by the
+        // caller (from-scratch parses it fresh; incremental keeps a
+        // persistent map and re-parses only changed files — cd-32 perf:
+        // parsing all files' directives here dominated the incremental
+        // finalize, ~7.7ms on a 325-file repo).
         issues.retain(|issue| {
             if let Some(sup) = suppressions_by_file.get(&issue.file) {
                 !sup.is_suppressed(issue.location.line(), &issue.check_id)
@@ -1213,7 +1235,7 @@ impl Engine {
         state: &mut AnalysisState,
         changed: &[(PathBuf, String)],
         removed: &[PathBuf],
-    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+    ) -> Vec<Issue> {
         let changed: Vec<(PathBuf, String)> = changed
             .iter()
             .map(|(p, t)| {
@@ -1236,6 +1258,7 @@ impl Engine {
             state.corpus.remove_file(path);
             state.sources.remove(path);
             state.pass1_issues.remove(path);
+            state.suppressions.remove(path);
         }
 
         for (path, text) in &changed {
@@ -1253,6 +1276,9 @@ impl Engine {
                 None,
                 Some(&state.parse_cache),
             );
+            state
+                .suppressions
+                .insert(path.clone(), suppress::Suppressions::parse(text));
             state.sources.insert(path.clone(), text.clone());
             state.pass1_issues.insert(path.clone(), file_issues);
         }
@@ -1292,9 +1318,9 @@ impl Engine {
             }
         }
 
-        let texts = state.sources.clone();
-        let issues = self.finalize_and_filter(&state.corpus, issues, &texts, None);
-        (issues, texts)
+        // finalize reads the persistent per-file suppression map — only
+        // changed files were re-parsed above (cd-32 perf).
+        self.finalize_and_filter(&state.corpus, issues, &state.suppressions, None)
     }
 
     /// Cache-aware variant of [`Engine::analyze_with_text`]. Reads

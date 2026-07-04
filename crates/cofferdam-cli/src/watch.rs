@@ -229,8 +229,7 @@ fn analyze_once(engine: &Engine, state: &mut AnalysisState, files: &[PathBuf]) -
         .cloned()
         .collect();
 
-    let (issues, _texts) = engine.analyze_incremental(state, &changed, &removed);
-    issues
+    engine.analyze_incremental(state, &changed, &removed)
 }
 
 fn print_findings(issues: &[Issue]) {

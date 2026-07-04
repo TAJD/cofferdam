@@ -358,6 +358,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cofferdam-mcp"
+version = "0.3.6"
+dependencies = [
+ "cofferdam-checks",
+ "cofferdam-core",
+ "cofferdam-engine",
+ "cofferdam-formatters",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cofferdam-napi"
 version = "0.3.6"
 dependencies = [

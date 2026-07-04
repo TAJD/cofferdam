@@ -19,12 +19,27 @@ fn init_repo(dir: &Path) {
     run_git(dir, &["config", "commit.gpgsign", "false"]);
 }
 
+/// GIT_* vars git sets when this test binary is itself invoked from a
+/// git hook (e.g. `cargo test` under `pre-push`). Left in place, they
+/// redirect this helper's `git init`/`git commit` at the *real* repo
+/// (or its worktree common dir) instead of the fresh temp dir.
+const GIT_ENV_VARS_TO_CLEAR: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+];
+
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(dir);
+    for var in GIT_ENV_VARS_TO_CLEAR {
+        cmd.env_remove(var);
+    }
+    let out = cmd.output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -44,17 +59,21 @@ fn cofferdam_bin() -> &'static str {
 /// Run `cofferdam check --since HEAD~1 --no-baseline --format=json` in `repo`.
 /// Returns the parsed JSON value and raw stdout.
 fn run_since_check(repo: &Path) -> (serde_json::Value, String) {
-    let out = Command::new(cofferdam_bin())
-        .args([
-            "check",
-            "--since",
-            "HEAD~1",
-            "--no-baseline",
-            "--format=json",
-        ])
-        .current_dir(repo)
-        .output()
-        .expect("spawn cofferdam");
+    // `--since` shells out to git internally, so it needs the same env
+    // isolation as `run_git` above.
+    let mut cmd = Command::new(cofferdam_bin());
+    cmd.args([
+        "check",
+        "--since",
+        "HEAD~1",
+        "--no-baseline",
+        "--format=json",
+    ])
+    .current_dir(repo);
+    for var in GIT_ENV_VARS_TO_CLEAR {
+        cmd.env_remove(var);
+    }
+    let out = cmd.output().expect("spawn cofferdam");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let v: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!(

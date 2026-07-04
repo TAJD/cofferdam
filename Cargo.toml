@@ -8,6 +8,7 @@ members = [
     "crates/cofferdam-cli",
     "crates/cofferdam-graph",
     "crates/cofferdam-lsp",
+    "crates/cofferdam-mcp",
     "crates/cofferdam-napi",
     "crates/cofferdam-rust",
     "crates/cofferdam-typst",

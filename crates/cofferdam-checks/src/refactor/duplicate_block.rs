@@ -177,6 +177,12 @@ impl Check for DuplicateBlock {
         &DUP_META
     }
 
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&DUPLICATE_BLOCKS, |slot, path| {
+            slot.retain(|f| f.file != path)
+        });
+    }
+
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
@@ -227,8 +233,13 @@ impl Check for DuplicateBlock {
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         let mut by_hash: BTreeMap<u64, Vec<Fingerprint>> = BTreeMap::new();
+        // Read-only (cd-32): a draining read would empty the slot as a
+        // side effect of finalize, which is fine for a one-shot analyze
+        // but corrupts `Engine::analyze_incremental`'s persistent
+        // `AnalysisState` — the next incremental call would finalize
+        // over an empty slot for every file that didn't just change.
         ctx.corpus.with_slot(&DUPLICATE_BLOCKS, |slot| {
-            for fp in slot.drain(..) {
+            for fp in slot.iter().cloned() {
                 by_hash.entry(fp.hash).or_default().push(fp);
             }
         });

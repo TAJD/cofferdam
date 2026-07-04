@@ -56,6 +56,12 @@ impl Check for QuoteStyle {
         &META
     }
 
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&QUOTE_STATS, |slot, path| {
+            slot.remove(path);
+        });
+    }
+
     /// Pass 1: walk AST and collect per-file quote-usage statistics.
     /// Skips JSX attribute string values (they have different style rules)
     /// and strings whose content forces the alternate quote (e.g. `"don't"`).
@@ -375,6 +381,12 @@ const US_META: CheckMeta = CheckMeta {
 impl Check for UnusedSuppression {
     fn meta(&self) -> &'static CheckMeta {
         &US_META
+    }
+
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&SUPPRESSION_DIRECTIVES, |slot, path| {
+            slot.remove(path);
+        });
     }
 
     /// Pass 1: scan the file text for scoped suppression directives and

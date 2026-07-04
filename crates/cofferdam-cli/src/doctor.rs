@@ -1,8 +1,9 @@
 //! `cofferdam doctor` — diagnose install and configuration issues.
 //!
-//! Runs 9 checks covering binary integrity, config, baseline, baseline
-//! suppression overlap, git, discovery, suppression directives, and npm
-//! wrapper version. Reports every check in one pass (no early exit);
+//! Runs 10 checks covering binary integrity, config, baseline, baseline
+//! suppression overlap, git, discovery, suppression directives, type-host
+//! tsconfig availability, and npm wrapper version. Reports every check in
+//! one pass (no early exit);
 //! returns `ExitCode::FAILURE` if any check has `Status::Fail`,
 //! `ExitCode::SUCCESS` otherwise (warns alone do not cause non-zero exit).
 //!
@@ -129,6 +130,7 @@ pub(crate) fn run(robot: bool, pretty: bool) -> ExitCode {
         check_git(),
         check_discovery(),
         check_suppression_directives(),
+        check_type_host(),
         check_wrapper_version(),
     ];
 
@@ -406,6 +408,13 @@ fn check_baseline() -> CheckResult {
                 )
             }
         }
+        Err(baseline::BaselineError::Version {
+            found, supported, ..
+        }) => CheckResult::warn(
+            NAME,
+            format!("baseline schema is v{found}; this binary writes v{supported} — regenerate it"),
+            "cofferdam baseline write",
+        ),
         Err(e) => CheckResult::fail(
             NAME,
             format!("failed to load {}: {e}", baseline_path.display()),
@@ -665,7 +674,66 @@ fn check_suppression_directives() -> CheckResult {
     }
 }
 
-// ── Check 8 — wrapper-version ────────────────────────────────────────────────
+// ── Check 8 — type-host ──────────────────────────────────────────────────────
+
+/// Warn when type-aware checks are registered but no root `tsconfig.json`
+/// can be found — the common pnpm/turbo monorepo footgun (a
+/// `tsconfig.base.json` plus per-package configs, but nothing at the
+/// project root). Mirrors the discovery predicate in `main.rs`'s
+/// `find_tsconfig`, duplicated locally so this check stays independent of
+/// the CLI's type-host wiring.
+fn check_type_host() -> CheckResult {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return CheckResult::fail(
+                "type-host",
+                format!("could not determine current directory: {e}"),
+                "check your working directory",
+            );
+        }
+    };
+    check_type_host_at(&cwd)
+}
+
+/// Test-friendly variant: takes the directory to search from.
+fn check_type_host_at(start: &Path) -> CheckResult {
+    const NAME: &str = "type-host";
+
+    let needs_types = all_builtins().iter().any(|c| c.meta().requires_types);
+    if !needs_types {
+        return CheckResult::pass(NAME, "no type-aware checks registered");
+    }
+
+    if find_tsconfig_from(start).is_some() {
+        CheckResult::pass(NAME, "root tsconfig.json found — type-aware checks enabled")
+    } else {
+        CheckResult::warn(
+            NAME,
+            format!(
+                "type-aware checks are registered but no tsconfig.json found near {} — they will be skipped",
+                start.display()
+            ),
+            "add a root tsconfig.json (a references-only one is enough) so type-aware checks can run",
+        )
+    }
+}
+
+/// Walk up from `start` looking for a `tsconfig.json`. Mirrors
+/// `main.rs::find_tsconfig`.
+fn find_tsconfig_from(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        let candidate = d.join("tsconfig.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+// ── Check 9 — wrapper-version ────────────────────────────────────────────────
 
 fn check_wrapper_version() -> CheckResult {
     const NAME: &str = "wrapper-version";
@@ -909,6 +977,57 @@ mod tests {
             "message should mention dual-state: {}",
             r.message
         );
+    }
+
+    // ── check_type_host tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn type_host_passes_when_tsconfig_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("tsconfig.json"), "{}\n").expect("write");
+        let r = check_type_host_at(dir.path());
+        assert_eq!(r.name, "type-host");
+        // Whether this is a Pass depends on whether any built-in check
+        // currently requires types; either way tsconfig presence must not
+        // produce the "no tsconfig" warning message.
+        assert!(
+            !r.message.contains("no tsconfig.json found"),
+            "should not warn when tsconfig.json exists: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn type_host_warns_when_tsconfig_missing_and_types_required() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let needs_types = all_builtins().iter().any(|c| c.meta().requires_types);
+        let r = check_type_host_at(dir.path());
+        if needs_types {
+            assert_eq!(
+                r.status,
+                Status::Warn,
+                "missing tsconfig with type-aware checks registered should warn: {}",
+                r.message
+            );
+            assert!(r.remediation.is_some());
+        } else {
+            assert_eq!(r.status, Status::Pass);
+        }
+    }
+
+    #[test]
+    fn find_tsconfig_from_walks_up_parent_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("tsconfig.json"), "{}\n").expect("write");
+        let nested = dir.path().join("packages/app");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        assert!(find_tsconfig_from(&nested).is_some());
+    }
+
+    #[test]
+    fn find_tsconfig_from_none_when_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(find_tsconfig_from(dir.path()).is_none());
     }
 
     #[test]

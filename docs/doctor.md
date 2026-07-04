@@ -17,7 +17,7 @@ cofferdam doctor --robot --pretty
 
 ## Checks
 
-Doctor runs 7 checks in sequence and reports every result before exiting. All 7 always run — there is no early exit on first failure, so you see the complete picture in one shot.
+Doctor runs 10 checks in sequence and reports every result before exiting. All 10 always run — there is no early exit on first failure, so you see the complete picture in one shot.
 
 ### binary-integrity
 
@@ -49,13 +49,13 @@ Remediation for Fail: `fix the syntax error in <path>`
 
 ### baseline
 
-Looks for `.cofferdam/baseline.json` by walking up from the current directory. If found, reads and parses it. Additionally checks that every file path referenced by a baselined entry still exists on disk (stale paths indicate the baseline needs refreshing after files were renamed or deleted).
+Looks for `.cofferdam/baseline.json` by walking up from the current directory. If found, reads and parses it. Additionally checks that every file path referenced by a baselined entry still exists on disk (stale paths indicate the baseline needs refreshing after files were renamed or deleted). A baseline written by an older or newer binary — one whose schema `version` doesn't match what this binary writes — is called out explicitly by name, with the found and supported version numbers, rather than surfacing as a generic parse failure.
 
 | Status | Condition |
 |---|---|
 | Pass | No baseline file found, or file loads cleanly with no stale entries |
-| Warn | Baseline is valid but references one or more files no longer in the repo |
-| Fail | File exists but cannot be read or parsed (schema mismatch, JSON error) |
+| Warn | Baseline is valid but references one or more files no longer in the repo, or the baseline's schema version doesn't match what this binary writes |
+| Fail | File exists but cannot be read or parsed (JSON error) |
 
 Remediation for Warn or Fail: `cofferdam baseline write`
 
@@ -101,6 +101,19 @@ If more than 1000 files are found, the scan is skipped with a warning (use `--pa
 | Warn | One or more directive IDs reference unknown checks, or >1000 files (scan skipped) |
 
 Remediation: `rename to a current check ID or remove the directive — see cofferdam explain --list`
+
+---
+
+### type-host
+
+Checks whether any registered check has `requires_types: true` (type-aware checks, routed through the ts-morph type host). If none are registered, this check is a no-op pass. If at least one is registered, walks up from the current directory looking for a root `tsconfig.json` — the same discovery `cofferdam check` uses to start the type host. This catches the common pnpm/turbo monorepo footgun: a `tsconfig.base.json` plus per-package `tsconfig.json` files, but nothing at the project root, which silently disables every type-aware check.
+
+| Status | Condition |
+|---|---|
+| Pass | No type-aware checks registered, or a root `tsconfig.json` was found |
+| Warn | Type-aware checks are registered but no `tsconfig.json` was found near the project root |
+
+Remediation for Warn: add a root `tsconfig.json` (a references-only one pointing at the per-package configs is enough) so type-aware checks can run.
 
 ---
 

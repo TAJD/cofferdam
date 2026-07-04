@@ -10,10 +10,17 @@
 #   - cargo-zigbuild for the cross targets (linux-arm64-gnu, linux-musl x64+arm64).
 #     Simpler than `cross` (no docker required on the runner) and battle-tested.
 #
-# Out of scope (pre-phase-4):
-#   - npm publish — handled by the napi-rs path once cofferdam-napi is wired up
+# Publish targets on a v* tag (all automatic — no manual npm step):
+#   - GitHub Releases: multi-platform binaries + .sha256      → `publish` job
+#   - npm @cofferdam/cofferdam (postinstall binary fetcher)   → `publish-npm` (OIDC)
+#   - npm @cofferdam/check-sdk (plugin SDK, tsc → dist)       → `publish-check-sdk` (OIDC)
+#     then `npm-smoke` install-verifies the published package on Linux/macOS/Windows.
+#
+# Still out of scope:
 #   - crates.io publish — separate workflow when the trait surface stabilizes
-#   - Apple notarization / Windows code signing — adds complexity; skipped for v0.1.0
+#   - Apple notarization / Windows code signing — adds complexity; skipped pre-1.0
+#   - A native napi package (@cofferdam/node) is phase 4; today's npm package ships
+#     the prebuilt CLI binary via a postinstall download, not napi bindings.
 
 name: release
 

@@ -26,6 +26,13 @@ fn run_git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        // A git hook invoking this test suite (e.g. pre-push, in a
+        // worktree checkout) exports GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+        // pointing at the real repo; left inherited, they hijack this
+        // git call away from `dir`.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(
@@ -42,6 +49,20 @@ fn commit_all(dir: &Path, message: &str) {
 
 fn cofferdam_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cofferdam")
+}
+
+fn run_cofferdam(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(cofferdam_bin())
+        .args(args)
+        .current_dir(dir)
+        // See the comment in `run_git` above -- the same leaked
+        // GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE would otherwise make
+        // cofferdam's own git-diff logic look at the wrong repo.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("invoke cofferdam")
 }
 
 #[test]
@@ -67,11 +88,7 @@ fn diff_introduces_violation_shows_in_would_fire() {
     )
     .expect("write modified");
 
-    let out = Command::new(cofferdam_bin())
-        .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .expect("invoke cofferdam");
+    let out = run_cofferdam(dir, &["advise", "--diff", "HEAD"]);
 
     assert!(
         out.status.success(),
@@ -116,11 +133,7 @@ fn diff_clears_violation_shows_in_would_clear() {
     )
     .expect("write modified");
 
-    let out = Command::new(cofferdam_bin())
-        .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .expect("invoke cofferdam");
+    let out = run_cofferdam(dir, &["advise", "--diff", "HEAD"]);
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -152,11 +165,7 @@ fn diff_no_changes_emits_empty_report() {
     std::fs::write(&file, "export const x = 1;\n").expect("write baseline");
     commit_all(dir, "baseline");
 
-    let out = Command::new(cofferdam_bin())
-        .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .expect("invoke cofferdam");
+    let out = run_cofferdam(dir, &["advise", "--diff", "HEAD"]);
 
     assert!(out.status.success(), "cofferdam exit non-zero");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -184,11 +193,7 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     .expect("write modified");
 
     // Default fail_on threshold is unset → exit 0 even with would_fire.
-    let no_gate = Command::new(cofferdam_bin())
-        .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .expect("invoke cofferdam");
+    let no_gate = run_cofferdam(dir, &["advise", "--diff", "HEAD"]);
     assert!(
         no_gate.status.success(),
         "expected exit 0 without --fail-on; stderr={}",
@@ -196,11 +201,7 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     );
 
     // With --fail-on=medium and Warning.TripleEquals at Medium, exit 1.
-    let gated = Command::new(cofferdam_bin())
-        .args(["advise", "--diff", "HEAD", "--fail-on", "medium"])
-        .current_dir(dir)
-        .output()
-        .expect("invoke cofferdam");
+    let gated = run_cofferdam(dir, &["advise", "--diff", "HEAD", "--fail-on", "medium"]);
     assert_eq!(
         gated.status.code(),
         Some(1),
@@ -210,11 +211,7 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     );
 
     // With --fail-on=critical, the Medium finding is below threshold → exit 0.
-    let gated_high = Command::new(cofferdam_bin())
-        .args(["advise", "--diff", "HEAD", "--fail-on", "critical"])
-        .current_dir(dir)
-        .output()
-        .expect("invoke cofferdam");
+    let gated_high = run_cofferdam(dir, &["advise", "--diff", "HEAD", "--fail-on", "critical"]);
     assert!(
         gated_high.status.success(),
         "expected exit 0 with --fail-on=critical (above Medium); stdout={}",

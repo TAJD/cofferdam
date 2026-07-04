@@ -23,6 +23,13 @@ fn run_git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        // A git hook invoking this test suite (e.g. pre-push, in a
+        // worktree checkout) exports GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+        // pointing at the real repo; left inherited, they hijack this
+        // git call away from `dir`.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(
@@ -53,6 +60,12 @@ fn run_since_check(repo: &Path) -> (serde_json::Value, String) {
             "--format=json",
         ])
         .current_dir(repo)
+        // See the comment in `run_git` above -- the same leaked
+        // GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE would otherwise make
+        // cofferdam's own git-diff logic look at the wrong repo.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("spawn cofferdam");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

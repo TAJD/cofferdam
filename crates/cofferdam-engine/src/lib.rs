@@ -14,13 +14,16 @@ pub mod graph;
 pub mod run_cache;
 pub mod since;
 pub mod suppress;
+pub mod timing;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use config::{ConfigError, ProjectConfig};
 pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
+pub use timing::TimingCollector;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use std::collections::BTreeMap;
 
@@ -367,6 +370,38 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_full_impl(sources, parse_cache, findings_cache, run_cache, None)
+    }
+
+    /// Same as [`Engine::analyze_with_sources_full`] but records
+    /// per-check and per-phase timing into `timing` (CD-34,
+    /// `cofferdam check --time-checks`). Findings are byte-identical
+    /// to the untimed path — timing is a side channel only.
+    pub fn analyze_with_sources_full_timed(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: &TimingCollector,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_full_impl(
+            sources,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            Some(timing),
+        )
+    }
+
+    fn analyze_with_sources_full_impl(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: Option<&TimingCollector>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Outermost layer: if the run cache has an entry for this
         // exact input set + config, return its issues directly.
         // The text map is reconstructed cheaply from `sources` — no
@@ -381,11 +416,12 @@ impl Engine {
                 let texts: HashMap<PathBuf, String> = sources.iter().cloned().collect();
                 return ((*cached).clone(), texts);
             }
-            let (issues, texts) = self.run_cache_miss_path(sources, parse_cache, findings_cache);
+            let (issues, texts) =
+                self.run_cache_miss_path(sources, parse_cache, findings_cache, timing);
             rc.insert(key, issues.clone());
             return (issues, texts);
         }
-        self.run_cache_miss_path(sources, parse_cache, findings_cache)
+        self.run_cache_miss_path(sources, parse_cache, findings_cache, timing)
     }
 
     /// The full analyze path used on a `RunCache` miss. Factored out
@@ -396,8 +432,9 @@ impl Engine {
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
+        timing: Option<&TimingCollector>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache)
+        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache, timing)
     }
 
     /// Inner entry point — does the full per-file analysis through
@@ -409,6 +446,7 @@ impl Engine {
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
+        timing: Option<&TimingCollector>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         let cache = parse_cache;
         // Computed once per analysis. cp2 uses Debug-format hashing —
@@ -485,6 +523,7 @@ impl Engine {
             }
         }
 
+        let run_loop_start = Instant::now();
         for (path, text) in &sources {
             let file = SourceFile::new(path.clone(), text.clone());
             texts.insert(path.clone(), text.clone());
@@ -558,7 +597,9 @@ impl Engine {
                         .with_options(opts)
                         .with_corpus(&corpus)
                         .with_parsed_lang(&tree);
-                    issues.extend(check.run(&file, &mut ctx));
+                    issues.extend(timed_run(timing, check.meta().id, || {
+                        check.run(&file, &mut ctx)
+                    }));
                 }
                 continue;
             }
@@ -584,7 +625,9 @@ impl Engine {
                     let mut ctx = CheckContext::new(&file)
                         .with_options(opts)
                         .with_corpus(&corpus);
-                    issues.extend(check.run(&file, &mut ctx));
+                    issues.extend(timed_run(timing, check.meta().id, || {
+                        check.run(&file, &mut ctx)
+                    }));
                 }
                 continue;
             }
@@ -678,7 +721,8 @@ impl Engine {
                                 .with_parsed(&parsed)
                                 .with_options(opts)
                                 .with_corpus(&corpus);
-                            let fresh = check.run(&file, &mut ctx);
+                            let fresh =
+                                timed_run(timing, check.meta().id, || check.run(&file, &mut ctx));
                             fc.insert(key, fresh.clone());
                             issues.extend(fresh);
                             continue;
@@ -691,7 +735,9 @@ impl Engine {
                     if let Some(oracle) = self.type_oracle.as_deref() {
                         ctx = ctx.with_types(oracle);
                     }
-                    issues.extend(check.run(&file, &mut ctx));
+                    issues.extend(timed_run(timing, check.meta().id, || {
+                        check.run(&file, &mut ctx)
+                    }));
                 }
             };
 
@@ -707,6 +753,9 @@ impl Engine {
                 }
             }
         }
+        if let Some(t) = timing {
+            t.record_phase("run_loop", run_loop_start.elapsed());
+        }
 
         // Pass 2: iterate every file again for consistency checks.
         // Only checks with `meta().consistency == true` are called.
@@ -720,6 +769,7 @@ impl Engine {
             .map(|(i, c)| (i, c.as_ref()))
             .collect();
 
+        let pass2_start = Instant::now();
         if !consistency_checks.is_empty() {
             for (path, _) in &sources {
                 let text = match texts.get(path) {
@@ -746,9 +796,14 @@ impl Engine {
                         .with_parsed(&parsed)
                         .with_options(&self.options[*idx])
                         .with_corpus(&corpus);
-                    issues.extend(check.pass2(&file, &mut ctx));
+                    issues.extend(timed_run(timing, check.meta().id, || {
+                        check.pass2(&file, &mut ctx)
+                    }));
                 }
             }
+        }
+        if let Some(t) = timing {
+            t.record_phase("pass2", pass2_start.elapsed());
         }
 
         // Canonical-graph build (cd-9hp.9 cp3). Translates the flat
@@ -759,12 +814,16 @@ impl Engine {
         // (Design.OrphanExport first) can query it. The flat slots
         // stay populated for checks that haven't migrated yet.
         {
+            let graph_build_start = Instant::now();
             corpus.with_slot(&IMPORTS, |imports| {
                 corpus.with_slot(&EXPORTS, |exports| {
                     let graph = build_canonical_graph(imports, exports);
                     corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
                 });
             });
+            if let Some(t) = timing {
+                t.record_phase("graph_build", graph_build_start.elapsed());
+            }
         }
 
         // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):
@@ -780,11 +839,17 @@ impl Engine {
         // (`Consistency.UnusedSuppression`); the flag was paying no rent.
         // If a second observer use case appears, extend
         // `FINALIZE_OBSERVER_CHECK_IDS` in cofferdam-core.
+        let finalize_a_start = Instant::now();
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
             if !cofferdam_core::is_finalize_observer(check.meta().id) {
                 let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
-                issues.extend(check.finalize(&mut finalize_ctx));
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.finalize(&mut finalize_ctx)
+                }));
             }
+        }
+        if let Some(t) = timing {
+            t.record_phase("finalize_a", finalize_a_start.elapsed());
         }
 
         // Snapshot: re-build ALL_PRE_FILTER_FINDINGS from the union of
@@ -807,11 +872,17 @@ impl Engine {
         // Phase B — run finalize on every check in the observer set.
         // Today only `Consistency.UnusedSuppression` qualifies. Per-check
         // options flow in the same way as Phase A (cd-3uj).
+        let finalize_b_start = Instant::now();
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
             if cofferdam_core::is_finalize_observer(check.meta().id) {
                 let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
-                issues.extend(check.finalize(&mut finalize_ctx));
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.finalize(&mut finalize_ctx)
+                }));
             }
+        }
+        if let Some(t) = timing {
+            t.record_phase("finalize_b", finalize_b_start.elapsed());
         }
 
         // Post-collection filter (cd-5t7): suppress findings based on inline directives.
@@ -866,6 +937,30 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
     ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
+        let sources = Self::read_sources(paths)?;
+        Ok(self.analyze_with_sources_full(sources, parse_cache, findings_cache, run_cache))
+    }
+
+    /// Timed variant of [`Engine::analyze_with_text_full`] (CD-34).
+    pub fn analyze_with_text_full_timed<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: &TimingCollector,
+    ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
+        let sources = Self::read_sources(paths)?;
+        Ok(self.analyze_with_sources_full_timed(
+            sources,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            timing,
+        ))
+    }
+
+    fn read_sources<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<(PathBuf, String)>, EngineError> {
         let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(paths.len());
         for path in paths {
             let path = path.as_ref();
@@ -875,7 +970,7 @@ impl Engine {
             })?;
             sources.push((path.to_path_buf(), text));
         }
-        Ok(self.analyze_with_sources_full(sources, parse_cache, findings_cache, run_cache))
+        Ok(sources)
     }
 
     /// Cache-aware variant of [`Engine::analyze_with_signatures`].
@@ -891,16 +986,39 @@ impl Engine {
     ) -> Result<Vec<(Issue, String)>, EngineError> {
         let (issues, texts) =
             self.analyze_with_text_full(paths, parse_cache, findings_cache, run_cache)?;
+        Ok(Self::sign_issues(issues, &texts))
+    }
+
+    /// Timed variant of [`Engine::analyze_with_signatures_full`] (CD-34).
+    /// Used by `cofferdam check --time-checks`.
+    pub fn analyze_with_signatures_full_timed<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: &TimingCollector,
+    ) -> Result<Vec<(Issue, String)>, EngineError> {
+        let (issues, texts) = self.analyze_with_text_full_timed(
+            paths,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            timing,
+        )?;
+        Ok(Self::sign_issues(issues, &texts))
+    }
+
+    fn sign_issues(issues: Vec<Issue>, texts: &HashMap<PathBuf, String>) -> Vec<(Issue, String)> {
         let empty = String::new();
-        let out = issues
+        issues
             .into_iter()
             .map(|issue| {
                 let text = texts.get(&issue.file).unwrap_or(&empty);
                 let sig = baseline::signature_for_issue(text, &issue);
                 (issue, sig)
             })
-            .collect();
-        Ok(out)
+            .collect()
     }
 
     /// Run analysis and emit each issue paired with its baseline
@@ -1010,6 +1128,26 @@ fn merge_raw(
         merged.insert(k.clone(), v.clone());
     }
     merged
+}
+
+/// Run one check invocation (`run` / `pass2` / `finalize`), recording its
+/// elapsed time under `check_id` when a [`TimingCollector`] is present
+/// (CD-34). A no-op wrapper when `timing` is `None` — no `Instant::now()`
+/// call on the hot path for ordinary runs.
+fn timed_run<F: FnOnce() -> Vec<Issue>>(
+    timing: Option<&TimingCollector>,
+    check_id: &'static str,
+    f: F,
+) -> Vec<Issue> {
+    match timing {
+        Some(t) => {
+            let start = Instant::now();
+            let issues = f();
+            t.record_check(check_id, start.elapsed());
+            issues
+        }
+        None => f(),
+    }
 }
 
 /// Forward-slash, lowercase-on-Windows path key for override glob

@@ -379,7 +379,7 @@ impl Engine {
             };
             if let Some(cached) = rc.get(&key) {
                 let texts: HashMap<PathBuf, String> = sources.iter().cloned().collect();
-                return (cached, texts);
+                return ((*cached).clone(), texts);
             }
             let (issues, texts) = self.run_cache_miss_path(sources, parse_cache, findings_cache);
             rc.insert(key, issues.clone());
@@ -759,10 +759,12 @@ impl Engine {
         // (Design.OrphanExport first) can query it. The flat slots
         // stay populated for checks that haven't migrated yet.
         {
-            let imports = corpus.with_slot(&IMPORTS, |slot| slot.clone());
-            let exports = corpus.with_slot(&EXPORTS, |slot| slot.clone());
-            let graph = build_canonical_graph(&imports, &exports);
-            corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
+            corpus.with_slot(&IMPORTS, |imports| {
+                corpus.with_slot(&EXPORTS, |exports| {
+                    let graph = build_canonical_graph(imports, exports);
+                    corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
+                });
+            });
         }
 
         // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):

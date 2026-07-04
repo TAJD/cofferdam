@@ -143,7 +143,10 @@ impl CorpusIndex {
         T: 'static + Send + Default,
     {
         let entry = self.entry::<T>(Cow::Borrowed(key.name()))?;
-        let mut guard = entry.value.lock().expect("CorpusIndex slot poisoned");
+        let mut guard = entry
+            .value
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let typed = guard
             .downcast_mut::<T>()
             .expect("CorpusIndex slot type id matched but downcast failed");
@@ -174,7 +177,10 @@ impl CorpusIndex {
     {
         let effective = Cow::Owned(namespaced_key(check_id, key.name()));
         let entry = self.entry::<T>(effective)?;
-        let mut guard = entry.value.lock().expect("CorpusIndex slot poisoned");
+        let mut guard = entry
+            .value
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let typed = guard
             .downcast_mut::<T>()
             .expect("CorpusIndex slot type id matched but downcast failed");
@@ -188,7 +194,7 @@ impl CorpusIndex {
         if let Some(existing) = self
             .slots
             .read()
-            .expect("CorpusIndex map poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(name.as_ref())
             .cloned()
         {
@@ -196,7 +202,10 @@ impl CorpusIndex {
             return Ok(existing);
         }
 
-        let mut write = self.slots.write().expect("CorpusIndex map poisoned");
+        let mut write = self
+            .slots
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = write.get(name.as_ref()).cloned() {
             check_type::<T>(&existing, name.as_ref())?;
             return Ok(existing);

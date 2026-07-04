@@ -48,6 +48,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cofferdam_core::Issue;
 use sha2::{Digest, Sha256};
@@ -103,7 +104,7 @@ pub struct RunKey {
 /// load prior issues from disk.
 #[derive(Default)]
 pub struct RunCache {
-    entries: RefCell<HashMap<RunKey, Vec<Issue>>>,
+    entries: RefCell<HashMap<RunKey, Arc<Vec<Issue>>>>,
     hits: Cell<u64>,
     misses: Cell<u64>,
 }
@@ -115,13 +116,15 @@ impl RunCache {
     }
 
     /// Look up cached issues for `(input_set, config)`. Bumps hit /
-    /// miss counters on every call.
-    pub fn get(&self, key: &RunKey) -> Option<Vec<Issue>> {
+    /// miss counters on every call. Returns a cheap `Arc` clone
+    /// (refcount bump) rather than deep-cloning the underlying
+    /// `Vec<Issue>` on every hit.
+    pub fn get(&self, key: &RunKey) -> Option<Arc<Vec<Issue>>> {
         let map = self.entries.borrow();
         match map.get(key) {
             Some(cached) => {
                 self.hits.set(self.hits.get() + 1);
-                Some(cached.clone())
+                Some(Arc::clone(cached))
             }
             None => {
                 self.misses.set(self.misses.get() + 1);
@@ -135,7 +138,7 @@ impl RunCache {
     /// after a full analyze has produced a result, so an overwrite
     /// means a corpus / engine change invalidated the prior entry.
     pub fn insert(&self, key: RunKey, issues: Vec<Issue>) {
-        self.entries.borrow_mut().insert(key, issues);
+        self.entries.borrow_mut().insert(key, Arc::new(issues));
     }
 
     /// Drop every cached entry. The watch loop calls this on config
@@ -168,12 +171,14 @@ impl RunCache {
 
     /// Clone every `(key, issues)` pair out for serialisation. Used
     /// by `crate::disk_cache::save_run` to persist the cache across
-    /// runs. Allocates once per entry; not on the hot path.
-    pub fn snapshot(&self) -> Vec<(RunKey, Vec<Issue>)> {
+    /// runs. The `Issue` data itself is a cheap `Arc` clone here; the
+    /// deep clone only happens once, when the disk-cache writer
+    /// builds its serialisable representation.
+    pub fn snapshot(&self) -> Vec<(RunKey, Arc<Vec<Issue>>)> {
         self.entries
             .borrow()
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
             .collect()
     }
 }

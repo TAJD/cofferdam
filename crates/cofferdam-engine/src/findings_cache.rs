@@ -48,6 +48,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use cofferdam_core::{Issue, Uri};
 
@@ -87,7 +88,7 @@ pub struct FindingsKey {
 /// before the engine appends to its issue buffer.
 #[derive(Default)]
 pub struct FindingsCache {
-    entries: RefCell<HashMap<FindingsKey, Vec<Issue>>>,
+    entries: RefCell<HashMap<FindingsKey, Arc<Vec<Issue>>>>,
     hits: Cell<u64>,
     misses: Cell<u64>,
 }
@@ -99,13 +100,17 @@ impl FindingsCache {
     }
 
     /// Look up cached findings for `(content, config, check_id)`.
-    /// Increments hit / miss counters on every call.
-    pub fn get(&self, key: &FindingsKey) -> Option<Vec<Issue>> {
+    /// Increments hit / miss counters on every call. Returns a cheap
+    /// `Arc` clone (refcount bump) rather than deep-cloning the
+    /// underlying `Vec<Issue>` — callers that need an owned, mutable
+    /// copy (e.g. [`Self::get_for_path`]'s re-stamp) clone the `Arc`'s
+    /// contents themselves.
+    pub fn get(&self, key: &FindingsKey) -> Option<Arc<Vec<Issue>>> {
         let map = self.entries.borrow();
         match map.get(key) {
             Some(cached) => {
                 self.hits.set(self.hits.get() + 1);
-                Some(cached.clone())
+                Some(Arc::clone(cached))
             }
             None => {
                 self.misses.set(self.misses.get() + 1);
@@ -120,7 +125,7 @@ impl FindingsCache {
     /// overwrite means a corpus / engine change invalidated the
     /// prior entry's premise.
     pub fn insert(&self, key: FindingsKey, issues: Vec<Issue>) {
-        self.entries.borrow_mut().insert(key, issues);
+        self.entries.borrow_mut().insert(key, Arc::new(issues));
     }
 
     /// Drop every cached entry. Useful when the caller knows the
@@ -161,7 +166,8 @@ impl FindingsCache {
     /// the wrong file path — making warm-cache output disagree with
     /// `--no-cache`.
     pub fn get_for_path(&self, key: &FindingsKey, path: &Path) -> Option<Vec<Issue>> {
-        self.get(key).map(|mut issues| {
+        self.get(key).map(|cached| {
+            let mut issues = (*cached).clone();
             restamp_path(&mut issues, path);
             issues
         })
@@ -169,14 +175,14 @@ impl FindingsCache {
 
     /// Clone every `(key, issues)` pair out for serialisation. Used
     /// by `crate::disk_cache::save_findings` to persist the cache
-    /// across runs. The map is held under a short-lived borrow so
-    /// the snapshot's allocation cost is paid once, off the hot
-    /// path.
-    pub fn snapshot(&self) -> Vec<(FindingsKey, Vec<Issue>)> {
+    /// across runs. The `Issue` data itself is a cheap `Arc` clone
+    /// here; the deep clone only happens once, when the disk-cache
+    /// writer builds its serialisable representation.
+    pub fn snapshot(&self) -> Vec<(FindingsKey, Arc<Vec<Issue>>)> {
         self.entries
             .borrow()
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
             .collect()
     }
 }

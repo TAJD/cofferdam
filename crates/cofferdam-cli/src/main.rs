@@ -22,7 +22,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use cofferdam_checks::all_builtins;
 use cofferdam_core::Severity;
-use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
+use cofferdam_engine::baseline::{self, Baseline, BaselineEntry, BaselineError};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig, TimingCollector};
@@ -1169,8 +1169,20 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // full discovered set below.
 
     let baseline_loaded = match resolved_baseline.as_deref().map(load_baseline_with_warning) {
-        Some(Ok(b)) => Some(b),
-        Some(Err(_)) => None,
+        Some(BaselineLoad::Loaded(b)) => Some(b),
+        Some(BaselineLoad::Absent) => None,
+        Some(BaselineLoad::VersionMismatch {
+            path,
+            found,
+            supported,
+        }) => {
+            eprintln!(
+                "error: baseline {} declares unsupported version {found}; this binary supports {supported}.\n\
+                 Run `cofferdam baseline write` to regenerate it under the current schema.",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
         None => None,
     };
     let baseline_active = baseline_loaded.is_some();
@@ -1855,12 +1867,35 @@ fn in_report_scope(scope: &Option<HashSet<PathBuf>>, file: &Path) -> bool {
     }
 }
 
-fn load_baseline_with_warning(path: &Path) -> Result<Baseline, ()> {
+/// Outcome of loading a baseline for `cofferdam check`. Distinguishes a
+/// schema-version mismatch (hard failure — the user's gate can't be
+/// trusted) from every other read failure (soft — a missing or corrupt
+/// baseline just means "run unbaselined").
+enum BaselineLoad {
+    Loaded(Baseline),
+    Absent,
+    VersionMismatch {
+        path: PathBuf,
+        found: u32,
+        supported: u32,
+    },
+}
+
+fn load_baseline_with_warning(path: &Path) -> BaselineLoad {
     match baseline::read(path) {
-        Ok(b) => Ok(b),
+        Ok(b) => BaselineLoad::Loaded(b),
+        Err(BaselineError::Version {
+            path,
+            found,
+            supported,
+        }) => BaselineLoad::VersionMismatch {
+            path,
+            found,
+            supported,
+        },
         Err(e) => {
             eprintln!("warning: ignoring baseline ({e})");
-            Err(())
+            BaselineLoad::Absent
         }
     }
 }

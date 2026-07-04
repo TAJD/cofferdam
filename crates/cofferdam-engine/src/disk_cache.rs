@@ -210,7 +210,7 @@ pub fn save_findings(cache_dir: &Path, cache: &FindingsCache) -> Result<usize, D
                 config_hash: k.config_hash,
                 check_id: k.check_id.to_string(),
             },
-            issues: v,
+            issues: (*v).clone(),
         })
         .collect();
     let count = entries.len();
@@ -263,7 +263,7 @@ pub fn save_run(cache_dir: &Path, cache: &RunCache) -> Result<usize, DiskCacheEr
                 input_set: k.input_set,
                 config_hash: k.config_hash,
             },
-            issues: v,
+            issues: (*v).clone(),
         })
         .collect();
     let count = entries.len();

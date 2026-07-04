@@ -896,7 +896,7 @@ impl Engine {
             .into_iter()
             .map(|issue| {
                 let text = texts.get(&issue.file).unwrap_or(&empty);
-                let sig = baseline::signature_for_span(text, &issue.location);
+                let sig = baseline::signature_for_issue(text, &issue);
                 (issue, sig)
             })
             .collect();
@@ -922,7 +922,7 @@ impl Engine {
             .into_iter()
             .map(|issue| {
                 let text = texts.get(&issue.file).unwrap_or(&empty);
-                let sig = baseline::signature_for_span(text, &issue.location);
+                let sig = baseline::signature_for_issue(text, &issue);
                 (issue, sig)
             })
             .collect();

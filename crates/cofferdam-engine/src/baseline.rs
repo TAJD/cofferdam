@@ -18,9 +18,14 @@
 //!   re-indentation, line-wrap shifts, CRLF/LF differences, and alignment
 //!   padding — only changes when the offending tokens themselves change.
 //!
-//! Per-check overrides for `rule_signature` will land later (e.g.
-//! `Refactor.CognitiveComplexity` may want to hash the AST shape rather
-//! than text), but the default covers every check shipped today.
+//! - **Per-check override (cd-9, "rulesig"): function-scoped checks hash
+//!   the enclosing function's header, not its body.** `Readability.MaxFunctionLength`,
+//!   `Refactor.CyclomaticComplexity`, and `Refactor.CognitiveComplexity` all
+//!   flag a whole function/method — hashing the full span text meant ANY
+//!   edit inside a large flagged function (even one that doesn't change its
+//!   size/complexity classification) drifted the signature and forced a
+//!   spurious re-baseline. See [`FUNCTION_SCOPED_SIGNATURE_CHECK_IDS`] and
+//!   [`symbol_signature_for_span`].
 //!
 //! ## File format
 //!
@@ -49,7 +54,7 @@ use std::path::{Component, Path, PathBuf};
 
 use cofferdam_core::Issue;
 #[cfg(test)]
-use cofferdam_core::{Location, Span};
+use cofferdam_core::{Location, Priority, Severity, Span};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -61,7 +66,13 @@ use sha2::{Digest, Sha256};
 /// `cofferdam baseline write` once after upgrade — `read` rejects them
 /// with `BaselineError::Version` so the user sees a clear failure mode
 /// rather than silent invalidation of every baselined entry.
-pub const VERSION: u32 = 2;
+///
+/// V3 (cd-9, "rulesig"): function-scoped checks (see
+/// [`FUNCTION_SCOPED_SIGNATURE_CHECK_IDS`]) now hash the enclosing
+/// function's header instead of its whole body, so unrelated edits inside
+/// a flagged function no longer drift the signature. V2 baselines must be
+/// regenerated the same way as the V1→V2 transition.
+pub const VERSION: u32 = 3;
 
 /// Default baseline file path, relative to the project root. Kept here
 /// so the CLI and any other consumer agree on the convention.
@@ -180,14 +191,92 @@ pub enum BaselineError {
 /// than truncating: collisions on truncated hashes inside a single repo
 /// are unlikely but the cost of avoiding them is one constant.
 pub fn signature_for_span(file_text: &str, location: &cofferdam_core::Location) -> String {
+    hash_collapsed(span_snippet(file_text, location))
+}
+
+/// Check IDs whose finding is scoped to an entire enclosing function or
+/// method, rather than to the specific tokens that make the span "the
+/// finding". For these, [`signature_for_issue`] hashes the function's
+/// header (name + parameter list) instead of the full span text, so an
+/// edit anywhere in the body that doesn't change the reported
+/// classification (line count, cyclomatic/cognitive complexity) doesn't
+/// drift the baseline signature. Every other check keeps hashing the
+/// full span text via [`signature_for_span`] — that's still correct
+/// there because the span IS the offending content.
+pub const FUNCTION_SCOPED_SIGNATURE_CHECK_IDS: &[&str] = &[
+    "Readability.MaxFunctionLength",
+    "Refactor.CyclomaticComplexity",
+    "Refactor.CognitiveComplexity",
+];
+
+/// Compute the canonical signature for one issue, dispatching to the
+/// function-header strategy for [`FUNCTION_SCOPED_SIGNATURE_CHECK_IDS`]
+/// and the default whole-span strategy for every other check. This is
+/// the entry point baseline writers/readers should call — prefer it over
+/// calling [`signature_for_span`] directly so new call sites don't have
+/// to know about the per-check override.
+pub fn signature_for_issue(file_text: &str, issue: &Issue) -> String {
+    if FUNCTION_SCOPED_SIGNATURE_CHECK_IDS.contains(&issue.check_id.as_str()) {
+        symbol_signature_for_span(file_text, &issue.location)
+    } else {
+        signature_for_span(file_text, &issue.location)
+    }
+}
+
+/// Function-header variant of [`signature_for_span`]. Hashes the text
+/// from the span's start up to (but excluding) the function's
+/// body-opening `{` — i.e. the name + parameter list — rather than the
+/// whole span. Falls back to hashing the whole snippet (identical to
+/// [`signature_for_span`]) when no such brace can be found at
+/// paren-depth 0, e.g. an arrow function with an expression body
+/// (`(a, b) => a + b`) — those are rare for function-scoped checks
+/// (which fire on size/complexity) and anonymous besides, so the
+/// fallback's coarser invalidation is an acceptable trade.
+///
+/// Deliberately does NOT try to survive a function rename: the header
+/// text includes the name, so renaming changes the signature like any
+/// other check. Baseline entries are not expected to survive renames.
+pub fn symbol_signature_for_span(file_text: &str, location: &cofferdam_core::Location) -> String {
+    let snippet = span_snippet(file_text, location);
+    hash_collapsed(function_header(snippet).unwrap_or(snippet))
+}
+
+/// Slice `file_text` to the byte range `location` covers, or `""` when
+/// the range is out of bounds (defensive — callers should never pass a
+/// stale location, but a corrupt/mismatched file must not panic).
+fn span_snippet<'t>(file_text: &'t str, location: &cofferdam_core::Location) -> &'t str {
     let start = location.start_byte() as usize;
     let end = location.end_byte() as usize;
-    let snippet = if start <= end && end <= file_text.len() {
+    if start <= end && end <= file_text.len() {
         &file_text[start..end]
     } else {
         ""
-    };
+    }
+}
 
+/// Byte range of `snippet` up to (excluding) the first `{` encountered
+/// at paren-depth `<= 0`, tracking `(`/`)` so default-parameter object
+/// destructuring (`function f({a, b} = {}) {`) inside the parameter
+/// list isn't mistaken for the body's opening brace. Returns `None` when
+/// no such brace exists (e.g. an expression-bodied arrow function).
+fn function_header(snippet: &str) -> Option<&str> {
+    let mut depth: i32 = 0;
+    for (i, ch) in snippet.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '{' if depth <= 0 => return Some(&snippet[..i]),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Collapse every whitespace run in `snippet` to a single space, trim
+/// the ends, and return the hex-encoded SHA-256 of the result. Shared by
+/// [`signature_for_span`] and [`symbol_signature_for_span`] so both
+/// strategies are equally robust to reformatting.
+fn hash_collapsed(snippet: &str) -> String {
     // Collapse every whitespace run to a single space, then trim. The
     // resulting normal form is the same regardless of indentation,
     // line-wrapping, CRLF/LF, or alignment-padding shifts.
@@ -482,6 +571,105 @@ mod tests {
             "indentation + alignment shifts must not change the signature"
         );
         assert_eq!(s_post, s_crlf, "CRLF vs LF must not change the signature");
+    }
+
+    /// Builds an `Issue` covering the whole of `text` (byte 0 to `text.len()`),
+    /// for exercising [`signature_for_issue`] against different check IDs.
+    fn whole_file_issue(check_id: &str, text: &str) -> Issue {
+        Issue {
+            check_id: check_id.to_string(),
+            message: String::new(),
+            file: PathBuf::from("test.ts"),
+            location: Location::from_span(
+                std::path::Path::new(""),
+                Span {
+                    start_byte: 0,
+                    end_byte: text.len() as u32,
+                    line: 1,
+                    column: 1,
+                },
+            ),
+            priority: Priority(0),
+            severity: Severity::Medium,
+            related: Vec::new(),
+        }
+    }
+
+    /// cd-9 ("rulesig") regression: a function-scoped check's signature
+    /// must survive an edit inside the function body that doesn't change
+    /// the reported classification — only the header (name + params)
+    /// should participate in the hash.
+    #[test]
+    fn function_scoped_signature_survives_unrelated_body_edit() {
+        let before = "function foo(a, b) {\n  return a + b;\n}";
+        let after =
+            "function foo(a, b) {\n  // an unrelated comment added below\n  return a + b;\n}";
+
+        for check_id in FUNCTION_SCOPED_SIGNATURE_CHECK_IDS {
+            let sig_before = signature_for_issue(before, &whole_file_issue(check_id, before));
+            let sig_after = signature_for_issue(after, &whole_file_issue(check_id, after));
+            assert_eq!(
+                sig_before, sig_after,
+                "{check_id}: unrelated body edit must not drift the signature"
+            );
+        }
+    }
+
+    /// A function-scoped check's signature still changes when the header
+    /// itself changes (rename, or added/removed parameter) — baseline
+    /// entries are not expected to survive a rename.
+    #[test]
+    fn function_scoped_signature_changes_with_rename() {
+        let original = "function foo(a, b) {\n  return a + b;\n}";
+        let renamed = "function bar(a, b) {\n  return a + b;\n}";
+        let sig_original = signature_for_issue(
+            original,
+            &whole_file_issue("Refactor.CyclomaticComplexity", original),
+        );
+        let sig_renamed = signature_for_issue(
+            renamed,
+            &whole_file_issue("Refactor.CyclomaticComplexity", renamed),
+        );
+        assert_ne!(
+            sig_original, sig_renamed,
+            "renaming the function is a header change and may re-baseline"
+        );
+    }
+
+    /// Non-function-scoped checks (the vast majority) must keep the cd-1h7
+    /// whole-span-text behavior — `signature_for_issue` should not
+    /// accidentally widen the function-scoped override to every check.
+    #[test]
+    fn non_function_scoped_signature_still_invalidates_on_content_change() {
+        let a = whole_file_issue("Warning.TripleEquals", "x === y");
+        let b = whole_file_issue("Warning.TripleEquals", "a === b");
+        assert_ne!(
+            signature_for_issue("x === y", &a),
+            signature_for_issue("a === b", &b),
+            "TextHash checks must still invalidate on a real content edit"
+        );
+    }
+
+    /// `symbol_signature_for_span` falls back to the whole-snippet hash
+    /// (identical to `signature_for_span`) when no paren-depth-0 `{` is
+    /// found — e.g. an arrow function with an expression body.
+    #[test]
+    fn symbol_signature_falls_back_to_text_hash_without_a_body_brace() {
+        let snippet = "(a, b) => a + b";
+        let loc = Location::from_span(
+            std::path::Path::new(""),
+            Span {
+                start_byte: 0,
+                end_byte: snippet.len() as u32,
+                line: 1,
+                column: 1,
+            },
+        );
+        assert_eq!(
+            symbol_signature_for_span(snippet, &loc),
+            signature_for_span(snippet, &loc),
+            "no body brace to key on → fall back to hashing the whole snippet"
+        );
     }
 
     /// Token boundaries still matter — we only collapse whitespace, not

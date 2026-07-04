@@ -25,7 +25,7 @@ use cofferdam_core::Severity;
 use cofferdam_engine::baseline::{self, Baseline, BaselineEntry};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
-use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
+use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig, TimingCollector};
 use cofferdam_formatters::{
     CompactFormatter, JsonFormatter, JsonRenderOpts, SarifFormatter, SarifRenderOpts,
     TextFormatter, TextRenderOpts,
@@ -199,6 +199,13 @@ enum Cmd {
         /// type-aware coverage to catch silent regressions.
         #[arg(long)]
         fail_on_type_unavailable: bool,
+        /// Print a per-check + per-phase timing breakdown to stderr
+        /// (discovery, run loop, pass 2, graph build, finalize A/B, and
+        /// each check's accumulated time, sorted descending). Findings
+        /// output (JSON/robot/text) is byte-identical with and without
+        /// this flag (CD-34).
+        #[arg(long)]
+        time_checks: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -589,6 +596,7 @@ fn main() -> ExitCode {
             cache_dir,
             no_cache,
             fail_on_type_unavailable,
+            time_checks,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -612,6 +620,7 @@ fn main() -> ExitCode {
             cache_dir,
             no_cache,
             fail_on_type_unavailable,
+            time_checks,
         }),
         Cmd::Explain {
             check_id,
@@ -1044,6 +1053,7 @@ struct CheckArgs {
     cache_dir: Option<PathBuf>,
     no_cache: bool,
     fail_on_type_unavailable: bool,
+    time_checks: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -1066,6 +1076,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         cache_dir,
         no_cache,
         fail_on_type_unavailable,
+        time_checks,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -1085,6 +1096,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
         include_hidden: hidden,
         ..DiscoveryOptions::default()
     };
+    let timing = time_checks.then(TimingCollector::new);
+    let discover_start = std::time::Instant::now();
     let files = match discover(&roots, &opts) {
         Ok(f) => f,
         Err(e) => {
@@ -1092,6 +1105,9 @@ fn run_check(args: CheckArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let Some(t) = timing.as_ref() {
+        t.record_phase("discovery", discover_start.elapsed());
+    }
 
     if files.is_empty() {
         match format {
@@ -1276,12 +1292,25 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // baseline path matches them against the stored lookup, while the
     // no-baseline path discards them after plugin merging. This unifies
     // the engine call, plugin merge, and scope filter for both paths.
-    let mut signed = match engine.analyze_with_signatures_full(
-        &files,
-        None,
-        Some(&findings_cache),
-        Some(&run_cache),
-    ) {
+    let analyzed = match timing.as_ref() {
+        Some(t) => engine.analyze_with_signatures_full_timed(
+            &files,
+            None,
+            Some(&findings_cache),
+            Some(&run_cache),
+            t,
+        ),
+        None => engine.analyze_with_signatures_full(
+            &files,
+            None,
+            Some(&findings_cache),
+            Some(&run_cache),
+        ),
+    };
+    if let Some(t) = timing.as_ref() {
+        eprintln!("{}", t.report());
+    }
+    let mut signed = match analyzed {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: {e}");

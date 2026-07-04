@@ -1,8 +1,11 @@
 //! `cofferdam-engine` — orchestration.
 //!
 //! Phase 1: parse each file with oxc, expose the AST through CheckContext,
-//! emit Warning.ParseError on fatal parse failures. Still single-threaded;
-//! rayon comes in a follow-up once the AST seam is stable.
+//! emit Warning.ParseError on fatal parse failures. The per-file run loop
+//! and pass 2 run in parallel via rayon when no external `ParseCache` is
+//! supplied (CD-30); see `analyze_with_sources_caches_inner`'s dispatch
+//! comment for why a caller-supplied `ParseCache` forces the sequential
+//! path instead.
 
 pub mod baseline;
 pub mod cache;
@@ -14,13 +17,16 @@ pub mod graph;
 pub mod run_cache;
 pub mod since;
 pub mod suppress;
+pub mod timing;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use config::{ConfigError, ProjectConfig};
 pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
+pub use timing::TimingCollector;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use std::collections::BTreeMap;
 
@@ -34,6 +40,7 @@ use cofferdam_core::{
 };
 use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_rust::{parse_rust, RustParseTree};
+use rayon::prelude::*;
 
 /// Errors the engine can surface independent of per-check findings —
 /// today, I/O failures while reading input paths. Per-file parse
@@ -367,6 +374,38 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_full_impl(sources, parse_cache, findings_cache, run_cache, None)
+    }
+
+    /// Same as [`Engine::analyze_with_sources_full`] but records
+    /// per-check and per-phase timing into `timing` (CD-34,
+    /// `cofferdam check --time-checks`). Findings are byte-identical
+    /// to the untimed path — timing is a side channel only.
+    pub fn analyze_with_sources_full_timed(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: &TimingCollector,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        self.analyze_with_sources_full_impl(
+            sources,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            Some(timing),
+        )
+    }
+
+    fn analyze_with_sources_full_impl(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: Option<&TimingCollector>,
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Outermost layer: if the run cache has an entry for this
         // exact input set + config, return its issues directly.
         // The text map is reconstructed cheaply from `sources` — no
@@ -381,11 +420,12 @@ impl Engine {
                 let texts: HashMap<PathBuf, String> = sources.iter().cloned().collect();
                 return ((*cached).clone(), texts);
             }
-            let (issues, texts) = self.run_cache_miss_path(sources, parse_cache, findings_cache);
+            let (issues, texts) =
+                self.run_cache_miss_path(sources, parse_cache, findings_cache, timing);
             rc.insert(key, issues.clone());
             return (issues, texts);
         }
-        self.run_cache_miss_path(sources, parse_cache, findings_cache)
+        self.run_cache_miss_path(sources, parse_cache, findings_cache, timing)
     }
 
     /// The full analyze path used on a `RunCache` miss. Factored out
@@ -396,8 +436,9 @@ impl Engine {
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
+        timing: Option<&TimingCollector>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache)
+        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache, timing)
     }
 
     /// Inner entry point — does the full per-file analysis through
@@ -409,8 +450,30 @@ impl Engine {
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
+        timing: Option<&TimingCollector>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        let cache = parse_cache;
+        // Two execution modes, chosen by whether the caller supplied a
+        // long-lived `ParseCache` (CD-30):
+        //
+        // * `Some(cache)` — sequential, single-threaded. Pass 1
+        //   populates the cache; pass 2 reads the same entry back by
+        //   content hash instead of re-parsing (CD-29). This is the
+        //   only mode a `ParseCache` can run in: oxc's arena-based
+        //   `ParserReturn` holds raw pointers internally and is not
+        //   `Send`, so a cached parse can never cross a thread
+        //   boundary (see `cache.rs`).
+        // * `None` — parallel via rayon. Each file's parse stays local
+        //   to whichever worker thread handles it (own `Allocator`,
+        //   never shared), so there's nothing to make `Send`. Pass 2
+        //   re-parses each file fresh, in parallel, rather than
+        //   reusing pass 1's AST — a small redundant-parse cost traded
+        //   for real multi-core scaling on the dominant run-loop phase.
+        //
+        // No production caller passes `Some` today (CLI and LSP both
+        // pass `None`) — the sequential path exists for callers that
+        // need cross-call reuse (e.g. a future daemon/watch mode) and
+        // is exercised directly by `parse_cache.rs` / `run_cache.rs`.
+        //
         // Computed once per analysis. cp2 uses Debug-format hashing —
         // deterministic for BTreeMap-backed `CheckOptions` and the
         // derived `Debug` on `LayersConfig` / `InvariantsSpec`; good
@@ -441,7 +504,12 @@ impl Engine {
             .map(|(p, t)| (std::path::absolute(&p).unwrap_or(p), t))
             .collect();
         let mut issues = Vec::new();
-        let mut texts: HashMap<PathBuf, String> = HashMap::with_capacity(sources.len());
+        // Every input path gets an entry regardless of parse outcome
+        // (that's how callers clear stale results for a file that
+        // used to have issues) — built upfront from `sources` rather
+        // than incrementally so the per-file loop below has no
+        // shared-mutation step to make thread-safe.
+        let texts: HashMap<PathBuf, String> = sources.iter().cloned().collect();
         // One corpus per analysis run: shared by every per-file CheckContext
         // and the post-pass FinalizeContext below. Cross-file checks (DRY,
         // export-graph rules) collect into it during run() and read it back
@@ -485,227 +553,50 @@ impl Engine {
             }
         }
 
-        for (path, text) in &sources {
-            let file = SourceFile::new(path.clone(), text.clone());
-            texts.insert(path.clone(), text.clone());
-
-            // Per-glob override key (cd-m5tu). `None` when no
-            // `[[overrides]]` blocks are configured — the per-check
-            // resolution below then short-circuits to the global config
-            // with zero extra work for the overwhelmingly common case.
-            let file_key = (!self.overrides.is_empty()).then(|| path_key(&file.path));
-
-            // Per-language dispatch (cd-91zc checkpoint 4 + cd-0039).
-            // Non-TS files skip oxc parsing and graph extraction
-            // entirely — the engine instead invokes the matching
-            // language adapter's parser ONCE per file and installs the
-            // resulting handle on `CheckContext.parsed_lang`. Each
-            // language check downcasts via `ctx.parsed_as::<T>()` (TS
-            // checks read `ctx.parsed` directly; this branch never
-            // runs for them).
-            //
-            // Fatal parse failures emit a single `Warning.ParseError`
-            // and short-circuit the per-check loop, mirroring TS
-            // behaviour. This eliminated the silent no-op on malformed
-            // .rs files that the pre-cd-0039 per-check `parse_rust` +
-            // `has_errors()` preamble produced.
-            if file.language == Language::Rust {
-                // Three outcomes from parse_rust:
-                //
-                // * `Err(_)`: the parser failed to produce a tree at
-                //   all (grammar load failure / cancellation / timeout).
-                //   Surface as `Warning.ParseError` via
-                //   `rust_load_error_issue`.
-                //
-                // * `Ok(tree)` with `has_errors() == true`: tree-sitter
-                //   recovered with ERROR / MISSING nodes. Surface as
-                //   `Warning.ParseError` pointing at the first error
-                //   span. (Pre-cd-0039-followup this branch silently
-                //   skipped — tree-sitter-rust 0.23 had false positives
-                //   on valid Rust like `&raw` where `raw` is a variable
-                //   name. The 0.24 grammar fixed those. The
-                //   `diagnose_parse_errors` integration test in
-                //   `cofferdam-rust` pins the regression: if the bug
-                //   ever comes back, those tests start failing and the
-                //   silent-skip would need to come back too.)
-                //
-                // * `Ok(tree)` clean: install on parsed_lang and run
-                //   the matching checks.
-                let tree = match parse_rust(&file.text) {
-                    Ok(t) if !t.has_errors() => t,
-                    Ok(t) => {
-                        issues.push(rust_parse_error_issue(&file, &t));
-                        continue;
-                    }
-                    Err(e) => {
-                        issues.push(rust_load_error_issue(&file, &e));
-                        continue;
-                    }
-                };
-                for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                    if check.language() != file.language {
-                        continue;
-                    }
-                    let (disabled, ov_opts) = match &file_key {
-                        Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
-                        None => (false, None),
-                    };
-                    if disabled {
-                        continue;
-                    }
-                    let opts = ov_opts.as_ref().unwrap_or(opts);
-                    let mut ctx = CheckContext::new(&file)
-                        .with_options(opts)
-                        .with_corpus(&corpus)
-                        .with_parsed_lang(&tree);
-                    issues.extend(check.run(&file, &mut ctx));
-                }
-                continue;
-            }
-            // Defensive catch-all for languages we recognise (via
-            // `Language::from_path`) but haven't wired a parser for
-            // yet. Falls through to the TS path so nothing crashes;
-            // matching checks (none today) would see `parsed_lang =
-            // None`.
-            #[allow(clippy::collapsible_if)]
-            if file.language != Language::TypeScript {
-                for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                    if check.language() != file.language {
-                        continue;
-                    }
-                    let (disabled, ov_opts) = match &file_key {
-                        Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
-                        None => (false, None),
-                    };
-                    if disabled {
-                        continue;
-                    }
-                    let opts = ov_opts.as_ref().unwrap_or(opts);
-                    let mut ctx = CheckContext::new(&file)
-                        .with_options(opts)
-                        .with_corpus(&corpus);
-                    issues.extend(check.run(&file, &mut ctx));
-                }
-                continue;
-            }
-
-            // Post-parse pass for one TypeScript file. Pulled into a
-            // closure so the cached and non-cached paths below share
-            // one body — the cache branch invokes it inside
-            // `ParseCache::with_parsed`'s callback (where the parsed
-            // borrow can't escape), the non-cache branch invokes it
-            // directly. `issues` is taken by `&mut` so the closure
-            // doesn't have to capture it mutably.
-            let run_ts = |parsed_return: &oxc_parser::ParserReturn<'_>, issues: &mut Vec<Issue>| {
-                if parse_fatal(parsed_return) {
-                    issues.push(parse_error_issue(&file, &parsed_return.errors));
-                    return;
-                }
-                let parsed = ParsedView {
-                    program: &parsed_return.program,
-                    diagnostics: &parsed_return.errors,
-                };
-
-                // Pass-1 graph extraction: imports/exports for every
-                // parsed file, into the well-known IMPORTS/EXPORTS
-                // corpus slots. Graph-aware checks (orphan, cycle,
-                // layer, dead) read these in their `finalize`. Always
-                // runs — cp3 will lift graph extraction into a cached
-                // (and replayable) step too.
-                graph_builder.collect(&file, &parsed, &corpus);
-
-                // Per-file content hash, computed once and reused
-                // for every pure-check lookup against this file.
-                // cache::hash_text is just a SHA-256 over the source
-                // bytes — under a microsecond even for big files.
-                let content_hash = findings_cache.map(|_| cache::hash_text(&file.text));
-
-                for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                    if check.language() != Language::TypeScript {
-                        continue;
-                    }
-                    // Type-aware routing (cd-9hp.2). A check declaring
-                    // `requires_types` only runs when the engine has a
-                    // live type oracle; otherwise it's skipped entirely
-                    // (no oracle → no way to answer its type queries).
-                    // The findings cache never applies to type-aware
-                    // checks: their results depend on the whole
-                    // project's types, which the per-file content hash
-                    // can't capture. A `requires_types` check must keep
-                    // `pure_run = false` so the fast path below is never
-                    // taken for it; the explicit guard here is belt and
-                    // braces.
-                    let requires_types = check.meta().requires_types;
-                    if requires_types && self.type_oracle.is_none() {
-                        continue;
-                    }
-                    // Per-glob overrides (cd-m5tu). `disabled` skips the
-                    // check on this file; `ov_opts` carries this file's
-                    // effective options when an override changed them.
-                    let (disabled, ov_opts) = match &file_key {
-                        Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
-                        None => (false, None),
-                    };
-                    if disabled {
-                        continue;
-                    }
-                    let opts = ov_opts.as_ref().unwrap_or(opts);
-                    // Findings-cache fast path: skip Check::run when
-                    // (a) the check declares pure_run, (b) no per-glob
-                    // override changed this file's options (the cache key
-                    // can't capture per-file option deltas — cd-m5tu),
-                    // and (c) a cache entry exists under
-                    // (content, config, check_id). Non-pure checks always
-                    // run — their findings may depend on corpus state,
-                    // which the cache key can't capture today.
-                    if check.meta().pure_run && !requires_types && ov_opts.is_none() {
-                        if let (Some(fc), Some(content_hash)) = (findings_cache, content_hash) {
-                            let key = findings_cache::FindingsKey {
-                                content_hash,
-                                config_hash,
-                                check_id: check.meta().id,
-                            };
-                            // Re-stamp the cached findings onto this
-                            // file's path (cd-mwr6): the cache key has no
-                            // path, so a byte-identical sibling file would
-                            // otherwise inherit the path of whichever file
-                            // first populated the entry.
-                            if let Some(cached) = fc.get_for_path(&key, &file.path) {
-                                issues.extend(cached);
-                                continue;
-                            }
-                            let mut ctx = CheckContext::new(&file)
-                                .with_parsed(&parsed)
-                                .with_options(opts)
-                                .with_corpus(&corpus);
-                            let fresh = check.run(&file, &mut ctx);
-                            fc.insert(key, fresh.clone());
-                            issues.extend(fresh);
-                            continue;
-                        }
-                    }
-                    let mut ctx = CheckContext::new(&file)
-                        .with_parsed(&parsed)
-                        .with_options(opts)
-                        .with_corpus(&corpus);
-                    if let Some(oracle) = self.type_oracle.as_deref() {
-                        ctx = ctx.with_types(oracle);
-                    }
-                    issues.extend(check.run(&file, &mut ctx));
-                }
-            };
-
-            match cache {
-                Some(c) => c.with_parsed(&file, |p| run_ts(p, &mut issues)),
-                None => {
-                    // Per-file allocator. Lives until the file's
-                    // checks finish, then drops with the AST it owns.
-                    // Bumpalo allocation makes this trivially cheap.
-                    let allocator = Allocator::default();
-                    let parsed_return = parse_into(&allocator, &file);
-                    run_ts(&parsed_return, &mut issues);
+        let run_loop_start = Instant::now();
+        match parse_cache {
+            Some(cache) => {
+                // Sequential: shares one `ParseCache` across pass 1 and
+                // pass 2 (CD-29). Must stay single-threaded — see the
+                // dispatch comment above.
+                for (path, text) in &sources {
+                    issues.extend(self.pass1_one_file(
+                        path,
+                        text,
+                        &corpus,
+                        &graph_builder,
+                        findings_cache,
+                        config_hash,
+                        timing,
+                        Some(cache),
+                    ));
                 }
             }
+            None => {
+                // CD-30: one rayon task per file. Each task's TS parse
+                // (if any) lives entirely inside `pass1_one_file` —
+                // never shared, so nothing here needs to be `Send`
+                // beyond the `Vec<Issue>` results `collect()` gathers.
+                let per_file: Vec<Vec<Issue>> = sources
+                    .par_iter()
+                    .map(|(path, text)| {
+                        self.pass1_one_file(
+                            path,
+                            text,
+                            &corpus,
+                            &graph_builder,
+                            findings_cache,
+                            config_hash,
+                            timing,
+                            None,
+                        )
+                    })
+                    .collect();
+                issues.extend(per_file.into_iter().flatten());
+            }
+        }
+        if let Some(t) = timing {
+            t.record_phase("run_loop", run_loop_start.elapsed());
         }
 
         // Pass 2: iterate every file again for consistency checks.
@@ -720,35 +611,73 @@ impl Engine {
             .map(|(i, c)| (i, c.as_ref()))
             .collect();
 
+        let pass2_start = Instant::now();
         if !consistency_checks.is_empty() {
-            for (path, _) in &sources {
-                let text = match texts.get(path) {
-                    Some(t) => t,
-                    None => continue, // file failed to parse in pass 1 — skip
-                };
-                let file = SourceFile::new(path.clone(), text.clone());
-                // Consistency checks are TS-only today (cd-91zc). Skip
-                // non-TS files so we don't re-parse them with oxc.
-                if file.language != Language::TypeScript {
-                    continue;
+            match parse_cache {
+                Some(cache) => {
+                    for (path, _) in &sources {
+                        let text = match texts.get(path) {
+                            Some(t) => t,
+                            None => continue, // file failed to parse in pass 1 — skip
+                        };
+                        let file = SourceFile::new(path.clone(), text.clone());
+                        // Consistency checks are TS-only today (cd-91zc). Skip
+                        // non-TS files so we don't re-parse them with oxc.
+                        if file.language != Language::TypeScript {
+                            continue;
+                        }
+                        // Same content hash as pass 1's parse of this file
+                        // (byte-identical text) — this hits the cache instead
+                        // of re-parsing (CD-29).
+                        let file_issues = cache.with_parsed(&file, |parsed_return| {
+                            if parse_fatal(parsed_return) {
+                                return Vec::new();
+                            }
+                            let parsed = ParsedView {
+                                program: &parsed_return.program,
+                                diagnostics: &parsed_return.errors,
+                            };
+                            self.pass2_ts_file(&file, &parsed, &consistency_checks, &corpus, timing)
+                        });
+                        issues.extend(file_issues);
+                    }
                 }
-                let allocator = Allocator::default();
-                let parsed_return = parse_into(&allocator, &file);
-                if parse_fatal(&parsed_return) {
-                    continue;
-                }
-                let parsed = ParsedView {
-                    program: &parsed_return.program,
-                    diagnostics: &parsed_return.errors,
-                };
-                for (idx, check) in &consistency_checks {
-                    let mut ctx = CheckContext::new(&file)
-                        .with_parsed(&parsed)
-                        .with_options(&self.options[*idx])
-                        .with_corpus(&corpus);
-                    issues.extend(check.pass2(&file, &mut ctx));
+                None => {
+                    // CD-30: no shared cache to reuse pass 1's parse
+                    // across threads (see the dispatch comment above),
+                    // so each rayon task re-parses its file fresh.
+                    let per_file: Vec<Vec<Issue>> = sources
+                        .par_iter()
+                        .filter_map(|(path, _)| {
+                            let text = texts.get(path)?;
+                            let file = SourceFile::new(path.clone(), text.clone());
+                            if file.language != Language::TypeScript {
+                                return None;
+                            }
+                            let allocator = Allocator::default();
+                            let parsed_return = parse_into(&allocator, &file);
+                            if parse_fatal(&parsed_return) {
+                                return None;
+                            }
+                            let parsed = ParsedView {
+                                program: &parsed_return.program,
+                                diagnostics: &parsed_return.errors,
+                            };
+                            Some(self.pass2_ts_file(
+                                &file,
+                                &parsed,
+                                &consistency_checks,
+                                &corpus,
+                                timing,
+                            ))
+                        })
+                        .collect();
+                    issues.extend(per_file.into_iter().flatten());
                 }
             }
+        }
+        if let Some(t) = timing {
+            t.record_phase("pass2", pass2_start.elapsed());
         }
 
         // Canonical-graph build (cd-9hp.9 cp3). Translates the flat
@@ -759,12 +688,16 @@ impl Engine {
         // (Design.OrphanExport first) can query it. The flat slots
         // stay populated for checks that haven't migrated yet.
         {
+            let graph_build_start = Instant::now();
             corpus.with_slot(&IMPORTS, |imports| {
                 corpus.with_slot(&EXPORTS, |exports| {
                     let graph = build_canonical_graph(imports, exports);
                     corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
                 });
             });
+            if let Some(t) = timing {
+                t.record_phase("graph_build", graph_build_start.elapsed());
+            }
         }
 
         // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):
@@ -780,11 +713,17 @@ impl Engine {
         // (`Consistency.UnusedSuppression`); the flag was paying no rent.
         // If a second observer use case appears, extend
         // `FINALIZE_OBSERVER_CHECK_IDS` in cofferdam-core.
+        let finalize_a_start = Instant::now();
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
             if !cofferdam_core::is_finalize_observer(check.meta().id) {
                 let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
-                issues.extend(check.finalize(&mut finalize_ctx));
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.finalize(&mut finalize_ctx)
+                }));
             }
+        }
+        if let Some(t) = timing {
+            t.record_phase("finalize_a", finalize_a_start.elapsed());
         }
 
         // Snapshot: re-build ALL_PRE_FILTER_FINDINGS from the union of
@@ -807,11 +746,17 @@ impl Engine {
         // Phase B — run finalize on every check in the observer set.
         // Today only `Consistency.UnusedSuppression` qualifies. Per-check
         // options flow in the same way as Phase A (cd-3uj).
+        let finalize_b_start = Instant::now();
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
             if cofferdam_core::is_finalize_observer(check.meta().id) {
                 let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
-                issues.extend(check.finalize(&mut finalize_ctx));
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.finalize(&mut finalize_ctx)
+                }));
             }
+        }
+        if let Some(t) = timing {
+            t.record_phase("finalize_b", finalize_b_start.elapsed());
         }
 
         // Post-collection filter (cd-5t7): suppress findings based on inline directives.
@@ -853,6 +798,315 @@ impl Engine {
         (issues, texts)
     }
 
+    /// Pass-1 work for one file: language dispatch, parse, and every
+    /// matching check's `run()`. Shared by both the sequential
+    /// (`parse_cache: Some`) and rayon-parallel (`parse_cache: None`)
+    /// run-loop dispatch in `analyze_with_sources_caches_inner` (CD-30)
+    /// — the only difference between the two call sites is whether a
+    /// shared `ParseCache` is available to short-circuit the TS parse.
+    #[allow(clippy::too_many_arguments)]
+    fn pass1_one_file(
+        &self,
+        path: &Path,
+        text: &str,
+        corpus: &CorpusIndex,
+        graph_builder: &graph::GraphBuilder,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        config_hash: findings_cache::ConfigHash,
+        timing: Option<&TimingCollector>,
+        parse_cache: Option<&cache::ParseCache>,
+    ) -> Vec<Issue> {
+        let file = SourceFile::new(path.to_path_buf(), text.to_string());
+        let mut issues = Vec::new();
+
+        // Per-glob override key (cd-m5tu). `None` when no
+        // `[[overrides]]` blocks are configured — the per-check
+        // resolution below then short-circuits to the global config
+        // with zero extra work for the overwhelmingly common case.
+        let file_key = (!self.overrides.is_empty()).then(|| path_key(&file.path));
+
+        // Per-language dispatch (cd-91zc checkpoint 4 + cd-0039).
+        // Non-TS files skip oxc parsing and graph extraction
+        // entirely — the engine instead invokes the matching
+        // language adapter's parser ONCE per file and installs the
+        // resulting handle on `CheckContext.parsed_lang`. Each
+        // language check downcasts via `ctx.parsed_as::<T>()` (TS
+        // checks read `ctx.parsed` directly; this branch never
+        // runs for them).
+        //
+        // Fatal parse failures emit a single `Warning.ParseError`
+        // and short-circuit the per-check loop, mirroring TS
+        // behaviour. This eliminated the silent no-op on malformed
+        // .rs files that the pre-cd-0039 per-check `parse_rust` +
+        // `has_errors()` preamble produced.
+        if file.language == Language::Rust {
+            // Three outcomes from parse_rust:
+            //
+            // * `Err(_)`: the parser failed to produce a tree at
+            //   all (grammar load failure / cancellation / timeout).
+            //   Surface as `Warning.ParseError` via
+            //   `rust_load_error_issue`.
+            //
+            // * `Ok(tree)` with `has_errors() == true`: tree-sitter
+            //   recovered with ERROR / MISSING nodes. Surface as
+            //   `Warning.ParseError` pointing at the first error
+            //   span. (Pre-cd-0039-followup this branch silently
+            //   skipped — tree-sitter-rust 0.23 had false positives
+            //   on valid Rust like `&raw` where `raw` is a variable
+            //   name. The 0.24 grammar fixed those. The
+            //   `diagnose_parse_errors` integration test in
+            //   `cofferdam-rust` pins the regression: if the bug
+            //   ever comes back, those tests start failing and the
+            //   silent-skip would need to come back too.)
+            //
+            // * `Ok(tree)` clean: install on parsed_lang and run
+            //   the matching checks.
+            let tree = match parse_rust(&file.text) {
+                Ok(t) if !t.has_errors() => t,
+                Ok(t) => {
+                    issues.push(rust_parse_error_issue(&file, &t));
+                    return issues;
+                }
+                Err(e) => {
+                    issues.push(rust_load_error_issue(&file, &e));
+                    return issues;
+                }
+            };
+            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                if check.language() != file.language {
+                    continue;
+                }
+                let (disabled, ov_opts) = match &file_key {
+                    Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                    None => (false, None),
+                };
+                if disabled {
+                    continue;
+                }
+                let opts = ov_opts.as_ref().unwrap_or(opts);
+                let mut ctx = CheckContext::new(&file)
+                    .with_options(opts)
+                    .with_corpus(corpus)
+                    .with_parsed_lang(&tree);
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.run(&file, &mut ctx)
+                }));
+            }
+            return issues;
+        }
+        // Defensive catch-all for languages we recognise (via
+        // `Language::from_path`) but haven't wired a parser for
+        // yet. Falls through to the TS path so nothing crashes;
+        // matching checks (none today) would see `parsed_lang =
+        // None`.
+        #[allow(clippy::collapsible_if)]
+        if file.language != Language::TypeScript {
+            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                if check.language() != file.language {
+                    continue;
+                }
+                let (disabled, ov_opts) = match &file_key {
+                    Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                    None => (false, None),
+                };
+                if disabled {
+                    continue;
+                }
+                let opts = ov_opts.as_ref().unwrap_or(opts);
+                let mut ctx = CheckContext::new(&file)
+                    .with_options(opts)
+                    .with_corpus(corpus);
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.run(&file, &mut ctx)
+                }));
+            }
+            return issues;
+        }
+
+        // TypeScript: reuse a shared `ParseCache` entry when the
+        // caller supplied one (sequential path — CD-29's pass-1/pass-2
+        // reuse), otherwise parse fresh with a local `Allocator` (the
+        // rayon-parallel path — CD-30). Either way the parse never
+        // outlives this call, so `run_ts_checks` doesn't care which
+        // branch produced it.
+        match parse_cache {
+            Some(cache) => {
+                cache.with_parsed(&file, |parsed_return| {
+                    issues.extend(self.run_ts_checks(
+                        &file,
+                        parsed_return,
+                        &file_key,
+                        corpus,
+                        graph_builder,
+                        findings_cache,
+                        config_hash,
+                        timing,
+                    ));
+                });
+            }
+            None => {
+                let allocator = Allocator::default();
+                let parsed_return = parse_into(&allocator, &file);
+                issues.extend(self.run_ts_checks(
+                    &file,
+                    &parsed_return,
+                    &file_key,
+                    corpus,
+                    graph_builder,
+                    findings_cache,
+                    config_hash,
+                    timing,
+                ));
+            }
+        }
+        issues
+    }
+
+    /// Pass-1 checks for one already-parsed TypeScript file: graph
+    /// extraction, then every TS check's `run()` (with the
+    /// findings-cache fast path). Called from `pass1_one_file` with
+    /// either a cached or a freshly-parsed `ParserReturn` — the parse
+    /// itself never crosses a thread boundary, so this method doesn't
+    /// need to be anything more than an ordinary `&self` call.
+    #[allow(clippy::too_many_arguments)]
+    fn run_ts_checks(
+        &self,
+        file: &SourceFile,
+        parsed_return: &oxc_parser::ParserReturn<'_>,
+        file_key: &Option<String>,
+        corpus: &CorpusIndex,
+        graph_builder: &graph::GraphBuilder,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        config_hash: findings_cache::ConfigHash,
+        timing: Option<&TimingCollector>,
+    ) -> Vec<Issue> {
+        let mut issues = Vec::new();
+        if parse_fatal(parsed_return) {
+            issues.push(parse_error_issue(file, &parsed_return.errors));
+            return issues;
+        }
+        let parsed = ParsedView {
+            program: &parsed_return.program,
+            diagnostics: &parsed_return.errors,
+        };
+
+        // Pass-1 graph extraction: imports/exports for every
+        // parsed file, into the well-known IMPORTS/EXPORTS
+        // corpus slots. Graph-aware checks (orphan, cycle,
+        // layer, dead) read these in their `finalize`. Always
+        // runs — cp3 will lift graph extraction into a cached
+        // (and replayable) step too.
+        graph_builder.collect(file, &parsed, corpus);
+
+        // Per-file content hash, computed once and reused
+        // for every pure-check lookup against this file.
+        // cache::hash_text is just a SHA-256 over the source
+        // bytes — under a microsecond even for big files.
+        let content_hash = findings_cache.map(|_| cache::hash_text(&file.text));
+
+        for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+            if check.language() != Language::TypeScript {
+                continue;
+            }
+            // Type-aware routing (cd-9hp.2). A check declaring
+            // `requires_types` only runs when the engine has a
+            // live type oracle; otherwise it's skipped entirely
+            // (no oracle → no way to answer its type queries).
+            // The findings cache never applies to type-aware
+            // checks: their results depend on the whole
+            // project's types, which the per-file content hash
+            // can't capture. A `requires_types` check must keep
+            // `pure_run = false` so the fast path below is never
+            // taken for it; the explicit guard here is belt and
+            // braces.
+            let requires_types = check.meta().requires_types;
+            if requires_types && self.type_oracle.is_none() {
+                continue;
+            }
+            // Per-glob overrides (cd-m5tu). `disabled` skips the
+            // check on this file; `ov_opts` carries this file's
+            // effective options when an override changed them.
+            let (disabled, ov_opts) = match file_key {
+                Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                None => (false, None),
+            };
+            if disabled {
+                continue;
+            }
+            let opts = ov_opts.as_ref().unwrap_or(opts);
+            // Findings-cache fast path: skip Check::run when
+            // (a) the check declares pure_run, (b) no per-glob
+            // override changed this file's options (the cache key
+            // can't capture per-file option deltas — cd-m5tu),
+            // and (c) a cache entry exists under
+            // (content, config, check_id). Non-pure checks always
+            // run — their findings may depend on corpus state,
+            // which the cache key can't capture today.
+            if check.meta().pure_run && !requires_types && ov_opts.is_none() {
+                if let (Some(fc), Some(content_hash)) = (findings_cache, content_hash) {
+                    let key = findings_cache::FindingsKey {
+                        content_hash,
+                        config_hash,
+                        check_id: check.meta().id,
+                    };
+                    // Re-stamp the cached findings onto this
+                    // file's path (cd-mwr6): the cache key has no
+                    // path, so a byte-identical sibling file would
+                    // otherwise inherit the path of whichever file
+                    // first populated the entry.
+                    if let Some(cached) = fc.get_for_path(&key, &file.path) {
+                        issues.extend(cached);
+                        continue;
+                    }
+                    let mut ctx = CheckContext::new(file)
+                        .with_parsed(&parsed)
+                        .with_options(opts)
+                        .with_corpus(corpus);
+                    let fresh = timed_run(timing, check.meta().id, || check.run(file, &mut ctx));
+                    fc.insert(key, fresh.clone());
+                    issues.extend(fresh);
+                    continue;
+                }
+            }
+            let mut ctx = CheckContext::new(file)
+                .with_parsed(&parsed)
+                .with_options(opts)
+                .with_corpus(corpus);
+            if let Some(oracle) = self.type_oracle.as_deref() {
+                ctx = ctx.with_types(oracle);
+            }
+            issues.extend(timed_run(timing, check.meta().id, || {
+                check.run(file, &mut ctx)
+            }));
+        }
+        issues
+    }
+
+    /// Pass-2 consistency checks for one already-parsed TypeScript
+    /// file. Called from both the sequential (shared `ParseCache`) and
+    /// parallel (fresh per-file parse) pass-2 dispatch in
+    /// `analyze_with_sources_caches_inner` (CD-30).
+    fn pass2_ts_file(
+        &self,
+        file: &SourceFile,
+        parsed: &ParsedView<'_>,
+        consistency_checks: &[(usize, &dyn Check)],
+        corpus: &CorpusIndex,
+        timing: Option<&TimingCollector>,
+    ) -> Vec<Issue> {
+        let mut issues = Vec::new();
+        for (idx, check) in consistency_checks {
+            let mut ctx = CheckContext::new(file)
+                .with_parsed(parsed)
+                .with_options(&self.options[*idx])
+                .with_corpus(corpus);
+            issues.extend(timed_run(timing, check.meta().id, || {
+                check.pass2(file, &mut ctx)
+            }));
+        }
+        issues
+    }
+
     /// Cache-aware variant of [`Engine::analyze_with_text`]. Reads
     /// each path from disk, then routes through
     /// [`Engine::analyze_with_sources_full`] with the supplied caches.
@@ -866,6 +1120,30 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
     ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
+        let sources = Self::read_sources(paths)?;
+        Ok(self.analyze_with_sources_full(sources, parse_cache, findings_cache, run_cache))
+    }
+
+    /// Timed variant of [`Engine::analyze_with_text_full`] (CD-34).
+    pub fn analyze_with_text_full_timed<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: &TimingCollector,
+    ) -> Result<(Vec<Issue>, HashMap<PathBuf, String>), EngineError> {
+        let sources = Self::read_sources(paths)?;
+        Ok(self.analyze_with_sources_full_timed(
+            sources,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            timing,
+        ))
+    }
+
+    fn read_sources<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<(PathBuf, String)>, EngineError> {
         let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(paths.len());
         for path in paths {
             let path = path.as_ref();
@@ -875,7 +1153,7 @@ impl Engine {
             })?;
             sources.push((path.to_path_buf(), text));
         }
-        Ok(self.analyze_with_sources_full(sources, parse_cache, findings_cache, run_cache))
+        Ok(sources)
     }
 
     /// Cache-aware variant of [`Engine::analyze_with_signatures`].
@@ -891,16 +1169,39 @@ impl Engine {
     ) -> Result<Vec<(Issue, String)>, EngineError> {
         let (issues, texts) =
             self.analyze_with_text_full(paths, parse_cache, findings_cache, run_cache)?;
+        Ok(Self::sign_issues(issues, &texts))
+    }
+
+    /// Timed variant of [`Engine::analyze_with_signatures_full`] (CD-34).
+    /// Used by `cofferdam check --time-checks`.
+    pub fn analyze_with_signatures_full_timed<P: AsRef<Path>>(
+        &self,
+        paths: &[P],
+        parse_cache: Option<&cache::ParseCache>,
+        findings_cache: Option<&findings_cache::FindingsCache>,
+        run_cache: Option<&run_cache::RunCache>,
+        timing: &TimingCollector,
+    ) -> Result<Vec<(Issue, String)>, EngineError> {
+        let (issues, texts) = self.analyze_with_text_full_timed(
+            paths,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            timing,
+        )?;
+        Ok(Self::sign_issues(issues, &texts))
+    }
+
+    fn sign_issues(issues: Vec<Issue>, texts: &HashMap<PathBuf, String>) -> Vec<(Issue, String)> {
         let empty = String::new();
-        let out = issues
+        issues
             .into_iter()
             .map(|issue| {
                 let text = texts.get(&issue.file).unwrap_or(&empty);
                 let sig = baseline::signature_for_issue(text, &issue);
                 (issue, sig)
             })
-            .collect();
-        Ok(out)
+            .collect()
     }
 
     /// Run analysis and emit each issue paired with its baseline
@@ -1010,6 +1311,26 @@ fn merge_raw(
         merged.insert(k.clone(), v.clone());
     }
     merged
+}
+
+/// Run one check invocation (`run` / `pass2` / `finalize`), recording its
+/// elapsed time under `check_id` when a [`TimingCollector`] is present
+/// (CD-34). A no-op wrapper when `timing` is `None` — no `Instant::now()`
+/// call on the hot path for ordinary runs.
+fn timed_run<F: FnOnce() -> Vec<Issue>>(
+    timing: Option<&TimingCollector>,
+    check_id: &'static str,
+    f: F,
+) -> Vec<Issue> {
+    match timing {
+        Some(t) => {
+            let start = Instant::now();
+            let issues = f();
+            t.record_check(check_id, start.elapsed());
+            issues
+        }
+        None => f(),
+    }
 }
 
 /// Forward-slash, lowercase-on-Windows path key for override glob

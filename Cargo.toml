@@ -51,6 +51,13 @@ sha2 = "0.11"
 # already noted self_cell as a viable option; the parse cache makes
 # the dep earn its keep.
 self_cell = "1"
+# CD-30 — per-file parallelism for the engine's run loop. Each rayon
+# worker parses its own file with a local `Allocator`; oxc's
+# arena-based AST holds raw pointers internally and is not `Send`, so
+# unlike `FindingsCache` the parse cache can't be shared across
+# threads (see `cache.rs`'s doc comment) — parallel runs accept a
+# redundant per-file parse in exchange for real multi-core scaling.
+rayon = "1"
 # cd-9hp.4 cp1b — file-system watcher backing `cofferdam watch`'s
 # daemon loop. notify v8 picks the platform-recommended backend
 # (ReadDirectoryChangesW on Windows, FSEvents on macOS, inotify on

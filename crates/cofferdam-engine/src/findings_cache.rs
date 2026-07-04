@@ -41,14 +41,16 @@
 //!
 //! ## Threading
 //!
-//! Single-threaded today (matches the parse cache). Per-file
-//! parallelism (cd-6ad) is a separate piece of work; both caches
-//! lift in tandem.
+//! `Vec<Issue>` findings carry no borrowed data — unlike the parse
+//! cache's oxc ASTs, they're plain, freely `Send + Sync` values. So
+//! this cache (CD-30) uses `RwLock` + `AtomicU64` instead of the
+//! parse cache's `RefCell`/`Cell`, and is safely shared across the
+//! rayon per-file parallel loop.
 
-use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use cofferdam_core::{Issue, Uri};
 
@@ -88,9 +90,9 @@ pub struct FindingsKey {
 /// before the engine appends to its issue buffer.
 #[derive(Default)]
 pub struct FindingsCache {
-    entries: RefCell<HashMap<FindingsKey, Arc<Vec<Issue>>>>,
-    hits: Cell<u64>,
-    misses: Cell<u64>,
+    entries: RwLock<HashMap<FindingsKey, Arc<Vec<Issue>>>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl FindingsCache {
@@ -106,14 +108,14 @@ impl FindingsCache {
     /// copy (e.g. [`Self::get_for_path`]'s re-stamp) clone the `Arc`'s
     /// contents themselves.
     pub fn get(&self, key: &FindingsKey) -> Option<Arc<Vec<Issue>>> {
-        let map = self.entries.borrow();
+        let map = self.entries.read().unwrap_or_else(|p| p.into_inner());
         match map.get(key) {
             Some(cached) => {
-                self.hits.set(self.hits.get() + 1);
+                self.hits.fetch_add(1, Ordering::Relaxed);
                 Some(Arc::clone(cached))
             }
             None => {
-                self.misses.set(self.misses.get() + 1);
+                self.misses.fetch_add(1, Ordering::Relaxed);
                 None
             }
         }
@@ -125,36 +127,45 @@ impl FindingsCache {
     /// overwrite means a corpus / engine change invalidated the
     /// prior entry's premise.
     pub fn insert(&self, key: FindingsKey, issues: Vec<Issue>) {
-        self.entries.borrow_mut().insert(key, Arc::new(issues));
+        self.entries
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key, Arc::new(issues));
     }
 
     /// Drop every cached entry. Useful when the caller knows the
     /// config or engine has changed in a way the key doesn't (yet)
     /// capture — the watch loop calls this on config reload.
     pub fn clear(&self) {
-        self.entries.borrow_mut().clear();
-        self.hits.set(0);
-        self.misses.set(0);
+        self.entries
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
     }
 
     /// Hits since construction (or last `clear`).
     pub fn hits(&self) -> u64 {
-        self.hits.get()
+        self.hits.load(Ordering::Relaxed)
     }
 
     /// Misses since construction (or last `clear`).
     pub fn misses(&self) -> u64 {
-        self.misses.get()
+        self.misses.load(Ordering::Relaxed)
     }
 
     /// Distinct entries currently retained.
     pub fn len(&self) -> usize {
-        self.entries.borrow().len()
+        self.entries.read().unwrap_or_else(|p| p.into_inner()).len()
     }
 
     /// True when no entries are retained.
     pub fn is_empty(&self) -> bool {
-        self.entries.borrow().is_empty()
+        self.entries
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty()
     }
 
     /// Look up cached findings and re-stamp them onto `path` before
@@ -180,7 +191,8 @@ impl FindingsCache {
     /// writer builds its serialisable representation.
     pub fn snapshot(&self) -> Vec<(FindingsKey, Arc<Vec<Issue>>)> {
         self.entries
-            .borrow()
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
             .iter()
             .map(|(k, v)| (k.clone(), Arc::clone(v)))
             .collect()

@@ -1540,7 +1540,7 @@ fn run_plugins_filtered_with_signatures(
             let text = texts
                 .entry(issue.file.clone())
                 .or_insert_with(|| std::fs::read_to_string(&issue.file).unwrap_or_default());
-            let sig = baseline::signature_for_span(text, &issue.location);
+            let sig = baseline::signature_for_issue(text, &issue);
             (issue, sig)
         })
         .collect()

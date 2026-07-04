@@ -103,6 +103,53 @@ pub struct Engine {
     raw_checks: BTreeMap<String, BTreeMap<String, RawOptionValue>>,
 }
 
+/// Retained state for [`Engine::analyze_incremental`] (cd-32).
+///
+/// Holds everything a from-scratch analyze would otherwise rebuild:
+/// the corpus (cross-file evidence + finalize-stage slots), the graph
+/// builder (its `oxc_resolver` instance), a content-hash-keyed parse
+/// cache, and — per currently-known file — its text and the `Vec<Issue>`
+/// its pass-1 `run()` (checks + graph extraction) produced. A caller
+/// holds one `AnalysisState` across many `analyze_incremental` calls
+/// (e.g. the watch loop, one per filesystem event); each call only
+/// re-does pass-1 work for the files it's told changed.
+#[derive(Default)]
+pub struct AnalysisState {
+    corpus: CorpusIndex,
+    graph_builder: graph::GraphBuilder,
+    parse_cache: cache::ParseCache,
+    /// Text of every file currently contributing to the corpus.
+    sources: HashMap<PathBuf, String>,
+    /// Pass-1 issues (checks + graph extraction) per currently-known
+    /// file, so an incremental call can reuse the ones whose file
+    /// didn't change instead of re-running `Check::run`.
+    pass1_issues: HashMap<PathBuf, Vec<Issue>>,
+}
+
+impl AnalysisState {
+    /// Empty state — as if no file had ever been analyzed. The first
+    /// `analyze_incremental` call against it behaves like a
+    /// from-scratch analyze of whatever `changed` it's given.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Paths currently contributing to the retained corpus, with
+    /// their last-seen text. Mirrors the `texts` map a from-scratch
+    /// analyze would return for the same file set.
+    pub fn sources(&self) -> &HashMap<PathBuf, String> {
+        &self.sources
+    }
+
+    /// The retained content-hash-keyed parse cache. Exposed for
+    /// callers that want to report hit/miss stats (e.g. `cofferdam
+    /// watch`'s diagnostics) — incremental analysis itself only ever
+    /// reads it through `Engine::analyze_incremental`.
+    pub fn parse_cache(&self) -> &cache::ParseCache {
+        &self.parse_cache
+    }
+}
+
 impl Engine {
     /// Build an `Engine` from a check set with default options.
     /// Prefer `with_config` when you have a loaded `ProjectConfig`
@@ -516,42 +563,7 @@ impl Engine {
         // in finalize(). Per-check checks ignore it.
         let corpus = CorpusIndex::new();
         let graph_builder = graph::GraphBuilder::new();
-        // Publish the set of registered check IDs so that
-        // `Consistency.UnusedSuppression` can distinguish stale-by-cause
-        // suppressions from stale-by-config ones (unknown check IDs are
-        // `Consistency.UnknownCheckId`'s territory, not ours).
-        {
-            let ids: std::collections::HashSet<String> = self
-                .checks
-                .iter()
-                .map(|c| c.meta().id.to_string())
-                .collect();
-            corpus.with_slot(&REGISTERED_CHECK_IDS, |slot| *slot = ids);
-        }
-
-        // Publish the layers config (if any) so finalize-stage checks
-        // see it through the same corpus channel as the import/export
-        // tables. Done before any check sees a file.
-        if let Some(layers) = &self.layers {
-            corpus.with_slot(&LAYERS, |slot| *slot = Some(layers.clone()));
-        }
-        // Publish invariants runtime when a spec was loaded. One slot,
-        // one lock — checks (BoundaryFrozen, InvariantViolation, and
-        // OrphanExport's public_api allowlist) read whichever slice
-        // they care about from the same bundle. Empty bundles are
-        // skipped so dependent checks no-op without touching the slot.
-        if let Some(spec) = &self.invariants {
-            let runtime = InvariantsRuntime {
-                project_root: spec.project_root.clone(),
-                public_api: spec.public_api.clone(),
-                boundaries: spec.boundaries.clone(),
-                invariants: spec.invariants.clone(),
-                scripted: spec.scripted.clone(),
-            };
-            if !runtime.is_empty() {
-                corpus.with_slot(&INVARIANTS, |slot| *slot = Some(runtime));
-            }
-        }
+        self.publish_static_slots(&corpus);
 
         let run_loop_start = Instant::now();
         match parse_cache {
@@ -680,6 +692,64 @@ impl Engine {
             t.record_phase("pass2", pass2_start.elapsed());
         }
 
+        let issues = self.finalize_and_filter(&corpus, issues, &texts, timing);
+        (issues, texts)
+    }
+
+    /// Publish the run-scoped slots that don't accumulate per-file
+    /// evidence — they're fully overwritten rather than appended to,
+    /// so republishing them is idempotent and safe to call again on
+    /// every [`Engine::analyze_incremental`] call.
+    fn publish_static_slots(&self, corpus: &CorpusIndex) {
+        // Publish the set of registered check IDs so that
+        // `Consistency.UnusedSuppression` can distinguish stale-by-cause
+        // suppressions from stale-by-config ones (unknown check IDs are
+        // `Consistency.UnknownCheckId`'s territory, not ours).
+        let ids: std::collections::HashSet<String> = self
+            .checks
+            .iter()
+            .map(|c| c.meta().id.to_string())
+            .collect();
+        corpus.with_slot(&REGISTERED_CHECK_IDS, |slot| *slot = ids);
+
+        // Publish the layers config (if any) so finalize-stage checks
+        // see it through the same corpus channel as the import/export
+        // tables. Done before any check sees a file.
+        if let Some(layers) = &self.layers {
+            corpus.with_slot(&LAYERS, |slot| *slot = Some(layers.clone()));
+        }
+        // Publish invariants runtime when a spec was loaded. One slot,
+        // one lock — checks (BoundaryFrozen, InvariantViolation, and
+        // OrphanExport's public_api allowlist) read whichever slice
+        // they care about from the same bundle. Empty bundles are
+        // skipped so dependent checks no-op without touching the slot.
+        if let Some(spec) = &self.invariants {
+            let runtime = InvariantsRuntime {
+                project_root: spec.project_root.clone(),
+                public_api: spec.public_api.clone(),
+                boundaries: spec.boundaries.clone(),
+                invariants: spec.invariants.clone(),
+                scripted: spec.scripted.clone(),
+            };
+            if !runtime.is_empty() {
+                corpus.with_slot(&INVARIANTS, |slot| *slot = Some(runtime));
+            }
+        }
+    }
+
+    /// Shared tail of every analyze path (cd-32): canonical-graph
+    /// build, two-phase finalize, suppression filter, severity
+    /// stamp, and the final deterministic sort. Factored out so
+    /// [`Engine::analyze_incremental`] produces byte-identical output
+    /// to a from-scratch [`Engine::analyze_with_sources`] given the
+    /// same current file set — both funnel through this one method.
+    fn finalize_and_filter(
+        &self,
+        corpus: &CorpusIndex,
+        mut issues: Vec<Issue>,
+        texts: &HashMap<PathBuf, String>,
+        timing: Option<&TimingCollector>,
+    ) -> Vec<Issue> {
         // Canonical-graph build (cd-9hp.9 cp3). Translates the flat
         // IMPORTS / EXPORTS slots populated above into the
         // typed-graph substrate from `cofferdam_graph`. Done once,
@@ -716,7 +786,7 @@ impl Engine {
         let finalize_a_start = Instant::now();
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
             if !cofferdam_core::is_finalize_observer(check.meta().id) {
-                let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
+                let mut finalize_ctx = FinalizeContext::new(corpus).with_options(opts);
                 issues.extend(timed_run(timing, check.meta().id, || {
                     check.finalize(&mut finalize_ctx)
                 }));
@@ -749,7 +819,7 @@ impl Engine {
         let finalize_b_start = Instant::now();
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
             if cofferdam_core::is_finalize_observer(check.meta().id) {
-                let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(opts);
+                let mut finalize_ctx = FinalizeContext::new(corpus).with_options(opts);
                 issues.extend(timed_run(timing, check.meta().id, || {
                     check.finalize(&mut finalize_ctx)
                 }));
@@ -795,7 +865,7 @@ impl Engine {
                 .then_with(|| a.location.line().cmp(&b.location.line()))
         });
 
-        (issues, texts)
+        issues
     }
 
     /// Pass-1 work for one file: language dispatch, parse, and every
@@ -1105,6 +1175,126 @@ impl Engine {
             }));
         }
         issues
+    }
+
+    /// Register every check's cross-file corpus remover plus the
+    /// engine-owned `IMPORTS`/`EXPORTS` removers on `state`'s corpus.
+    /// Idempotent — re-registering the same slot name just overwrites
+    /// the previous closure — so it's safe (and cheap) to call on
+    /// every [`Engine::analyze_incremental`] call rather than only
+    /// the first.
+    fn register_removers(&self, corpus: &CorpusIndex) {
+        corpus.register_removable(&IMPORTS, |slot, path| slot.retain(|r| r.from_file != path));
+        corpus.register_removable(&EXPORTS, |slot, path| slot.retain(|r| r.file != path));
+        for check in &self.checks {
+            check.register_removable(corpus);
+        }
+    }
+
+    /// Incremental analyze (cd-32): re-analyzes only `changed` files
+    /// and drops `removed` ones, reusing everything else from `state`.
+    ///
+    /// Flow: drop `removed`/stale `changed` files' corpus
+    /// contributions via [`CorpusIndex::remove_file`], re-run pass 1
+    /// for `changed` files only (repopulating the corpus and
+    /// `state`'s per-file issue cache), reuse every other file's
+    /// cached pass-1 issues, then re-run pass 2 + the full finalize
+    /// pipeline over the complete, now-current file set — mirroring
+    /// [`Engine::finalize_and_filter`], the same tail a from-scratch
+    /// analyze funnels through, so output is byte-identical to
+    /// calling `analyze_with_sources` on `state`'s resulting file set.
+    ///
+    /// `changed` covers both edited and newly-added files — either
+    /// way the file's prior contributions (if any) are dropped and
+    /// pass 1 re-runs against the new text. `analyze_with_sources*`
+    /// entry points are unaffected by this method's existence.
+    pub fn analyze_incremental(
+        &self,
+        state: &mut AnalysisState,
+        changed: &[(PathBuf, String)],
+        removed: &[PathBuf],
+    ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        let changed: Vec<(PathBuf, String)> = changed
+            .iter()
+            .map(|(p, t)| {
+                (
+                    std::path::absolute(p).unwrap_or_else(|_| p.clone()),
+                    t.clone(),
+                )
+            })
+            .collect();
+        let removed: Vec<PathBuf> = removed
+            .iter()
+            .map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()))
+            .collect();
+
+        let config_hash = self.config_hash();
+        self.register_removers(&state.corpus);
+        self.publish_static_slots(&state.corpus);
+
+        for path in &removed {
+            state.corpus.remove_file(path);
+            state.sources.remove(path);
+            state.pass1_issues.remove(path);
+        }
+
+        for (path, text) in &changed {
+            // Drop this file's prior contributions (a no-op the first
+            // time a path is seen — `remove_file` is harmless for
+            // paths with no registered contributions).
+            state.corpus.remove_file(path);
+            let file_issues = self.pass1_one_file(
+                path,
+                text,
+                &state.corpus,
+                &state.graph_builder,
+                None,
+                config_hash,
+                None,
+                Some(&state.parse_cache),
+            );
+            state.sources.insert(path.clone(), text.clone());
+            state.pass1_issues.insert(path.clone(), file_issues);
+        }
+
+        let mut issues: Vec<Issue> = state.pass1_issues.values().flatten().cloned().collect();
+
+        // Pass 2: consistency checks re-run over every currently-known
+        // file, not just `changed` — a consistency check's pass-2
+        // verdict for an untouched file can depend on pass-1 evidence
+        // from a file that DID change (e.g. a project-wide dominant
+        // style). Parses go through `state.parse_cache`, so unchanged
+        // files are a content-hash cache hit rather than a re-parse.
+        let consistency_checks: Vec<(usize, &dyn Check)> = self
+            .checks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.meta().consistency)
+            .map(|(i, c)| (i, c.as_ref()))
+            .collect();
+        if !consistency_checks.is_empty() {
+            for (path, text) in &state.sources {
+                let file = SourceFile::new(path.clone(), text.clone());
+                if file.language != Language::TypeScript {
+                    continue;
+                }
+                let file_issues = state.parse_cache.with_parsed(&file, |parsed_return| {
+                    if parse_fatal(parsed_return) {
+                        return Vec::new();
+                    }
+                    let parsed = ParsedView {
+                        program: &parsed_return.program,
+                        diagnostics: &parsed_return.errors,
+                    };
+                    self.pass2_ts_file(&file, &parsed, &consistency_checks, &state.corpus, None)
+                });
+                issues.extend(file_issues);
+            }
+        }
+
+        let texts = state.sources.clone();
+        let issues = self.finalize_and_filter(&state.corpus, issues, &texts, None);
+        (issues, texts)
     }
 
     /// Cache-aware variant of [`Engine::analyze_with_text`]. Reads

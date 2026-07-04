@@ -1,19 +1,24 @@
-﻿{
-    "repos":  [
-                  {
-                      "path":  "C:/Users/tajdi/bestefforttools",
-                      "findings":  356,
-                      "tolerance":  5
-                  },
-                  {
-                      "path":  "C:/Users/tajdi/gistreact",
-                      "findings":  98,
-                      "tolerance":  5
-                  },
-                  {
-                      "path":  "C:/Users/tajdi/examplco-landing-page",
-                      "findings":  0,
-                      "tolerance":  5
-                  }
-              ]
+{
+  "repos": [
+    {
+      "path": "C:/Users/tajdi/bestefforttools",
+      "findings": 356,
+      "tolerance": 5
+    },
+    {
+      "path": "C:/Users/tajdi/gistreact",
+      "findings": 98,
+      "tolerance": 5
+    },
+    {
+      "path": "C:/Users/tajdi/examplco-landing-page",
+      "findings": 0,
+      "tolerance": 5
+    }
+  ],
+  "memory": {
+    "corpus": "examples",
+    "peak_rss_kb": 13068.0,
+    "tolerance_pct": 20
+  }
 }

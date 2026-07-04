@@ -79,6 +79,10 @@ thiserror = "2"
 toml = "0.8"
 insta = { version = "1", features = ["filters"] }
 proptest = "1"
+# CD-35 — criterion benches lock in the CD-28 epic's perf wins
+# (crates/cofferdam-engine/benches) so later changes can't silently
+# regress them.
+criterion = "0.5"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

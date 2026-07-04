@@ -34,8 +34,9 @@
 //!   build of cofferdam-graph.
 //! - [`store`] — petgraph-backed [`store::Graph`] with path and
 //!   layer indexes and bounded-depth BFS over edge-kind filters.
-//!   The mutation API is build-only at cp2; incremental removal /
-//!   replacement lands with cd-9hp.4.
+//!   `add_node_owned`/`add_edge_owned`/`remove_file` (cd-36) give
+//!   nodes and edges per-file provenance and let a changed file's
+//!   contributions be dropped without a full rebuild.
 //!
 //! # Schema versioning
 //!
@@ -56,7 +57,7 @@ pub mod schema;
 pub mod store;
 pub mod value;
 
-pub use build::{build_canonical_graph, normalized_file_path};
+pub use build::{apply_records, build_canonical_graph, normalized_file_path};
 pub use corpus_slot::CANONICAL_GRAPH;
 pub use id::{compute_node_id, NodeId};
 pub use loader::{

@@ -22,12 +22,27 @@ fn init_repo(dir: &Path) {
     run_git(dir, &["config", "commit.gpgsign", "false"]);
 }
 
+/// GIT_* vars git sets when this test binary is itself invoked from a
+/// git hook (e.g. `cargo test` under `pre-push`). Left in place, they
+/// redirect this helper's `git init`/`git commit` at the *real* repo
+/// (or its worktree common dir) instead of the fresh temp dir.
+const GIT_ENV_VARS_TO_CLEAR: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+];
+
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(dir);
+    for var in GIT_ENV_VARS_TO_CLEAR {
+        cmd.env_remove(var);
+    }
+    let out = cmd.output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -42,6 +57,17 @@ fn commit_all(dir: &Path, message: &str) {
 
 fn cofferdam_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cofferdam")
+}
+
+/// `cofferdam advise --diff` shells out to `git show <ref>:<path>`
+/// internally, so it needs the same env isolation as `run_git` above.
+fn cofferdam_cmd(dir: &Path) -> Command {
+    let mut cmd = Command::new(cofferdam_bin());
+    cmd.current_dir(dir);
+    for var in GIT_ENV_VARS_TO_CLEAR {
+        cmd.env_remove(var);
+    }
+    cmd
 }
 
 #[test]
@@ -67,9 +93,8 @@ fn diff_introduces_violation_shows_in_would_fire() {
     )
     .expect("write modified");
 
-    let out = Command::new(cofferdam_bin())
+    let out = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
         .output()
         .expect("invoke cofferdam");
 
@@ -116,9 +141,8 @@ fn diff_clears_violation_shows_in_would_clear() {
     )
     .expect("write modified");
 
-    let out = Command::new(cofferdam_bin())
+    let out = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
         .output()
         .expect("invoke cofferdam");
 
@@ -152,9 +176,8 @@ fn diff_no_changes_emits_empty_report() {
     std::fs::write(&file, "export const x = 1;\n").expect("write baseline");
     commit_all(dir, "baseline");
 
-    let out = Command::new(cofferdam_bin())
+    let out = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
         .output()
         .expect("invoke cofferdam");
 
@@ -184,9 +207,8 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     .expect("write modified");
 
     // Default fail_on threshold is unset → exit 0 even with would_fire.
-    let no_gate = Command::new(cofferdam_bin())
+    let no_gate = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD"])
-        .current_dir(dir)
         .output()
         .expect("invoke cofferdam");
     assert!(
@@ -196,9 +218,8 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     );
 
     // With --fail-on=medium and Warning.TripleEquals at Medium, exit 1.
-    let gated = Command::new(cofferdam_bin())
+    let gated = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD", "--fail-on", "medium"])
-        .current_dir(dir)
         .output()
         .expect("invoke cofferdam");
     assert_eq!(
@@ -210,9 +231,8 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     );
 
     // With --fail-on=critical, the Medium finding is below threshold → exit 0.
-    let gated_high = Command::new(cofferdam_bin())
+    let gated_high = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD", "--fail-on", "critical"])
-        .current_dir(dir)
         .output()
         .expect("invoke cofferdam");
     assert!(

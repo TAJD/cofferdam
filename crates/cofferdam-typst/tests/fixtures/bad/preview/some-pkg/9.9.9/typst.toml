@@ -1,0 +1,4 @@
+[package]
+name = "Calendar"
+version = "1.0.0"
+description = "A Typst package for drawing things"

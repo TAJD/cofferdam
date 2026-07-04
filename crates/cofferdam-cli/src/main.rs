@@ -460,6 +460,36 @@ enum Cmd {
         #[arg(long)]
         pretty: bool,
     },
+    /// Lint a Typst package directory for Typst Universe submission
+    /// hygiene (manifest fields, license, naming, README, bundle
+    /// hygiene). Standalone from the AST engine — the unit of analysis
+    /// is the package directory (`typst.toml` + `LICENSE` + `README.md`
+    /// + bundle), not individual `.typ` files.
+    Typst {
+        /// Package directory to lint. Defaults to `.`.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Output format. Default: `text`. With `--robot` and no
+        /// explicit `--format`, defaults to `json`.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<OutputFormat>,
+        /// Default to a machine-readable format when `--format` is not
+        /// set.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output (only with `--format=json` / `--robot`).
+        #[arg(long)]
+        pretty: bool,
+        /// Severity threshold for the exit-1 gate. Findings below this
+        /// level still print; the process only exits 1 if at least one
+        /// finding is at this level or above.
+        #[arg(long, value_enum, value_name = "LEVEL", default_value_t = FailOnLevel::Medium)]
+        fail_on: FailOnLevel,
+        /// Suppress the trailing `N finding(s)` summary line. Findings
+        /// themselves still print. Has no effect on JSON output.
+        #[arg(long)]
+        quiet: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -744,6 +774,100 @@ fn main() -> ExitCode {
             robot,
             pretty,
         }),
+        Cmd::Typst {
+            path,
+            format,
+            robot,
+            pretty,
+            fail_on,
+            quiet,
+        } => run_typst(TypstArgs {
+            path,
+            format: format.unwrap_or(if robot {
+                OutputFormat::Json
+            } else {
+                OutputFormat::Text
+            }),
+            pretty,
+            fail_on: fail_on.into(),
+            quiet,
+        }),
+    }
+}
+
+struct TypstArgs {
+    path: PathBuf,
+    format: OutputFormat,
+    pretty: bool,
+    fail_on: Severity,
+    quiet: bool,
+}
+
+fn run_typst(args: TypstArgs) -> ExitCode {
+    let TypstArgs {
+        path,
+        format,
+        pretty,
+        fail_on,
+        quiet,
+    } = args;
+
+    let pkg = match cofferdam_typst::load(&path) {
+        Ok(pkg) => pkg,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut issues: Vec<cofferdam_core::Issue> = cofferdam_typst::all_typst_checks()
+        .iter()
+        .flat_map(|c| c.check(&pkg))
+        .collect();
+    issues.sort_by(|a, b| {
+        b.priority
+            .0
+            .cmp(&a.priority.0)
+            .then_with(|| a.check_id.cmp(&b.check_id))
+            .then_with(|| a.file.cmp(&b.file))
+    });
+
+    // Same gate shape as `cofferdam check`: any finding at or above
+    // `--fail-on` triggers exit 1.
+    let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+
+    match format {
+        OutputFormat::Text => {
+            let opts = TextRenderOpts {
+                quiet,
+                ..Default::default()
+            };
+            print!("{}", TextFormatter::render_with_opts(&issues, opts));
+        }
+        OutputFormat::Json => {
+            // No CheckMeta catalog for Typst checks yet — omit docs_url
+            // rather than emit a URL that 404s (mirrors plugin findings).
+            let opts = JsonRenderOpts {
+                pretty,
+                truncated_from: None,
+            };
+            println!("{}", JsonFormatter::render_with_opts(&issues, &[], opts));
+        }
+        OutputFormat::Compact => {
+            print!("{}", CompactFormatter::render(&issues));
+        }
+        OutputFormat::Sarif => {
+            println!(
+                "{}",
+                SarifFormatter::render_with_opts(&issues, &[], SarifRenderOpts { pretty })
+            );
+        }
+    }
+
+    if triggering == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 

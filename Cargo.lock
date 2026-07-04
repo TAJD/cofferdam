@@ -256,6 +256,7 @@ dependencies = [
  "cofferdam-engine",
  "cofferdam-formatters",
  "cofferdam-lsp",
+ "cofferdam-typst",
  "globset",
  "notify",
  "oxc_ast",
@@ -372,6 +373,17 @@ dependencies = [
  "thiserror 1.0.69",
  "tree-sitter",
  "tree-sitter-rust",
+]
+
+[[package]]
+name = "cofferdam-typst"
+version = "0.3.6"
+dependencies = [
+ "cofferdam-core",
+ "serde",
+ "thiserror 1.0.69",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]

@@ -1,0 +1,7 @@
+[package]
+name = "cool-widgets"
+version = "1.0.0"
+entrypoint = "lib.typ"
+authors = ["Jane Doe <jane@example.com>"]
+license = "MIT"
+description = "Draws neat diagrams for scientific papers and reports."

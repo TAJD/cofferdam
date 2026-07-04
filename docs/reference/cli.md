@@ -26,6 +26,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam advise`↴](#cofferdam-advise)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
 * [`cofferdam lsp`↴](#cofferdam-lsp)
+* [`cofferdam typst`↴](#cofferdam-typst)
 
 ## `cofferdam`
 
@@ -47,6 +48,7 @@ TypeScript code-quality analyzer
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
 * `lsp` — Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
+* `typst` — Lint a Typst package directory for Typst Universe submission hygiene (manifest fields, license, naming, README, bundle hygiene). Standalone from the AST engine — the unit of analysis is the package directory (`typst.toml` + `LICENSE` + `README.md` + bundle), not individual `.typ` files
 
 
 
@@ -342,6 +344,44 @@ Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a s
 Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
 
 **Usage:** `cofferdam lsp`
+
+
+
+## `cofferdam typst`
+
+Lint a Typst package directory for Typst Universe submission hygiene (manifest fields, license, naming, README, bundle hygiene). Standalone from the AST engine — the unit of analysis is the package directory (`typst.toml` + `LICENSE` + `README.md` + bundle), not individual `.typ` files
+
+**Usage:** `cofferdam typst [OPTIONS] [PATH]`
+
+###### **Arguments:**
+
+* `<PATH>` — Package directory to lint. Defaults to `.`
+
+  Default value: `.`
+
+###### **Options:**
+
+* `--format <FORMAT>` — Output format. Default: `text`. With `--robot` and no explicit `--format`, defaults to `json`
+
+  Possible values:
+  - `text`:
+    Human-readable text grouped by category (default)
+  - `json`:
+    Machine-readable JSON. Stable schema, no ANSI, no decorative output
+  - `compact`:
+    Pipe-delimited line-per-finding format. One header line followed by one record per finding. Most token-economical — use when shovelling findings into an AI prompt
+  - `sarif`:
+    SARIF 2.1.0 — OASIS-standard JSON for static-analysis tools. Upload directly to GitHub Code Scanning via `github/codeql-action/upload-sarif`, or feed Azure DevOps, GitLab, SonarQube, the VS Code Sarif Viewer, etc
+
+* `--robot` — Default to a machine-readable format when `--format` is not set
+* `--pretty` — Pretty-print JSON output (only with `--format=json` / `--robot`)
+* `--fail-on <LEVEL>` — Severity threshold for the exit-1 gate. Findings below this level still print; the process only exits 1 if at least one finding is at this level or above
+
+  Default value: `medium`
+
+  Possible values: `info`, `low`, `medium`, `high`, `critical`
+
+* `--quiet` — Suppress the trailing `N finding(s)` summary line. Findings themselves still print. Has no effect on JSON output
 
 
 

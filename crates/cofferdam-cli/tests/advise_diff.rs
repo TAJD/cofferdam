@@ -26,6 +26,13 @@ fn run_git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        // A git hook invoking this test suite (e.g. pre-push, in a
+        // worktree checkout) exports GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+        // pointing at the real repo; left inherited, they hijack this
+        // git call away from `dir`.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(

@@ -58,7 +58,7 @@ jobs:
   # tag-gated) so `build`'s `needs: verify` resolves on workflow_dispatch
   # too.
   verify:
-    name: verify version consistency
+    name: verify version + changelog
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -73,6 +73,29 @@ jobs:
           else
             node scripts/version.mjs check
           fi
+      - name: Verify CHANGELOG has a release section for this tag
+        # Gated PRE-BUILD on purpose. This same assertion used to live in
+        # publish-npm, which runs AFTER the GitHub Release is published — so a
+        # changelog slip (unrolled [Unreleased], missing version heading) would
+        # ship binaries + a consumed tag but block npm, leaving a half-release
+        # with diverged versions. Failing here costs nothing but a checkout.
+        # Only meaningful on a tag; a no-op on workflow_dispatch.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # [Unreleased] must be empty (entries moved into the release section)
+          unreleased_body=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md)
+          if echo "$unreleased_body" | grep -qP '\S'; then
+            echo "ERROR: ## [Unreleased] section is not empty. Move entries to ## [$version] before releasing."
+            exit 1
+          fi
+          # ...and a section for this exact version must exist
+          if ! grep -qP "^## \[$version\]" CHANGELOG.md; then
+            echo "ERROR: No ## [$version] section found in CHANGELOG.md. Add a release section before publishing."
+            exit 1
+          fi
+          echo "CHANGELOG.md OK for $version"
 
   build:
     name: build ${{ matrix.target }}
@@ -281,22 +304,9 @@ jobs:
           # Use npm to set the version (no git tag — we're already on the tag commit)
           npm version "$version" --no-git-tag-version --allow-same-version
 
-      - name: Verify CHANGELOG.md for this release
-        shell: bash
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          # Assert [Unreleased] section is empty (no non-blank lines before the next ## [)
-          unreleased_body=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md)
-          if echo "$unreleased_body" | grep -qP '\S'; then
-            echo "ERROR: ## [Unreleased] section is not empty. Move entries to ## [$version] before releasing."
-            exit 1
-          fi
-          # Assert that a versioned section exists for this tag
-          if ! grep -qP "^## \[$version\]" CHANGELOG.md; then
-            echo "ERROR: No ## [$version] section found in CHANGELOG.md. Add a release section before publishing."
-            exit 1
-          fi
-          echo "CHANGELOG.md OK for $version"
+      # CHANGELOG for this release is verified pre-build in the `verify` job
+      # (this job needs: publish needs: build needs: verify), so a changelog
+      # slip can never reach here with binaries already published.
 
       - name: Verify cofferdam tarball includes bin/cofferdam.js
         # Guard against a successful-but-empty publish (cd-iye / gh #10).

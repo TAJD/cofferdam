@@ -31,6 +31,7 @@ use std::any::{Any, TypeId};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 /// Typed handle to a corpus slot. Two checks sharing the same `CorpusKey`
@@ -82,6 +83,11 @@ struct SlotEntry {
     value: Mutex<Box<dyn Any + Send>>,
 }
 
+/// Type-erased per-file removal closure for one slot. Downcasts the
+/// slot's boxed value back to `T` internally — callers only ever see
+/// the typed `register_removable` API.
+type Remover = Box<dyn Fn(&mut (dyn Any + Send), &Path) + Send + Sync>;
+
 /// Run-scoped shared store. The engine builds one per analysis run,
 /// passes it by `&` into every `CheckContext`, and hands the same instance
 /// to `FinalizeContext`. Slots survive across all `Check::run` calls so
@@ -94,6 +100,11 @@ struct SlotEntry {
 #[derive(Default)]
 pub struct CorpusIndex {
     slots: RwLock<HashMap<Cow<'static, str>, Arc<SlotEntry>>>,
+    /// Per-slot removal closures registered via
+    /// [`CorpusIndex::register_removable`], keyed by the same raw slot
+    /// name used by `with_slot` (namespaced plugin slots are out of
+    /// scope — only built-ins own cross-file corpus state today).
+    removers: RwLock<HashMap<&'static str, Remover>>,
 }
 
 impl CorpusIndex {
@@ -185,6 +196,63 @@ impl CorpusIndex {
             .downcast_mut::<T>()
             .expect("CorpusIndex slot type id matched but downcast failed");
         Ok(f(typed))
+    }
+
+    /// Register a per-file removal closure for `key`'s slot (cd-32
+    /// incremental analysis). `remover` is called by
+    /// [`CorpusIndex::remove_file`] with the slot's current value and
+    /// the file being dropped — e.g. a `Vec<E>` slot whose entries
+    /// carry their originating file typically implements this as
+    /// `slot.retain(|e| e.file != path)`.
+    ///
+    /// Re-registering the same `key.name()` overwrites the previous
+    /// closure. Checks that own a cross-file corpus slot should call
+    /// this once per `CorpusIndex` (the engine does so when building
+    /// its incremental-analysis state); slots with no registered
+    /// remover are left untouched by `remove_file`.
+    pub fn register_removable<T: 'static + Send + Default>(
+        &self,
+        key: &CorpusKey<T>,
+        remover: impl Fn(&mut T, &Path) + Send + Sync + 'static,
+    ) {
+        let boxed: Remover = Box::new(move |any, path| {
+            if let Some(typed) = any.downcast_mut::<T>() {
+                remover(typed, path);
+            }
+        });
+        self.removers
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key.name(), boxed);
+    }
+
+    /// Drop `path`'s contributions from every slot with a registered
+    /// remover (cd-32). Slots with no remover registered — including
+    /// every namespaced plugin slot — are left untouched. Safe to call
+    /// for a file that never contributed to a given slot; the
+    /// remover's own filter (e.g. `retain`) is then a no-op for it.
+    pub fn remove_file(&self, path: &Path) {
+        let removers = self
+            .removers
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if removers.is_empty() {
+            return;
+        }
+        let slots = self
+            .slots
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (name, remover) in removers.iter() {
+            let Some(entry) = slots.get(*name) else {
+                continue;
+            };
+            let mut guard = entry
+                .value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            remover(&mut **guard, path);
+        }
     }
 
     fn entry<T>(&self, name: Cow<'static, str>) -> Result<Arc<SlotEntry>, CorpusError>
@@ -424,5 +492,67 @@ mod tests {
 
         let total = corpus.with_slot(&SHARED, |v| v.len());
         assert_eq!(total, (threads * pushes_per_thread) as usize);
+    }
+
+    // ----- register_removable / remove_file (cd-32) -----
+
+    #[derive(Clone)]
+    struct Entry {
+        file: std::path::PathBuf,
+        value: u32,
+    }
+
+    #[test]
+    fn remove_file_drops_only_that_files_entries() {
+        static ENTRIES: CorpusKey<Vec<Entry>> = CorpusKey::new("test.removable.entries");
+        let corpus = CorpusIndex::new();
+        corpus.register_removable(&ENTRIES, |slot, path| slot.retain(|e| e.file != path));
+
+        let a = std::path::PathBuf::from("/p/a.ts");
+        let b = std::path::PathBuf::from("/p/b.ts");
+        corpus.with_slot(&ENTRIES, |v| {
+            v.push(Entry {
+                file: a.clone(),
+                value: 1,
+            });
+            v.push(Entry {
+                file: b.clone(),
+                value: 2,
+            });
+        });
+
+        corpus.remove_file(&a);
+
+        let remaining =
+            corpus.with_slot(&ENTRIES, |v| v.iter().map(|e| e.value).collect::<Vec<_>>());
+        assert_eq!(remaining, vec![2]);
+    }
+
+    #[test]
+    fn remove_file_is_a_noop_for_slots_without_a_registered_remover() {
+        static UNREGISTERED: CorpusKey<Vec<Entry>> = CorpusKey::new("test.removable.unregistered");
+        let corpus = CorpusIndex::new();
+        let a = std::path::PathBuf::from("/p/a.ts");
+        corpus.with_slot(&UNREGISTERED, |v| {
+            v.push(Entry {
+                file: a.clone(),
+                value: 1,
+            })
+        });
+
+        corpus.remove_file(&a);
+
+        let remaining = corpus.with_slot(&UNREGISTERED, |v| v.len());
+        assert_eq!(remaining, 1, "no remover registered — slot is untouched");
+    }
+
+    #[test]
+    fn remove_file_for_a_path_with_no_contributions_is_harmless() {
+        static ENTRIES: CorpusKey<Vec<Entry>> = CorpusKey::new("test.removable.harmless");
+        let corpus = CorpusIndex::new();
+        corpus.register_removable(&ENTRIES, |slot, path| slot.retain(|e| e.file != path));
+        corpus.remove_file(&std::path::PathBuf::from("/never/seen.ts"));
+        let remaining = corpus.with_slot(&ENTRIES, |v| v.len());
+        assert_eq!(remaining, 0);
     }
 }

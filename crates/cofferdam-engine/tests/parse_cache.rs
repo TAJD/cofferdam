@@ -91,8 +91,10 @@ fn cached_run_matches_uncached_run() {
         finding_keys(&cached_issues),
         "cached path must produce the same findings as the non-cached path"
     );
-    // First cached pass populated the cache; every TS file was a miss.
-    assert_eq!(cache.hits(), 0);
+    // Pass 1 populates the cache (a miss per TS file); pass 2's
+    // consistency check (Consistency.QuoteStyle) reads the same
+    // content hash back and hits instead of re-parsing (CD-29).
+    assert_eq!(cache.hits(), 3);
     assert!(cache.misses() >= 3);
 }
 
@@ -105,7 +107,9 @@ fn second_run_is_all_cache_hits() {
     let ts_file_count = sources.len() as u64;
 
     let (first, _) = engine.analyze_with_sources_cached(sources.clone(), Some(&cache));
-    assert_eq!(cache.hits(), 0);
+    // Pass 2's consistency check hits every entry pass 1 just
+    // populated within this same call (CD-29).
+    assert_eq!(cache.hits(), ts_file_count);
     assert_eq!(cache.misses(), ts_file_count);
 
     let (second, _) = engine.analyze_with_sources_cached(sources, Some(&cache));
@@ -116,8 +120,9 @@ fn second_run_is_all_cache_hits() {
     );
     assert_eq!(
         cache.hits(),
-        ts_file_count,
-        "every TS file must be served from cache on the second run"
+        ts_file_count * 3,
+        "second run: pass 1 hits the first run's entries, pass 2 hits again — \
+         on top of the first run's own pass-2 hits"
     );
     assert_eq!(
         cache.misses(),
@@ -135,7 +140,9 @@ fn changed_file_invalidates_only_its_slot() {
 
     let mut sources = project_sources();
     let _ = engine.analyze_with_sources_cached(sources.clone(), Some(&cache));
-    assert_eq!(cache.hits(), 0);
+    // Pass 2's consistency check hits every entry pass 1 just
+    // populated within this same call (CD-29).
+    assert_eq!(cache.hits(), 3);
     assert_eq!(cache.misses(), 3);
 
     // Replace b.ts body. The cache is content-keyed so this lands as
@@ -156,8 +163,12 @@ export function beta(): boolean {
     }
 
     let _ = engine.analyze_with_sources_cached(sources, Some(&cache));
-    // a.ts and c.ts hit; b.ts misses (new content-hash).
-    assert_eq!(cache.hits(), 2, "a.ts + c.ts unchanged → 2 hits");
+    // Second call: pass 1 hits a.ts + c.ts (unchanged) and misses
+    // b.ts (new content-hash); pass 2 then hits all three (its
+    // lookups always land after pass 1 has populated them this call —
+    // CD-29). Cumulative: 3 (first call's pass 2) + 2 (pass 1) + 3
+    // (pass 2) = 8 hits; 3 (first call) + 1 (b.ts) = 4 misses.
+    assert_eq!(cache.hits(), 8);
     assert_eq!(cache.misses(), 4, "b.ts's edited body adds one miss");
     // The cache retains both b.ts entries (old + new); cp1 has no
     // path-keyed eviction.

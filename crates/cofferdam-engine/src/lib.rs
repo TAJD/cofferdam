@@ -28,9 +28,9 @@ use std::time::Instant;
 use std::collections::BTreeMap;
 
 use cofferdam_core::graph::{EXPORTS, IMPORTS};
-use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
+use cofferdam_core::parser::{parse_fatal, ParsedView};
 use cofferdam_core::{
-    validate_options, Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext,
+    validate_options, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext,
     InvariantsRuntime, InvariantsSpec, Issue, Language, LayersConfig, Location, OptionSpec,
     Priority, RawOptionValue, Severity, SourceFile, Span, TypeOracle, ALL_PRE_FILTER_FINDINGS,
     INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
@@ -448,7 +448,19 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         timing: Option<&TimingCollector>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        let cache = parse_cache;
+        // Pass 2 (below) needs every TS file's pass-1 parse handed back
+        // without re-parsing (CD-29). When the caller didn't supply a
+        // long-lived `ParseCache`, fall back to one scoped to this single
+        // analysis call — pass 1 populates it, pass 2 reads it back by
+        // content hash, and it drops at the end of this function.
+        let local_cache;
+        let cache: &cache::ParseCache = match parse_cache {
+            Some(c) => c,
+            None => {
+                local_cache = cache::ParseCache::new();
+                &local_cache
+            }
+        };
         // Computed once per analysis. cp2 uses Debug-format hashing —
         // deterministic for BTreeMap-backed `CheckOptions` and the
         // derived `Debug` on `LayersConfig` / `InvariantsSpec`; good
@@ -741,17 +753,9 @@ impl Engine {
                 }
             };
 
-            match cache {
-                Some(c) => c.with_parsed(&file, |p| run_ts(p, &mut issues)),
-                None => {
-                    // Per-file allocator. Lives until the file's
-                    // checks finish, then drops with the AST it owns.
-                    // Bumpalo allocation makes this trivially cheap.
-                    let allocator = Allocator::default();
-                    let parsed_return = parse_into(&allocator, &file);
-                    run_ts(&parsed_return, &mut issues);
-                }
-            }
+            // Content-hash-keyed: pass 2 (below) hits this same entry
+            // for every file instead of re-parsing (CD-29).
+            cache.with_parsed(&file, |p| run_ts(p, &mut issues));
         }
         if let Some(t) = timing {
             t.record_phase("run_loop", run_loop_start.elapsed());
@@ -782,24 +786,27 @@ impl Engine {
                 if file.language != Language::TypeScript {
                     continue;
                 }
-                let allocator = Allocator::default();
-                let parsed_return = parse_into(&allocator, &file);
-                if parse_fatal(&parsed_return) {
-                    continue;
-                }
-                let parsed = ParsedView {
-                    program: &parsed_return.program,
-                    diagnostics: &parsed_return.errors,
-                };
-                for (idx, check) in &consistency_checks {
-                    let mut ctx = CheckContext::new(&file)
-                        .with_parsed(&parsed)
-                        .with_options(&self.options[*idx])
-                        .with_corpus(&corpus);
-                    issues.extend(timed_run(timing, check.meta().id, || {
-                        check.pass2(&file, &mut ctx)
-                    }));
-                }
+                // Same content hash as pass 1's parse of this file
+                // (byte-identical text) — this hits the cache instead
+                // of re-parsing (CD-29).
+                cache.with_parsed(&file, |parsed_return| {
+                    if parse_fatal(parsed_return) {
+                        return;
+                    }
+                    let parsed = ParsedView {
+                        program: &parsed_return.program,
+                        diagnostics: &parsed_return.errors,
+                    };
+                    for (idx, check) in &consistency_checks {
+                        let mut ctx = CheckContext::new(&file)
+                            .with_parsed(&parsed)
+                            .with_options(&self.options[*idx])
+                            .with_corpus(&corpus);
+                        issues.extend(timed_run(timing, check.meta().id, || {
+                            check.pass2(&file, &mut ctx)
+                        }));
+                    }
+                });
             }
         }
         if let Some(t) = timing {

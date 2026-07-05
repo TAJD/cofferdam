@@ -8,7 +8,7 @@ title: Built-in checks
 
 This catalog is generated from `CheckMeta` in the cofferdam source — every check is guaranteed to be in sync with the running binary. The machine-readable index lives at [`checks.json`](../checks.json) and is consumed by AI agents.
 
-**Badges:** `graph` — needs the whole-project import/export graph (what Biome/ESLint structurally can't do); `file` — analyzes one file in isolation; `type-aware` — routes through the ts-morph type host; `advisable` — `cofferdam advise` emits a file-specific constraint for it (not just the generic explanation).
+**Badges:** `graph` — needs cross-file context: the whole-project import/export graph or a duplicate-detection corpus (what Biome/ESLint structurally can't do); `file` — analyzes one file in isolation; `type-aware` — routes through the ts-morph type host; `advisable` — `cofferdam advise` emits a file-specific constraint for it (not just the generic explanation).
 
 ## Consistency
 
@@ -38,7 +38,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Refactor.CognitiveComplexity`](Refactor.CognitiveComplexity.md) `file` `advisable` — Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.
 - [`Refactor.CyclomaticComplexity`](Refactor.CyclomaticComplexity.md) `file` `advisable` — McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.
 - [`Refactor.DeadExport`](Refactor.DeadExport.md) `graph` — Every importer of this export imports its local binding and never references it. The export is dead even though it appears used.
-- [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md) `file` `advisable` — Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.
+- [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md) `graph` `advisable` — Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.
 - [`Refactor.LongAndComplex`](Refactor.LongAndComplex.md) `file` `advisable` — Functions that are both long and complex are the strongest refactor candidates. Length alone catches flat config tables; complexity alone catches deeply-branching short helpers. The intersection is almost always a real refactor target.
 - [`Refactor.PreferNullishCoalescing`](Refactor.PreferNullishCoalescing.md) `file` — `x || default` falls through on every falsy value (`0`, `""`, `false`). Use `??` to fall through only on `null`/`undefined`.
 - [`Refactor.PreferOptionalChain`](Refactor.PreferOptionalChain.md) `file` — `a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.

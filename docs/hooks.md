@@ -28,8 +28,11 @@ cofferdam agents --hooks
 call as JSON on stdin — `tool_input.file_path` is the target file — runs `advise` on it, and
 wraps the output in `hookSpecificOutput.additionalContext`. That field is what Claude Code
 injects into the agent's context; a hook's plain stdout is **not** seen by the agent, which is
-why the command pipes `advise` through `jq` rather than printing it directly. (Requires `jq`;
-to hard-block an edit instead of advising, have the hook exit `2` with the reason on stderr.)
+why the command pipes `advise` through `jq` rather than printing it directly. The recipe
+deliberately omits `permissionDecision`, so your normal Edit/Write approval prompts still fire —
+it only advises, never auto-approves an edit. (Requires `jq`; to hard-block an edit have the
+hook exit `2` with the reason on stderr; to auto-approve add `permissionDecision: "allow"`, but
+that suppresses the permission prompt, so opt in knowingly.)
 `Stop` fires when Claude finishes responding; running `advise --diff HEAD` there is a
 pre-commit-style pre-flight check that catches regressions before you ask for a commit.
 
@@ -42,7 +45,7 @@ pre-commit-style pre-flight check that catches regressions before you ask for a 
         "hooks": [
           {
             "type": "command",
-            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" | jq -Rs '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"allow\",additionalContext:.}}'"
+            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" | jq -Rs '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:.}}'"
           }
         ]
       }

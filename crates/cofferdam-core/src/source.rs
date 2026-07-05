@@ -19,6 +19,10 @@ pub enum Language {
     TypeScript,
     /// Rust — handled by tree-sitter-rust via `cofferdam-rust` (cd-91zc).
     Rust,
+    /// Astro SFCs — not parsed as a whole file. The engine only pulls
+    /// import edges out of the frontmatter fence (cd-45); no built-in
+    /// check declares this language today.
+    Astro,
 }
 
 impl Language {
@@ -29,6 +33,7 @@ impl Language {
         match path.extension().and_then(|e| e.to_str()) {
             Some(ext) => match ext.to_ascii_lowercase().as_str() {
                 "rs" => Language::Rust,
+                "astro" => Language::Astro,
                 "ts" | "tsx" | "js" | "jsx" | "cjs" | "mjs" | "mts" | "cts" => Language::TypeScript,
                 _ => Language::TypeScript,
             },

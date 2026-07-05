@@ -45,9 +45,9 @@ use std::path::{Path, PathBuf};
 use cofferdam_core::graph::{
     ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName, EXPORTS, IMPORTS,
 };
-use cofferdam_core::parser::ParsedView;
+use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::span_util::span_from_bytes;
-use cofferdam_core::{CorpusIndex, SourceFile};
+use cofferdam_core::{Allocator, CorpusIndex, SourceFile};
 use oxc_ast::ast::{
     BindingPattern, Declaration, ExportAllDeclaration, ExportDefaultDeclaration,
     ExportNamedDeclaration, Expression, IdentifierReference, ImportDeclaration,
@@ -111,6 +111,79 @@ impl GraphBuilder {
             corpus.with_slot(&EXPORTS, |slot| slot.append(&mut exports));
         }
     }
+
+    /// Astro frontmatter import extraction (cd-45). `.astro` SFCs mix an
+    /// HTML-like template with an ESM frontmatter fence — the template
+    /// isn't valid TS/JS, so the file as a whole is never routed through
+    /// oxc. The frontmatter fence *is* plain ESM, so we slice just that
+    /// region and reuse the same `collect_program` walk as a normal TS
+    /// file, appending only the resulting imports into the shared
+    /// `IMPORTS` slot.
+    ///
+    /// Exports are deliberately discarded: Astro pages routinely declare
+    /// frontmatter-level metadata (`export const prerender = true`,
+    /// `export interface Props`) that has no meaning as a project-graph
+    /// export and would otherwise surface as spurious
+    /// `Design.OrphanExport` candidates for nearly every page.
+    ///
+    /// Import spans are relative to the extracted frontmatter slice, not
+    /// the full `.astro` file — acceptable because nothing renders
+    /// `ImportRecord::span` for these records today (no check declares
+    /// `Language::Astro`, so they're only ever read back out of the
+    /// canonical graph as edges).
+    pub fn collect_astro(&self, file: &SourceFile, corpus: &CorpusIndex) {
+        let Some(frontmatter) = extract_astro_frontmatter(&file.text) else {
+            return;
+        };
+        let fm_file = SourceFile::new(file.path.clone(), frontmatter.to_string());
+        let allocator = Allocator::default();
+        let parsed_return = parse_into(&allocator, &fm_file);
+        if parse_fatal(&parsed_return) {
+            // Malformed frontmatter — skip silently rather than emitting
+            // a Warning.ParseError against a language no check owns.
+            return;
+        }
+        let mut imports = Vec::new();
+        let mut exports = Vec::new();
+        collect_program(
+            &fm_file,
+            &parsed_return.program,
+            &self.resolver,
+            &mut imports,
+            &mut exports,
+        );
+        // `collect_program`'s local-use counting only sees identifier
+        // references inside the frontmatter fence itself — it can't see
+        // the template body, which is where an imported component is
+        // actually referenced (`<MyIssues client:load />`). Left at 0,
+        // that undercounts and trips `Refactor.DeadExport`'s "imported
+        // but never used" heuristic for every island. Force every name
+        // to count as used; we can't verify template usage here, but
+        // treating frontmatter imports as call sites (not orphans) is
+        // the correct default — that's Design.OrphanExport's job.
+        for imp in &mut imports {
+            for n in &mut imp.names {
+                n.local_use_count = n.local_use_count.max(1);
+            }
+        }
+        if !imports.is_empty() {
+            corpus.with_slot(&IMPORTS, |slot| slot.append(&mut imports));
+        }
+    }
+}
+
+/// Slice the `---\n ... \n---` frontmatter fence off the start of an
+/// Astro file's source text. Per the Astro spec the fence must open the
+/// file — no leading blank lines or whitespace — so this only matches at
+/// byte 0. Returns `None` when the file has no frontmatter (a valid,
+/// if unusual, Astro file — e.g. a template-only partial).
+fn extract_astro_frontmatter(text: &str) -> Option<&str> {
+    let after_open = text.strip_prefix("---")?;
+    let after_open = after_open
+        .strip_prefix("\r\n")
+        .or_else(|| after_open.strip_prefix('\n'))?;
+    let close = after_open.find("\n---")?;
+    Some(&after_open[..close])
 }
 
 impl Default for GraphBuilder {
@@ -582,4 +655,69 @@ fn handle_export_all(
         type_only,
         span: span_from_bytes(&file.text, decl.span.start, decl.span.end),
     });
+}
+
+#[cfg(test)]
+mod astro_tests {
+    use super::*;
+    use cofferdam_core::CorpusIndex;
+
+    #[test]
+    fn extracts_frontmatter_between_fences() {
+        let text = "---\nimport X from './x';\n---\n<X />\n";
+        assert_eq!(
+            extract_astro_frontmatter(text),
+            Some("import X from './x';")
+        );
+    }
+
+    #[test]
+    fn none_when_no_opening_fence() {
+        assert_eq!(extract_astro_frontmatter("<h1>Hello</h1>\n"), None);
+    }
+
+    #[test]
+    fn none_when_fence_unclosed() {
+        assert_eq!(
+            extract_astro_frontmatter("---\nimport X from './x';\n<X />\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn collect_astro_records_frontmatter_import_but_no_exports() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let page = dir.path().join("page.astro");
+        let island = dir.path().join("Island.tsx");
+        std::fs::write(
+            &island,
+            "export default function Island() { return null; }\n",
+        )
+        .expect("write island");
+        std::fs::write(
+            &page,
+            "---\nimport Island from './Island';\nexport const prerender = true;\n---\n<Island />\n",
+        )
+        .expect("write page");
+
+        let file = SourceFile::new(page.clone(), std::fs::read_to_string(&page).unwrap());
+        let corpus = CorpusIndex::new();
+        let builder = GraphBuilder::new();
+        builder.collect_astro(&file, &corpus);
+
+        let imports = corpus.with_slot(&IMPORTS, |slot| slot.clone());
+        assert_eq!(imports.len(), 1, "expected one import record: {imports:?}");
+        assert_eq!(imports[0].resolved.as_deref(), Some(island.as_path()));
+        assert!(
+            imports[0].names.iter().all(|n| n.local_use_count > 0),
+            "frontmatter imports must be marked used — template usage is invisible \
+             to the frontmatter parse, so Refactor.DeadExport must not flag them: {imports:?}"
+        );
+
+        let exports = corpus.with_slot(&EXPORTS, |slot| slot.clone());
+        assert!(
+            exports.is_empty(),
+            "frontmatter exports must not be recorded: {exports:?}"
+        );
+    }
 }

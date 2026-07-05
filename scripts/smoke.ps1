@@ -38,7 +38,8 @@ $ErrorActionPreference = "Stop"
 # Determine binary path
 $workspaceRoot = Split-Path -Parent $PSScriptRoot
 $profile = if ($Debug) { "debug" } else { "release" }
-$binary = "$workspaceRoot\target\$profile\cofferdam.exe"
+$binaryName = if ($IsWindows) { "cofferdam.exe" } else { "cofferdam" }
+$binary = Join-Path $workspaceRoot "target" $profile $binaryName
 
 if (-not (Test-Path $binary)) {
     Write-Error "Binary not found: $binary`nRun 'cargo build --workspace' first (add '--release' for release build)."

@@ -986,6 +986,16 @@ impl Engine {
             }
             return issues;
         }
+        // Astro (cd-45): no whole-file parse — only the frontmatter
+        // fence's imports get pulled into the shared IMPORTS slot so
+        // islands referenced solely from `.astro` pages aren't flagged
+        // as orphan exports. No built-in check declares
+        // `Language::Astro`, so there's nothing else to dispatch here.
+        if file.language == Language::Astro {
+            graph_builder.collect_astro(&file, corpus);
+            return issues;
+        }
+
         // Defensive catch-all for languages we recognise (via
         // `Language::from_path`) but haven't wired a parser for
         // yet. Falls through to the TS path so nothing crashes;

@@ -23,7 +23,12 @@ use ignore::WalkBuilder;
 /// declaring `Language::Rust`; the default discovery widening means
 /// `cofferdam check crates/` walks Rust files alongside TS files
 /// without per-call option fiddling.
-pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "rs"];
+///
+/// `astro` lands via cd-45 — Astro SFCs aren't parsed as a whole file
+/// (their template body isn't valid TS/JS), but the engine extracts
+/// import edges from the frontmatter fence so islands referenced only
+/// from `.astro` pages aren't flagged as orphan exports.
+pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "rs", "astro"];
 
 /// Configuration for the file walker. Controls which extensions are
 /// included, whether to honour `.gitignore` / `.cofferdamignore`, and

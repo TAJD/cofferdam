@@ -2859,3 +2859,41 @@ fn run_fix_dry_run(
 
     ExitCode::SUCCESS
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn civil_from_days_known_dates() {
+        // Epoch and simple offsets within the first non-leap year.
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(30), (1970, 1, 31));
+        assert_eq!(civil_from_days(59), (1970, 3, 1)); // 1970 is not a leap year
+                                                       // First leap day of the epoch era.
+        assert_eq!(civil_from_days(789), (1972, 2, 29));
+        assert_eq!(civil_from_days(790), (1972, 3, 1));
+        // Century divisible by 400 IS a leap year.
+        assert_eq!(civil_from_days(10_957), (2000, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
+    }
+
+    #[test]
+    fn today_utc_date_is_well_formed() {
+        let s = today_utc_date();
+        let bytes = s.as_bytes();
+        assert_eq!(s.len(), 10, "YYYY-MM-DD is 10 chars; got {s}");
+        assert_eq!(bytes[4], b'-');
+        assert_eq!(bytes[7], b'-');
+        let (y, m, d) = civil_from_days(
+            (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                / 86_400) as i64,
+        );
+        assert_eq!(s, format!("{y:04}-{m:02}-{d:02}"));
+        assert!((1..=12).contains(&m) && (1..=31).contains(&d));
+    }
+}

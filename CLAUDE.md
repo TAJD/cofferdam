@@ -35,12 +35,19 @@ The release is **tag-triggered**: pushing a `v*` tag runs `.github/workflows/rel
 
 Versions bump by patch digit even for features pre-1.0 (0.3.x → 0.3.(x+1)); reserve minor bumps for breaking changes. All 24 version locations must agree — `scripts/version.mjs` owns them.
 
+**`main` is protected by a GitHub ruleset** (no bypass, including for admins): direct pushes are rejected, so the version-bump commit must go through a PR like any other change, and merging requires the `test`, `MSRV (1.93)`, `windows release build (cd-rvn guard)`, and `cargo-deny` checks to pass. Tags are not covered by the ruleset, so the `v*` tag push in step 3 still goes directly to the remote.
+
 ```bash
-# 1. from a clean, green main:
+# 1. from a clean, green main, on a branch:
+git checkout -b release/0.3.8
 node scripts/release.mjs 0.3.8          # bump+regen all 24 version locations, roll CHANGELOG [Unreleased] -> [0.3.8]
 git diff                                # review
-git commit -am "chore(release): prepare v0.3.8" && git push origin main
-# 2. WAIT for CI to go fully green (this gate caught the MSRV break + a plugin flake — don't skip it)
+git commit -am "chore(release): prepare v0.3.8" && git push -u origin release/0.3.8
+gh pr create --title "chore(release): prepare v0.3.8" --fill
+# 2. WAIT for the PR's required checks to go green, then merge (this gate caught the MSRV break + a plugin flake — don't skip it)
+gh pr merge --squash --delete-branch
+# 3. tag the merged commit on main
+git checkout main && git pull
 git tag -a v0.3.8 -m "cofferdam 0.3.8" && git push origin v0.3.8
 ```
 

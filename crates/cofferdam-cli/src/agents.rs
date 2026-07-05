@@ -89,8 +89,13 @@ pub fn hooks_fragment() -> String {
 #
 # ---- Claude Code: .claude/settings.json ----
 # PreToolUse fires before Edit/Write/MultiEdit; the hook reads the target
-# file path from stdin JSON (`tool_input.file_path`) and prints the
-# advisory so the agent sees layer/invariant constraints before writing.
+# file path from the event JSON on stdin (`tool_input.file_path`), runs
+# `advise` on it, and wraps the output in `hookSpecificOutput.additionalContext`
+# so Claude Code injects the advisory into the agent's context before it
+# writes. NOTE: a hook's plain stdout is NOT seen by the agent — only the
+# `additionalContext` field is; that's why the recipe pipes through jq
+# rather than just printing `advise`. (Requires `jq`; the command is `sh`.
+# To hard-block an edit instead of advising, exit 2 with the reason on stderr.)
 # Stop fires when Claude finishes responding; the second hook here runs
 # `advise --diff HEAD` as a pre-commit-style pre-flight check.
 {
@@ -101,7 +106,7 @@ pub fn hooks_fragment() -> String {
         "hooks": [
           {
             "type": "command",
-            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" --format=json"
+            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" | jq -Rs '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"allow\",additionalContext:.}}'"
           }
         ]
       }

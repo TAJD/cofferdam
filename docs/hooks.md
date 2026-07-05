@@ -7,7 +7,7 @@ plumbing, not by hoping the agent read AGENTS.md:
 ```mermaid
 flowchart TB
     T["Edit / Write / MultiEdit tool call"] --> P["PreToolUse hook"]
-    P -- "cofferdam advise $FILE --format=json" --> W["agent writes code<br/>(layer, invariants, boundary, budget already in context)"]
+    P -- "advise $FILE → hookSpecificOutput.additionalContext" --> W["agent writes code<br/>(layer, invariants, boundary, budget already in context)"]
     W --> S["Claude finishes responding"]
     S --> H["Stop hook"]
     H -- "cofferdam advise --diff HEAD --pretty" --> D["would_fire empty or justified<br/>before you ask for a commit"]
@@ -25,10 +25,13 @@ cofferdam agents --hooks
 ## Claude Code (`.claude/settings.json`)
 
 `PreToolUse` fires before `Edit`/`Write`/`MultiEdit` tool calls. The hook receives the tool
-call as JSON on stdin — `tool_input.file_path` is the target file — and prints the advisory
-so the agent sees layer/invariant constraints before writing code. `Stop` fires when Claude
-finishes responding; running `advise --diff HEAD` there is a pre-commit-style pre-flight
-check that catches regressions before you ask for a commit.
+call as JSON on stdin — `tool_input.file_path` is the target file — runs `advise` on it, and
+wraps the output in `hookSpecificOutput.additionalContext`. That field is what Claude Code
+injects into the agent's context; a hook's plain stdout is **not** seen by the agent, which is
+why the command pipes `advise` through `jq` rather than printing it directly. (Requires `jq`;
+to hard-block an edit instead of advising, have the hook exit `2` with the reason on stderr.)
+`Stop` fires when Claude finishes responding; running `advise --diff HEAD` there is a
+pre-commit-style pre-flight check that catches regressions before you ask for a commit.
 
 ```json
 {
@@ -39,7 +42,7 @@ check that catches regressions before you ask for a commit.
         "hooks": [
           {
             "type": "command",
-            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" --format=json"
+            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" | jq -Rs '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"allow\",additionalContext:.}}'"
           }
         ]
       }

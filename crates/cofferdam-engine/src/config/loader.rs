@@ -42,6 +42,11 @@ pub struct TomlDoc {
     /// sub-table.
     #[serde(default)]
     pub overrides: Vec<OverrideTable>,
+    /// `[budgets]` — caps on finding counts, keyed by check id or
+    /// category name (CD-64 D2). Ratcheted down by `cofferdam baseline
+    /// ratchet`; enforced by `cofferdam check`.
+    #[serde(default)]
+    pub budgets: BTreeMap<String, u32>,
 }
 
 /// Raw `[[overrides]]` element. `checks` keys are check ids; each value
@@ -190,6 +195,7 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         layers_double_declaration: false,
         engine_type_aware: doc.engine.type_aware,
         overrides,
+        budgets: doc.budgets,
     })
 }
 

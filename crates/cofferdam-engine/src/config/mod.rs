@@ -97,6 +97,14 @@ pub struct ProjectConfig {
     /// are declared. The engine applies them per-file in declaration
     /// order; the last matching block wins per (check, key).
     pub overrides: Vec<OverrideBlock>,
+    /// `[budgets]` table (CD-64 D2) — caps on the number of findings
+    /// allowed for a check id (e.g. `"Refactor.CognitiveComplexity"`) or
+    /// a whole category (e.g. `"Refactor"`). Counts include baselined
+    /// findings, so a budget catches debt a severity-based `--fail-on`
+    /// gate would otherwise let through un-gated. Enforced by `cofferdam
+    /// check`; `cofferdam baseline ratchet` lowers (never raises) these
+    /// values to match the current finding count.
+    pub budgets: BTreeMap<String, u32>,
 }
 
 /// One `[[overrides]]` block: a set of path globs plus the per-check
@@ -483,6 +491,7 @@ severity = 5
             layers_double_declaration: false,
             engine_type_aware: None,
             overrides: Vec::new(),
+            budgets: BTreeMap::new(),
         };
 
         let opts = options_for(
@@ -518,6 +527,7 @@ severity = 5
             layers_double_declaration: false,
             engine_type_aware: None,
             overrides: Vec::new(),
+            budgets: BTreeMap::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -538,6 +548,7 @@ severity = 5
             layers_double_declaration: false,
             engine_type_aware: None,
             overrides: Vec::new(),
+            budgets: BTreeMap::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -615,6 +626,7 @@ severity = 5
             layers_double_declaration: false,
             engine_type_aware: None,
             overrides: Vec::new(),
+            budgets: BTreeMap::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

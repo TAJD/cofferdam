@@ -77,6 +77,10 @@ crossbeam-channel = "0.5"
 smol_str = { version = "0.3", features = ["serde"] }
 thiserror = "2"
 toml = "0.8"
+# CD-64 D2 — format-preserving TOML edits for `cofferdam baseline
+# ratchet` (rewrites the `[budgets]` table in cofferdam.toml without
+# disturbing the rest of the user's file, comments included).
+toml_edit = "0.22"
 insta = { version = "1", features = ["filters"] }
 proptest = "1"
 # CD-35 — criterion benches lock in the CD-28 epic's perf wins

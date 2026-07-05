@@ -17,6 +17,8 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam baseline write`↴](#cofferdam-baseline-write)
 * [`cofferdam baseline lint`↴](#cofferdam-baseline-lint)
 * [`cofferdam baseline diff`↴](#cofferdam-baseline-diff)
+* [`cofferdam baseline prune`↴](#cofferdam-baseline-prune)
+* [`cofferdam baseline ratchet`↴](#cofferdam-baseline-ratchet)
 * [`cofferdam explain`↴](#cofferdam-explain)
 * [`cofferdam init`↴](#cofferdam-init)
 * [`cofferdam doctor`↴](#cofferdam-doctor)
@@ -109,6 +111,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 * `--no-cache` — Disable disk caching entirely. Equivalent to deleting the cache directory before each run. Cold cost only; no correctness difference
 * `--fail-on-type-unavailable` — Exit with code 2 when a type-aware check is registered but the type oracle could not be started (Node unavailable, ts-morph not installed, or no tsconfig.json found). Default off: oracle failures print a warning and type-aware checks are silently skipped. Use in CI jobs that explicitly rely on type-aware coverage to catch silent regressions
 * `--time-checks` — Print a per-check + per-phase timing breakdown to stderr (discovery, run loop, pass 2, graph build, finalize A/B, and each check's accumulated time, sorted descending). Findings output (JSON/robot/text) is byte-identical with and without this flag (CD-34)
+* `--trend` — Append one `{date, category, count}` JSON row per category to `.cofferdam/trend.jsonl` (creating it if needed). Counts include baselined findings, same as `[budgets]` enforcement. Purely additive — no rendering or dashboard; pair with an external tool if you want a chart. (CD-64 D3)
 
 
 
@@ -123,6 +126,8 @@ Manage the baseline of accepted findings. The baseline lets you drop cofferdam i
 * `write` — Run the analyzer and write the current set of findings to the baseline file. Subsequent `cofferdam check` runs ignore these findings for CI-gating purposes; they still print as `[baselined]` so the team can chip away at them
 * `lint` — Report baseline entries that are also suppressed inline
 * `diff` — Compute delta between two baselines
+* `prune` — Remove baseline entries whose signature matches no current finding (a fixed finding, a deleted file, or a renamed check)
+* `ratchet` — Lower `[budgets]` entries in `cofferdam.toml` to match the current finding count — never raises a budget. Run after fixing findings to lock in the improvement so a regression fails CI even if it's below the old, looser budget
 
 
 
@@ -179,6 +184,54 @@ With two explicit paths: compares them directly. Useful for triage and PR review
 ###### **Options:**
 
 * `--robot` — Machine-readable JSON
+* `--pretty` — Pretty-print JSON output. No effect without `--robot`
+
+
+
+## `cofferdam baseline prune`
+
+Remove baseline entries whose signature matches no current finding (a fixed finding, a deleted file, or a renamed check).
+
+Keeps the baseline from accumulating dead weight that never gets re-examined once fixed. Default: rewrites the baseline in place. `--dry-run` lists candidates without writing. `--check` reports the same list but exits 1 if any exist and never writes — wire into CI to keep baseline hygiene from silently drifting.
+
+**Usage:** `cofferdam baseline prune [OPTIONS] [PATHS]...`
+
+###### **Arguments:**
+
+* `<PATHS>` — Files or directories to analyze. Defaults to `.`
+
+###### **Options:**
+
+* `--hidden` — Walk hidden files/directories (default: skip)
+* `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
+* `--baseline <PATH>` — Path to the baseline file. Defaults to auto-detected `.cofferdam/baseline.json`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory. Conflicts with `--no-config`
+* `--no-config` — Disable config-file discovery entirely
+* `--dry-run` — List stale entries without writing. Always exits 0
+* `--check` — List stale entries without writing; exit 1 if any exist. For CI gating on baseline hygiene
+* `--robot` — Machine-readable JSON output
+* `--pretty` — Pretty-print JSON output. No effect without `--robot`
+
+
+
+## `cofferdam baseline ratchet`
+
+Lower `[budgets]` entries in `cofferdam.toml` to match the current finding count — never raises a budget. Run after fixing findings to lock in the improvement so a regression fails CI even if it's below the old, looser budget
+
+**Usage:** `cofferdam baseline ratchet [OPTIONS] [PATHS]...`
+
+###### **Arguments:**
+
+* `<PATHS>` — Files or directories to analyze. Defaults to `.`
+
+###### **Options:**
+
+* `--hidden` — Walk hidden files/directories (default: skip)
+* `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory. Conflicts with `--no-config`
+* `--no-config` — Disable config-file discovery entirely
+* `--dry-run` — Compute and print the new budgets without writing them
+* `--robot` — Machine-readable JSON output
 * `--pretty` — Pretty-print JSON output. No effect without `--robot`
 
 

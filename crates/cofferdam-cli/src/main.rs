@@ -5,6 +5,7 @@ use cofferdam_cli::{
     plugins, type_host, watch,
 };
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -197,6 +198,13 @@ enum Cmd {
         /// this flag (CD-34).
         #[arg(long)]
         time_checks: bool,
+        /// Append one `{date, category, count}` JSON row per category to
+        /// `.cofferdam/trend.jsonl` (creating it if needed). Counts
+        /// include baselined findings, same as `[budgets]` enforcement.
+        /// Purely additive — no rendering or dashboard; pair with an
+        /// external tool if you want a chart. (CD-64 D3)
+        #[arg(long)]
+        trend: bool,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -563,6 +571,78 @@ enum BaselineAction {
         #[arg(long)]
         pretty: bool,
     },
+    /// Remove baseline entries whose signature matches no current
+    /// finding (a fixed finding, a deleted file, or a renamed check).
+    ///
+    /// Keeps the baseline from accumulating dead weight that never gets
+    /// re-examined once fixed. Default: rewrites the baseline in place.
+    /// `--dry-run` lists candidates without writing. `--check` reports
+    /// the same list but exits 1 if any exist and never writes — wire
+    /// into CI to keep baseline hygiene from silently drifting.
+    Prune {
+        /// Files or directories to analyze. Defaults to `.`.
+        paths: Vec<PathBuf>,
+        /// Walk hidden files/directories (default: skip).
+        #[arg(long)]
+        hidden: bool,
+        /// Disable `.gitignore` / `.cofferdamignore` filtering.
+        #[arg(long)]
+        no_ignore: bool,
+        /// Path to the baseline file. Defaults to auto-detected
+        /// `.cofferdam/baseline.json`.
+        #[arg(long, value_name = "PATH")]
+        baseline: Option<PathBuf>,
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the current directory. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+        /// List stale entries without writing. Always exits 0.
+        #[arg(long, conflicts_with = "check")]
+        dry_run: bool,
+        /// List stale entries without writing; exit 1 if any exist.
+        /// For CI gating on baseline hygiene.
+        #[arg(long)]
+        check: bool,
+        /// Machine-readable JSON output.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Lower `[budgets]` entries in `cofferdam.toml` to match the
+    /// current finding count — never raises a budget. Run after fixing
+    /// findings to lock in the improvement so a regression fails CI even
+    /// if it's below the old, looser budget.
+    Ratchet {
+        /// Files or directories to analyze. Defaults to `.`.
+        paths: Vec<PathBuf>,
+        /// Walk hidden files/directories (default: skip).
+        #[arg(long)]
+        hidden: bool,
+        /// Disable `.gitignore` / `.cofferdamignore` filtering.
+        #[arg(long)]
+        no_ignore: bool,
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the current directory. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+        /// Compute and print the new budgets without writing them.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable JSON output.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output. No effect without `--robot`.
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -594,6 +674,7 @@ fn main() -> ExitCode {
             no_cache,
             fail_on_type_unavailable,
             time_checks,
+            trend,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -618,6 +699,7 @@ fn main() -> ExitCode {
             no_cache,
             fail_on_type_unavailable,
             time_checks,
+            trend,
         }),
         Cmd::Explain {
             check_id,
@@ -663,6 +745,48 @@ fn main() -> ExitCode {
             } => baseline_diff::run(baseline_diff::DiffArgs {
                 a,
                 b,
+                robot,
+                pretty,
+            }),
+            BaselineAction::Prune {
+                paths,
+                hidden,
+                no_ignore,
+                baseline,
+                config,
+                no_config,
+                dry_run,
+                check,
+                robot,
+                pretty,
+            } => run_baseline_prune(BaselinePruneArgs {
+                paths,
+                hidden,
+                no_ignore,
+                baseline_path: baseline,
+                config_path: config,
+                no_config,
+                dry_run,
+                check,
+                robot,
+                pretty,
+            }),
+            BaselineAction::Ratchet {
+                paths,
+                hidden,
+                no_ignore,
+                config,
+                no_config,
+                dry_run,
+                robot,
+                pretty,
+            } => run_baseline_ratchet(BaselineRatchetArgs {
+                paths,
+                hidden,
+                no_ignore,
+                config_path: config,
+                no_config,
+                dry_run,
                 robot,
                 pretty,
             }),
@@ -1037,6 +1161,59 @@ fn run_lsp() -> ExitCode {
     }
 }
 
+/// Append one `{date, category, count}` JSONL row per category to
+/// `.cofferdam/trend.jsonl` under the current working directory (CD-64
+/// D3). Deliberately not tied to the resolved baseline path — trend
+/// tracking is orthogonal to baselining and should work even with
+/// `--no-baseline`.
+fn append_trend(counts_by_category: &BTreeMap<String, u32>) -> std::io::Result<()> {
+    use std::io::Write;
+    let date = today_utc_date();
+    let path = Path::new(".cofferdam/trend.jsonl");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    for (category, count) in counts_by_category {
+        writeln!(
+            file,
+            r#"{{"date":"{date}","category":"{category}","count":{count}}}"#
+        )?;
+    }
+    Ok(())
+}
+
+/// Today's UTC calendar date as `YYYY-MM-DD`, computed from the system
+/// clock without pulling in a date/time crate (the workspace has none).
+fn today_utc_date() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (y, m, d) = civil_from_days((secs / 86_400) as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Days-since-epoch to (year, month, day). Howard Hinnant's
+/// `civil_from_days` algorithm (public domain) — proleptic Gregorian,
+/// valid for the full `i64` range; we only ever feed it post-1970 values.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
 struct CheckArgs {
     paths: Vec<PathBuf>,
     hidden: bool,
@@ -1057,6 +1234,7 @@ struct CheckArgs {
     no_cache: bool,
     fail_on_type_unavailable: bool,
     time_checks: bool,
+    trend: bool,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -1080,6 +1258,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         no_cache,
         fail_on_type_unavailable,
         time_checks,
+        trend,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -1348,6 +1527,55 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // both engine and plugin findings respect the narrowed output window.
     signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
 
+    // COMMON: [budgets] enforcement + --trend (CD-64 D2/D3). Both tally
+    // the full finding set INCLUDING baselined findings — a budget is a
+    // hard cap on debt, not a CI-gate exemption, so it must catch counts
+    // a severity-based `--fail-on` gate (or a baseline) would otherwise
+    // let through un-gated. Computed before truncation/baseline-tagging
+    // since neither should affect the tally.
+    let counts_by_check: BTreeMap<String, u32> = {
+        let mut m: BTreeMap<String, u32> = BTreeMap::new();
+        for (issue, _sig) in &signed {
+            *m.entry(issue.check_id.clone()).or_insert(0) += 1;
+        }
+        m
+    };
+    let counts_by_category: BTreeMap<String, u32> = {
+        let mut m: BTreeMap<String, u32> = BTreeMap::new();
+        for (check_id, count) in &counts_by_check {
+            let category = check_id.split('.').next().unwrap_or(check_id.as_str());
+            *m.entry(category.to_string()).or_insert(0) += count;
+        }
+        m
+    };
+    let budget_violations: Vec<(String, u32, u32)> = project_config
+        .as_ref()
+        .map(|cfg| {
+            cfg.budgets
+                .iter()
+                .filter_map(|(key, &budget)| {
+                    let actual = counts_by_check
+                        .get(key)
+                        .or_else(|| counts_by_category.get(key))
+                        .copied()
+                        .unwrap_or(0);
+                    (actual > budget).then_some((key.clone(), budget, actual))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (key, budget, actual) in &budget_violations {
+        eprintln!(
+            "error: budget exceeded for `{key}`: {actual} finding(s), budget is {budget} \
+             (fix findings and run `cofferdam baseline ratchet` to lower the budget, or raise it deliberately)"
+        );
+    }
+    if trend {
+        if let Err(e) = append_trend(&counts_by_category) {
+            eprintln!("warning: failed to append trend data: {e}");
+        }
+    }
+
     let exit_code = if baseline_active {
         let lookup: HashSet<&BaselineEntry> = baseline_loaded
             .as_ref()
@@ -1496,6 +1724,14 @@ fn run_check(args: CheckArgs) -> ExitCode {
         } else {
             ExitCode::from(1)
         }
+    };
+    // Budgets are an independent gate from `--fail-on`/baselining — a
+    // budget overage fails the build even when every triggering finding
+    // is baselined or below the severity threshold.
+    let exit_code = if budget_violations.is_empty() {
+        exit_code
+    } else {
+        ExitCode::from(1)
     };
 
     // Persist disk cache after analyze (cd-9hp.4 cp4). Save failures
@@ -1794,6 +2030,384 @@ fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
         }
     }
 
+    ExitCode::SUCCESS
+}
+
+struct BaselinePruneArgs {
+    paths: Vec<PathBuf>,
+    hidden: bool,
+    no_ignore: bool,
+    baseline_path: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+    no_config: bool,
+    dry_run: bool,
+    check: bool,
+    robot: bool,
+    pretty: bool,
+}
+
+/// `cofferdam baseline prune` (CD-64 D1): remove baseline entries whose
+/// `(file, check_id, rule_signature)` matches no finding from a fresh
+/// analysis run — a fixed finding, a deleted file, or a renamed check.
+fn run_baseline_prune(args: BaselinePruneArgs) -> ExitCode {
+    let BaselinePruneArgs {
+        paths,
+        hidden,
+        no_ignore,
+        baseline_path,
+        config_path,
+        no_config,
+        dry_run,
+        check,
+        robot,
+        pretty,
+    } = args;
+
+    let target = match baseline_path.or_else(|| resolve_baseline_path(None)) {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "error: no baseline found; run `cofferdam baseline write` first, or pass --baseline"
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let existing = match load_baseline_with_warning(&target) {
+        BaselineLoad::Loaded(b) => b,
+        BaselineLoad::Absent => {
+            eprintln!("error: no baseline found at {}", target.display());
+            return ExitCode::from(2);
+        }
+        BaselineLoad::VersionMismatch {
+            path,
+            found,
+            supported,
+        } => {
+            eprintln!(
+                "error: baseline {} declares unsupported version {found}; this binary supports {supported}.\n\
+                 Run `cofferdam baseline write` to regenerate it under the current schema.",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    let roots: Vec<PathBuf> = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths
+    };
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+    let opts = DiscoveryOptions {
+        respect_ignore: !no_ignore,
+        include_hidden: hidden,
+        ..DiscoveryOptions::default()
+    };
+    let files = match discover(&roots, &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let engine = match project_config.as_ref() {
+        Some(cfg) => {
+            let path = resolved_config_path
+                .as_deref()
+                .unwrap_or_else(|| Path::new("cofferdam.invariants.toml"));
+            match Engine::with_config(all_builtins(), cfg, path) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        None => Engine::new(all_builtins()),
+    };
+    let mut signed = match engine.analyze_with_signatures(&files) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Some(cfg) = project_config.as_ref() {
+        signed.extend(run_plugins_filtered_with_signatures(
+            cfg,
+            resolved_config_path.as_deref(),
+            &files,
+        ));
+    }
+
+    let project_root = project_root_for_baseline(Some(&target));
+    let current: HashSet<BaselineEntry> = signed
+        .iter()
+        .map(|(issue, sig)| baseline::entry_for(issue, sig.clone(), project_root.as_deref()))
+        .collect();
+
+    let stale: Vec<BaselineEntry> = existing
+        .findings
+        .iter()
+        .filter(|e| !current.contains(*e))
+        .cloned()
+        .collect();
+
+    if robot {
+        let stale_json: Vec<_> = stale
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "file": e.file,
+                    "check_id": e.check_id,
+                    "rule_signature": e.rule_signature,
+                })
+            })
+            .collect();
+        let obj = serde_json::json!({
+            "stale": stale_json,
+            "summary": { "count": stale.len() },
+            "wrote": !dry_run && !check && !stale.is_empty(),
+        });
+        let s = if pretty {
+            serde_json::to_string_pretty(&obj)
+        } else {
+            serde_json::to_string(&obj)
+        }
+        .expect("serializes infallibly");
+        println!("{s}");
+    } else if stale.is_empty() {
+        eprintln!("baseline is clean — nothing to prune");
+    } else {
+        for e in &stale {
+            eprintln!("stale: {} {} ({})", e.file, e.check_id, e.rule_signature);
+        }
+        eprintln!(
+            "{} stale entr{}",
+            stale.len(),
+            if stale.len() == 1 { "y" } else { "ies" }
+        );
+    }
+
+    if check {
+        return if stale.is_empty() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        };
+    }
+    if dry_run || stale.is_empty() {
+        return ExitCode::SUCCESS;
+    }
+
+    let stale_set: HashSet<&BaselineEntry> = stale.iter().collect();
+    let kept: Vec<BaselineEntry> = existing
+        .findings
+        .into_iter()
+        .filter(|e| !stale_set.contains(e))
+        .collect();
+    let pruned = Baseline::new(kept);
+    if let Err(e) = baseline::write(&target, &pruned) {
+        eprintln!("error: {e}");
+        return ExitCode::from(2);
+    }
+    if !robot {
+        eprintln!(
+            "✓ pruned {} entr{} → {}",
+            stale.len(),
+            if stale.len() == 1 { "y" } else { "ies" },
+            target.display()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+struct BaselineRatchetArgs {
+    paths: Vec<PathBuf>,
+    hidden: bool,
+    no_ignore: bool,
+    config_path: Option<PathBuf>,
+    no_config: bool,
+    dry_run: bool,
+    robot: bool,
+    pretty: bool,
+}
+
+/// `cofferdam baseline ratchet` (CD-64 D2): lower `[budgets]` entries in
+/// `cofferdam.toml` to match the current finding count for each budgeted
+/// key. Never raises a budget — a key whose current count is already
+/// under budget is left untouched, so ratchet can never be used to
+/// quietly relax a gate.
+fn run_baseline_ratchet(args: BaselineRatchetArgs) -> ExitCode {
+    let BaselineRatchetArgs {
+        paths,
+        hidden,
+        no_ignore,
+        config_path,
+        no_config,
+        dry_run,
+        robot,
+        pretty,
+    } = args;
+
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+    let (project_config, resolved_config_path) = match (project_config, resolved_config_path) {
+        (Some(cfg), Some(path)) => (cfg, path),
+        _ => {
+            eprintln!(
+                "error: no cofferdam.toml found; ratchet needs an existing [budgets] table to lower"
+            );
+            return ExitCode::from(2);
+        }
+    };
+    if project_config.budgets.is_empty() {
+        eprintln!(
+            "no [budgets] declared in {} — nothing to ratchet",
+            resolved_config_path.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let roots: Vec<PathBuf> = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths
+    };
+    let opts = DiscoveryOptions {
+        respect_ignore: !no_ignore,
+        include_hidden: hidden,
+        ..DiscoveryOptions::default()
+    };
+    let files = match discover(&roots, &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let engine = match Engine::with_config(all_builtins(), &project_config, &resolved_config_path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut signed = match engine.analyze_with_signatures(&files) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    signed.extend(run_plugins_filtered_with_signatures(
+        &project_config,
+        Some(resolved_config_path.as_path()),
+        &files,
+    ));
+
+    let mut counts_by_check: BTreeMap<String, u32> = BTreeMap::new();
+    for (issue, _sig) in &signed {
+        *counts_by_check.entry(issue.check_id.clone()).or_insert(0) += 1;
+    }
+    let mut counts_by_category: BTreeMap<String, u32> = BTreeMap::new();
+    for (check_id, count) in &counts_by_check {
+        let category = check_id.split('.').next().unwrap_or(check_id.as_str());
+        *counts_by_category.entry(category.to_string()).or_insert(0) += count;
+    }
+
+    let mut lowered: Vec<(String, u32, u32)> = Vec::new();
+    for (key, &budget) in &project_config.budgets {
+        let actual = counts_by_check
+            .get(key)
+            .or_else(|| counts_by_category.get(key))
+            .copied()
+            .unwrap_or(0);
+        if actual < budget {
+            lowered.push((key.clone(), budget, actual));
+        }
+    }
+
+    if robot {
+        let lowered_json: Vec<_> = lowered
+            .iter()
+            .map(|(k, old, new)| serde_json::json!({"key": k, "from": old, "to": new}))
+            .collect();
+        let obj = serde_json::json!({ "lowered": lowered_json, "wrote": !dry_run && !lowered.is_empty() });
+        let s = if pretty {
+            serde_json::to_string_pretty(&obj)
+        } else {
+            serde_json::to_string(&obj)
+        }
+        .expect("serializes infallibly");
+        println!("{s}");
+    } else if lowered.is_empty() {
+        eprintln!("no budget is above its current finding count — nothing to ratchet");
+    } else {
+        for (key, old, new) in &lowered {
+            eprintln!("{key}: {old} -> {new}");
+        }
+    }
+
+    if dry_run || lowered.is_empty() {
+        return ExitCode::SUCCESS;
+    }
+
+    let raw = match std::fs::read_to_string(&resolved_config_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "error: failed to read {}: {e}",
+                resolved_config_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let mut doc = match raw.parse::<toml_edit::DocumentMut>() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "error: failed to parse {}: {e}",
+                resolved_config_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let budgets_table = doc
+        .entry("budgets")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut();
+    let Some(budgets_table) = budgets_table else {
+        eprintln!(
+            "error: `budgets` in {} is not a table",
+            resolved_config_path.display()
+        );
+        return ExitCode::from(2);
+    };
+    for (key, _old, new) in &lowered {
+        budgets_table[key.as_str()] = toml_edit::value(i64::from(*new));
+    }
+    if let Err(e) = std::fs::write(&resolved_config_path, doc.to_string()) {
+        eprintln!(
+            "error: failed to write {}: {e}",
+            resolved_config_path.display()
+        );
+        return ExitCode::from(2);
+    }
+    if !robot {
+        eprintln!(
+            "✓ lowered {} budget(s) in {}",
+            lowered.len(),
+            resolved_config_path.display()
+        );
+    }
     ExitCode::SUCCESS
 }
 

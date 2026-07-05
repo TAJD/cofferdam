@@ -42,6 +42,7 @@ export default defineConfig({
           { text: 'Ignoring files', link: '/ignore' },
           { text: 'Suppression directives', link: '/suppression' },
           { text: 'Per-path overrides', link: '/overrides' },
+          { text: 'Budgets & ratchet', link: '/budgets' },
           { text: 'Type-aware checks', link: '/type-aware-checks' },
         ],
       },

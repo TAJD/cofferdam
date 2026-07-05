@@ -1577,6 +1577,29 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
         m
     };
+    // Warn on budget keys that match no known check id or category. A typo
+    // (e.g. "Refactor.CognitiveComplexty") otherwise resolves to a count of 0
+    // via `unwrap_or(0)` below, silently defeating the gate it was meant to be —
+    // and `baseline ratchet` would then lock that dead key in at 0.
+    if let Some(cfg) = project_config.as_ref() {
+        if !cfg.budgets.is_empty() {
+            let known: HashSet<String> = all_builtins()
+                .iter()
+                .flat_map(|c| {
+                    let id = c.meta().id;
+                    let cat = id.split('.').next().unwrap_or(id);
+                    [id.to_string(), cat.to_string()]
+                })
+                .collect();
+            for key in cfg.budgets.keys() {
+                if !known.contains(key) {
+                    eprintln!(
+                        "warning: budget key `{key}` matches no known check id or category — it will never fire; check for a typo"
+                    );
+                }
+            }
+        }
+    }
     let budget_violations: Vec<(String, u32, u32)> = project_config
         .as_ref()
         .map(|cfg| {

@@ -13,6 +13,60 @@ root. Discovery walks up from the working directory until it finds the
 file or hits a `.git` entry — same rule as `cofferdam.toml`. Both files
 are optional and additive; you can ship one without the other.
 
+## Starter spec
+
+The minimal viable spec for a typical Next.js/Vite app — copy, adjust the
+globs, delete what you don't need yet:
+
+```toml
+schema_version = "1.0"
+
+[layers]
+domain = ["src/domain/**"]
+app    = ["src/app/**"]
+
+[layers.allow]
+app = ["domain"]
+
+[public_api]
+exports = ["src/index.ts"]
+```
+
+Ten lines: one layer boundary (`app` may use `domain`, not the reverse) and
+one public-API entry point. `[boundaries]` and `[invariants]` are additive —
+add them once you have a specific area to freeze or a specific import to
+ban.
+
+## Invariants anatomy
+
+Each table maps to exactly one check — this is the reading map an agent
+uses to go from spec to enforcement:
+
+```toml
+schema_version = "1.0"                        # loader: accepted MAJOR.MINOR
+
+[layers]                                       # ─┐
+infra  = ["src/infra/**"]                      #  │ read by
+domain = ["src/domain/**"]                     #  ├─► Design.LayerViolation
+app    = ["src/app/**"]                        #  │   (which layer a file is in)
+                                                # ─┘
+[layers.allow]                                 # ─┐
+domain = ["infra"]                             #  ├─► Design.LayerViolation
+app    = ["domain", "infra"]                   #  │   (allowed import directions)
+                                                # ─┘
+[public_api]                                    # ─┐
+exports = ["package.json:exports", "src/index.ts"] ├─► exempts Design.OrphanExport
+                                                # ─┘   (entry points aren't "dead")
+
+[boundaries]                                   # ─┐
+"src/legacy/**" = { frozen = true, reason = "see ADR-0007" } ├─► Design.BoundaryFrozen
+                                                # ─┘   (per-file glob match, flagged if touched)
+
+[invariants]                                   # ─┐
+"no-direct-db-access" = { forbid_imports = ["src/infra/db"], from_layers = ["app"] } ├─► Design.InvariantViolation
+                                                # ─┘   (named forbid/require import rules)
+```
+
 ## Schema
 
 ```toml

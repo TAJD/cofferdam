@@ -13,6 +13,29 @@
 
 \* Measured on a 509-finding run against `bestefforttools`. Numbers will shift as checks land or messages change; the relative ordering is what matters.
 
+## Priority sorts, severity gates
+
+Priority and severity are two independent axes — the two-axis model
+Credo popularised, and easy to miss from a single sentence:
+
+```mermaid
+quadrantChart
+    title Priority (report order) vs. severity (CI gate)
+    x-axis Low severity --> High severity
+    y-axis Low priority --> High priority
+    quadrant-1 "High priority, high severity: read first, gates CI"
+    quadrant-2 "High priority, low severity: read first, doesn't gate CI"
+    quadrant-3 "Low priority, low severity: read last, doesn't gate CI"
+    quadrant-4 "Low priority, high severity: read last, still gates CI"
+```
+
+**Priority** is computed per finding (category base + check-specific
+adjustments) and decides *what to look at first* in the report.
+**Severity** is configured per check in `cofferdam.toml` and decides
+*what fails the build* via `--fail-on`. A high-priority, low-severity
+finding is worth reading before a low-priority, high-severity one — but
+only the severity axis blocks CI.
+
 ## `text` format
 
 Default. Findings grouped by category, priority-sorted within each. Decorated with category headers and a trailing summary line. Use for humans reading reports in a terminal.

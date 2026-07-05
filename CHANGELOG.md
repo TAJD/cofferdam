@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Per-check badges (`graph` / `file` / `type-aware` / `advisable`) in the check catalog (`docs/checks/index.md`, `public/checks.json`), computed by `cofferdam gen-docs` from `CheckMeta` plus a hand-maintained graph-check list (CD-54).
+
+### Changed
+- Docs site repositioned around the two loops (advisory + debt) and cofferdam's place in the toolchain (CD-47): new homepage hero, "where cofferdam sits" / "the two loops" sections with ASCII diagrams, an `advise` demo replacing the `Warning.TripleEquals` demo, a Biome/ESLint coexistence section, and a "why the name" footer. `docs/reference/advise.md` now leads with the JSON envelope and schema link and adds a "what agents should branch on" field guide. `docs/agents.md` and `docs/hooks.md` gained the two-loops diagram and hooks-wiring diagram; `docs/invariants.md` gained a 10-line starter spec and an annotated invariants-anatomy diagram; `docs/budgets.md` and `docs/output-formats.md` gained signature-stability, would_fire/would_clear set-difference, ratchet, and priority×severity diagrams. README mirrors the new hero and stack diagram with a single `advise` demo.
+
 ## [0.3.7] - 2026-07-04
 
 ### Fixed

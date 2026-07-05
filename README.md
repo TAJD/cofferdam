@@ -1,8 +1,26 @@
 # cofferdam
 
-> A watertight compartment for your codebase. Isolate bad code, measure it against rules, ship a priority-sorted verdict.
+> Your linter checks code after it's written. Cofferdam tells your agent the rules before it writes — and guarantees the debt only goes down.
 
-`cofferdam` is a software architecture and code-quality analyzer for TypeScript with a Rust core. Findings are bucketed into five categories — **Consistency**, **Design**, **Readability**, **Refactor**, **Warning** — and priority-sorted within each. The category model is inspired by Elixir's [Credo](https://github.com/rrrene/credo).
+`cofferdam` is a software architecture and code-quality analyzer for TypeScript with a Rust core. Layer rules, frozen boundaries, import invariants, and complexity budgets are declared once in `cofferdam.invariants.toml`, enforced in CI, and *advised* to AI coding agents just-in-time. Findings are bucketed into five categories — **Consistency**, **Design**, **Readability**, **Refactor**, **Warning** — and priority-sorted within each; the category model is inspired by Elixir's [Credo](https://github.com/rrrene/credo).
+
+```
+   advise <file> ↓        ┌────────────────────────────────┐
+   advise --diff ↑        │  cofferdam                     │
+                           │  layers · invariants ·        │
+                           │  boundaries · baseline        │
+                           ├────────────────────────────────┤
+                           │  tsc                           │
+                           ├────────────────────────────────┤
+                           │  Biome / ESLint                │
+                           ├────────────────────────────────┤
+                           │  Biome / Prettier               │
+                           └────────────────────────────────┘
+```
+
+Cofferdam sits above your linter and type-checker, not instead of them — see
+[where cofferdam sits](https://tajd.github.io/cofferdam#where-cofferdam-sits)
+for the full picture.
 
 ## Documentation
 
@@ -34,19 +52,25 @@ The `postinstall` script downloads the matching prebuilt binary for your platfor
 ## Usage
 
 ```sh
-$ cofferdam check examples/triple_equals.ts
-── Design ───────────────
-  [  5] [  medium] examples/triple_equals.ts:3:17  `loose` is exported but never imported in the project  (Design.OrphanExport)
-  [  5] [  medium] examples/triple_equals.ts:13:17  `strict` is exported but never imported in the project  (Design.OrphanExport)
+$ cofferdam advise src/app/checkout.ts
+src/app/checkout.ts
+  layer: app          public_api: no
+  Design.LayerViolation      imports must target layer(s) [domain, infra]
+  Design.InvariantViolation  "no-direct-db-access": must not import src/infra/db
+  Design.BoundaryFrozen      not frozen
+  Refactor.CognitiveComplexity  limit 15
 
-── Warning ───────────────
-  [ 15] [    high] examples/triple_equals.ts:4:7  use `===` instead of `==`  (Warning.TripleEquals)
-  [ 15] [    high] examples/triple_equals.ts:7:7  use `!==` instead of `!=`  (Warning.TripleEquals)
-
-6 finding(s)
+$ cofferdam advise --diff main
+would_fire: 1
+  src/app/checkout.ts:12  imports src/infra/db from layer `app`  (Design.InvariantViolation)
+would_clear: 0
 ```
 
-The first column is the priority score; the second is severity. Priority sorts the report; severity gates CI.
+An agent runs `advise` before editing and `advise --diff` before asking for a
+commit. For finding-level output on the code as it stands today, `cofferdam
+check` gives the same priority-sorted, severity-gated report any linter
+does — see the [agent workflow docs](https://tajd.github.io/cofferdam/agents) and
+[output formats](https://tajd.github.io/cofferdam/output-formats) for both.
 
 ## CI
 

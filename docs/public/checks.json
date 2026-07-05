@@ -13,7 +13,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Consistency.QuoteStyle",
@@ -25,7 +28,10 @@
       "requires_types": false,
       "consistency": true,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Consistency.UnusedSuppression",
@@ -37,7 +43,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Design.BoundaryFrozen",
@@ -49,7 +58,11 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file",
+        "advisable"
+      ]
     },
     {
       "id": "Design.DuplicateExportName",
@@ -61,7 +74,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "graph"
+      ]
     },
     {
       "id": "Design.ImportCycle",
@@ -80,6 +96,10 @@
           "doc": "Skip cycles that exist only via `import type` edges. TS allows clean type-only cycles.",
           "default": true
         }
+      ],
+      "badges": [
+        "graph",
+        "advisable"
       ]
     },
     {
@@ -92,7 +112,11 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "graph",
+        "advisable"
+      ]
     },
     {
       "id": "Design.LayerViolation",
@@ -104,7 +128,11 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "graph",
+        "advisable"
+      ]
     },
     {
       "id": "Design.MaxParameters",
@@ -123,6 +151,10 @@
           "doc": "maximum number of parameters per function signature",
           "default": 5
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -203,6 +235,10 @@
             "/prettier.config."
           ]
         }
+      ],
+      "badges": [
+        "graph",
+        "advisable"
       ]
     },
     {
@@ -215,7 +251,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "graph"
+      ]
     },
     {
       "id": "Readability.MaxFunctionLength",
@@ -234,6 +273,10 @@
           "doc": "maximum function body length in lines",
           "default": 50
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -253,6 +296,10 @@
           "doc": "maximum line length in display columns",
           "default": 120
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -272,6 +319,10 @@
           "doc": "maximum cognitive complexity per function",
           "default": 15
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -291,6 +342,10 @@
           "doc": "maximum cyclomatic complexity per function",
           "default": 10
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -303,7 +358,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "graph"
+      ]
     },
     {
       "id": "Refactor.DuplicateBlock",
@@ -340,6 +398,10 @@
           "doc": "run the AST statement-window pass (disable to use token-mode only)",
           "default": true
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -365,6 +427,10 @@
           "doc": "minimum cyclomatic complexity for a function to be considered complex",
           "default": 15
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -377,7 +443,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Refactor.PreferOptionalChain",
@@ -389,7 +458,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Refactor.UnusedVariable",
@@ -401,7 +473,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Rust.MissingPubDoc",
@@ -413,7 +488,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Rust.NoUnimplementedInNonTest",
@@ -425,7 +503,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Rust.NoUnwrapInLib",
@@ -437,7 +518,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Warning.NoConsoleLog",
@@ -458,6 +542,10 @@
             "log"
           ]
         }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -470,7 +558,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Warning.NoEval",
@@ -482,7 +573,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Warning.TripleEquals",
@@ -494,7 +588,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": true,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Warning.UnusedImport",
@@ -506,7 +603,10 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file"
+      ]
     },
     {
       "id": "Warning.UnusedNullCheck",
@@ -518,7 +618,11 @@
       "requires_types": true,
       "consistency": false,
       "autofix": false,
-      "options": []
+      "options": [],
+      "badges": [
+        "file",
+        "type-aware"
+      ]
     }
   ]
 }

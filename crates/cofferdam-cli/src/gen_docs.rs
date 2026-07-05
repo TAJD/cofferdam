@@ -140,6 +140,54 @@ struct CheckEntry {
     consistency: bool,
     autofix: bool,
     options: Vec<OptionEntry>,
+    badges: Vec<&'static str>,
+}
+
+/// Checks whose findings require the whole-project import/export graph
+/// (built via the corpus + `finalize()`), not just the file in front of
+/// them — the "Biome/ESLint structurally can't do this" differentiator
+/// (CD-54). Hand-maintained: a new graph-based check should add itself
+/// here. `Design.BoundaryFrozen` is deliberately excluded — it matches a
+/// per-file glob against `[boundaries]`, no cross-file graph needed.
+const GRAPH_CHECK_IDS: &[&str] = &[
+    "Design.ImportCycle",
+    "Design.InvariantViolation",
+    "Design.LayerViolation",
+    "Design.OrphanExport",
+    "Design.ScriptedInvariant",
+    "Design.DuplicateExportName",
+    "Refactor.DeadExport",
+];
+
+/// Checks `advise` gives file-specific, non-generic treatment to today
+/// (CD-62 WS-A1-A3): every option-bearing check resolves its thresholds,
+/// plus these graph-aware checks project layer/boundary/invariant state
+/// even though they take no options.
+const ADVISABLE_SPECIAL_CASE_IDS: &[&str] = &[
+    "Design.LayerViolation",
+    "Design.BoundaryFrozen",
+    "Design.InvariantViolation",
+    "Design.OrphanExport",
+];
+
+/// Badges for the checks catalog (CD-54): `graph` / `file` (mutually
+/// exclusive — whole-project graph vs. per-file analysis), `type-aware`
+/// (routes through the ts-morph type host), `advisable` (`cofferdam
+/// advise` emits a file-specific, non-generic constraint for it).
+fn check_badges(meta: &'static CheckMeta) -> Vec<&'static str> {
+    let mut badges = Vec::new();
+    if GRAPH_CHECK_IDS.contains(&meta.id) {
+        badges.push("graph");
+    } else {
+        badges.push("file");
+    }
+    if meta.requires_types {
+        badges.push("type-aware");
+    }
+    if !meta.options.is_empty() || ADVISABLE_SPECIAL_CASE_IDS.contains(&meta.id) {
+        badges.push("advisable");
+    }
+    badges
 }
 
 #[derive(Serialize)]
@@ -164,6 +212,7 @@ fn build_checks_json(metas: &[&'static CheckMeta]) -> String {
             consistency: m.consistency,
             autofix: m.autofix,
             options: m.options.iter().map(map_option_entry).collect(),
+            badges: check_badges(m),
         })
         .collect();
 
@@ -281,6 +330,14 @@ fn build_index_md(metas: &[&'static CheckMeta]) -> String {
          The machine-readable index lives at [`checks.json`](../checks.json) \
          and is consumed by AI agents.\n",
     );
+    out.push('\n');
+    out.push_str(
+        "**Badges:** `graph` — needs the whole-project import/export graph \
+         (what Biome/ESLint structurally can't do); `file` — analyzes one \
+         file in isolation; `type-aware` — routes through the ts-morph type \
+         host; `advisable` — `cofferdam advise` emits a file-specific \
+         constraint for it (not just the generic explanation).\n",
+    );
 
     for cat in Category::ALL {
         let cat_name = category_pascal(cat);
@@ -292,9 +349,14 @@ fn build_index_md(metas: &[&'static CheckMeta]) -> String {
         // so the per-category order is sorted-by-id too.
         for meta in metas.iter().filter(|m| m.category == cat) {
             let autofix_badge = if meta.autofix { " · autofix" } else { "" };
+            let badges = check_badges(meta)
+                .into_iter()
+                .map(|b| format!("`{b}`"))
+                .collect::<Vec<_>>()
+                .join(" ");
             out.push_str(&format!(
-                "- [`{}`]({}.md) — {}{}\n",
-                meta.id, meta.id, meta.explanation, autofix_badge
+                "- [`{}`]({}.md) {} — {}{}\n",
+                meta.id, meta.id, badges, meta.explanation, autofix_badge
             ));
         }
     }

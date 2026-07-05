@@ -1,8 +1,22 @@
 # Agent hooks
 
 Recipes for wiring `cofferdam advise` into an agent's edit loop, so constraints surface
-automatically instead of depending on the agent remembering to run the CLI. Generate the
-Claude Code fragment (plus Cursor/pre-commit equivalents as comments) with:
+automatically instead of depending on the agent remembering to run the CLI. Rules arrive by
+plumbing, not by hoping the agent read AGENTS.md:
+
+```mermaid
+flowchart TB
+    T["Edit / Write / MultiEdit tool call"] --> P["PreToolUse hook"]
+    P -- "cofferdam advise $FILE --format=json" --> W["agent writes code<br/>(layer, invariants, boundary, budget already in context)"]
+    W --> S["Claude finishes responding"]
+    S --> H["Stop hook"]
+    H -- "cofferdam advise --diff HEAD --pretty" --> D["would_fire empty or justified<br/>before you ask for a commit"]
+
+    style P fill:#6366f1,color:#fff,stroke:#4338ca
+    style H fill:#6366f1,color:#fff,stroke:#4338ca
+```
+
+Generate the Claude Code fragment (plus Cursor/pre-commit equivalents as comments) with:
 
 ```sh
 cofferdam agents --hooks

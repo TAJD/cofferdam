@@ -27,12 +27,53 @@ forward-looking question — "what should the next edit respect?"
 ## Quick start
 
 ```bash
-# What rules apply to this file?
-cofferdam advise src/ui/Button.tsx
-
-# JSON for an agent / pipeline. --robot defaults --format to json.
+# What rules apply to this file? JSON for an agent / pipeline;
+# --robot defaults --format to json.
 cofferdam advise --robot src/ui/Button.tsx
+```
 
+```json
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "path": "src/ui/Button.tsx",
+      "layer": "ui",
+      "public_api": false,
+      "constraints": [
+        {
+          "rule": "Design.LayerViolation",
+          "category": "design",
+          "severity": "high",
+          "applies": "imports must target layer(s) [domain]",
+          "allowed": ["domain"],
+          "forbidden": ["infra"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Schema: [`/schemas/advise-v1.json`](/cofferdam/schemas/advise-v1.json) — additive-only
+within `schema_version: 1`; full field reference below.
+
+## What agents should branch on
+
+Before writing or committing, key off these fields rather than reading the
+whole envelope:
+
+| Field | Where | Branch on |
+|---|---|---|
+| `layer` | per file | Which `[layers]` group the edit falls in — determines which `forbidden`/`allowed` lists apply. |
+| `frozen` | `Design.BoundaryFrozen` constraint | `true` → do not modify this file without addressing `reason`. |
+| `forbidden` | `Design.LayerViolation` constraint | Layers this file must not import from — check new imports against this before writing them. |
+| `remaining` | `--analyze` budget entry | Headroom left before a limit-style check (complexity, length, params) fires. `0` means the next addition trips it. |
+| `would_fire` | `--diff` output | Non-empty → the working tree introduces a new violation; resolve or justify before asking for a commit. |
+
+## Quick start (more forms)
+
+```bash
 # Glob — quote it so the shell does not expand.
 cofferdam advise 'src/domain/**/*.ts'
 
@@ -238,6 +279,28 @@ tree — and reports two sets:
 - `would_clear` — rules that fire on the baseline but not on the
   proposed change. Regressions the edit cleans up.
 
+Both are a set difference over the same finding keys (`file`, `check_id`,
+`rule_signature`), computed both ways:
+
+```mermaid
+flowchart LR
+    subgraph Base ["findings at &lt;ref&gt;"]
+        direction TB
+        Clear["would_clear<br/>(base only — fixed by this edit)"]
+    end
+    subgraph Now ["findings now (working tree)"]
+        direction TB
+        Fire["would_fire<br/>(now only — introduced by this edit)"]
+    end
+    Base <-- "unchanged (in both)" --> Now
+
+    style Clear fill:#16a34a,color:#fff,stroke:#15803d
+    style Fire fill:#dc2626,color:#fff,stroke:#b91c1c
+```
+
+`exit 0 ⟺ would_fire ∩ severity≥--fail-on = ∅` — `would_clear` never
+gates; a change that only clears findings should never fail CI.
+
 For agentic edit loops this collapses
 "write → check → fix → repeat" to "advise --diff → done" whenever the
 draft is rule-compliant on the first pass.
@@ -253,7 +316,21 @@ cofferdam advise --diff main --fail-on medium
 Output is always JSON in diff mode (`--format` is ignored). Findings
 are keyed by `(file, check_id, rule_signature)` where `rule_signature`
 is the same SHA-256-of-trimmed-span used by the baseline subsystem, so
-reformats and line shifts do **not** show up as spurious entries.
+reformats and line shifts do **not** show up as spurious entries:
+
+```mermaid
+flowchart LR
+    A["checkout.ts:12<br/>import db from 'src/infra/db'"] --> H["sha256(trimmed span)"]
+    B["checkout.ts:31 (after reformat)<br/>import db from 'src/infra/db'"] --> H
+    H --> R["same rule_signature<br/>→ not a new/cleared finding"]
+
+    style H fill:#6366f1,color:#fff,stroke:#4338ca
+```
+
+The signature hashes the trimmed span, not the line number — so a
+reformat or an unrelated diff further up the file never produces a
+phantom `would_fire`/`would_clear` entry for a finding that didn't
+actually change.
 
 ```json
 {

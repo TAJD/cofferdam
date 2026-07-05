@@ -2,6 +2,20 @@
 
 A baseline (see [`cofferdam baseline write`](/reference/cli#baseline)) freezes today's findings so CI only fails on *new* ones — but it never shrinks on its own. Debt that's baselined once can sit there forever, and a finding under the `--fail-on` severity threshold never gates CI at all, baselined or not.
 
+Baseline entries are keyed by `(file, check_id, rule_signature)`, where
+`rule_signature` hashes the trimmed span rather than the line number — a
+reformat or an unrelated edit further up the file does not invalidate an
+existing baseline entry:
+
+```mermaid
+flowchart LR
+    A["baselined at commit A<br/>checkout.ts:12"] --> H["sha256(trimmed span)"]
+    B["same finding at commit B (reformatted)<br/>checkout.ts:31"] --> H
+    H --> R["same rule_signature → still baselined"]
+
+    style H fill:#6366f1,color:#fff,stroke:#4338ca
+```
+
 `[budgets]` is a hard cap on finding counts, independent of severity and baseline status:
 
 ```toml
@@ -46,6 +60,28 @@ cofferdam baseline prune --check     # same list; exits 1 if any exist (CI gate)
 `--check` is the one to wire into CI if you want baseline hygiene enforced — it never writes, so it's safe in a read-only checkout.
 
 ---
+
+## The ratchet: budgets only move down
+
+`baseline ratchet` and `[budgets]` compose into one property: the debt
+number for a given key can go down over time, or hold — never silently
+back up.
+
+```mermaid
+xychart-beta
+    title "Refactor.CognitiveComplexity: count vs. budget over time"
+    x-axis [write, fix, ratchet, fix, fix]
+    y-axis "count / budget" 0 --> 45
+    line "count" [40, 30, 20, 15, 10]
+    line "budget" [40, 40, 20, 20, 20]
+```
+
+The budget line only ever steps down (at `ratchet`) or holds — never up.
+A regression that pushes `count` back above the current `budget` fails CI
+even though it would still be under an earlier, higher value.
+
+That's the mechanism that makes debt monotone by construction, not by
+discipline.
 
 ## Trend tracking
 

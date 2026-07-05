@@ -1,8 +1,9 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 import { checksItems } from './sidebar-checks'
 
 // https://vitepress.dev/reference/site-config
-export default defineConfig({
+export default withMermaid(defineConfig({
   title: 'cofferdam',
   description:
     "TypeScript code-quality analyzer — Rust core + JS plugin layer, inspired by Elixir's Credo",
@@ -100,4 +101,4 @@ export default defineConfig({
       copyright: 'Copyright © 2026 Thomas Dickson',
     },
   },
-})
+}))

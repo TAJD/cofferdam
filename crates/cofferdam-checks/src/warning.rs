@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use crate::framework_paths::is_framework_entry;
-use crate::public_api::{resolve_public_api, PublicApi};
+use cofferdam_core::public_api::{resolve_public_api, PublicApi};
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
     path_key, Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location,

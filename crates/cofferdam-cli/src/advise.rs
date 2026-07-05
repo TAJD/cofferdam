@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use cofferdam_checks::all_builtins;
+use cofferdam_core::invariants::InvariantsSpec;
 use cofferdam_core::layers::{self, LayerMatcher};
+use cofferdam_core::public_api::{self, PublicApi};
 use cofferdam_core::{Category, CheckMeta, CheckOptions, OptionDefault, OptionValue, Severity};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::{discover, DiscoveryOptions, ProjectConfig};
@@ -165,6 +167,21 @@ pub fn build_advisories(
     let layer_matchers: Vec<LayerMatcher> =
         layers_cfg.map(layers::build_matchers).unwrap_or_default();
 
+    let invariants: Option<&InvariantsSpec> =
+        project_config.as_ref().and_then(|p| p.invariants.as_ref());
+    let public_api_matcher: Option<PublicApi> = invariants
+        .map(|spec| public_api::resolve_public_api(&spec.public_api.exports, &spec.project_root));
+    let public_api_unresolved: Vec<String> = invariants
+        .map(|spec| {
+            spec.public_api
+                .exports
+                .iter()
+                .filter(|e| e.starts_with("package.json:"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Load plugin check metadata so advise can include plugin-specific
     // constraints alongside built-in ones. Metadata-mode host invocation
     // is fail-soft: if node isn't available or the host errors, plugin
@@ -182,32 +199,62 @@ pub fn build_advisories(
         })
         .unwrap_or_default();
 
+    let advise_ctx = AdviseContext {
+        layers_cfg,
+        layer_matchers: &layer_matchers,
+        invariants,
+        public_api_matcher: public_api_matcher.as_ref(),
+        public_api_unresolved: &public_api_unresolved,
+    };
+
     let advisories: Vec<FileAdvisory> = files
         .iter()
-        .map(|file| build_advisory(file, &resolved, layers_cfg, &layer_matchers, &plugin_metas))
+        .map(|file| build_advisory(file, &resolved, &advise_ctx, &plugin_metas))
         .collect();
 
     Ok(advisories)
 }
 
+/// Shared, per-run projection inputs threaded through `build_advisory` /
+/// `build_constraint` for every file. Bundled into one struct to keep
+/// both functions under clippy's argument-count lint.
+struct AdviseContext<'a> {
+    layers_cfg: Option<&'a cofferdam_core::LayersConfig>,
+    layer_matchers: &'a [LayerMatcher],
+    invariants: Option<&'a InvariantsSpec>,
+    public_api_matcher: Option<&'a PublicApi>,
+    public_api_unresolved: &'a [String],
+}
+
 fn build_advisory(
     file: &Path,
     resolved: &[(CheckMeta, CheckOptions, Severity)],
-    layers_cfg: Option<&cofferdam_core::LayersConfig>,
-    layer_matchers: &[LayerMatcher],
+    ctx: &AdviseContext<'_>,
     plugin_metas: &[PluginCheckMeta],
 ) -> FileAdvisory {
-    let layer =
-        layers_cfg.and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, file));
+    let layer = ctx
+        .layers_cfg
+        .and_then(|cfg| layers::layer_for(ctx.layer_matchers, &cfg.project_root, file));
 
-    // public_api is forward-looking — cofferdam.invariants.toml (cd-9ph)
-    // will populate the allowlist; until then no file is on it.
-    let public_api = false;
+    let file_abs = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+    let file_key = public_api::path_key(&file_abs);
+    let public_api = ctx
+        .public_api_matcher
+        .map(|m| m.is_match(&file_key))
+        .unwrap_or(false);
 
     let mut constraints: Vec<Constraint> = resolved
         .iter()
         .map(|(meta, options, severity)| {
-            build_constraint(file, meta, options, *severity, layer.as_deref(), layers_cfg)
+            build_constraint(
+                file,
+                meta,
+                options,
+                *severity,
+                layer.as_deref(),
+                ctx,
+                public_api,
+            )
         })
         .collect();
 
@@ -233,6 +280,7 @@ fn build_advisory(
             forbidden: None,
             exempt: None,
             exempt_reason: None,
+            public_api_unresolved: None,
         });
     }
 
@@ -345,14 +393,19 @@ fn build_constraint(
     options: &CheckOptions,
     severity: Severity,
     layer: Option<&str>,
-    layers_cfg: Option<&cofferdam_core::LayersConfig>,
+    ctx: &AdviseContext<'_>,
+    public_api: bool,
 ) -> Constraint {
+    let layers_cfg = ctx.layers_cfg;
+    let invariants = ctx.invariants;
+    let public_api_unresolved = ctx.public_api_unresolved;
     let parameters = build_parameters(meta, options);
 
     let mut allowed: Option<Vec<String>> = None;
     let mut forbidden: Option<Vec<String>> = None;
     let mut exempt: Option<bool> = None;
     let mut exempt_reason: Option<String> = None;
+    let mut public_api_unresolved_field: Option<Vec<String>> = None;
 
     let applies = match meta.id {
         "Design.LayerViolation" => match (layer, layers_cfg) {
@@ -394,11 +447,82 @@ fn build_constraint(
             } else if matches_substring(file, &test_patterns) {
                 exempt = Some(true);
                 exempt_reason = Some("test file".to_string());
+            } else if public_api {
+                exempt = Some(true);
+                exempt_reason = Some("public API entry point".to_string());
             } else {
                 exempt = Some(false);
             }
+            if !public_api_unresolved.is_empty() {
+                public_api_unresolved_field = Some(public_api_unresolved.to_vec());
+            }
             "every export must be imported somewhere in-project".to_string()
         }
+        "Design.BoundaryFrozen" => match invariants {
+            Some(spec) if !spec.boundaries.is_empty() => {
+                let rel = relative_normalised(&spec.project_root, file);
+                let matched: Vec<(&String, &cofferdam_core::invariants::BoundarySpec)> = spec
+                    .boundaries
+                    .iter()
+                    .filter(|(glob, b)| {
+                        b.frozen
+                            && globset::Glob::new(glob)
+                                .map(|g| g.compile_matcher().is_match(&rel))
+                                .unwrap_or(false)
+                    })
+                    .collect();
+                if matched.is_empty() {
+                    "no frozen boundary covers this file".to_string()
+                } else {
+                    let parts: Vec<String> = matched
+                        .iter()
+                        .map(|(glob, b)| match b.reason.as_deref() {
+                            Some(r) => format!("`{}` ({})", glob, r),
+                            None => format!("`{}`", glob),
+                        })
+                        .collect();
+                    format!("file is inside frozen boundary(ies): {}", parts.join(", "))
+                }
+            }
+            _ => "no boundaries declared".to_string(),
+        },
+        "Design.InvariantViolation" => match invariants {
+            Some(spec) if !spec.invariants.is_empty() => {
+                let applicable: Vec<(&String, &cofferdam_core::invariants::InvariantSpec)> = spec
+                    .invariants
+                    .iter()
+                    .filter(|(_, rule)| {
+                        rule.from_layers.is_empty()
+                            || layer.is_some_and(|l| rule.from_layers.iter().any(|fl| fl == l))
+                    })
+                    .collect();
+                let mut forbid: Vec<String> = Vec::new();
+                let mut require: Vec<String> = Vec::new();
+                for (_, rule) in &applicable {
+                    forbid.extend(rule.forbid_imports.iter().cloned());
+                    require.extend(rule.require_imports.iter().cloned());
+                }
+                if applicable.is_empty() {
+                    "no invariant rules apply to this file's layer".to_string()
+                } else {
+                    if !forbid.is_empty() {
+                        forbidden = Some(forbid);
+                    }
+                    if !require.is_empty() {
+                        allowed = Some(require);
+                    }
+                    format!(
+                        "invariant(s) apply: [{}]",
+                        applicable
+                            .iter()
+                            .map(|(name, _)| name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
+            _ => "no invariants declared".to_string(),
+        },
         _ => default_applies(meta, options),
     };
 
@@ -413,7 +537,21 @@ fn build_constraint(
         forbidden,
         exempt,
         exempt_reason,
+        public_api_unresolved: public_api_unresolved_field,
     }
+}
+
+/// Project-root-relative, forward-slash normalised path for glob matching
+/// against `[boundaries]`/`[invariants]` keys. Mirrors
+/// `cofferdam-checks/src/design/mod.rs::relative_normalised` — duplicated
+/// here rather than shared since it's a 6-line pure function and the two
+/// crates otherwise have no reason to depend on each other's internals.
+fn relative_normalised(project_root: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(project_root).unwrap_or(path);
+    let s = rel.to_string_lossy().replace('\\', "/");
+    s.trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string()
 }
 
 /// Render a generic `applies` line from option values. For checks with a
@@ -434,7 +572,19 @@ fn default_applies(meta: &CheckMeta, options: &CheckOptions) -> String {
             OptionValue::Bool(b) => Some(format!("{}={}", spec.name, b)),
             OptionValue::Int(i) => Some(format!("{}={}", spec.name, i)),
             OptionValue::String(s) => Some(format!("{}=\"{}\"", spec.name, s)),
-            OptionValue::StringList(_) | OptionValue::IntList(_) => None,
+            OptionValue::StringList(xs) => Some(format!(
+                "{}=[{}]",
+                spec.name,
+                xs.iter()
+                    .map(|s| format!("\"{}\"", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            OptionValue::IntList(xs) => Some(format!(
+                "{}=[{}]",
+                spec.name,
+                xs.iter().map(i64::to_string).collect::<Vec<_>>().join(", ")
+            )),
         })
         .collect();
     if parts.is_empty() {
@@ -555,6 +705,13 @@ pub struct Constraint {
     pub exempt: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exempt_reason: Option<String>,
+    /// `[public_api].exports` entries this constraint could not resolve
+    /// (currently `package.json:<key>` pointers — resolution deferred).
+    /// Present only on `Design.OrphanExport` when such entries exist, so
+    /// callers relying on `public_api`/`exempt` know the allowlist is
+    /// incomplete rather than silently treating it as fully resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_api_unresolved: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -730,13 +887,21 @@ mod tests {
             pure_run: false,
         };
         let opts = CheckOptions::default();
+        let ctx = AdviseContext {
+            layers_cfg: Some(&cfg),
+            layer_matchers: &[],
+            invariants: None,
+            public_api_matcher: None,
+            public_api_unresolved: &[],
+        };
         let c = build_constraint(
             Path::new("/repo/src/app/page.ts"),
             &LV_META,
             &opts,
             Severity::High,
             layer.as_deref(),
-            Some(&cfg),
+            &ctx,
+            false,
         );
         let allowed = c.allowed.expect("allowed populated");
         assert_eq!(allowed, vec!["domain".to_string(), "infra".to_string()]);
@@ -785,6 +950,13 @@ mod tests {
         let _ = test_patterns;
         let _ = framework_patterns;
         let opts = CheckOptions::defaults_from(OE_OPTIONS);
+        let ctx = AdviseContext {
+            layers_cfg: None,
+            layer_matchers: &[],
+            invariants: None,
+            public_api_matcher: None,
+            public_api_unresolved: &[],
+        };
 
         let c_framework = build_constraint(
             Path::new("/repo/src/app/page.ts"),
@@ -792,7 +964,8 @@ mod tests {
             &opts,
             Severity::Medium,
             None,
-            None,
+            &ctx,
+            false,
         );
         assert_eq!(c_framework.exempt, Some(true));
         assert_eq!(
@@ -806,7 +979,8 @@ mod tests {
             &opts,
             Severity::Medium,
             None,
-            None,
+            &ctx,
+            false,
         );
         assert_eq!(c_test.exempt, Some(true));
         assert_eq!(c_test.exempt_reason, Some("test file".to_string()));
@@ -817,7 +991,8 @@ mod tests {
             &opts,
             Severity::Medium,
             None,
-            None,
+            &ctx,
+            false,
         );
         assert_eq!(c_normal.exempt, Some(false));
     }

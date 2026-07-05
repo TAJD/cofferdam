@@ -39,9 +39,9 @@ fn relative_normalised(project_root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::public_api::{resolve_public_api, PublicApi};
     use cofferdam_core::graph::{ExportKind, ExportRecord, ImportKind, ImportRecord, ImportedName};
     use cofferdam_core::path_key;
+    use cofferdam_core::public_api::{resolve_public_api, PublicApi};
     use cofferdam_core::Span;
     use std::path::PathBuf;
 
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn is_glob_pattern_detects_metacharacters() {
-        use crate::public_api::is_glob_pattern;
+        use cofferdam_core::public_api::is_glob_pattern;
         assert!(is_glob_pattern("**/*.tsx"));
         assert!(is_glob_pattern("src/*.ts"));
         assert!(is_glob_pattern("src/[abc].ts"));

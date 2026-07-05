@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::framework_paths::FRAMEWORK_ENTRY_PATTERNS;
-use crate::public_api::{resolve_public_api, PublicApi};
 use cofferdam_core::graph::{
     ExportKind, ExportRecord, InvariantsRuntime, EXPORTS as GRAPH_EXPORTS,
     INVARIANTS as GRAPH_INVARIANTS,
 };
 use cofferdam_core::path_key;
+use cofferdam_core::public_api::{resolve_public_api, PublicApi};
 use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, OptionDefault,
     OptionKind, OptionSpec, Priority, Severity, SourceFile,

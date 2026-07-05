@@ -18,6 +18,7 @@ pub mod lines;
 pub mod location;
 pub mod options;
 pub mod parser;
+pub mod public_api;
 pub mod source;
 pub mod span_util;
 pub mod types;

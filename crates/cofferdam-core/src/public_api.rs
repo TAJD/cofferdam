@@ -26,7 +26,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 /// Resolved public-API allowlist. Build via [`resolve_public_api`] and
 /// test file keys via [`PublicApi::is_match`].
-pub(crate) struct PublicApi {
+pub struct PublicApi {
     exact: HashSet<String>,
     globs: GlobSet,
     /// Normalised absolute root prefix (`path_key(project_root)`) used to
@@ -37,7 +37,7 @@ pub(crate) struct PublicApi {
 impl PublicApi {
     /// Test whether `file_key` (a forward-slash, normalised path — may be
     /// absolute or relative) is covered by this allowlist.
-    pub(crate) fn is_match(&self, file_key: &str) -> bool {
+    pub fn is_match(&self, file_key: &str) -> bool {
         if self.exact.contains(file_key) {
             return true;
         }
@@ -86,7 +86,7 @@ impl Default for PublicApi {
 /// are kept project-root-relative in forward-slash form so
 /// `GlobSet::is_match` receives the same relative key the caller
 /// computes. Empty input yields a default `PublicApi` (no matches).
-pub(crate) fn resolve_public_api(entries: &[String], project_root: &Path) -> PublicApi {
+pub fn resolve_public_api(entries: &[String], project_root: &Path) -> PublicApi {
     let project_root_abs =
         std::path::absolute(project_root).unwrap_or_else(|_| project_root.to_path_buf());
 
@@ -138,7 +138,7 @@ pub(crate) fn resolve_public_api(entries: &[String], project_root: &Path) -> Pub
 }
 
 /// Returns true when `entry` contains at least one glob metacharacter.
-pub(crate) fn is_glob_pattern(entry: &str) -> bool {
+pub fn is_glob_pattern(entry: &str) -> bool {
     entry.contains('*') || entry.contains('?') || entry.contains('[') || entry.contains('{')
 }
 
@@ -146,7 +146,7 @@ pub(crate) fn is_glob_pattern(entry: &str) -> bool {
 /// per-check `path_key` helpers in `design.rs` / `warning.rs` /
 /// `refactor.rs`; shared here so the `PublicApi` table keys agree
 /// with whatever the call-site uses.
-pub(crate) fn path_key(p: &Path) -> String {
+pub fn path_key(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
         s.to_lowercase()

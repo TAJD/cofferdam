@@ -17,7 +17,7 @@ cofferdam doctor --robot --pretty
 
 ## Checks
 
-Doctor runs 10 checks in sequence and reports every result before exiting. All 10 always run — there is no early exit on first failure, so you see the complete picture in one shot.
+Doctor runs 11 checks in sequence and reports every result before exiting. All 11 always run — there is no early exit on first failure, so you see the complete picture in one shot.
 
 ### binary-integrity
 
@@ -130,6 +130,21 @@ If no `packages/cofferdam/package.json` is found, the check is skipped — it do
 | Skipped | Not an npm install |
 
 Remediation for Warn: `re-run npm install @cofferdam/cofferdam` (for npm users). Version drift in a source-tree checkout is intentional pre-1.0 behaviour.
+
+---
+
+### formatter-coexistence
+
+Looks for a `biome.json`/`biome.jsonc` or an eslint config (`eslint.config.{js,mjs,cjs,ts}`, `.eslintrc*`) in the current directory. If a linter/formatter is present, cofferdam has a handful of built-in checks that overlap rules biome and eslint both ship out of the box — `Consistency.QuoteStyle`, `Warning.TripleEquals`, `Warning.NoConsoleLog`, `Warning.NoDebugger`, `Refactor.PreferNullishCoalescing`, `Refactor.PreferOptionalChain`. Running both tools unmodified means the same line gets flagged twice.
+
+This is informational, not a correctness problem — some teams want the belt-and-suspenders double coverage. `biome.json` takes precedence over an eslint config if both are present (most repos migrating to biome keep a stale `.eslintrc` around during the transition).
+
+| Status | Condition |
+|---|---|
+| Pass | No `biome.json`/eslint config found |
+| Warn | A `biome.json`/eslint config is present |
+
+Remediation for Warn: disable the overlapping checks via `[[overrides]]` blocks in `cofferdam.toml` (`paths = ["**"]`, `disabled = true`, one block per check) — see [Per-path overrides](./overrides.md).
 
 ---
 

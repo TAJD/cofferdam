@@ -1,9 +1,9 @@
 //! `cofferdam doctor` — diagnose install and configuration issues.
 //!
-//! Runs 10 checks covering binary integrity, config, baseline, baseline
+//! Runs 11 checks covering binary integrity, config, baseline, baseline
 //! suppression overlap, git, discovery, suppression directives, type-host
-//! tsconfig availability, and npm wrapper version. Reports every check in
-//! one pass (no early exit);
+//! tsconfig availability, npm wrapper version, and biome/eslint
+//! coexistence. Reports every check in one pass (no early exit);
 //! returns `ExitCode::FAILURE` if any check has `Status::Fail`,
 //! `ExitCode::SUCCESS` otherwise (warns alone do not cause non-zero exit).
 //!
@@ -132,6 +132,7 @@ pub fn run(robot: bool, pretty: bool) -> ExitCode {
         check_suppression_directives(),
         check_type_host(),
         check_wrapper_version(),
+        check_formatter_coexistence(),
     ];
 
     let summary = DoctorSummary {
@@ -795,6 +796,87 @@ fn read_npm_version(pkg_path: &Path) -> Result<String, String> {
         .ok_or_else(|| "missing or non-string `version` field".into())
 }
 
+// ── Check 10 — formatter-coexistence ─────────────────────────────────────────
+
+/// Style/lint checks whose finding overlaps a rule biome and eslint both
+/// ship out of the box (quote style, `==`/`!=`, `console.log`, `debugger`,
+/// nullish-coalescing/optional-chain preference). Not a correctness
+/// problem — just double-reporting the same thing through two tools.
+const OVERLAPPING_STYLE_CHECKS: &[&str] = &[
+    "Consistency.QuoteStyle",
+    "Warning.TripleEquals",
+    "Warning.NoConsoleLog",
+    "Warning.NoDebugger",
+    "Refactor.PreferNullishCoalescing",
+    "Refactor.PreferOptionalChain",
+];
+
+/// Warn (informational, not a Fail — coexistence is a style preference, not
+/// a bug) when a `biome.json`/eslint config is present alongside cofferdam,
+/// naming the built-in checks most likely to double-report against it.
+fn check_formatter_coexistence() -> CheckResult {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return CheckResult::fail(
+                "formatter-coexistence",
+                format!("could not determine current directory: {e}"),
+                "check your working directory",
+            );
+        }
+    };
+    check_formatter_coexistence_at(&cwd)
+}
+
+/// Test-friendly variant: takes the directory to search from (no parent
+/// walk-up — a `biome.json`/eslint config always lives at the project
+/// root, same place `cofferdam.toml` does).
+fn check_formatter_coexistence_at(start: &Path) -> CheckResult {
+    const NAME: &str = "formatter-coexistence";
+
+    let biome = ["biome.json", "biome.jsonc"]
+        .iter()
+        .find(|f| start.join(f).is_file());
+    let eslint = [
+        "eslint.config.js",
+        "eslint.config.mjs",
+        "eslint.config.cjs",
+        "eslint.config.ts",
+        ".eslintrc",
+        ".eslintrc.json",
+        ".eslintrc.js",
+        ".eslintrc.cjs",
+        ".eslintrc.yml",
+        ".eslintrc.yaml",
+    ]
+    .iter()
+    .find(|f| start.join(f).is_file());
+
+    let found = match (biome, eslint) {
+        (Some(f), _) => Some(("biome", *f)),
+        (None, Some(f)) => Some(("eslint", *f)),
+        (None, None) => None,
+    };
+
+    match found {
+        None => CheckResult::pass(
+            NAME,
+            "no biome/eslint config found — nothing to coexist with",
+        ),
+        Some((tool, file)) => CheckResult::warn(
+            NAME,
+            format!("{file} found — {tool} and cofferdam both flag style issues"),
+            format!(
+                "avoid double-reporting: disable {} in cofferdam.toml, e.g. \
+                 `[[overrides]]` / `check = \"{}\"` / `paths = [\"**\"]` / `disabled = true` \
+                 (one block per check) — see docs/overrides.md",
+                OVERLAPPING_STYLE_CHECKS.join(", "),
+                OVERLAPPING_STYLE_CHECKS[0],
+            ),
+        ),
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Format up to `limit` items from `list`, appending `... and N more` when
@@ -1028,6 +1110,50 @@ mod tests {
     fn find_tsconfig_from_none_when_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(find_tsconfig_from(dir.path()).is_none());
+    }
+
+    // ── check_formatter_coexistence tests ─────────────────────────────────────
+
+    #[test]
+    fn formatter_coexistence_passes_when_no_config_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let r = check_formatter_coexistence_at(dir.path());
+        assert_eq!(r.status, Status::Pass, "no config → pass: {}", r.message);
+        assert_eq!(r.name, "formatter-coexistence");
+    }
+
+    #[test]
+    fn formatter_coexistence_warns_on_biome_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("biome.json"), "{}\n").expect("write");
+        let r = check_formatter_coexistence_at(dir.path());
+        assert_eq!(r.status, Status::Warn, "biome.json → warn: {}", r.message);
+        assert!(r.message.contains("biome.json"), "got: {}", r.message);
+        let rem = r.remediation.expect("remediation present");
+        assert!(rem.contains("Consistency.QuoteStyle"), "got: {rem}");
+    }
+
+    #[test]
+    fn formatter_coexistence_warns_on_eslint_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("eslint.config.js"), "").expect("write");
+        let r = check_formatter_coexistence_at(dir.path());
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "eslint config → warn: {}",
+            r.message
+        );
+        assert!(r.message.contains("eslint"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn formatter_coexistence_biome_takes_precedence_over_eslint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("biome.json"), "{}\n").expect("write");
+        std::fs::write(dir.path().join(".eslintrc.json"), "{}\n").expect("write");
+        let r = check_formatter_coexistence_at(dir.path());
+        assert!(r.message.contains("biome"), "got: {}", r.message);
     }
 
     #[test]

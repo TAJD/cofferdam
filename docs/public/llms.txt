@@ -13,6 +13,7 @@ Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64
 - [Machine-readable index](https://tajd.github.io/cofferdam/checks.json): the canonical artifact. JSON, schema_version 1, sorted by check id. AI agents should consume this.
 - [Human-readable catalog](https://tajd.github.io/cofferdam/checks/): grouped by category, with prose, examples, and configuration.
 - [CLI reference](https://tajd.github.io/cofferdam/reference/cli): every flag of every subcommand.
+- [Full page content](https://tajd.github.io/cofferdam/llms-full.txt): every docs page's raw markdown, concatenated — one fetch instead of one per page.
 
 ## Docs
 
@@ -33,14 +34,18 @@ Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64
 - `cofferdam agents`: print a version-pinned onboarding prompt for AI coding agents — pipe into AGENTS.md / CLAUDE.md.
 - `cofferdam advise <file>`: print the rules and constraints that apply to a file — run this BEFORE editing.
 - `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports `would_fire` / `would_clear` against the working tree.
-- `cofferdam baseline write|check`: snapshot accepted findings; gate CI on new ones only.
+- `cofferdam baseline write`: snapshot accepted findings so future `check` runs ignore them.
+- `cofferdam baseline lint`: gate CI on findings not already in the baseline.
+- `cofferdam baseline diff`: compare two baselines (e.g. before/after a refactor).
 - `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.
 - `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.
 - `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.
 - `cofferdam watch [paths...]`: re-run checks on file change.
 - `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.
 - `cofferdam lsp`: LSP server over stdio for editor integration.
+- `cofferdam typst <dir>`: lint a Typst package directory.
 - `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).
+- `cofferdam hello`: print the project banner.
 
 ## Agent workflow
 

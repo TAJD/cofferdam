@@ -48,6 +48,27 @@ jobs:
       - name: Build VitePress site
         working-directory: docs
         run: pnpm docs:build
+      - name: Verify pages serve content without JS (CD-63 E1)
+        working-directory: docs
+        run: |
+          set -e
+          # Grep the built HTML directly -- this is exactly what a
+          # non-JS fetcher (curl, an agent's HTTP client) receives from
+          # GitHub Pages. VitePress pre-renders to static HTML by
+          # default; this step exists so a future regression to a
+          # client-rendered app shell fails CI instead of silently
+          # serving empty pages to agents.
+          check() {
+            grep -q "$2" ".vitepress/dist/$1" || {
+              echo "::error::$1 missing expected content ($2) -- page may not be statically rendered"
+              exit 1
+            }
+          }
+          check "index.html" "cofferdam"
+          check "agents.html" "cofferdam agents"
+          check "hooks.html" "PreToolUse"
+          check "mcp.html" "cofferdam.check"
+          check "checks/index.html" "Consistency"
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

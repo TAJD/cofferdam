@@ -6,7 +6,7 @@
   "scripts": {
     "docs:check": "node ../scripts/check-vitepress.mjs",
     "docs:dev": "vitepress dev .",
-    "docs:build": "node ../scripts/check-vitepress.mjs && vitepress build .",
+    "docs:build": "node ../scripts/check-vitepress.mjs && node ../scripts/build-llms-full.mjs && vitepress build .",
     "docs:preview": "vitepress preview ."
   },
   "devDependencies": {

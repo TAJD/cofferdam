@@ -223,7 +223,7 @@ The CI gate (`--fail-on`) is unaffected — it always considers the full pre-tru
 
 ## Future formats
 
-These formats are planned and **not yet implemented**. Passing `--format=github-annotations` today will produce an error.
+These formats are planned but unimplemented. Passing `--format=github-annotations` today will produce an error.
 
 ### `github-annotations` (planned)
 

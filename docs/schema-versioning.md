@@ -169,6 +169,6 @@ forgets to update the relevant version constant is tracked separately
 * CI gate: fail the release workflow if any of (a) the TomlDoc struct,
   (b) the canonical-graph schema module, (c) the DSL parser change
   without a matching version constant bump and CHANGELOG entry. Tracked
-  alongside cd-9hp.12; not yet implemented.
+  alongside cd-9hp.12; unimplemented.
 * `cofferdam invariants migrate <input>` — one-shot migration tool.
   Stub until the first MAJOR bump makes it earn its keep.

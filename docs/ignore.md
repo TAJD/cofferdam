@@ -105,7 +105,7 @@ cofferdam check --no-ignore src/    # analyze everything, including ignored path
 
 ### `cofferdam.toml` per-check `exclude` globs (future)
 
-Future versions of cofferdam will add a `[ignore]` section in `cofferdam.toml` for inline configuration of file exclusions at the config level. As of v0.2.0 this is not yet implemented; see bead cd-4ms. When it lands, it will operate independently of `.cofferdamignore` — you will be able to use both mechanisms together.
+Future versions of cofferdam will add a `[ignore]` section in `cofferdam.toml` for inline configuration of file exclusions at the config level. As of v0.2.0 this is unimplemented; see bead cd-4ms. When it lands, it will operate independently of `.cofferdamignore` — you will be able to use both mechanisms together.
 
 ---
 

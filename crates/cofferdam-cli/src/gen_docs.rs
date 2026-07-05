@@ -55,7 +55,7 @@ pub fn run<C: clap::CommandFactory>(out: PathBuf, check: bool) -> ExitCode {
     let artifacts = build_all::<C>(&metas, &base);
 
     if check {
-        run_check_mode(&artifacts)
+        run_check_mode::<C>(&artifacts, &base)
     } else {
         run_write_mode(&artifacts)
     }
@@ -340,6 +340,8 @@ fn build_llms_txt() -> String {
              grouped by category, with prose, examples, and configuration.\n",
             "- [CLI reference](https://tajd.github.io/cofferdam/reference/cli): \
              every flag of every subcommand.\n",
+            "- [Full page content](https://tajd.github.io/cofferdam/llms-full.txt): \
+             every docs page's raw markdown, concatenated — one fetch instead of one per page.\n",
             "\n",
             "## Docs\n",
             "\n",
@@ -374,14 +376,19 @@ fn build_llms_txt() -> String {
              — run this BEFORE editing.\n",
             "- `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports \
              `would_fire` / `would_clear` against the working tree.\n",
-            "- `cofferdam baseline write|check`: snapshot accepted findings; gate CI on new ones only.\n",
+            "- `cofferdam baseline write`: snapshot accepted findings so future `check` runs \
+             ignore them.\n",
+            "- `cofferdam baseline lint`: gate CI on findings not already in the baseline.\n",
+            "- `cofferdam baseline diff`: compare two baselines (e.g. before/after a refactor).\n",
             "- `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.\n",
             "- `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.\n",
             "- `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.\n",
             "- `cofferdam watch [paths...]`: re-run checks on file change.\n",
             "- `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.\n",
             "- `cofferdam lsp`: LSP server over stdio for editor integration.\n",
+            "- `cofferdam typst <dir>`: lint a Typst package directory.\n",
             "- `cofferdam gen-docs --out <dir> [--check]`: regenerate this catalog (maintainer-only).\n",
+            "- `cofferdam hello`: print the project banner.\n",
             "\n",
             "## Agent workflow\n",
             "\n",
@@ -506,7 +513,7 @@ fn run_write_mode(artifacts: &[Artifact]) -> ExitCode {
 // Check mode
 // ---------------------------------------------------------------------------
 
-fn run_check_mode(artifacts: &[Artifact]) -> ExitCode {
+fn run_check_mode<C: clap::CommandFactory>(artifacts: &[Artifact], base: &Path) -> ExitCode {
     let mut any_stale = false;
 
     for artifact in artifacts {
@@ -537,11 +544,108 @@ fn run_check_mode(artifacts: &[Artifact]) -> ExitCode {
         }
     }
 
+    // Drift gate: every non-hidden top-level subcommand must be
+    // mentioned in llms.txt (CD-63 E3). Checked against the generated
+    // content directly so a new Cmd variant with no llms.txt update
+    // fails --check even before the artifact is regenerated on disk.
+    if let Some(llms) = artifacts.iter().find(|a| a.path.ends_with("llms.txt")) {
+        let missing = missing_subcommands_in_llms_txt::<C>(&llms.content);
+        if !missing.is_empty() {
+            eprintln!(
+                "drift: llms.txt is missing subcommand(s): {} (update build_llms_txt in gen_docs.rs)",
+                missing.join(", ")
+            );
+            any_stale = true;
+        }
+    }
+
+    // Denylist gate: hand-authored docs must not claim something
+    // "doesn't exist yet" — mcp.md said exactly that about advise/
+    // advise_diff/explain/invariants for months after they shipped
+    // (CD-63 E3, seeded with that incident).
+    for (path, phrase) in find_stale_claims(base) {
+        eprintln!(
+            "stale claim: {} contains {phrase:?} — verify the claim and rephrase or remove it",
+            path.display()
+        );
+        any_stale = true;
+    }
+
     if any_stale {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Every non-hidden top-level subcommand's name (e.g. `"gen-docs"`) must
+/// appear as `cofferdam <name>` somewhere in llms.txt — otherwise an agent
+/// skimming llms.txt has no way to discover the subcommand exists.
+fn missing_subcommands_in_llms_txt<C: clap::CommandFactory>(llms_txt: &str) -> Vec<String> {
+    C::command()
+        .get_subcommands()
+        .filter(|c| !c.is_hide_set())
+        .map(|c| c.get_name().to_string())
+        .filter(|name| !llms_txt.contains(&format!("cofferdam {name}")))
+        .collect()
+}
+
+/// Forward-looking phrases that describe something as not-yet-existing.
+/// Seeded with the exact phrase from the mcp.md incident (CD-60): docs
+/// claimed the advise/advise_diff/explain/invariants MCP tools "depend on
+/// features that don't exist yet" for months after those features
+/// shipped. A denylist can't know when a true claim goes stale on its
+/// own — but it stops a *new* stale claim from being added, and forces a
+/// human decision (rephrase or remove) the moment CI catches a match.
+const STALE_CLAIM_DENYLIST: &[&str] = &[
+    "doesn't exist yet",
+    "don't exist yet",
+    "coming soon",
+    "not yet implemented",
+    "not yet available",
+];
+
+/// Recursively scan hand-authored `.md` files under `base` (skipping
+/// generated/vendor directories) for `STALE_CLAIM_DENYLIST` phrases.
+/// Returns one `(path, phrase)` entry per match.
+fn find_stale_claims(base: &Path) -> Vec<(PathBuf, &'static str)> {
+    let mut hits = Vec::new();
+    let mut stack = vec![base.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                // `superpowers/` holds plan/spec scratch docs, not VitePress
+                // site content (not referenced from config.ts nav) — plans
+                // legitimately describe unimplemented future work.
+                if matches!(
+                    name,
+                    ".vitepress" | "node_modules" | "dist" | "public" | "superpowers"
+                ) {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let lower = content.to_lowercase();
+            for phrase in STALE_CLAIM_DENYLIST {
+                if lower.contains(phrase) {
+                    hits.push((path.clone(), *phrase));
+                }
+            }
+        }
+    }
+    hits
 }
 
 // ---------------------------------------------------------------------------

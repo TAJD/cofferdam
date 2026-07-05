@@ -30,6 +30,9 @@ build/
 *.swp
 .DS_Store
 
+# Local cargo config (per-machine toolchain overrides etc.)
+/.cargo/config.toml
+
 # Local secrets — never commit
 .env
 .env.*

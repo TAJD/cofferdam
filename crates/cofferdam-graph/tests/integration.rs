@@ -4,13 +4,13 @@
 //! inline unit tests in store.rs / schema.rs / build.rs / loader.rs.
 //! Only public re-exports from the crate root are used here.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use cofferdam_core::graph::{ImportKind, ImportRecord, ImportedName};
 use cofferdam_core::Span;
 use cofferdam_graph::{
-    apply_records, build_canonical_graph, load_envelope, normalized_file_path, EdgeKind,
-    EdgePayload, Graph, LoadError, NodeId, NodeKind,
+    build_canonical_graph, load_envelope, normalized_file_path, EdgeKind, EdgePayload, Graph,
+    LoadError, NodeId, NodeKind,
 };
 use smol_str::SmolStr;
 
@@ -237,103 +237,4 @@ fn load_envelope_rejects_unknown_future_version() {
     let err = load_envelope(input, None).unwrap_err();
     assert!(matches!(err, LoadError::FutureSchemaVersion { .. }));
     assert!(err.is_fatal());
-}
-
-// ---------------------------------------------------------------------------
-// Per-file provenance + removal (cd-36)
-// ---------------------------------------------------------------------------
-
-/// Structural equality for tests: same node ids present, same edges
-/// (as `(src, dst, payload)`), ignoring internal petgraph index /
-/// insertion order. `NodeId` is a content hash so it's stable
-/// regardless of how a node was reached.
-fn assert_graphs_structurally_equal(a: &Graph, b: &Graph) {
-    let mut a_nodes = a.node_ids();
-    let mut b_nodes = b.node_ids();
-    a_nodes.sort();
-    b_nodes.sort();
-    assert_eq!(a_nodes, b_nodes, "node sets differ");
-
-    let mut a_edges: Vec<String> = a.all_edges().iter().map(|e| format!("{e:?}")).collect();
-    let mut b_edges: Vec<String> = b.all_edges().iter().map(|e| format!("{e:?}")).collect();
-    a_edges.sort();
-    b_edges.sort();
-    assert_eq!(a_edges, b_edges, "edge sets differ");
-}
-
-#[test]
-fn remove_file_then_readd_matches_from_scratch_build() {
-    let a = "/proj/a.ts";
-    let b = "/proj/b.ts";
-    let lib = "/proj/lib.ts";
-    let imports = vec![named_import(a, lib, "Foo"), named_import(b, lib, "Bar")];
-    let exports: Vec<cofferdam_core::graph::ExportRecord> = vec![];
-
-    let fresh = build_canonical_graph(&imports, &exports);
-
-    let mut rebuilt = build_canonical_graph(&imports, &exports);
-    let a_path = normalized_file_path(&PathBuf::from(a));
-    assert!(rebuilt.remove_file(&a_path), "a.ts owned something");
-
-    // a.ts's own File node is gone, but lib.ts (shared import target)
-    // must survive — b.ts still owns it.
-    assert!(rebuilt.node_id_for_path(&a_path).is_none());
-    let lib_id = rebuilt
-        .node_id_for_path(&normalized_file_path(&PathBuf::from(lib)))
-        .expect("lib.ts survives — b.ts still owns it");
-    assert_eq!(rebuilt.incoming(lib_id).count(), 1, "only b.ts's edge left");
-
-    // Re-add exactly a.ts's slice of evidence.
-    let a_imports: Vec<_> = imports
-        .iter()
-        .filter(|i| i.from_file == Path::new(a))
-        .cloned()
-        .collect();
-    apply_records(&mut rebuilt, &a_imports, &[]);
-
-    assert_graphs_structurally_equal(&fresh, &rebuilt);
-}
-
-#[test]
-fn remove_file_leaves_shared_import_target_intact() {
-    let a = "/proj/a.ts";
-    let b = "/proj/b.ts";
-    let lib = "/proj/lib.ts";
-    let mut g = build_canonical_graph(
-        &[named_import(a, lib, "Foo"), named_import(b, lib, "Bar")],
-        &[],
-    );
-
-    let a_path = normalized_file_path(&PathBuf::from(a));
-    let lib_path = normalized_file_path(&PathBuf::from(lib));
-    let lib_id_before = g.node_id_for_path(&lib_path).expect("lib node exists");
-
-    g.remove_file(&a_path);
-
-    assert!(
-        g.node_id_for_path(&a_path).is_none(),
-        "a.ts's own node is gone"
-    );
-    let lib_id_after = g
-        .node_id_for_path(&lib_path)
-        .expect("lib.ts node must survive — b.ts still owns it");
-    assert_eq!(lib_id_before, lib_id_after);
-    assert_eq!(g.incoming(lib_id_after).count(), 1, "b.ts's edge remains");
-    assert_eq!(g.node_count(), 2, "b.ts + lib.ts remain");
-    assert_eq!(g.edge_count(), 1);
-}
-
-#[test]
-fn remove_file_is_noop_for_unowned_contributions() {
-    // Nodes/edges added via the plain (unowned) API carry no
-    // provenance; remove_file must not touch them.
-    let mut g = Graph::new();
-    let from = g.add_node(file_node("/p/a.ts"));
-    let to = g.add_node(file_node("/p/b.ts"));
-    g.add_edge(from, to, EdgePayload::bare(EdgeKind::ImportsAsValue));
-
-    let changed = g.remove_file(&PathBuf::from("/p/a.ts"));
-    assert!(!changed, "unowned contributions are untouched");
-    assert_eq!(g.node_count(), 2);
-    assert_eq!(g.edge_count(), 1);
 }

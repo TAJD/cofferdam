@@ -195,14 +195,7 @@ struct MFLCollector<'a> {
 }
 
 impl<'a> MFLCollector<'a> {
-    /// `node_start`/`node_end` are the enclosing function/arrow node's own
-    /// span (name + parameter list + body), used only for the reported
-    /// `Issue.location` — length is still measured from `body` alone. This
-    /// makes the finding's span match `Refactor.CyclomaticComplexity` and
-    /// `Refactor.CognitiveComplexity` (whole-function, not just the body),
-    /// which baseline signature computation relies on to find the
-    /// function's header (cd-9, "rulesig").
-    fn measure(&mut self, body: &FunctionBody<'_>, node_start: u32, node_end: u32, name: &str) {
+    fn measure(&mut self, body: &FunctionBody<'_>, name: &str) {
         let start_span = span_from_bytes(&self.file.text, body.span.start, body.span.start);
         let end_span = span_from_bytes(&self.file.text, body.span.end, body.span.end);
         let raw = end_span.line.saturating_sub(start_span.line);
@@ -215,7 +208,7 @@ impl<'a> MFLCollector<'a> {
         let skipped = count_skippable_lines(self.line_views, inner_lo, inner_hi);
         let length = raw.saturating_sub(skipped);
         if length > self.limit {
-            let span = span_from_bytes(&self.file.text, node_start, node_end);
+            let span = span_from_bytes(&self.file.text, body.span.start, body.span.end);
             self.issues.push(Issue {
                 check_id: MFL_META.id.to_string(),
                 message: format!(
@@ -240,7 +233,7 @@ impl<'a> Visit<'a> for MFLCollector<'a> {
                 .as_ref()
                 .map(|id| id.name.as_str().to_string())
                 .unwrap_or_else(|| "anonymous function".to_string());
-            self.measure(body, node.span.start, node.span.end, &name);
+            self.measure(body, &name);
         }
         oxc_ast_visit::walk::walk_function(self, node, flags);
     }
@@ -251,7 +244,7 @@ impl<'a> Visit<'a> for MFLCollector<'a> {
         // when the body is a single expression (no braces). Skip those —
         // they're measurable but not useful to flag.
         if !node.expression {
-            self.measure(&node.body, node.span.start, node.span.end, "arrow function");
+            self.measure(&node.body, "arrow function");
         } else if let Some(Statement::ExpressionStatement(_)) = node.body.statements.first() {
             // Block stays. Expression-bodied arrow's body is wrapped in
             // a BlockStatement with one ExpressionStatement; nothing to

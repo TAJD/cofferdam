@@ -85,12 +85,10 @@ fn no_op_re_run_serves_from_run_cache() {
         "warm pass must produce identical findings to cold"
     );
     assert_eq!(run_cache.hits(), 1, "no-op re-run must hit the run cache");
-    // The inner caches don't get a second probe on the warm pass —
-    // RunCache short-circuits before the per-file loop runs. Confirm
-    // the parse cache stayed at its cold-pass count: one miss per
-    // file in pass 1, then one hit per file in pass 2 when the
-    // consistency check reads the same entry back (CD-29).
-    assert_eq!(parse_cache.hits(), 2);
+    // The inner caches don't get a second probe — RunCache short-
+    // circuits before the per-file loop runs. Confirm the parse
+    // cache stayed at its cold-pass miss count.
+    assert!(parse_cache.hits() == 0);
 }
 
 #[test]

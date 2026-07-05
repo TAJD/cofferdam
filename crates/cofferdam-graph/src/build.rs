@@ -36,6 +36,7 @@
 //! consumer is dead weight until `Design.DeadExport`,
 //! `Design.ImportCycle`, and `Design.LayerViolation` migrate too.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use cofferdam_core::graph::{ExportRecord, ImportKind, ImportRecord};
@@ -77,63 +78,29 @@ pub fn normalized_file_path(p: &Path) -> PathBuf {
 /// finalize-stage checks to query.
 pub fn build_canonical_graph(imports: &[ImportRecord], exports: &[ExportRecord]) -> Graph {
     let mut g = Graph::new();
-    apply_records(&mut g, imports, exports);
-    g
-}
 
-/// Apply one batch of import/export evidence into an existing graph,
-/// tagging every touched node/edge with per-file provenance (cd-36).
-///
-/// This is the same materialisation logic [`build_canonical_graph`]
-/// runs against a fresh graph — factored out so incremental callers
-/// (e.g. re-adding a single file's contributions after
-/// [`crate::store::Graph::remove_file`]) can replay just that file's
-/// slice of `imports`/`exports` against the live graph and land on the
-/// exact same state a from-scratch rebuild would produce.
-///
-/// Provenance rule: a contribution is owned by the file whose
-/// evidence produced it.
-/// - `imp.from_file`'s own `File` node, and the `File` node for
-///   `imp.resolved` (the import target), are owned by `imp.from_file`
-///   — the importer. A shared import target ends up owned by every
-///   file that imports it.
-/// - `exp.file`'s own `File` node is owned by `exp.file` (this is
-///   what makes a pure exporter with no importers still get a node:
-///   see `materialises_file_node_for_pure_exporter` below).
-/// - Every import edge is owned solely by `imp.from_file`.
-pub fn apply_records(g: &mut Graph, imports: &[ImportRecord], exports: &[ExportRecord]) {
     // First pass: materialise every File node we'll need so each
-    // `add_edge_owned` call below can assume both endpoints are
-    // present.
+    // `add_edge` call below can assume both endpoints are present.
+    // Files appear here as either importer (`imp.from_file`), import
+    // target (`imp.resolved`), or pure exporter (`exp.file`) — the
+    // last case is what makes orphan exports queryable at all: a
+    // file that only exports and has nothing imported from it would
+    // otherwise have no node.
+    let mut paths: HashSet<PathBuf> = HashSet::new();
     for imp in imports {
-        let from = normalized_file_path(&imp.from_file);
-        g.add_node_owned(
-            NodeKind::File {
-                path: from.clone(),
-                lang: SmolStr::new_static("typescript"),
-            },
-            &from,
-        );
+        paths.insert(normalized_file_path(&imp.from_file));
         if let Some(r) = &imp.resolved {
-            let to = normalized_file_path(r);
-            g.add_node_owned(
-                NodeKind::File {
-                    path: to,
-                    lang: SmolStr::new_static("typescript"),
-                },
-                &from,
-            );
+            paths.insert(normalized_file_path(r));
         }
     }
     for exp in exports {
-        let f = normalized_file_path(&exp.file);
-        g.add_node_owned(
-            NodeKind::File {
-                path: f.clone(),
-                lang: SmolStr::new_static("typescript"),
-            },
-            &f,
-        );
+        paths.insert(normalized_file_path(&exp.file));
+    }
+    for p in paths {
+        g.add_node(NodeKind::File {
+            path: p,
+            lang: SmolStr::new_static("typescript"),
+        });
     }
 
     for imp in imports {
@@ -163,7 +130,7 @@ pub fn apply_records(g: &mut Graph, imports: &[ImportRecord], exports: &[ExportR
             } else {
                 EdgeKind::ImportsAsValue
             };
-            g.add_edge_owned(from_id, to_id, EdgePayload { kind, attrs }, &from);
+            g.add_edge(from_id, to_id, EdgePayload { kind, attrs });
             continue;
         }
 
@@ -190,9 +157,11 @@ pub fn apply_records(g: &mut Graph, imports: &[ImportRecord], exports: &[ExportR
             } else {
                 EdgeKind::ImportsAsValue
             };
-            g.add_edge_owned(from_id, to_id, EdgePayload { kind, attrs }, &from);
+            g.add_edge(from_id, to_id, EdgePayload { kind, attrs });
         }
     }
+
+    g
 }
 
 #[cfg(test)]

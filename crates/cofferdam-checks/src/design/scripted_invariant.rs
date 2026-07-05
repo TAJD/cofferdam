@@ -46,10 +46,6 @@ impl Check for ScriptedInvariant {
         &SI_META
     }
 
-    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
-        corpus.register_removable(&SCRIPTED_FILES, |slot, path| slot.retain(|p| p != path));
-    }
-
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
         // Record the file path so finalize can iterate the universe of
         // engine-seen TS files (not just files with imports/exports).

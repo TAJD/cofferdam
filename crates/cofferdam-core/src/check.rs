@@ -370,18 +370,6 @@ pub trait Check: Send + Sync {
     fn autofix(&self, _issue: &Issue, _source: &SourceFile) -> Option<TextEdit> {
         None
     }
-
-    /// Register this check's cross-file corpus slot(s) for per-file
-    /// removal (cd-32 incremental analysis). Checks that accumulate a
-    /// `Vec<E>` / `HashMap<PathBuf, _>` slot across files in `run()`
-    /// and read it back in `finalize()` should override this to call
-    /// `corpus.register_removable(&SLOT, |slot, path| ...)` once per
-    /// slot they own — e.g. `slot.retain(|e| e.file != path)`.
-    ///
-    /// Called once when incremental-analysis state is built; the
-    /// no-op default is correct for every check with no cross-file
-    /// slot (the overwhelming majority).
-    fn register_removable(&self, _corpus: &crate::CorpusIndex) {}
 }
 
 #[cfg(test)]

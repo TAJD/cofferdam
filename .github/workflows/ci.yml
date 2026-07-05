@@ -52,9 +52,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # The @<ref> here selects the Rust TOOLCHAIN, not the action version.
-      # Keep it pinned to the declared MSRV; dependabot is told to leave it
-      # alone (see .github/dependabot.yml) so it can't bump @1.93 -> @1.100.
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
@@ -119,33 +116,8 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-      - uses: codecov/codecov-action@v7
+      - uses: codecov/codecov-action@v6
         with:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-
-  changelog-reminder:
-    # Soft, non-blocking: warns when a PR changes crate/package source but
-    # leaves CHANGELOG.md untouched, so user-facing changes get noted at
-    # authoring time instead of being reconstructed at release time (the epic
-    # shipped with an empty [Unreleased] because entries were never added).
-    # Emits a `::warning::` annotation only — never fails a PR.
-    name: changelog reminder (soft)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Warn if source changed without a CHANGELOG update
-        shell: bash
-        run: |
-          base="origin/${{ github.base_ref }}"
-          changed=$(git diff --name-only "$base"...HEAD || true)
-          if echo "$changed" | grep -qE '^(crates|packages)/.+\.(rs|ts)$' \
-             && ! echo "$changed" | grep -qx 'CHANGELOG.md'; then
-            echo "::warning::Source changed but CHANGELOG.md was not updated. If this change is user-facing, add an entry under ## [Unreleased]."
-          else
-            echo "changelog reminder: ok"
-          fi

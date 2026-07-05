@@ -1,17 +1,12 @@
 //! Plugin host driver — invokes Node-side plugins declared in
 //! `cofferdam.toml`'s `plugins = [...]` array (cd-7e4 / cd-81a.7).
 //!
-//! Architecture (CD-33: streamed, wireVersion 2): the Rust CLI spawns
-//! `node cofferdam-plugin-host.mjs` and exchanges NDJSON records over
-//! stdin/stdout instead of one whole-repo JSON blob. Stdin carries a
-//! `header` record (plugins + options), one `file` record per source
-//! file, then an `end` record. Stdout carries `report` / `error` records
-//! streamed as each file is processed, then a final `done` record. This
-//! keeps peak memory on both sides at O(one file) instead of O(repo) —
-//! see `design/sdk-ast-wire.md` for the wire spec. Writing (this
-//! process) and reading (a background thread) run concurrently so a
-//! large volume of streamed findings can't back up the stdout pipe while
-//! we're still writing input (the classic bidirectional-pipe deadlock).
+//! Architecture: Rust CLI builds a JSON manifest carrying `(path, text,
+//! lineViews)` per file plus the plugin paths, spawns `node
+//! cofferdam-plugin-host.mjs` as a subprocess, pipes the manifest in
+//! over stdin, parses the host's JSON response on stdout, converts
+//! reports into engine `Issue`s, and returns them for merging into the
+//! built-in finding set.
 //!
 //! The host script is embedded at compile time via `include_str!`. On
 //! first call we materialise it into the OS temp dir and reuse the
@@ -27,19 +22,12 @@
 //!     `Warning.PluginCrashed` for that file; other files continue.
 //!   - Host script malformed JSON or non-zero exit: returns
 //!     `Warning.PluginHostFailed` with the captured stderr.
-//!   - Host exits successfully but the stdout stream ends without ever
-//!     emitting the closing `done` record (stdout truncated under load,
-//!     or the process terminated mid-finalize): treated as
-//!     `Warning.PluginHostFailed`, NOT as an empty finding set (cd-41).
-//!     `done` is the completion handshake — its absence is the only
-//!     reliable signal that the host didn't actually finish.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdout, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use cofferdam_core::layers::{self, LayerMatcher};
@@ -52,33 +40,19 @@ use serde::{Deserialize, Serialize};
 const HOST_SCRIPT: &str = include_str!("../scripts/plugin-host.mjs");
 const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
-/// Wire version for the streamed manifest protocol (CD-33). Bump and
-/// document in `design/sdk-ast-wire.md` on any breaking change to the
-/// record shapes below.
-const WIRE_VERSION: u32 = 2;
-
-/// First record on stdin: plugin list + per-check option overrides.
-/// Field names match `scripts/plugin-host.mjs`'s reads (camelCase on the
-/// JS side; Rust uses serde rename to match).
+/// Wire shape sent to the Node host on stdin. Field names match
+/// `scripts/plugin-host.mjs`'s `manifest.*` reads (camelCase on the JS
+/// side; Rust uses serde rename to match).
 #[derive(Serialize)]
-struct HeaderRecord<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    #[serde(rename = "wireVersion")]
-    wire_version: u32,
+struct PluginManifest<'a> {
     cwd: String,
-    plugins: &'a [String],
-    options: &'a BTreeMap<String, BTreeMap<String, ManifestOptionValue>>,
+    plugins: Vec<String>,
+    files: Vec<ManifestFile<'a>>,
+    options: BTreeMap<String, BTreeMap<String, ManifestOptionValue>>,
 }
 
-/// One streamed file record. Same fields the one-shot manifest used to
-/// carry per-file, now serialised and written as its own NDJSON line as
-/// soon as the file is parsed — the host processes it immediately
-/// instead of waiting for the whole repo to arrive.
 #[derive(Serialize)]
 struct ManifestFile<'a> {
-    #[serde(rename = "type")]
-    kind: &'static str,
     path: String,
     text: &'a str,
     #[serde(rename = "lineViews")]
@@ -92,28 +66,6 @@ struct ManifestFile<'a> {
     /// the engine has already emitted `Warning.ParseError` for the file.
     #[serde(skip_serializing_if = "Option::is_none")]
     ast: Option<crate::ast_wire::AstWire>,
-}
-
-/// Terminal record on stdin: no more files follow. Triggers `finalize()`
-/// hooks and the closing `done` record on stdout.
-#[derive(Serialize)]
-struct EndRecord {
-    #[serde(rename = "type")]
-    kind: &'static str,
-}
-
-/// One record read back from stdout. Internally tagged on `type`;
-/// `Report`/`Error` wrap the same shapes the one-shot `HostResponse`
-/// used to carry as array elements.
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum StreamRecord {
-    #[serde(rename = "report")]
-    Report(HostReport),
-    #[serde(rename = "error")]
-    Error(HostError),
-    #[serde(rename = "done")]
-    Done,
 }
 
 #[derive(Serialize)]
@@ -157,6 +109,14 @@ impl From<&RawOptionValue> for ManifestOptionValue {
             }
         }
     }
+}
+
+#[derive(Deserialize)]
+struct HostResponse {
+    #[serde(default)]
+    reports: Vec<HostReport>,
+    #[serde(default)]
+    errors: Vec<HostError>,
 }
 
 #[derive(Deserialize)]
@@ -472,6 +432,38 @@ pub fn run_plugins_with_sources(
     let layer_matchers: Vec<LayerMatcher> =
         layers_cfg.map(layers::build_matchers).unwrap_or_default();
 
+    let mut manifest_files = Vec::with_capacity(sources.len());
+    for (path, text) in sources {
+        let file = SourceFile::new(path.clone(), text.clone());
+        let allocator = Allocator::default();
+        let parsed = parse_into(&allocator, &file);
+        let line_views: Vec<ManifestLineView> = Lines::build(text, &parsed.program)
+            .map(|lv| ManifestLineView {
+                line_no: lv.line_no,
+                text: lv.text.to_string(),
+                is_comment: lv.is_comment,
+                is_doc_comment: lv.is_doc_comment,
+                is_string_literal: lv.is_string_literal,
+                is_jsx_text: lv.is_jsx_text,
+                is_pragma: lv.is_pragma,
+                line_start: lv.line_start,
+            })
+            .collect();
+        // Resolve layer membership for this file. `None` → JSON `null`.
+        let layer: Option<String> =
+            layers_cfg.and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
+        // Build the flat-array AST wire (cd-svf). One Visit pass per file;
+        // re-uses the parse already done for line views.
+        let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
+        manifest_files.push(ManifestFile {
+            path: forward_slash(path),
+            text,
+            line_views,
+            layer,
+            ast: Some(ast),
+        });
+    }
+
     // Canonicalise to absolute paths before handing to the host. The
     // host's `resolvePath(cwd, plugin)` is a no-op when the second arg
     // is absolute, so we avoid double-joining when ProjectConfig has
@@ -496,6 +488,17 @@ pub fn run_plugins_with_sources(
         options_payload.insert(check_id.clone(), converted);
     }
 
+    let manifest = PluginManifest {
+        cwd: forward_slash(project_root),
+        plugins: plugin_paths_str,
+        files: manifest_files,
+        options: options_payload,
+    };
+    let manifest_json = match serde_json::to_string(&manifest) {
+        Ok(s) => s,
+        Err(e) => return vec![host_failed_issue(&format!("manifest serialize: {e}"))],
+    };
+
     let mut child = match Command::new("node")
         .arg(&host_script)
         .stdin(Stdio::piped())
@@ -507,84 +510,12 @@ pub fn run_plugins_with_sources(
         Err(e) => return vec![host_unavailable_issue(&format!("spawn node: {e}"))],
     };
 
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => return vec![host_failed_issue("no host stdout")],
-    };
-    let stderr = match child.stderr.take() {
-        Some(s) => s,
-        None => return vec![host_failed_issue("no host stderr")],
-    };
-    let mut stdin = match child.stdin.take() {
-        Some(s) => s,
-        None => return vec![host_failed_issue("no host stdin")],
-    };
-
-    // Read stdout/stderr on background threads so a large volume of
-    // streamed findings can't fill the pipe and block Node while this
-    // thread is still writing input (see the module doc's deadlock
-    // note). Both threads terminate on EOF, which happens once the
-    // child exits (normally or via the timeout kill below).
-    let reader_handle = thread::spawn(move || read_stream_records(stdout));
-    let stderr_handle = thread::spawn(move || {
-        let mut buf = String::new();
-        let mut reader = BufReader::new(stderr);
-        std::io::Read::read_to_string(&mut reader, &mut buf).ok();
-        buf
-    });
-
-    let header = HeaderRecord {
-        kind: "header",
-        wire_version: WIRE_VERSION,
-        cwd: forward_slash(project_root),
-        plugins: &plugin_paths_str,
-        options: &options_payload,
-    };
-    let mut write_error = write_record(&mut stdin, &header).err();
-
-    if write_error.is_none() {
-        for (path, text) in sources {
-            let file = SourceFile::new(path.clone(), text.clone());
-            let allocator = Allocator::default();
-            let parsed = parse_into(&allocator, &file);
-            let line_views: Vec<ManifestLineView> = Lines::build(text, &parsed.program)
-                .map(|lv| ManifestLineView {
-                    line_no: lv.line_no,
-                    text: lv.text.to_string(),
-                    is_comment: lv.is_comment,
-                    is_doc_comment: lv.is_doc_comment,
-                    is_string_literal: lv.is_string_literal,
-                    is_jsx_text: lv.is_jsx_text,
-                    is_pragma: lv.is_pragma,
-                    line_start: lv.line_start,
-                })
-                .collect();
-            // Resolve layer membership for this file. `None` → JSON `null`.
-            let layer: Option<String> = layers_cfg
-                .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
-            // Build the flat-array AST wire (cd-svf). One Visit pass per
-            // file; re-uses the parse already done for line views.
-            let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
-            let record = ManifestFile {
-                kind: "file",
-                path: forward_slash(path),
-                text,
-                line_views,
-                layer,
-                ast: Some(ast),
-            };
-            if let Err(e) = write_record(&mut stdin, &record) {
-                write_error = Some(e);
-                break;
-            }
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(manifest_json.as_bytes()) {
+            return vec![host_failed_issue(&format!("write manifest: {e}"))];
         }
+        // Drop closes stdin → host script's `readFileSync(0, 'utf8')` returns.
     }
-
-    if write_error.is_none() {
-        write_error = write_record(&mut stdin, &EndRecord { kind: "end" }).err();
-    }
-    // Drop closes stdin → host script's readline sees EOF and finalizes.
-    drop(stdin);
 
     // cd-81a.7 acceptance criterion #3: enforce a wall-clock timeout on
     // plugin host execution. A genuinely-stuck plugin (infinite loop in
@@ -602,81 +533,58 @@ pub fn run_plugins_with_sources(
     // bead notes as a deferred refinement.
     let timeout = host_timeout();
     let start = Instant::now();
-    let exit_status = loop {
+    loop {
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(_)) => break,
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    break None;
+                    return vec![host_failed_issue(&format!(
+                        "plugin host exceeded {}s timeout (set COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS to change)",
+                        timeout.as_secs()
+                    ))];
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(_) => {
+            Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                return vec![host_failed_issue(&format!("try_wait: {e}"))];
             }
         }
-    };
-
-    let (reports, errors, malformed, saw_done) = reader_handle.join().unwrap_or_else(|_| {
-        (
-            Vec::new(),
-            Vec::new(),
-            vec!["reader thread panicked".to_string()],
-            false,
-        )
-    });
-    let stderr_text = stderr_handle.join().unwrap_or_default();
-
-    if let Some(e) = write_error {
-        return vec![host_failed_issue(&format!("write manifest: {e}"))];
     }
-    let Some(status) = exit_status else {
-        return vec![host_failed_issue(&format!(
-            "plugin host exceeded {}s timeout (set COFFERDAM_PLUGIN_HOST_TIMEOUT_SECS to change)",
-            timeout.as_secs()
-        ))];
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return vec![host_failed_issue(&format!("wait: {e}"))],
     };
-    if !status.success() {
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return vec![host_failed_issue(&format!(
             "host exited with status {:?}: {}",
-            status.code(),
-            stderr_text.trim()
-        ))];
-    }
-    if !saw_done {
-        // cd-41: the child exited successfully but its stdout stream
-        // ended without the closing `done` record ever arriving —
-        // truncated output or a mid-stream death that still returned
-        // exit code 0. Whatever reports/errors were collected up to
-        // that point are unreliable (we can't know what else was lost),
-        // so surface one clear failure instead of a silent (and
-        // possibly empty) result.
-        return vec![host_failed_issue(&format!(
-            "host exited successfully but never emitted its completion marker \
-             (stdout truncated or process terminated mid-run); \
-             {} report(s) and {} error(s) seen before the stream ended{}",
-            reports.len(),
-            errors.len(),
-            if stderr_text.trim().is_empty() {
-                String::new()
-            } else {
-                format!("; stderr: {}", stderr_text.trim())
-            }
+            output.status.code(),
+            stderr.trim()
         ))];
     }
 
     if std::env::var_os("COFFERDAM_PLUGIN_HOST_DEBUG").is_some() {
-        eprint!("{stderr_text}");
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
     }
 
-    let mut issues = Vec::with_capacity(reports.len() + errors.len() + malformed.len());
-    for m in malformed {
-        issues.push(host_failed_issue(&format!("malformed stream record: {m}")));
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let response: HostResponse = match serde_json::from_str(&stdout) {
+        Ok(r) => r,
+        Err(e) => {
+            return vec![host_failed_issue(&format!(
+                "parse host response: {e}; stdout was: {}",
+                stdout.chars().take(200).collect::<String>()
+            ))];
+        }
+    };
+
+    let mut issues = Vec::with_capacity(response.reports.len() + response.errors.len());
     let text_index: BTreeMap<&Path, &str> = sources
         .iter()
         .map(|(p, t)| (p.as_path(), t.as_str()))
@@ -703,7 +611,7 @@ pub fn run_plugins_with_sources(
             .push(shown);
     };
 
-    for r in reports {
+    for r in response.reports {
         let file = PathBuf::from(&r.file);
         let Some(text) = text_index.get(file.as_path()).copied() else {
             record_out_of_scope(&r.check_id, r.file);
@@ -773,7 +681,7 @@ pub fn run_plugins_with_sources(
         ));
     }
 
-    for err in errors {
+    for err in response.errors {
         let (check_id, message) = match err.kind.as_str() {
             "load_failed" => (
                 "Warning.PluginLoadFailed",
@@ -854,67 +762,6 @@ fn parse_severity(s: &str) -> Option<Severity> {
 
 fn forward_slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
-}
-
-/// Serialise one NDJSON record and write it (plus a trailing newline) to
-/// the host's stdin, flushing immediately so the host's `readline` sees
-/// the line without waiting for buffered data.
-fn write_record<T: Serialize>(stdin: &mut impl Write, record: &T) -> std::io::Result<()> {
-    let mut line = serde_json::to_string(record)
-        .map_err(|e| std::io::Error::other(format!("serialise record: {e}")))?;
-    line.push('\n');
-    stdin.write_all(line.as_bytes())?;
-    stdin.flush()
-}
-
-/// Read NDJSON `report`/`error`/`done` records from the host's stdout
-/// until EOF or a `done` record. Runs on a background thread (see
-/// `run_plugins_with_sources`) so it can drain the pipe concurrently
-/// with this process still writing input. A line that fails to parse is
-/// recorded in the third return slot rather than aborting the whole
-/// read — one bad record shouldn't discard every finding streamed
-/// before or after it.
-///
-/// The final `bool` reports whether a `done` record was actually
-/// observed before the stream ended (cd-41). EOF without `done` means
-/// the host's output was truncated or the process died mid-stream —
-/// the caller must not treat that the same as a legitimate empty
-/// result, even when the child's exit status is success.
-fn read_stream_records(
-    stdout: ChildStdout,
-) -> (Vec<HostReport>, Vec<HostError>, Vec<String>, bool) {
-    let mut reader = BufReader::new(stdout);
-    let mut reports = Vec::new();
-    let mut errors = Vec::new();
-    let mut malformed = Vec::new();
-    let mut saw_done = false;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {
-                let trimmed = line.trim_end();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<StreamRecord>(trimmed) {
-                    Ok(StreamRecord::Report(r)) => reports.push(r),
-                    Ok(StreamRecord::Error(e)) => errors.push(e),
-                    Ok(StreamRecord::Done) => {
-                        saw_done = true;
-                        break;
-                    }
-                    Err(e) => malformed.push(format!(
-                        "{e}: {}",
-                        trimmed.chars().take(200).collect::<String>()
-                    )),
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    (reports, errors, malformed, saw_done)
 }
 
 /// Wall-clock budget for one invocation of the plugin host. Default 60s;

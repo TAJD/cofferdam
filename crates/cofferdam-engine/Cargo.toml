@@ -25,7 +25,6 @@ oxc_ast_visit = { workspace = true }
 oxc_diagnostics = { workspace = true }
 oxc_parser = { workspace = true }
 oxc_resolver = { workspace = true }
-rayon = { workspace = true }
 self_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -43,9 +42,3 @@ proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
-# CD-35 — criterion bench harness, see benches/engine_bench.rs.
-criterion = { workspace = true }
-
-[[bench]]
-name = "engine_bench"
-harness = false

@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 use cofferdam_checks::all_builtins;
 use cofferdam_core::{Issue, Severity};
-use cofferdam_engine::baseline::signature_for_issue;
+use cofferdam_engine::baseline::signature_for_span;
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{Engine, ProjectConfig};
@@ -325,7 +325,7 @@ fn build_keyed_map(
         .iter()
         .map(|issue| {
             let text = texts.get(&issue.file).unwrap_or(&empty);
-            let sig = signature_for_issue(text, issue);
+            let sig = signature_for_span(text, &issue.location);
             let file = normalize_for_key(&issue.file, repo_root);
             let key = (file.clone(), issue.check_id.clone(), sig);
             let value = DiffIssue {

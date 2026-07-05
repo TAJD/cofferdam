@@ -29,23 +29,6 @@ git config core.hooksPath .githooks
 
 `pre-commit` runs `cargo fmt --check` + `cofferdam gen-docs --check` (sub-second on warm cache). `pre-push` runs `cargo clippy -D warnings` + `cargo test --workspace` (10s+ but only fires before publishing). See `.githooks/README.md` for details. Don't bypass with `--no-verify` — fix the underlying issue.
 
-## Cutting a release
-
-The release is **tag-triggered**: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the 7-platform binary matrix and publishes everything automatically — GitHub Releases (binaries + sha256), npm `@cofferdam/cofferdam` and `@cofferdam/check-sdk` (both via OIDC Trusted Publisher, no token), then install-smoke-tests the published packages on Linux/macOS/Windows. There is no manual publish step; the tag is the whole trigger.
-
-Versions bump by patch digit even for features pre-1.0 (0.3.x → 0.3.(x+1)); reserve minor bumps for breaking changes. All 24 version locations must agree — `scripts/version.mjs` owns them.
-
-```bash
-# 1. from a clean, green main:
-node scripts/release.mjs 0.3.8          # bump+regen all 24 version locations, roll CHANGELOG [Unreleased] -> [0.3.8]
-git diff                                # review
-git commit -am "chore(release): prepare v0.3.8" && git push origin main
-# 2. WAIT for CI to go fully green (this gate caught the MSRV break + a plugin flake — don't skip it)
-git tag -a v0.3.8 -m "cofferdam 0.3.8" && git push origin v0.3.8
-```
-
-`release.mjs` refuses a dirty tree and an empty `[Unreleased]` (pass `--allow-empty-changelog` to override). `release.yml`'s `verify` job re-checks version consistency **and** the CHANGELOG roll *before* any build, so a slip can't leave you half-published. The tag push is the irreversible step (npm versions are immutable) — that's why it's deliberately separate from prep and gated on green CI. Never let AI agents cut the tag without explicit go-ahead.
-
 ## Project structure
 
 ```
@@ -136,7 +119,7 @@ A check with `requires_types: true` is routed through a Node ts-morph "type host
 
 Cofferdam issues live in the **Cofferdam** project (key `CD`) on Projektor (MCP-native issue tracker), not beads. Use the `mcp__projektor__*` tools directly (`get_prioritized_issues` for "what's next", `search_issues` / `list_issues` to look things up, `create_issue` / `update_issue` to file and close work).
 
-Migrated 2026-07-03 from the prior beads (`bd`) tracker — old `cd-*` beads IDs are preserved as a `beads:cd-*` label on each migrated Projektor issue for traceability. `.beads/issues.jsonl` remains in the repo as a historical archive of closed work; do not add new issues to it.
+Migrated 2026-07-03 from the prior beads (`bd`) tracker — old `cd-*` beads IDs are preserved as a `beads:cd-*` label on each migrated Projektor issue for traceability. **The `.beads/issues.jsonl` archive is gone from the tree** and only ~9 beads carried labels through the migration, so a `cd-*` ID referenced in code/docs with no matching Projektor issue is likely *lost planned work*, not closed work — check Projektor before assuming it shipped (the "scalable architecture" ticket cd-6ad was lost this way and re-filed as CD-28).
 
 ## Output formats (when adding a new one)
 
@@ -171,7 +154,7 @@ impl Check for MyCheck {
 }
 ```
 
-Two checks share storage by referencing the same `CorpusKey<T>` constant (same name + same `T`); distinct keys (or a different `T`) get distinct slots. Findings spanning multiple locations use `Issue.related: Vec<RelatedSpan>` — formatters omit it when empty. The single-`Mutex<HashMap>` corpus serialises slot access; cd-6ad swaps in per-slot locks once per-file parallelism lands.
+Two checks share storage by referencing the same `CorpusKey<T>` constant (same name + same `T`); distinct keys (or a different `T`) get distinct slots. Findings spanning multiple locations use `Issue.related: Vec<RelatedSpan>` — formatters omit it when empty. The corpus already uses an outer `RwLock<HashMap>` with per-slot `Mutex`es (`cofferdam-core/src/corpus.rs`) — the locking groundwork for per-file parallelism landed, but the engine loop is still single-threaded, so nothing exercises the concurrency yet (tracked as CD-30 under the CD-28 scalability epic).
 
 **Engine finalize ordering (cd-wqc + cd-9hp.5).** Finalize runs in two phases. Phase A runs every check that is NOT in `cofferdam_core::FINALIZE_OBSERVER_CHECK_IDS` and appends issues; the engine then rebuilds the `ALL_PRE_FILTER_FINDINGS` snapshot from the union of run + pass2 + Phase A issues; Phase B runs the observer set. Today only `Consistency.UnusedSuppression` is an observer — dispatch is by check ID, not by a generic `CheckMeta` flag (cd-9hp.5 removed the flag because it had one user in six months). If you write a new check that emits from `finalize()` AND needs to see other checks' findings, add its ID to `FINALIZE_OBSERVER_CHECK_IDS` in `crates/cofferdam-core/src/check.rs`.
 
@@ -201,6 +184,9 @@ When dispatching for parallel check work:
 **Windows caveat:** the Agent tool's `isolation: "worktree"` has been observed to silently fall back to the main working tree on this host — agent edits show up directly in `git status` of the controller, with no per-agent branch to pull. When that happens, agents touching the same lines will overwrite each other with no merge step. Mitigations: only fan out when each agent's edits target disjoint methods/files (different `Check` structs, different `visit_X` methods on the same struct); have each agent run the full verification block before reporting back so the resulting tree is at least internally consistent; controller spot-checks `git status` after dispatch instead of trusting the worktree-list output.
 
 ## Real-repo validation
+
+TODO: Remove the reference to the specific repo - instead suggest that any local repos with cofferdam enabled are good test candidates.
+
 
 Test fixtures in `examples/` are necessary but not sufficient. Run against `C:/Users/tajdi/bestefforttools` (325 TS files) and `C:/Users/tajdi/gistreact` (31) — both known to parse cleanly — to spot-check whether a change introduces unexpected false positives or parse errors. No baseline number is enshrined here; the point is qualitative ("did the top-10 findings shift in ways I can defend?"), not a numeric regression gate.
 

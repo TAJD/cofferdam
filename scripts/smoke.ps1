@@ -13,24 +13,14 @@ Use debug binary (target/debug). Default is release (target/release).
 .PARAMETER Update
 Update the baseline file with current measurements.
 
-.PARAMETER Memory
-Run the CD-35 memory baseline gate instead of the findings-count smoke
-test: launch the binary against the checked-in `examples/` corpus (portable
-to CI, unlike the -repos corpus below which lives on the dev machine only),
-capture peak RSS, and fail if it grew more than the baseline's tolerance.
-Combine with -Update to record a fresh baseline.
-
 .EXAMPLE
 .\scripts\smoke.ps1 -Debug
 .\scripts\smoke.ps1 -Update
-.\scripts\smoke.ps1 -Memory
-.\scripts\smoke.ps1 -Memory -Update
 #>
 
 param(
     [switch]$Debug,
-    [switch]$Update,
-    [switch]$Memory
+    [switch]$Update
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,98 +43,6 @@ if (-not (Test-Path $baselineFile)) {
 }
 
 $baseline = Get-Content -Path $baselineFile -Raw | ConvertFrom-Json
-
-if ($Memory) {
-    # CD-35 memory baseline gate. Uses `examples/` (checked into the
-    # repo) rather than the `$baseline.repos` corpus above, which
-    # points at local-only dev-machine repos and would no-op on CI.
-    #
-    # `Process.PeakWorkingSet64` reads /proc/<pid>/status VmHWM on
-    # Linux and the Windows working-set counter on Windows via the
-    # same .NET API, so this branch runs unmodified on both CI OSes
-    # (pwsh ships on ubuntu-latest and windows-latest runners).
-    $corpus = Join-Path $workspaceRoot "examples"
-    if (-not (Test-Path $corpus)) {
-        Write-Error "Corpus not found: $corpus"
-        exit 1
-    }
-
-    Write-Host "Running memory gate with $profile binary: $binary"
-    Write-Host "Corpus: $corpus"
-
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $binary
-    $psi.ArgumentList.Add("check")
-    $psi.ArgumentList.Add($corpus)
-    $psi.ArgumentList.Add("--no-cache")
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    # Drain stdout/stderr asynchronously *before* WaitForExit — `check`
-    # can emit more output than the pipe buffer holds, and waiting
-    # synchronously first would deadlock (child blocks writing, we
-    # block waiting).
-    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-    $stderrTask = $proc.StandardError.ReadToEndAsync()
-
-    # `Process` properties are a point-in-time snapshot taken at
-    # `Start()` — `PeakWorkingSet64` reads back 0 unless `Refresh()` is
-    # called *while the process is still alive*; querying only after
-    # `WaitForExit()` reliably returns nothing. Poll until exit,
-    # tracking the max observed value ourselves as a safety net against
-    # missing the true peak between polls.
-    $peakRssBytes = 0
-    while (-not $proc.HasExited) {
-        try {
-            $proc.Refresh()
-            if ($proc.PeakWorkingSet64 -gt $peakRssBytes) {
-                $peakRssBytes = $proc.PeakWorkingSet64
-            }
-        } catch {}
-    }
-    $proc.WaitForExit()
-    $stdoutTask.Wait()
-    $stderrTask.Wait()
-    $peakRssKb = [Math]::Round($peakRssBytes / 1KB)
-    $proc.Close()
-
-    Write-Host "Peak RSS: $peakRssKb KB"
-
-    if ($Update) {
-        $memoryEntry = [PSCustomObject]@{
-            corpus       = "examples"
-            peak_rss_kb  = $peakRssKb
-            tolerance_pct = 20
-        }
-        $baseline | Add-Member -MemberType NoteProperty -Name "memory" -Value $memoryEntry -Force
-        $baseline | ConvertTo-Json -Depth 5 | Set-Content -Path $baselineFile -Encoding UTF8
-        Write-Host "Memory baseline updated: $baselineFile"
-        exit 0
-    }
-
-    if (-not $baseline.memory) {
-        Write-Error "No 'memory' baseline entry in $baselineFile. Run with -Memory -Update first."
-        exit 1
-    }
-
-    $baselineKb = $baseline.memory.peak_rss_kb
-    $tolerancePct = $baseline.memory.tolerance_pct
-    $growthPct = (($peakRssKb - $baselineKb) / $baselineKb) * 100
-
-    Write-Host "Baseline: $baselineKb KB, tolerance: +$tolerancePct%, growth: $([Math]::Round($growthPct, 1))%"
-
-    if ($growthPct -gt $tolerancePct) {
-        Write-Host ""
-        Write-Host "Memory regression: peak RSS grew $([Math]::Round($growthPct, 1))% vs baseline (gate: +$tolerancePct%)." -ForegroundColor Red
-        exit 1
-    }
-
-    Write-Host ""
-    Write-Host "Memory gate passed." -ForegroundColor Green
-    exit 0
-}
 
 # Run tests
 Write-Host "Running smoke tests with $profile binary: $binary"

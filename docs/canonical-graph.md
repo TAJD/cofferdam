@@ -266,12 +266,6 @@ When you write the next cross-file check:
   GraphQL schemas) wire into the graph via the `Extension` escape
   hatch. The contract for declaring namespaces and emitting facts is
   cd-9hp.10's deliverable.
-- ~~Incremental analysis — per-file provenance on each node/edge will
+- Incremental analysis — per-file provenance on each node/edge will
   give a natural invalidation unit for cd-9hp.4. The graph API stays
-  build-only at cp2; mutation/removal lands with that bead.~~ Shipped
-  in cd-36: `Graph::add_node_owned`/`add_edge_owned` tag every
-  contribution with the normalised file path that produced it, and
-  `Graph::remove_file(path)` drops exactly that file's contributions
-  (a shared node survives until its last owner is removed). Wiring
-  this into the engine's incremental replay flow is CD-32's scope, not
-  this one's.
+  build-only at cp2; mutation/removal lands with that bead.

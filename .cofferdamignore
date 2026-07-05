@@ -4,11 +4,3 @@
 # directories and is not affected by this file.
 crates/*/tests/fixtures/
 crates/*/tests/spec_contract/
-
-# Top-level fixture trees — one deliberately-flawed .ts per check, plus
-# plugin/type-host e2e fixtures. Not real source; kept out of self-scans
-# and the committed baseline. Tests reach these by explicit path, so
-# excluding them from discovery doesn't affect the suite.
-examples/
-examples-plugins/
-examples-type-host/

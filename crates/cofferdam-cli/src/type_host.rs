@@ -19,7 +19,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -56,24 +56,6 @@ pub fn host_timeout() -> Duration {
         .filter(|&n| n > 0)
         .unwrap_or(DEFAULT);
     Duration::from_secs(secs)
-}
-
-/// Number of Node workers in the type-host pool (CD-31). Default is the
-/// host's available parallelism (falling back to 1); override via
-/// `COFFERDAM_TYPE_HOST_POOL_SIZE=<n>`. Tying the default to core count
-/// means the pool roughly matches the eventual rayon thread count
-/// without hard-coding a dependency on the engine crate (which owns the
-/// actual rayon setup — CD-30).
-pub fn pool_size() -> usize {
-    std::env::var("COFFERDAM_TYPE_HOST_POOL_SIZE")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1)
-        })
 }
 
 #[derive(Debug, Serialize)]
@@ -369,42 +351,29 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
     })
 }
 
-/// Type oracle backed by a pool of live Node ts-morph workers (CD-31,
-/// following cd-9hp.2 cp2's single-worker design).
+/// Type oracle backed by a live Node ts-morph worker (cd-9hp.2 cp2).
 ///
-/// Each worker is a separate Node process with its own ts-morph
-/// `Project` handle, held behind its own `Mutex` so the `&self`
-/// [`TypeOracle`] API can drive the inherently `&mut` request channel.
-/// `type_at` dispatches to workers round-robin via an atomic counter —
-/// concurrent callers (once the engine's per-file loop is parallelized,
-/// CD-30) fan out across the pool instead of serialising onto one
-/// worker. A single-worker pool (the pre-CD-31 default on a 1-core
-/// host, or `COFFERDAM_TYPE_HOST_POOL_SIZE=1`) behaves identically to
-/// the old design.
+/// Holds the worker behind a `Mutex` so the `&self` [`TypeOracle`] API
+/// can drive the inherently `&mut` request channel. The engine runs
+/// type-aware checks single-threaded today, so contention is nil; once
+/// per-file parallelism lands the mutex serialises type queries onto the
+/// single-threaded worker, which is correct (if not yet parallel — a
+/// worker pool is the eventual answer).
 ///
 /// `type_at` swallows worker/transport errors into `None`: a check can't
 /// do anything useful with a transport failure mid-walk, and the right
 /// behaviour is "emit no finding" rather than crash the run. A dead
-/// worker therefore silently disables type findings from that worker's
-/// share of the run — cp4's CI smoke test guards against that
-/// regressing unnoticed.
+/// worker therefore silently disables type findings for the rest of the
+/// run — cp4's CI smoke test guards against that regressing unnoticed.
 pub struct WorkerTypeOracle {
-    workers: Vec<Mutex<Worker>>,
+    worker: Mutex<Worker>,
     tsconfig_path: String,
     next_id: AtomicU64,
-    next_worker: AtomicUsize,
 }
 
 impl WorkerTypeOracle {
     fn next_id(&self) -> String {
         format!("ta-{}", self.next_id.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// Pick the next worker round-robin. Panics only if the pool is
-    /// empty, which [`build_type_oracle`] never constructs.
-    fn next_worker(&self) -> &Mutex<Worker> {
-        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        &self.workers[idx]
     }
 }
 
@@ -418,16 +387,15 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
+        let mut worker = self.worker.lock().ok()?;
         let wire: Option<TypeFactsWire> = worker.request_nullable(&id, "typeAt", &params).ok()?;
         wire.map(Into::into)
     }
 }
 
-/// Spawn a pool of type-host workers (CD-31; size from [`pool_size`]),
-/// open the project's tsconfig on each (paying the init cost up front so
-/// it isn't a mysterious mid-run stall), and return a ready-to-use
-/// [`WorkerTypeOracle`].
+/// Spawn a type-host worker, open the project's tsconfig (paying the
+/// init cost up front so it isn't a mysterious mid-run stall), and
+/// return a ready-to-use [`WorkerTypeOracle`].
 ///
 /// `project_root` is the directory whose `node_modules` resolves
 /// `ts-morph`; `tsconfig_path` is the tsconfig the ts-morph `Project` is
@@ -435,80 +403,26 @@ impl TypeOracle for WorkerTypeOracle {
 /// type-aware check is registered and the user hasn't disabled
 /// `[engine] type_aware`.
 ///
-/// Workers are opened concurrently (one thread per worker) so the pool's
-/// wall-clock cost is close to a single worker's project-init time
-/// rather than N times it. On any failure (Node missing, ts-morph not
-/// installed, tsconfig invalid) already-spawned workers are torn down
-/// and the error is returned so the caller can surface a single clear
+/// On any failure (Node missing, ts-morph not installed, tsconfig
+/// invalid) returns the error so the caller can surface a single clear
 /// diagnostic and fall back to running without type-aware checks.
 pub fn build_type_oracle(
     project_root: &Path,
     tsconfig_path: &Path,
 ) -> Result<WorkerTypeOracle, TypeHostError> {
-    build_type_oracle_with_pool_size(project_root, tsconfig_path, pool_size())
-}
-
-/// Same as [`build_type_oracle`] but with an explicit pool size, bypassing
-/// the `COFFERDAM_TYPE_HOST_POOL_SIZE` env lookup. Exists so tests can pin
-/// a pool size deterministically without mutating process-global env
-/// state (the workspace forbids `unsafe`, which `std::env::set_var`
-/// requires since Rust 2024).
-fn build_type_oracle_with_pool_size(
-    project_root: &Path,
-    tsconfig_path: &Path,
-    size: usize,
-) -> Result<WorkerTypeOracle, TypeHostError> {
     let tsconfig = tsconfig_path.to_string_lossy().replace('\\', "/");
-
-    let results: Vec<Result<Worker, TypeHostError>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..size)
-            .map(|_| {
-                let tsconfig = tsconfig.as_str();
-                scope.spawn(move || -> Result<Worker, TypeHostError> {
-                    let mut worker = spawn_worker(project_root)?;
-                    let _open: OpenProjectResult = worker.request(
-                        "open-1",
-                        "openProject",
-                        &OpenProjectRpcParams {
-                            tsconfig_path: tsconfig,
-                        },
-                    )?;
-                    Ok(worker)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join().unwrap_or_else(|_| {
-                    Err(TypeHostError::Io("worker init thread panicked".into()))
-                })
-            })
-            .collect()
-    });
-
-    let mut workers = Vec::with_capacity(size);
-    let mut first_err = None;
-    for result in results {
-        match result {
-            Ok(w) => workers.push(w),
-            Err(e) if first_err.is_none() => first_err = Some(e),
-            Err(_) => {}
-        }
-    }
-
-    if let Some(err) = first_err {
-        for w in workers {
-            let _ = w.close();
-        }
-        return Err(err);
-    }
-
+    let mut worker = spawn_worker(project_root)?;
+    let _open: OpenProjectResult = worker.request(
+        "open-1",
+        "openProject",
+        &OpenProjectRpcParams {
+            tsconfig_path: &tsconfig,
+        },
+    )?;
     Ok(WorkerTypeOracle {
-        workers: workers.into_iter().map(Mutex::new).collect(),
+        worker: Mutex::new(worker),
         tsconfig_path: tsconfig,
         next_id: AtomicU64::new(0),
-        next_worker: AtomicUsize::new(0),
     })
 }
 
@@ -580,61 +494,5 @@ mod tests {
             !facts_s.includes_null,
             "s: string should NOT report includes_null; got {facts_s:?}"
         );
-    }
-
-    /// CD-31: a pool of >1 workers services concurrent `type_at` callers
-    /// without serialising through a single mutex. Same gating as
-    /// `worker_oracle_resolves_nullable_type`. Pins a 3-worker pool via
-    /// `build_type_oracle_with_pool_size` (not the env var, to avoid
-    /// `unsafe` env mutation), fires concurrent requests from multiple
-    /// threads against the same oracle, and asserts every response is
-    /// correct — the round-robin dispatch must not scramble results
-    /// across workers.
-    #[test]
-    fn worker_pool_serves_concurrent_requests() {
-        let Ok(ts_morph_root) = std::env::var("COFFERDAM_TYPE_HOST_TS_MORPH_ROOT") else {
-            return; // not configured — skip
-        };
-        let ts_morph_root = PathBuf::from(ts_morph_root);
-
-        let project = tempfile::tempdir().expect("tempdir");
-        let sample = project.path().join("sample.ts");
-        std::fs::write(
-            &sample,
-            "const x: string | null = null;\nconst s: string = \"hi\";\nexport { x, s };\n",
-        )
-        .expect("write sample");
-        let tsconfig = project.path().join("tsconfig.json");
-        std::fs::write(
-            &tsconfig,
-            r#"{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["sample.ts"] }"#,
-        )
-        .expect("write tsconfig");
-
-        let oracle = match build_type_oracle_with_pool_size(&ts_morph_root, &tsconfig, 3) {
-            Ok(o) => o,
-            Err(e) => panic!(
-                "build_type_oracle failed (is ts-morph installed at {}?): {e}",
-                ts_morph_root.display()
-            ),
-        };
-        assert_eq!(oracle.workers.len(), 3, "pool should have 3 workers");
-
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                let oracle = &oracle;
-                let sample = &sample;
-                scope.spawn(move || {
-                    let facts_x = oracle
-                        .type_at(sample, 6, 7)
-                        .expect("type_at should resolve x");
-                    assert!(facts_x.includes_null, "got {facts_x:?}");
-                    let facts_s = oracle
-                        .type_at(sample, 37, 38)
-                        .expect("type_at should resolve s");
-                    assert!(!facts_s.includes_null, "got {facts_s:?}");
-                });
-            }
-        });
     }
 }

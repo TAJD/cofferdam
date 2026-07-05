@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.7"
+version = "0.3.6"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/TAJD/cofferdam"
@@ -23,13 +23,13 @@ authors = ["cofferdam contributors"]
 rust-version = "1.93"
 
 [workspace.dependencies]
-cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.7" }
-cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.7" }
-cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.7" }
-cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.7" }
-cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.7" }
-cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.7" }
-cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.3.7" }
+cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.6" }
+cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.6" }
+cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.6" }
+cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.6" }
+cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.6" }
+cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.6" }
+cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.3.6" }
 
 # Third-party (kept narrow at phase 0; expanded as phases land)
 clap = { version = "4", features = ["derive"] }
@@ -45,19 +45,12 @@ oxc_span = "0.128"
 oxc_syntax = "0.128"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.11"
+sha2 = "0.10"
 # cd-9hp.4 cp1 — self-referential parse-cache entry (Allocator + parse
 # result borrowed from it). The pattern in `crates/cofferdam-core/src/parser.rs`
 # already noted self_cell as a viable option; the parse cache makes
 # the dep earn its keep.
 self_cell = "1"
-# CD-30 — per-file parallelism for the engine's run loop. Each rayon
-# worker parses its own file with a local `Allocator`; oxc's
-# arena-based AST holds raw pointers internally and is not `Send`, so
-# unlike `FindingsCache` the parse cache can't be shared across
-# threads (see `cache.rs`'s doc comment) — parallel runs accept a
-# redundant per-file parse in exchange for real multi-core scaling.
-rayon = "1"
 # cd-9hp.4 cp1b — file-system watcher backing `cofferdam watch`'s
 # daemon loop. notify v8 picks the platform-recommended backend
 # (ReadDirectoryChangesW on Windows, FSEvents on macOS, inotify on
@@ -75,14 +68,10 @@ crossbeam-channel = "0.5"
 # cofferdam-graph; pulled into the workspace deps so its version is
 # pinned alongside the other shared crates.
 smol_str = { version = "0.3", features = ["serde"] }
-thiserror = "2"
+thiserror = "1"
 toml = "0.8"
 insta = { version = "1", features = ["filters"] }
 proptest = "1"
-# CD-35 — criterion benches lock in the CD-28 epic's perf wins
-# (crates/cofferdam-engine/benches) so later changes can't silently
-# regress them.
-criterion = "0.5"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

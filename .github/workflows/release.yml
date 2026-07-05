@@ -10,17 +10,10 @@
 #   - cargo-zigbuild for the cross targets (linux-arm64-gnu, linux-musl x64+arm64).
 #     Simpler than `cross` (no docker required on the runner) and battle-tested.
 #
-# Publish targets on a v* tag (all automatic — no manual npm step):
-#   - GitHub Releases: multi-platform binaries + .sha256      → `publish` job
-#   - npm @cofferdam/cofferdam (postinstall binary fetcher)   → `publish-npm` (OIDC)
-#   - npm @cofferdam/check-sdk (plugin SDK, tsc → dist)       → `publish-check-sdk` (OIDC)
-#     then `npm-smoke` install-verifies the published package on Linux/macOS/Windows.
-#
-# Still out of scope:
+# Out of scope (pre-phase-4):
+#   - npm publish — handled by the napi-rs path once cofferdam-napi is wired up
 #   - crates.io publish — separate workflow when the trait surface stabilizes
-#   - Apple notarization / Windows code signing — adds complexity; skipped pre-1.0
-#   - A native napi package (@cofferdam/node) is phase 4; today's npm package ships
-#     the prebuilt CLI binary via a postinstall download, not napi bindings.
+#   - Apple notarization / Windows code signing — adds complexity; skipped for v0.1.0
 
 name: release
 
@@ -58,11 +51,11 @@ jobs:
   # tag-gated) so `build`'s `needs: verify` resolves on workflow_dispatch
   # too.
   verify:
-    name: verify version + changelog
+    name: verify version consistency
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: "24"
       - name: Check version locations
@@ -73,29 +66,6 @@ jobs:
           else
             node scripts/version.mjs check
           fi
-      - name: Verify CHANGELOG has a release section for this tag
-        # Gated PRE-BUILD on purpose. This same assertion used to live in
-        # publish-npm, which runs AFTER the GitHub Release is published — so a
-        # changelog slip (unrolled [Unreleased], missing version heading) would
-        # ship binaries + a consumed tag but block npm, leaving a half-release
-        # with diverged versions. Failing here costs nothing but a checkout.
-        # Only meaningful on a tag; a no-op on workflow_dispatch.
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          # [Unreleased] must be empty (entries moved into the release section)
-          unreleased_body=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md)
-          if echo "$unreleased_body" | grep -qP '\S'; then
-            echo "ERROR: ## [Unreleased] section is not empty. Move entries to ## [$version] before releasing."
-            exit 1
-          fi
-          # ...and a section for this exact version must exist
-          if ! grep -qP "^## \[$version\]" CHANGELOG.md; then
-            echo "ERROR: No ## [$version] section found in CHANGELOG.md. Add a release section before publishing."
-            exit 1
-          fi
-          echo "CHANGELOG.md OK for $version"
 
   build:
     name: build ${{ matrix.target }}
@@ -304,9 +274,22 @@ jobs:
           # Use npm to set the version (no git tag — we're already on the tag commit)
           npm version "$version" --no-git-tag-version --allow-same-version
 
-      # CHANGELOG for this release is verified pre-build in the `verify` job
-      # (this job needs: publish needs: build needs: verify), so a changelog
-      # slip can never reach here with binaries already published.
+      - name: Verify CHANGELOG.md for this release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Assert [Unreleased] section is empty (no non-blank lines before the next ## [)
+          unreleased_body=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md)
+          if echo "$unreleased_body" | grep -qP '\S'; then
+            echo "ERROR: ## [Unreleased] section is not empty. Move entries to ## [$version] before releasing."
+            exit 1
+          fi
+          # Assert that a versioned section exists for this tag
+          if ! grep -qP "^## \[$version\]" CHANGELOG.md; then
+            echo "ERROR: No ## [$version] section found in CHANGELOG.md. Add a release section before publishing."
+            exit 1
+          fi
+          echo "CHANGELOG.md OK for $version"
 
       - name: Verify cofferdam tarball includes bin/cofferdam.js
         # Guard against a successful-but-empty publish (cd-iye / gh #10).

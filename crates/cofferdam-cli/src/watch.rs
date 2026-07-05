@@ -30,7 +30,6 @@
 //! the default `--debounce 100` covers the common case without
 //! adding visible latency.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -38,9 +37,8 @@ use std::time::{Duration, Instant};
 
 use cofferdam_checks::all_builtins;
 use cofferdam_core::Issue;
-use cofferdam_engine::{
-    config::resolve_with_invariants, discover, AnalysisState, DiscoveryOptions, Engine,
-};
+use cofferdam_engine::cache::ParseCache;
+use cofferdam_engine::{config::resolve_with_invariants, discover, DiscoveryOptions, Engine};
 use cofferdam_formatters::TextFormatter;
 use notify::{Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -86,11 +84,9 @@ pub fn run(args: WatchArgs) -> ExitCode {
         Err(()) => return ExitCode::from(2),
     };
 
-    // Same incremental-analysis state across every iteration (cd-32)
-    // — the corpus, graph, parse cache, and per-file pass-1 issues all
-    // survive until the process is killed, so an edit to one file
-    // only re-runs pass 1 for that file instead of the whole tree.
-    let mut state = AnalysisState::new();
+    // Same cache across every iteration — the whole point of the
+    // exercise. Survives until the process is killed.
+    let cache = ParseCache::new();
 
     // First pass: analyze whatever's there now so the user sees a
     // baseline of findings before any keystroke.
@@ -102,7 +98,7 @@ pub fn run(args: WatchArgs) -> ExitCode {
         }
     };
     print_separator("initial");
-    let initial_issues = analyze_once(&engine, &mut state, &initial_files);
+    let initial_issues = analyze_once(&engine, &cache, &initial_files);
     print_findings(&initial_issues);
 
     // Filesystem watcher. Recursive on every root so subtree changes
@@ -158,7 +154,7 @@ pub fn run(args: WatchArgs) -> ExitCode {
                     }
                 };
                 print_separator("change");
-                let issues = analyze_once(&engine, &mut state, &files);
+                let issues = analyze_once(&engine, &cache, &files);
                 print_findings(&issues);
             }
         }
@@ -199,37 +195,21 @@ fn build_engine(config_path: Option<&Path>, no_config: bool) -> Result<Engine, (
     Ok(engine)
 }
 
-/// Read every discovered file from disk, diff it against `state`'s
-/// last-seen content, and run the engine incrementally (cd-32) over
-/// just the files that changed or were removed. Returns the issue
-/// list ready for rendering — byte-identical to a from-scratch run
-/// over the same discovered file set.
-fn analyze_once(engine: &Engine, state: &mut AnalysisState, files: &[PathBuf]) -> Vec<Issue> {
-    let mut discovered: HashSet<PathBuf> = HashSet::with_capacity(files.len());
-    let mut changed: Vec<(PathBuf, String)> = Vec::new();
+/// Read every discovered file from disk, run the engine through the
+/// cache, and apply severity overrides (mirrors `run_check`'s
+/// post-analyze stamping). Returns the issue list ready for rendering.
+fn analyze_once(engine: &Engine, cache: &ParseCache, files: &[PathBuf]) -> Vec<Issue> {
+    let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(files.len());
     for path in files {
-        let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
         match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let unchanged = state.sources().get(&abs) == Some(&text);
-                discovered.insert(abs.clone());
-                if !unchanged {
-                    changed.push((abs, text));
-                }
-            }
+            Ok(text) => sources.push((path.clone(), text)),
             Err(e) => {
                 eprintln!("warning: skipping `{}`: {e}", path.display());
             }
         }
     }
-    let removed: Vec<PathBuf> = state
-        .sources()
-        .keys()
-        .filter(|p| !discovered.contains(*p))
-        .cloned()
-        .collect();
-
-    engine.analyze_incremental(state, &changed, &removed)
+    let (issues, _texts) = engine.analyze_with_sources_cached(sources, Some(cache));
+    issues
 }
 
 fn print_findings(issues: &[Issue]) {
@@ -337,27 +317,24 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn analyze_once_uses_the_shared_state() {
+    fn analyze_once_uses_the_shared_cache() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("widget.ts");
         fs::write(&path, "export const x = 1;\n").expect("write");
 
         let engine = Engine::new(all_builtins());
-        let mut state = AnalysisState::new();
-        let _ = analyze_once(&engine, &mut state, std::slice::from_ref(&path));
-        let misses = state.parse_cache().misses();
+        let cache = ParseCache::new();
+        let _ = analyze_once(&engine, &cache, std::slice::from_ref(&path));
+        let misses = cache.misses();
         assert!(misses >= 1, "first pass must record a parse miss");
 
-        let _ = analyze_once(&engine, &mut state, std::slice::from_ref(&path));
+        let _ = analyze_once(&engine, &cache, std::slice::from_ref(&path));
         assert_eq!(
-            state.parse_cache().misses(),
+            cache.misses(),
             misses,
             "second pass against unchanged text must add no misses"
         );
-        assert!(
-            state.parse_cache().hits() >= 1,
-            "second pass must register a cache hit"
-        );
+        assert!(cache.hits() >= 1, "second pass must register a cache hit");
     }
 
     #[test]
@@ -367,40 +344,19 @@ mod tests {
         fs::write(&path, "export const x = 1;\n").expect("write");
 
         let engine = Engine::new(all_builtins());
-        let mut state = AnalysisState::new();
-        let _ = analyze_once(&engine, &mut state, std::slice::from_ref(&path));
-        let misses_after_first = state.parse_cache().misses();
+        let cache = ParseCache::new();
+        let _ = analyze_once(&engine, &cache, std::slice::from_ref(&path));
+        let misses_after_first = cache.misses();
 
         // Rewrite with different bytes — the content hash changes,
         // so the next pass misses again.
         fs::write(&path, "export const x = 2;\n").expect("rewrite");
-        let _ = analyze_once(&engine, &mut state, std::slice::from_ref(&path));
+        let _ = analyze_once(&engine, &cache, std::slice::from_ref(&path));
         assert_eq!(
-            state.parse_cache().misses(),
+            cache.misses(),
             misses_after_first + 1,
             "edited file must record exactly one new parse miss"
         );
-    }
-
-    #[test]
-    fn removed_file_drops_out_of_state() {
-        let dir = tempdir().expect("tempdir");
-        let a = dir.path().join("a.ts");
-        let b = dir.path().join("b.ts");
-        fs::write(&a, "export const a = 1;\n").expect("write a");
-        fs::write(&b, "export const b = 1;\n").expect("write b");
-
-        let engine = Engine::new(all_builtins());
-        let mut state = AnalysisState::new();
-        let _ = analyze_once(&engine, &mut state, &[a.clone(), b.clone()]);
-        assert_eq!(state.sources().len(), 2);
-
-        // `b.ts` is no longer discovered (e.g. deleted) — the next
-        // pass should drop its contributions from the retained state.
-        let _ = analyze_once(&engine, &mut state, std::slice::from_ref(&a));
-        assert_eq!(state.sources().len(), 1);
-        let abs_b = std::path::absolute(&b).unwrap_or(b);
-        assert!(!state.sources().contains_key(&abs_b));
     }
 
     #[test]

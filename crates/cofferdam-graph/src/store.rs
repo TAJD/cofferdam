@@ -25,8 +25,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use petgraph::graph::{EdgeIndex, NodeIndex};
-use petgraph::stable_graph::StableDiGraph;
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use smol_str::SmolStr;
@@ -64,19 +63,12 @@ impl EdgePayload {
 /// engine after pass-1 graph extraction, consumed by graph-aware
 /// checks in finalize().
 ///
-/// cd-36 (per-file provenance + removal): backed by
-/// [`petgraph::stable_graph::StableDiGraph`] rather than plain
-/// `DiGraph`. Plain `DiGraph::remove_node`/`remove_edge` swap the last
-/// element into the removed slot, which would silently invalidate
-/// every `NodeIndex`/`EdgeIndex` this type caches (`node_lookup`,
-/// `edge_owner`, ...) unless every one of those maps was fixed up on
-/// every removal. `StableGraph` leaves a hole instead of swapping, so
-/// cached indices stay valid across `remove_file` calls — the
-/// trade-off is `O(capacity)` iteration instead of `O(len)`, which is
-/// fine at cofferdam's per-project node counts.
+/// Build-only at cp2 — no removal or mutation API. Incremental
+/// analysis (cd-9hp.4) will need a stable-index variant; we'll add
+/// it under a separate type or behind a feature flag when cp4 lands.
 #[derive(Debug, Default)]
 pub struct Graph {
-    inner: StableDiGraph<NodeKind, EdgePayload>,
+    inner: DiGraph<NodeKind, EdgePayload>,
     /// `NodeId → petgraph index`. Built incrementally as nodes are
     /// added. Required because the public API speaks `NodeId`
     /// (content-addressed, stable across processes) while petgraph
@@ -87,26 +79,6 @@ pub struct Graph {
     path_index: HashMap<PathBuf, NodeId>,
     /// Layer name → file NodeIds belonging to that layer.
     layer_members: HashMap<SmolStr, Vec<NodeId>>,
-    /// Per-node provenance: which normalised file paths contributed
-    /// this node. A node is only physically removed once its owner
-    /// set is empty — see [`Graph::remove_file`]. Only populated for
-    /// nodes added via [`Graph::add_node_owned`]; nodes added through
-    /// the plain [`Graph::add_node`] (e.g. existing tests, or
-    /// `assign_layer`, which isn't wired into `remove_file` at cd-36
-    /// because nothing in the build pipeline calls it yet) carry no
-    /// provenance and are never touched by removal.
-    node_owners: HashMap<NodeId, HashSet<PathBuf>>,
-    /// Reverse index of `node_owners`: file path → node ids it owns a
-    /// share of. Lets `remove_file` find its nodes without scanning
-    /// every entry in `node_owners`.
-    owned_nodes_by_file: HashMap<PathBuf, HashSet<NodeId>>,
-    /// Per-edge provenance. Unlike nodes, an edge has exactly one
-    /// owner — the file whose per-file evidence produced it — so a
-    /// removed owner always removes the edge outright.
-    edge_owner: HashMap<EdgeIndex, PathBuf>,
-    /// Reverse index of `edge_owner`: file path → edge indices it
-    /// owns.
-    owned_edges_by_file: HashMap<PathBuf, HashSet<EdgeIndex>>,
 }
 
 impl Graph {
@@ -174,128 +146,6 @@ impl Graph {
             .copied()
             .expect("destination node must be added before its edges");
         self.inner.add_edge(src_idx, dst_idx, payload)
-    }
-
-    // ----- owned mutation (cd-36: per-file provenance) -----
-
-    /// Like [`Graph::add_node`], but records `owner` (an already
-    /// normalised file path — see [`crate::normalized_file_path`]) as
-    /// a contributor to this node's identity.
-    ///
-    /// A node can accumulate several owners over its lifetime — e.g.
-    /// a shared import target's `File` node is owned by every file
-    /// that imports it, not just the file it represents. The node is
-    /// only physically removed once every owner has been dropped via
-    /// [`Graph::remove_file`].
-    pub fn add_node_owned(&mut self, node: NodeKind, owner: &Path) -> NodeId {
-        let id = self.add_node(node);
-        self.node_owners
-            .entry(id)
-            .or_default()
-            .insert(owner.to_path_buf());
-        self.owned_nodes_by_file
-            .entry(owner.to_path_buf())
-            .or_default()
-            .insert(id);
-        id
-    }
-
-    /// Like [`Graph::add_edge`], but records `owner` as this edge's
-    /// sole contributor. Unlike nodes, an edge always has exactly one
-    /// owner (the file whose per-file evidence produced it), so
-    /// [`Graph::remove_file`] removes an owned edge outright rather
-    /// than decrementing a share count.
-    pub fn add_edge_owned(
-        &mut self,
-        src: NodeId,
-        dst: NodeId,
-        payload: EdgePayload,
-        owner: &Path,
-    ) -> EdgeIndex {
-        let edge_idx = self.add_edge(src, dst, payload);
-        self.edge_owner.insert(edge_idx, owner.to_path_buf());
-        self.owned_edges_by_file
-            .entry(owner.to_path_buf())
-            .or_default()
-            .insert(edge_idx);
-        edge_idx
-    }
-
-    /// Drop every contribution `path` (an already-normalised file
-    /// path) owns: edges it solely owns are removed outright; nodes
-    /// lose `path` from their owner set and are physically removed
-    /// only once that set becomes empty. Nodes/edges added via the
-    /// plain (unowned) [`Graph::add_node`]/[`Graph::add_edge`] are
-    /// untouched — they carry no provenance for this to key on.
-    ///
-    /// Returns `true` if `path` owned anything (i.e. this call changed
-    /// the graph).
-    pub fn remove_file(&mut self, path: &Path) -> bool {
-        let mut changed = false;
-
-        if let Some(edges) = self.owned_edges_by_file.remove(path) {
-            changed |= !edges.is_empty();
-            for edge_idx in edges {
-                self.edge_owner.remove(&edge_idx);
-                self.inner.remove_edge(edge_idx);
-            }
-        }
-
-        if let Some(node_ids) = self.owned_nodes_by_file.remove(path) {
-            changed |= !node_ids.is_empty();
-            for id in node_ids {
-                let Some(owners) = self.node_owners.get_mut(&id) else {
-                    continue;
-                };
-                owners.remove(path);
-                if !owners.is_empty() {
-                    continue;
-                }
-                self.node_owners.remove(&id);
-
-                let Some(idx) = self.node_lookup.remove(&id) else {
-                    continue;
-                };
-                if let Some(NodeKind::File {
-                    path: node_path, ..
-                }) = self.inner.node_weight(idx)
-                {
-                    self.path_index.remove(node_path);
-                }
-                self.inner.remove_node(idx);
-            }
-        }
-
-        changed
-    }
-
-    // ----- test/diagnostic snapshots -----
-
-    /// Every node id currently in the graph. Order is unspecified —
-    /// callers that need a deterministic comparison (e.g. asserting
-    /// two graphs are structurally equal) should sort first. Not a
-    /// hot-path API.
-    pub fn node_ids(&self) -> Vec<NodeId> {
-        self.node_lookup.keys().copied().collect()
-    }
-
-    /// Every edge as a `(src_id, dst_id, payload)` triple. Same
-    /// unspecified-order caveat as [`Graph::node_ids`].
-    pub fn all_edges(&self) -> Vec<(NodeId, NodeId, EdgePayload)> {
-        self.inner
-            .edge_indices()
-            .map(|e| {
-                let (src_idx, dst_idx) = self
-                    .inner
-                    .edge_endpoints(e)
-                    .expect("edge_indices() only yields present edges");
-                (
-                    self.id_for_index(src_idx),
-                    self.id_for_index(dst_idx),
-                    self.inner[e].clone(),
-                )
-            })
-            .collect()
     }
 
     // ----- size / introspection -----

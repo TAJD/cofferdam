@@ -29,7 +29,6 @@ use oxc_ast::ast::{
     ObjectPropertyKind, Program,
 };
 use oxc_ast_visit::{walk, Visit};
-use oxc_span::GetSpan;
 use oxc_syntax::scope::ScopeFlags;
 use serde::Serialize;
 
@@ -208,24 +207,12 @@ impl<'a> Visit<'a> for WireBuilder<'a> {
         }
         let mut argument_idxs = Vec::with_capacity(it.arguments.len());
         for arg in &it.arguments {
-            let arg_span = arg.span();
             let arg_first_idx = self.nodes.len() as i32;
             self.visit_argument(arg);
-            // Only record an argument idx if the visit pushed a node
-            // that IS the argument itself — i.e. its span matches the
-            // argument's own span exactly. A non-v0 argument kind (e.g.
-            // TemplateLiteral) still gets descended into (so v0 nodes
-            // nested inside it, like an identifier in `${...}`, are
-            // still discoverable via find_all/walk), but the first node
-            // that descent happens to push is a *descendant*, not a
-            // representation of the argument — recording it here would
-            // misattribute the descendant's (truncated) span as the
-            // argument's own, which is exactly the cd-18 bug.
-            if let Some(pushed) = self.nodes.get(arg_first_idx as usize) {
-                if pushed.span.start_byte == arg_span.start && pushed.span.end_byte == arg_span.end
-                {
-                    argument_idxs.push(arg_first_idx);
-                }
+            // Only record an argument idx if the visit actually pushed
+            // a v0 node. `nodes.len()` advanced means yes.
+            if (self.nodes.len() as i32) > arg_first_idx {
+                argument_idxs.push(arg_first_idx);
             }
         }
 
@@ -426,98 +413,5 @@ impl<'a> Visit<'a> for WireBuilder<'a> {
         self.nodes[idx as usize].extras = WireExtras::Identifier {
             name: it.name.to_string(),
         };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cofferdam_core::{parse_into, Allocator, SourceFile};
-    use std::path::PathBuf;
-
-    fn build_wire(text: &str) -> AstWire {
-        let file = SourceFile::new(PathBuf::from("repro.ts"), text.to_string());
-        let allocator = Allocator::default();
-        let parsed = parse_into(&allocator, &file);
-        WireBuilder::new(text).build(&parsed.program)
-    }
-
-    fn call_extras(wire: &AstWire, idx: i32) -> (i32, &[i32]) {
-        match &wire.nodes[idx as usize].extras {
-            WireExtras::Call {
-                callee_idx,
-                argument_idxs,
-            } => (*callee_idx, argument_idxs),
-            _ => panic!("node {idx} is not a CallExpression"),
-        }
-    }
-
-    /// Regression test for cd-18 (github#51): a template-literal argument
-    /// must not be misattributed as a truncated nested IdentifierReference.
-    #[test]
-    fn template_literal_argument_is_not_misattributed_as_nested_identifier() {
-        let text = "await db.prepare(`SELECT * FROM users WHERE id = ${userId}`).run()\n";
-        let wire = build_wire(text);
-
-        // node[3] is the `db.prepare(...)` CallExpression (node[1] is the
-        // outer `.run()` call).
-        let (callee_idx, argument_idxs) = call_extras(&wire, 3);
-        let callee_span = &wire.nodes[callee_idx as usize].span;
-        assert_eq!(
-            (callee_span.start_byte, callee_span.end_byte),
-            (6, 16),
-            "callee span (`db.prepare`) must stay correct"
-        );
-
-        // The template-literal argument has no v0 representation of its
-        // own (TemplateLiteral is out of the frozen v0 NodeKind union —
-        // see design/sdk-ast-surface.md), so it must be dropped from
-        // argumentIdxs entirely rather than misattributed to whichever
-        // v0 descendant happens to sit inside it.
-        assert_eq!(
-            argument_idxs,
-            &[] as &[i32],
-            "template-literal argument must be omitted, not misattributed"
-        );
-
-        // The nested `userId` identifier must still be discoverable in
-        // the flat array (findAll/walk still reach it) — the fix must
-        // not stop traversal into non-v0 argument kinds, only stop the
-        // argument-idx misattribution.
-        let userid_node = wire
-            .nodes
-            .iter()
-            .find(|n| n.kind == "IdentifierReference" && n.span.start_byte == 51)
-            .expect("nested `userId` identifier reference must still be emitted");
-        assert_eq!(userid_node.span.end_byte, 57);
-    }
-
-    /// Non-template argument kinds (identifier, object expression) must
-    /// keep reporting their own full span in argumentIdxs, unaffected by
-    /// the cd-18 fix. A string-literal argument has no v0 representation
-    /// (frozen out, same as TemplateLiteral) and is correctly omitted —
-    /// this was already true before the fix and must stay true.
-    #[test]
-    fn non_template_arguments_are_unaffected() {
-        let text = r#"send({ a: 1 }, target, "literal");"#;
-        let wire = build_wire(text);
-
-        // node[0] is Program, node[1] is the CallExpression.
-        let (_, argument_idxs) = call_extras(&wire, 1);
-        assert_eq!(
-            argument_idxs.len(),
-            2,
-            "object + identifier args recorded; string literal omitted (frozen out of v0)"
-        );
-
-        let object_node = &wire.nodes[argument_idxs[0] as usize];
-        assert_eq!(object_node.kind, "ObjectExpression");
-        assert_eq!(object_node.span.start_byte, 5);
-        assert_eq!(object_node.span.end_byte, 13);
-
-        let ident_node = &wire.nodes[argument_idxs[1] as usize];
-        assert_eq!(ident_node.kind, "IdentifierReference");
-        assert_eq!(ident_node.span.start_byte, 15);
-        assert_eq!(ident_node.span.end_byte, 21);
     }
 }

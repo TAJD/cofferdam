@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "MCP (Model Context Protocol) stdio server exposing cofferdam's checks as a tool."
+description = "MCP (Model Context Protocol) stdio server exposing cofferdam's check/advise/explain/invariants tools."
 
 [lints]
 workspace = true
@@ -16,6 +16,7 @@ name = "cofferdam-mcp"
 path = "src/main.rs"
 
 [dependencies]
+cofferdam-cli = { path = "../cofferdam-cli" }
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }
 cofferdam-checks = { workspace = true }

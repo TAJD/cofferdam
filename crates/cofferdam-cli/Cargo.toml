@@ -8,6 +8,10 @@ authors.workspace = true
 rust-version.workspace = true
 description = "Cofferdam command-line binary."
 
+[lib]
+name = "cofferdam_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cofferdam"
 path = "src/main.rs"

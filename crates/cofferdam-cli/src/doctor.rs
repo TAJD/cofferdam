@@ -26,7 +26,7 @@ use crate::baseline_lint;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Status {
+pub enum Status {
     Pass,
     Warn,
     Fail,
@@ -46,7 +46,7 @@ impl Status {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct CheckResult {
+pub struct CheckResult {
     pub name: &'static str,
     pub status: Status,
     pub message: String,
@@ -120,7 +120,7 @@ struct DoctorReport {
 ///
 /// Returns `ExitCode::FAILURE` when any check has `Status::Fail`.
 /// Warnings alone do **not** cause a non-zero exit.
-pub(crate) fn run(robot: bool, pretty: bool) -> ExitCode {
+pub fn run(robot: bool, pretty: bool) -> ExitCode {
     let results = vec![
         check_binary_integrity(),
         check_config(),
@@ -487,7 +487,7 @@ fn check_baseline_suppression() -> CheckResult {
 }
 
 /// Test-friendly variant: takes the directory to search from.
-pub(crate) fn check_baseline_suppression_at(start: &Path) -> CheckResult {
+pub fn check_baseline_suppression_at(start: &Path) -> CheckResult {
     const NAME: &str = "baseline-suppression";
 
     match baseline_lint::count_dual_state_at(start) {

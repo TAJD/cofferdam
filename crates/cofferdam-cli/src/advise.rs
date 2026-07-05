@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::plugins::{self, PluginCheckMeta, PluginFileScope};
 
-pub(crate) struct AdviseArgs {
+pub struct AdviseArgs {
     pub paths: Vec<PathBuf>,
     pub format: AdviseFormat,
     pub pretty: bool,
@@ -35,12 +35,12 @@ pub(crate) struct AdviseArgs {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AdviseFormat {
+pub enum AdviseFormat {
     Text,
     Json,
 }
 
-pub(crate) fn run(args: AdviseArgs) -> ExitCode {
+pub fn run(args: AdviseArgs) -> ExitCode {
     let AdviseArgs {
         paths,
         format,
@@ -51,6 +51,31 @@ pub(crate) fn run(args: AdviseArgs) -> ExitCode {
         no_ignore,
     } = args;
 
+    let advisories = match build_advisories(paths, config_path, no_config, hidden, no_ignore) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+
+    match format {
+        AdviseFormat::Json => emit_json(&advisories, pretty),
+        AdviseFormat::Text => emit_text(&advisories),
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Library entry point: resolve config, discover files, and build one
+/// `FileAdvisory` per path. Pure projection — used by both the CLI's
+/// `run()` (which additionally formats + prints) and `cofferdam-mcp`'s
+/// `cofferdam.advise` tool, so both surfaces stay byte-for-byte
+/// consistent (CD-60).
+pub fn build_advisories(
+    paths: Vec<PathBuf>,
+    config_path: Option<PathBuf>,
+    no_config: bool,
+    hidden: bool,
+    no_ignore: bool,
+) -> Result<Vec<FileAdvisory>, ExitCode> {
     let roots: Vec<PathBuf> = if paths.is_empty() {
         vec![PathBuf::from(".")]
     } else {
@@ -77,7 +102,7 @@ pub(crate) fn run(args: AdviseArgs) -> ExitCode {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("error: {e}");
-                return ExitCode::from(2);
+                return Err(ExitCode::from(2));
             }
         }
     };
@@ -88,14 +113,14 @@ pub(crate) fn run(args: AdviseArgs) -> ExitCode {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("error: {e}");
-                return ExitCode::from(2);
+                return Err(ExitCode::from(2));
             }
         };
         let glob_set = match build_glob_set(&glob_specs) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("error: invalid glob pattern: {e}");
-                return ExitCode::from(2);
+                return Err(ExitCode::from(2));
             }
         };
         for p in walked {
@@ -112,7 +137,7 @@ pub(crate) fn run(args: AdviseArgs) -> ExitCode {
     let (project_config, config_path_resolved) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
             Ok(pair) => pair,
-            Err(()) => return ExitCode::from(2),
+            Err(()) => return Err(ExitCode::from(2)),
         };
 
     let checks = all_builtins();
@@ -162,12 +187,7 @@ pub(crate) fn run(args: AdviseArgs) -> ExitCode {
         .map(|file| build_advisory(file, &resolved, layers_cfg, &layer_matchers, &plugin_metas))
         .collect();
 
-    match format {
-        AdviseFormat::Json => emit_json(&advisories, pretty),
-        AdviseFormat::Text => emit_text(&advisories),
-    }
-
-    ExitCode::SUCCESS
+    Ok(advisories)
 }
 
 fn build_advisory(
@@ -510,36 +530,36 @@ fn build_glob_set(specs: &[String]) -> Result<globset::GlobSet, globset::Error> 
 }
 
 #[derive(Serialize)]
-struct FileAdvisory {
-    path: String,
+pub struct FileAdvisory {
+    pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    layer: Option<String>,
-    public_api: bool,
-    constraints: Vec<Constraint>,
+    pub layer: Option<String>,
+    pub public_api: bool,
+    pub constraints: Vec<Constraint>,
 }
 
 #[derive(Serialize)]
-struct Constraint {
-    rule: String,
-    category: String,
-    severity: String,
-    applies: String,
-    rationale: String,
+pub struct Constraint {
+    pub rule: String,
+    pub category: String,
+    pub severity: String,
+    pub applies: String,
+    pub rationale: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parameters: Option<BTreeMap<String, ParamValue>>,
+    pub parameters: Option<BTreeMap<String, ParamValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    allowed: Option<Vec<String>>,
+    pub allowed: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    forbidden: Option<Vec<String>>,
+    pub forbidden: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    exempt: Option<bool>,
+    pub exempt: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    exempt_reason: Option<String>,
+    pub exempt_reason: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ParamValue {
+pub enum ParamValue {
     Bool(bool),
     Int(i64),
     String(String),

@@ -1,10 +1,26 @@
 # MCP server
 
 `cofferdam-mcp` is a minimal [Model Context Protocol](https://modelcontextprotocol.io) stdio
-server exposing one tool, `cofferdam.check`: given a filesystem path (file or directory), it runs
-cofferdam's built-in checks against it and returns findings as JSON (the same schema
-`cofferdam check --robot` produces). It loads `cofferdam.toml` when one is discoverable upward
-from the target path, otherwise runs with default check options.
+server exposing five tools, all thin wrappers over the same library functions the `cofferdam`
+CLI calls — CLI and MCP output are byte-for-byte identical:
+
+- **`cofferdam.check`** — given a filesystem path (file or directory), runs cofferdam's
+  built-in checks against it and returns findings as JSON (the same schema
+  `cofferdam check --robot` produces).
+- **`cofferdam.advise`** — static, per-file architectural advisory (layer membership,
+  public-API status, and the rule constraints that apply) without running the engine. Same
+  JSON shape as `cofferdam advise --format=json`.
+- **`cofferdam.advise_diff`** — pre-flight check: diffs findings between a git ref and the
+  working tree, returning `would_fire` / `would_clear` sets. Same shape as
+  `cofferdam advise --diff <ref>`.
+- **`cofferdam.explain`** — a check's metadata and prose explanation by ID (built-in or
+  plugin-declared). Same shape as `cofferdam explain <id> --robot`.
+- **`cofferdam.invariants`** — the parsed `cofferdam.invariants.toml` (layers, public_api,
+  boundaries, invariants) as JSON, discovered upward from a given path. No CLI equivalent
+  exists — this is MCP-only.
+
+All five load `cofferdam.toml` / `cofferdam.invariants.toml` when discoverable upward from the
+target path, otherwise run with default options.
 
 Build the binary with `cargo build --release -p cofferdam-mcp`; the executable lands at
 `target/release/cofferdam-mcp` (`.exe` on Windows).
@@ -26,11 +42,4 @@ MCP server config; point `command` at your built binary.
 
 ## Scope
 
-Only `cofferdam.check` ships today. The broader tool set from the originating ticket
-(`advise`, `advise_diff`, `explain`, `invariants`) depends on features that don't exist yet in
-this codebase (no `advise` subcommand, no invariants-reader API). `cofferdam.explain` was
-considered — `CheckMeta.explanation` is trivially reachable per check id via `all_builtins()` —
-but was left out of this first slice to keep the initial MCP surface to the one tool the ticket
-called out as shippable alone; a follow-up can add it without touching `cofferdam.check`.
-
-No HTTP/SSE transport, no auth, no streaming, no caching — stdio only, stateless, single tool.
+No HTTP/SSE transport, no auth, no streaming, no caching — stdio only, stateless.

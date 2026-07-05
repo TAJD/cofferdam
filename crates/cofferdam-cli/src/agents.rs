@@ -5,7 +5,7 @@ use std::process::ExitCode;
 /// The version-pinned agent onboarding prompt.
 ///
 /// Deterministic: identical output for the same binary version.
-pub(crate) fn prompt() -> String {
+pub fn prompt() -> String {
     let version = env!("CARGO_PKG_VERSION");
     format!(
         r#"# cofferdam agents — v{version}
@@ -57,15 +57,17 @@ False positive, crash, or confusing output? Open an issue at:
 
 Include: the command run, `cofferdam --version` output, and a minimal repro.
 
-## MCP (coming soon — cd-9r3)
+## MCP
 
-Once `cofferdam-mcp` ships, prefer the MCP tool over CLI shell-out. It provides
-structured tool calls without a subprocess and keeps findings in context.
+If `cofferdam-mcp` is configured, prefer its tools over CLI shell-out —
+structured tool calls without a subprocess, findings stay in context.
+It exposes `cofferdam.check`, `cofferdam.advise`, `cofferdam.advise_diff`,
+`cofferdam.explain`, and `cofferdam.invariants`. See docs/mcp.md.
 "#
     )
 }
 
-pub(crate) fn run() -> ExitCode {
+pub fn run() -> ExitCode {
     print!("{}", prompt());
     ExitCode::SUCCESS
 }

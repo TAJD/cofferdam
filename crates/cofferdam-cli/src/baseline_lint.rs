@@ -18,7 +18,7 @@ use serde::Serialize;
 // ── Output types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct DualStateEntry {
+pub struct DualStateEntry {
     pub file: String,
     pub line: u32,
     pub check_id: String,
@@ -39,7 +39,7 @@ struct LintSummary {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub(crate) fn run(robot: bool, pretty: bool) -> ExitCode {
+pub fn run(robot: bool, pretty: bool) -> ExitCode {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -52,7 +52,7 @@ pub(crate) fn run(robot: bool, pretty: bool) -> ExitCode {
 
 /// Test-friendly variant: takes the directory to search from.
 /// Avoids `std::env::set_current_dir` so parallel test threads don't race.
-pub(crate) fn run_at(dir: &Path, robot: bool, pretty: bool) -> ExitCode {
+pub fn run_at(dir: &Path, robot: bool, pretty: bool) -> ExitCode {
     let baseline_path = match resolve_baseline_path_from(dir) {
         Some(p) => p,
         None => {
@@ -119,7 +119,7 @@ pub(crate) fn run_at(dir: &Path, robot: bool, pretty: bool) -> ExitCode {
 /// Return the count of dual-state (baseline + inline suppression) entries
 /// from `dir`, without printing anything.  Returns 0 when no baseline exists
 /// or when none overlap.  Returns `Err` on IO / parse failure.
-pub(crate) fn count_dual_state_at(dir: &Path) -> Result<usize, String> {
+pub fn count_dual_state_at(dir: &Path) -> Result<usize, String> {
     let baseline_path = match resolve_baseline_path_from(dir) {
         Some(p) => p,
         None => return Ok(0),

@@ -23,13 +23,15 @@ use cofferdam_core::{Category, CheckMeta, OptionDefault, OptionKind, Severity};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
-use crate::Cli;
-
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub(crate) fn run(out: PathBuf, check: bool) -> ExitCode {
+/// `C` is the binary's top-level `clap::Parser` type (`Cli` in `main.rs`).
+/// Generic so this library module doesn't depend on the bin crate's type —
+/// callers pass their `Cli` struct as the type argument, e.g.
+/// `gen_docs::run::<Cli>(out, check)`.
+pub fn run<C: clap::CommandFactory>(out: PathBuf, check: bool) -> ExitCode {
     // Resolve `out` against CWD so relative paths like "docs" work.
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
@@ -50,7 +52,7 @@ pub(crate) fn run(out: PathBuf, check: bool) -> ExitCode {
     metas.sort_by_key(|m| m.id);
 
     // Build all artifacts as in-memory strings.
-    let artifacts = build_all(&metas, &base);
+    let artifacts = build_all::<C>(&metas, &base);
 
     if check {
         run_check_mode(&artifacts)
@@ -69,7 +71,7 @@ struct Artifact {
     content: String,
 }
 
-fn build_all(metas: &[&'static CheckMeta], base: &Path) -> Vec<Artifact> {
+fn build_all<C: clap::CommandFactory>(metas: &[&'static CheckMeta], base: &Path) -> Vec<Artifact> {
     let mut artifacts = Vec::new();
 
     // public/checks.json — VitePress copies docs/public/* to dist root,
@@ -102,7 +104,7 @@ fn build_all(metas: &[&'static CheckMeta], base: &Path) -> Vec<Artifact> {
     // reference/cli.md
     artifacts.push(Artifact {
         path: base.join("reference").join("cli.md"),
-        content: build_cli_md(),
+        content: build_cli_md::<C>(),
     });
 
     // .vitepress/sidebar-checks.ts
@@ -404,8 +406,8 @@ fn build_llms_txt() -> String {
 // reference/cli.md
 // ---------------------------------------------------------------------------
 
-fn build_cli_md() -> String {
-    let clap_output = clap_markdown::help_markdown::<Cli>();
+fn build_cli_md<C: clap::CommandFactory>() -> String {
+    let clap_output = clap_markdown::help_markdown::<C>();
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str("title: CLI reference\n");

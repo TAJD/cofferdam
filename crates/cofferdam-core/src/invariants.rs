@@ -86,7 +86,7 @@ pub const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, mino
 pub const MIN_SUPPORTED_SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, minor: 0 };
 
 /// Semver-flavoured `MAJOR.MINOR` version tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SchemaVersion {
     pub major: u32,
     pub minor: u32,
@@ -185,7 +185,7 @@ pub fn validate_version(
 /// * `invariants[name]` declares a generic forbid/require import rule.
 ///   `Design.InvariantViolation` evaluates one finding per violation,
 ///   keyed by the invariant's name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InvariantsSpec {
     /// Schema version this spec declares. Defaults to
     /// `CURRENT_SCHEMA_VERSION` when the field is missing on disk; see
@@ -241,7 +241,7 @@ impl Default for InvariantsSpec {
 /// allowlist of files that compose the project's published surface.
 /// Re-exports in matching files are exempt from `Design.OrphanExport`
 /// and `Warning.UnusedImport`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PublicApiSpec {
     /// Each entry is either a relative file path (`src/index.ts`) or a
     /// `package.json:<key>` pointer (`package.json:exports`). The
@@ -253,7 +253,7 @@ pub struct PublicApiSpec {
 /// `[boundaries."path/glob"]` block from `cofferdam.invariants.toml`.
 /// `Design.BoundaryFrozen` reads this to flag changes to files inside
 /// frozen directories.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BoundarySpec {
     /// When true, the boundary refuses changes (modulo
     /// suppression directives). Disables review-time green-lighting
@@ -268,7 +268,7 @@ pub struct BoundarySpec {
 /// `[invariants."rule-name"]` block from `cofferdam.invariants.toml`.
 /// Defines architectural rules over the project's import graph that
 /// `Design.InvariantViolation` evaluates in `finalize`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct InvariantSpec {
     /// Imports matching any of these prefixes (project-relative) are
     /// forbidden when `from_layers` matches (or always, if empty).
@@ -291,7 +291,7 @@ pub struct InvariantSpec {
 /// predicate; exactly one of the two MUST be set. `message` is surfaced
 /// to the user in the finding (literal v1 — `{file}` placeholder
 /// support is reserved for v2).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ScriptedInvariantSpec {
     pub when: Option<String>,
     pub require: Option<String>,

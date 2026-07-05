@@ -1,18 +1,9 @@
 //! Cofferdam CLI entry point.
 
-mod advise;
-mod advise_diff;
-mod agents;
-mod ast_wire;
-mod baseline_diff;
-mod baseline_lint;
-mod doctor;
-mod explain;
-mod gen_docs;
-mod init;
-mod plugins;
-mod type_host;
-mod watch;
+use cofferdam_cli::{
+    advise, advise_diff, agents, baseline_diff, baseline_lint, doctor, explain, gen_docs, init,
+    plugins, type_host, watch,
+};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -766,7 +757,7 @@ fn main() -> ExitCode {
             hidden,
             no_ignore,
         }),
-        Cmd::GenDocs { out, check } => gen_docs::run(out, check),
+        Cmd::GenDocs { out, check } => gen_docs::run::<Cli>(out, check),
         Cmd::Lsp => run_lsp(),
         Cmd::TypeHost {
             ping,

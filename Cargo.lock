@@ -409,6 +409,7 @@ name = "cofferdam-mcp"
 version = "0.3.7"
 dependencies = [
  "cofferdam-checks",
+ "cofferdam-cli",
  "cofferdam-core",
  "cofferdam-engine",
  "cofferdam-formatters",

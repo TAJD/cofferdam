@@ -34,7 +34,7 @@ use cofferdam_engine::since;
 use cofferdam_engine::{Engine, ProjectConfig};
 use serde::Serialize;
 
-pub(crate) struct DiffArgs {
+pub struct DiffArgs {
     pub diff_ref: String,
     pub paths: Vec<PathBuf>,
     pub fail_on: Option<Severity>,
@@ -48,31 +48,31 @@ pub(crate) struct DiffArgs {
 /// severity; the full priority/category bundle is recoverable via
 /// `cofferdam explain <check_id>` if needed.
 #[derive(Serialize, Clone)]
-struct DiffIssue {
-    file: String,
-    check_id: String,
-    severity: Severity,
-    line: u32,
-    column: u32,
-    message: String,
+pub struct DiffIssue {
+    pub file: String,
+    pub check_id: String,
+    pub severity: Severity,
+    pub line: u32,
+    pub column: u32,
+    pub message: String,
 }
 
 #[derive(Serialize)]
-struct DiffSummary {
-    would_fire: usize,
-    would_clear: usize,
+pub struct DiffSummary {
+    pub would_fire: usize,
+    pub would_clear: usize,
 }
 
 #[derive(Serialize)]
-struct DiffReport {
+pub struct DiffReport {
     #[serde(rename = "ref")]
-    git_ref: String,
-    would_fire: Vec<DiffIssue>,
-    would_clear: Vec<DiffIssue>,
-    summary: DiffSummary,
+    pub git_ref: String,
+    pub would_fire: Vec<DiffIssue>,
+    pub would_clear: Vec<DiffIssue>,
+    pub summary: DiffSummary,
 }
 
-pub(crate) fn run(args: DiffArgs) -> ExitCode {
+pub fn run(args: DiffArgs) -> ExitCode {
     let DiffArgs {
         diff_ref,
         paths,
@@ -82,13 +82,48 @@ pub(crate) fn run(args: DiffArgs) -> ExitCode {
         pretty,
     } = args;
 
+    let report = match build_diff_report(diff_ref, paths, config_path, no_config) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+
+    // CI gate. `--fail-on=<level>` exits 1 when any would_fire entry
+    // is at or above the given severity. would_clear never gates —
+    // regression-cleared signal should never block CI.
+    let exit = if let Some(threshold) = fail_on {
+        let any_at_or_above = report
+            .would_fire
+            .iter()
+            .any(|i| severity_ge(i.severity, threshold));
+        if any_at_or_above {
+            ExitCode::from(1)
+        } else {
+            ExitCode::SUCCESS
+        }
+    } else {
+        ExitCode::SUCCESS
+    };
+
+    emit_json(&report, pretty);
+    exit
+}
+
+/// Library entry point: build the would_fire / would_clear report for
+/// `diff_ref` without gating or printing. Shared by the CLI's `run()`
+/// and `cofferdam-mcp`'s `cofferdam.advise_diff` tool (CD-60).
+pub fn build_diff_report(
+    diff_ref: String,
+    paths: Vec<PathBuf>,
+    config_path: Option<PathBuf>,
+    no_config: bool,
+) -> Result<DiffReport, ExitCode> {
     // Resolve repo root once. Every git command we run keys off it.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let repo_root = match since::repo_root(&cwd) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");
-            return ExitCode::from(2);
+            return Err(ExitCode::from(2));
         }
     };
 
@@ -101,7 +136,7 @@ pub(crate) fn run(args: DiffArgs) -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: {e}");
-            return ExitCode::from(2);
+            return Err(ExitCode::from(2));
         }
     };
 
@@ -141,19 +176,15 @@ pub(crate) fn run(args: DiffArgs) -> ExitCode {
 
     // Fast path: no in-scope files → empty report.
     if scoped.is_empty() {
-        emit_json(
-            &DiffReport {
-                git_ref: diff_ref,
-                would_fire: Vec::new(),
-                would_clear: Vec::new(),
-                summary: DiffSummary {
-                    would_fire: 0,
-                    would_clear: 0,
-                },
+        return Ok(DiffReport {
+            git_ref: diff_ref,
+            would_fire: Vec::new(),
+            would_clear: Vec::new(),
+            summary: DiffSummary {
+                would_fire: 0,
+                would_clear: 0,
             },
-            pretty,
-        );
-        return ExitCode::SUCCESS;
+        });
     }
 
     // Materialise sources for both sides.
@@ -193,7 +224,7 @@ pub(crate) fn run(args: DiffArgs) -> ExitCode {
     let (project_config, resolved_config_path) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
             Ok(pair) => pair,
-            Err(()) => return ExitCode::from(2),
+            Err(()) => return Err(ExitCode::from(2)),
         };
 
     let make_engine = || match project_config.as_ref() {
@@ -214,11 +245,11 @@ pub(crate) fn run(args: DiffArgs) -> ExitCode {
 
     let pre_engine = match make_engine() {
         Some(e) => e,
-        None => return ExitCode::from(2),
+        None => return Err(ExitCode::from(2)),
     };
     let post_engine = match make_engine() {
         Some(e) => e,
-        None => return ExitCode::from(2),
+        None => return Err(ExitCode::from(2)),
     };
 
     // Clone sources before the engine consumes them — plugin host
@@ -287,32 +318,12 @@ pub(crate) fn run(args: DiffArgs) -> ExitCode {
         would_clear: would_clear.len(),
     };
 
-    let report = DiffReport {
+    Ok(DiffReport {
         git_ref: diff_ref,
         would_fire,
         would_clear,
         summary,
-    };
-
-    // CI gate. `--fail-on=<level>` exits 1 when any would_fire entry
-    // is at or above the given severity. would_clear never gates —
-    // regression-cleared signal should never block CI.
-    let exit = if let Some(threshold) = fail_on {
-        let any_at_or_above = report
-            .would_fire
-            .iter()
-            .any(|i| severity_ge(i.severity, threshold));
-        if any_at_or_above {
-            ExitCode::from(1)
-        } else {
-            ExitCode::SUCCESS
-        }
-    } else {
-        ExitCode::SUCCESS
-    };
-
-    emit_json(&report, pretty);
-    exit
+    })
 }
 
 fn build_keyed_map(

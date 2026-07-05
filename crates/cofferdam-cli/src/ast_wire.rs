@@ -34,14 +34,14 @@ use oxc_syntax::scope::ScopeFlags;
 use serde::Serialize;
 
 #[derive(Serialize)]
-pub(crate) struct AstWire {
+pub struct AstWire {
     #[serde(rename = "rootIdx")]
     pub root_idx: i32,
     pub nodes: Vec<WireNode>,
 }
 
 #[derive(Serialize)]
-pub(crate) struct WireNode {
+pub struct WireNode {
     pub kind: &'static str,
     pub span: cofferdam_core::Span,
     #[serde(rename = "firstChild")]
@@ -57,7 +57,7 @@ pub(crate) struct WireNode {
 /// AstNode interfaces.
 #[derive(Serialize)]
 #[serde(untagged)]
-pub(crate) enum WireExtras {
+pub enum WireExtras {
     None {},
     Call {
         #[serde(rename = "calleeIdx")]
@@ -103,7 +103,7 @@ pub(crate) enum WireExtras {
 }
 
 #[derive(Serialize)]
-pub(crate) struct ImportSpecifierWire {
+pub struct ImportSpecifierWire {
     #[serde(rename = "localName")]
     pub local_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,14 +117,14 @@ struct StackFrame {
     last_child_idx: i32,
 }
 
-pub(crate) struct WireBuilder<'a> {
+pub struct WireBuilder<'a> {
     text: &'a str,
     nodes: Vec<WireNode>,
     stack: Vec<StackFrame>,
 }
 
 impl<'a> WireBuilder<'a> {
-    pub(crate) fn new(text: &'a str) -> Self {
+    pub fn new(text: &'a str) -> Self {
         Self {
             text,
             nodes: Vec::new(),
@@ -132,7 +132,7 @@ impl<'a> WireBuilder<'a> {
         }
     }
 
-    pub(crate) fn build(mut self, program: &Program<'a>) -> AstWire {
+    pub fn build(mut self, program: &Program<'a>) -> AstWire {
         self.visit_program(program);
         let root_idx = if self.nodes.is_empty() { -1 } else { 0 };
         AstWire {

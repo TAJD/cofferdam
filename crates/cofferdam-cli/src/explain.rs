@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::plugins::{self, PluginCheckMeta};
 
-pub(crate) struct ExplainArgs {
+pub struct ExplainArgs {
     pub check_id: String,
     pub robot: bool,
     pub pretty: bool,
@@ -31,7 +31,7 @@ pub(crate) struct ExplainArgs {
     pub no_config: bool,
 }
 
-pub(crate) fn run(args: ExplainArgs) -> ExitCode {
+pub fn run(args: ExplainArgs) -> ExitCode {
     let ExplainArgs {
         check_id,
         robot,
@@ -202,36 +202,98 @@ fn suggestions_for(
 }
 
 #[derive(Serialize)]
-struct ExplainReport<'a> {
-    id: &'static str,
-    category: &'static str,
-    default_severity: &'static str,
-    base_priority: i8,
-    requires_types: bool,
-    consistency: bool,
-    autofix: bool,
-    options: Vec<ExplainOption<'a>>,
-    explanation: &'static str,
+pub struct ExplainReport<'a> {
+    pub id: &'static str,
+    pub category: &'static str,
+    pub default_severity: &'static str,
+    pub base_priority: i8,
+    pub requires_types: bool,
+    pub consistency: bool,
+    pub autofix: bool,
+    pub options: Vec<ExplainOption<'a>>,
+    pub explanation: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
+    pub body: Option<String>,
 }
 
 #[derive(Serialize)]
-struct ExplainOption<'a> {
-    name: &'static str,
-    kind: &'static str,
-    default: ExplainDefault<'a>,
-    doc: &'static str,
+pub struct ExplainOption<'a> {
+    pub name: &'static str,
+    pub kind: &'static str,
+    pub default: ExplainDefault<'a>,
+    pub doc: &'static str,
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ExplainDefault<'a> {
+pub enum ExplainDefault<'a> {
     Bool(bool),
     Int(i64),
     String(&'static str),
     StringList(&'a [&'static str]),
     IntList(&'a [i64]),
+}
+
+/// Outcome of resolving a check ID to its explanation. Shared by the
+/// CLI's `run()` and `cofferdam-mcp`'s `cofferdam.explain` tool (CD-60).
+pub enum ExplainOutcome {
+    Builtin(ExplainReport<'static>),
+    Plugin(PluginExplainReport),
+    NotFound {
+        error: String,
+        suggestions: Vec<String>,
+    },
+}
+
+/// Library entry point: resolve `check_id` against built-ins, then
+/// against any plugins declared in the resolved config. Pure — does no
+/// printing or process exit.
+pub fn explain_check(
+    check_id: &str,
+    config_path: Option<&Path>,
+    no_config: bool,
+    full: bool,
+) -> ExplainOutcome {
+    let metas: Vec<&'static CheckMeta> = all_builtins().iter().map(|c| c.meta()).collect();
+
+    if let Some(meta) = metas.iter().find(|m| m.id == check_id).copied() {
+        return ExplainOutcome::Builtin(build_report(meta, full));
+    }
+
+    let (project_config, config_path_resolved) =
+        match resolve_and_load_config(config_path, no_config) {
+            Ok(pair) => pair,
+            Err(()) => {
+                return ExplainOutcome::NotFound {
+                    error: format!("no such check: {check_id}"),
+                    suggestions: Vec::new(),
+                }
+            }
+        };
+
+    let plugin_metas = if let Some(cfg) = project_config.as_ref() {
+        if !cfg.plugins.is_empty() {
+            let cfg_dir = config_path_resolved
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    if let Some(pm) = plugin_metas.iter().find(|pm| pm.id == check_id) {
+        return ExplainOutcome::Plugin(build_plugin_report(pm, full));
+    }
+
+    ExplainOutcome::NotFound {
+        error: format!("no such check: {check_id}"),
+        suggestions: suggestions_for(check_id, &metas, &plugin_metas),
+    }
 }
 
 fn build_report(meta: &'static CheckMeta, full: bool) -> ExplainReport<'static> {
@@ -370,24 +432,24 @@ fn format_default(d: &OptionDefault) -> String {
 // ---- plugin check rendering ----
 
 #[derive(Serialize)]
-struct PluginExplainReport {
-    id: String,
-    category: String,
-    default_severity: String,
-    base_priority: i64,
-    requires_types: bool,
-    options: Vec<PluginExplainOption>,
-    explanation: String,
+pub struct PluginExplainReport {
+    pub id: String,
+    pub category: String,
+    pub default_severity: String,
+    pub base_priority: i64,
+    pub requires_types: bool,
+    pub options: Vec<PluginExplainOption>,
+    pub explanation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
+    pub body: Option<String>,
 }
 
 #[derive(Serialize)]
-struct PluginExplainOption {
-    name: String,
-    kind: String,
-    default: serde_json::Value,
-    doc: String,
+pub struct PluginExplainOption {
+    pub name: String,
+    pub kind: String,
+    pub default: serde_json::Value,
+    pub doc: String,
 }
 
 fn build_plugin_report(pm: &PluginCheckMeta, full: bool) -> PluginExplainReport {

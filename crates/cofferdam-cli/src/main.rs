@@ -345,7 +345,13 @@ enum Cmd {
     /// file to create or refresh an agent context fragment:
     ///
     ///   cofferdam agents >> AGENTS.md
-    Agents,
+    Agents {
+        /// Emit a paste-ready Claude Code `settings.json` hooks fragment
+        /// (plus Cursor/pre-commit equivalents as comments) instead of
+        /// the onboarding prompt.
+        #[arg(long)]
+        hooks: bool,
+    },
     /// JIT architectural advisory for agents — emit the rules that apply
     /// to a given file or directory, INDEPENDENT of whether any current
     /// code violates them. Designed for agentic edit loops: an LLM agent
@@ -710,7 +716,13 @@ fn main() -> ExitCode {
             robot,
             pretty,
         }),
-        Cmd::Agents => agents::run(),
+        Cmd::Agents { hooks } => {
+            if hooks {
+                agents::run_hooks()
+            } else {
+                agents::run()
+            }
+        }
         Cmd::Advise {
             paths,
             format: _,

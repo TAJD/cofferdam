@@ -55,6 +55,15 @@ export default defineConfig({
         ],
       },
       {
+        text: 'For agents',
+        items: [
+          { text: 'Agent onboarding', link: '/agents' },
+          { text: 'Agent hooks', link: '/hooks' },
+          { text: 'MCP server', link: '/mcp' },
+          { text: 'Invariants', link: '/invariants' },
+        ],
+      },
+      {
         text: 'Plugin SDK',
         items: [
           { text: 'Author guide', link: '/plugin-sdk-guide' },

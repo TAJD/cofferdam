@@ -63,12 +63,85 @@ If `cofferdam-mcp` is configured, prefer its tools over CLI shell-out —
 structured tool calls without a subprocess, findings stay in context.
 It exposes `cofferdam.check`, `cofferdam.advise`, `cofferdam.advise_diff`,
 `cofferdam.explain`, and `cofferdam.invariants`. See docs/mcp.md.
+
+## Hooks — automate the loop
+
+No MCP server, or want `advise` to fire automatically instead of relying on
+the agent to remember? Run:
+
+```sh
+cofferdam agents --hooks
+```
+
+for a paste-ready Claude Code `settings.json` fragment (plus Cursor and
+generic pre-commit equivalents). With hooks wired up, `advise` fires on
+every edit and every turn end with no further setup — see docs/hooks.md.
 "#
     )
 }
 
+/// Paste-ready hook recipes wiring `cofferdam advise` into an agent's edit
+/// loop (CD-61). The primary payload is a Claude Code `settings.json`
+/// fragment; Cursor rules and a generic pre-commit hook ship as commented
+/// equivalents since they don't share Claude Code's JSON hook schema.
+pub fn hooks_fragment() -> String {
+    r#"# cofferdam hook recipes — paste the relevant block into your tool's config.
+#
+# ---- Claude Code: .claude/settings.json ----
+# PreToolUse fires before Edit/Write/MultiEdit; the hook reads the target
+# file path from stdin JSON (`tool_input.file_path`) and prints the
+# advisory so the agent sees layer/invariant constraints before writing.
+# Stop fires when Claude finishes responding; the second hook here runs
+# `advise --diff HEAD` as a pre-commit-style pre-flight check.
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" --format=json"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cofferdam advise --diff HEAD --pretty"
+          }
+        ]
+      }
+    ]
+  }
+}
+
+# ---- Cursor: .cursor/rules (or cursorrules) ----
+# Cursor rules are prose, not JSON hooks — paste this as guidance:
+#
+#   Before editing a file, run `cofferdam advise <file> --format=json` and
+#   respect the returned layer/invariant constraints. Before finishing a
+#   task, run `cofferdam advise --diff HEAD --pretty` and resolve any
+#   would_fire entries.
+
+# ---- Generic pre-commit hook: .git/hooks/pre-commit ----
+#
+#   #!/bin/sh
+#   cofferdam advise --diff HEAD --fail-on=high
+"#
+    .to_string()
+}
+
 pub fn run() -> ExitCode {
     print!("{}", prompt());
+    ExitCode::SUCCESS
+}
+
+pub fn run_hooks() -> ExitCode {
+    print!("{}", hooks_fragment());
     ExitCode::SUCCESS
 }
 
@@ -120,5 +193,25 @@ mod tests {
     #[test]
     fn prompt_is_deterministic() {
         assert_eq!(prompt(), prompt(), "prompt() must be idempotent");
+    }
+
+    #[test]
+    fn hooks_fragment_is_valid_json_after_stripping_comments() {
+        let frag = hooks_fragment();
+        let json_start = frag.find('{').expect("fragment must contain JSON");
+        let json_end = frag.rfind('}').expect("fragment must contain JSON") + 1;
+        let json_text = &frag[json_start..json_end];
+        let parsed: serde_json::Value =
+            serde_json::from_str(json_text).expect("Claude Code hooks block must be valid JSON");
+        assert!(parsed["hooks"]["PreToolUse"].is_array());
+        assert!(parsed["hooks"]["Stop"].is_array());
+    }
+
+    #[test]
+    fn hooks_fragment_mentions_advise_and_diff() {
+        let frag = hooks_fragment();
+        assert!(frag.contains("cofferdam advise"));
+        assert!(frag.contains("--diff HEAD"));
+        assert!(frag.contains("Edit|Write|MultiEdit"));
     }
 }

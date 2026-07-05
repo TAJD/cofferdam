@@ -287,7 +287,11 @@ Print the agent-onboarding prompt — a ready-to-paste markdown block that tells
 
 cofferdam agents >> AGENTS.md
 
-**Usage:** `cofferdam agents`
+**Usage:** `cofferdam agents [OPTIONS]`
+
+###### **Options:**
+
+* `--hooks` — Emit a paste-ready Claude Code `settings.json` hooks fragment (plus Cursor/pre-commit equivalents as comments) instead of the onboarding prompt
 
 
 

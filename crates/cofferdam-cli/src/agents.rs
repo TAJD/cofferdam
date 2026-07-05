@@ -94,8 +94,12 @@ pub fn hooks_fragment() -> String {
 # so Claude Code injects the advisory into the agent's context before it
 # writes. NOTE: a hook's plain stdout is NOT seen by the agent — only the
 # `additionalContext` field is; that's why the recipe pipes through jq
-# rather than just printing `advise`. (Requires `jq`; the command is `sh`.
-# To hard-block an edit instead of advising, exit 2 with the reason on stderr.)
+# rather than just printing `advise`. It deliberately does NOT set
+# `permissionDecision`, so your normal Edit/Write approval prompts still
+# fire — the hook only advises, it never auto-approves an edit. (Requires
+# `jq`; the command is `sh`. To hard-block an edit, exit 2 with the reason
+# on stderr; to auto-approve, add `permissionDecision:"allow"` — but that
+# suppresses the permission prompt, so opt in knowingly.)
 # Stop fires when Claude finishes responding; the second hook here runs
 # `advise --diff HEAD` as a pre-commit-style pre-flight check.
 {
@@ -106,7 +110,7 @@ pub fn hooks_fragment() -> String {
         "hooks": [
           {
             "type": "command",
-            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" | jq -Rs '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"allow\",additionalContext:.}}'"
+            "command": "FILE=$(jq -r '.tool_input.file_path'); cofferdam advise \"$FILE\" | jq -Rs '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:.}}'"
           }
         ]
       }

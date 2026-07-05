@@ -16,7 +16,7 @@ name = "cofferdam-mcp"
 path = "src/main.rs"
 
 [dependencies]
-cofferdam-cli = { path = "../cofferdam-cli" }
+cofferdam-cli = { workspace = true }
 cofferdam-core = { workspace = true }
 cofferdam-engine = { workspace = true }
 cofferdam-checks = { workspace = true }

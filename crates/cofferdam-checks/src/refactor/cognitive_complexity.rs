@@ -6,7 +6,7 @@ use cofferdam_core::{
 use oxc_ast::ast::{
     ArrowFunctionExpression, CallExpression, ConditionalExpression, DoWhileStatement, Expression,
     ForInStatement, ForOfStatement, ForStatement, Function, IfStatement, LogicalExpression,
-    LogicalOperator, Statement, SwitchStatement, TryStatement, WhileStatement,
+    LogicalOperator, Program, Statement, SwitchStatement, TryStatement, WhileStatement,
 };
 use oxc_ast_visit::Visit;
 
@@ -76,10 +76,29 @@ impl Check for CognitiveComplexity {
             name_stack: Vec::new(),
             nesting: 0,
             logical_op_stack: Vec::new(),
+            max: 0,
         };
         visitor.visit_program(parsed.program);
         visitor.issues
     }
+}
+
+/// Highest per-function cognitive complexity found anywhere in the file,
+/// independent of `limit` — used by `cofferdam advise --analyze` (CD-65
+/// A4). Returns 0 for a file with no functions.
+pub fn max_in_file(file: &SourceFile, program: &Program<'_>) -> u32 {
+    let mut visitor = CogVisitor {
+        file,
+        limit: u32::MAX,
+        issues: Vec::new(),
+        stack: Vec::new(),
+        name_stack: Vec::new(),
+        nesting: 0,
+        logical_op_stack: Vec::new(),
+        max: 0,
+    };
+    visitor.visit_program(program);
+    visitor.max
 }
 
 struct CogVisitor<'a> {
@@ -88,6 +107,9 @@ struct CogVisitor<'a> {
     issues: Vec<Issue>,
     /// Per-function running total. Same lifecycle as CycVisitor.stack.
     stack: Vec<u32>,
+    /// Highest count seen across any function so far, tracked regardless
+    /// of `limit` so [`max_in_file`] can reuse this same visitor.
+    max: u32,
     /// Parallel stack tracking the name of each function being visited.
     /// `None` for anonymous/arrow functions where named recursion doesn't apply.
     /// Paired with `stack` — must push/pop in sync.
@@ -114,6 +136,7 @@ impl<'a> CogVisitor<'a> {
     fn exit(&mut self, name: String, span_start: u32, span_end: u32) {
         let count = self.stack.pop().unwrap_or(0);
         let _ = self.name_stack.pop(); // Must stay in sync with stack
+        self.max = self.max.max(count);
         if count > self.limit {
             let span = span_from_bytes(&self.file.text, span_start, span_end);
             self.issues.push(Issue {

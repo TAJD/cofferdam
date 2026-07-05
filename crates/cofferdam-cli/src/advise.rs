@@ -66,6 +66,174 @@ pub fn run(args: AdviseArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+pub struct AnalyzeArgs {
+    pub paths: Vec<PathBuf>,
+    pub pretty: bool,
+    pub config_path: Option<PathBuf>,
+    pub no_config: bool,
+}
+
+/// One check's current-state reading for `advise --analyze` (CD-65 A4).
+#[derive(Serialize)]
+struct AnalyzeBudget {
+    rule: String,
+    limit: i64,
+    current: u32,
+    /// `limit - current`, floored at 0 for a file already over budget —
+    /// negative headroom isn't meaningful to a caller deciding whether
+    /// there's room left, and `check`/`baseline ratchet` are the gates
+    /// that actually enforce the limit.
+    remaining: i64,
+}
+
+#[derive(Serialize)]
+struct AnalyzeEnvelope {
+    schema_version: u32,
+    file: String,
+    budgets: Vec<AnalyzeBudget>,
+}
+
+/// `cofferdam advise --analyze <file>` — parse exactly one file (no
+/// project graph) and report current/remaining state for the
+/// checks that measure a per-function or per-file magnitude against a
+/// configurable `limit`: cyclomatic/cognitive complexity, function
+/// length, line width, and parameter count. Unlike the rest of `advise`,
+/// this path does parse the file — it's the one place advise needs an
+/// actual AST to answer "how close is this file to its limits."
+pub fn run_analyze(args: AnalyzeArgs) -> ExitCode {
+    let AnalyzeArgs {
+        paths,
+        pretty,
+        config_path,
+        no_config,
+    } = args;
+
+    let path = match paths.as_slice() {
+        [p] => p.clone(),
+        [] => {
+            eprintln!("error: --analyze requires exactly one file path");
+            return ExitCode::from(2);
+        }
+        _ => {
+            eprintln!(
+                "error: --analyze accepts exactly one file path, got {}",
+                paths.len()
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: failed to read {}: {e}", path.display());
+            return ExitCode::from(2);
+        }
+    };
+
+    let (project_config, _) = match resolve_and_load_config(config_path.as_deref(), no_config) {
+        Ok(pair) => pair,
+        Err(()) => return ExitCode::from(2),
+    };
+
+    let limit_of = |check_id: &str, default: i64| -> i64 {
+        project_config
+            .as_ref()
+            .and_then(|p| {
+                cfg::options_for(
+                    p,
+                    Path::new(""),
+                    check_id,
+                    &[cofferdam_core::OptionSpec {
+                        name: "limit",
+                        kind: cofferdam_core::OptionKind::Int,
+                        default: OptionDefault::Int(default),
+                        doc: "",
+                    }],
+                )
+                .ok()
+            })
+            .and_then(|opts| opts.get_int("limit"))
+            .unwrap_or(default)
+    };
+
+    let file = cofferdam_core::SourceFile::new(path.clone(), text);
+    let allocator = cofferdam_core::Allocator::default();
+    let parsed = cofferdam_core::parser::parse_into(&allocator, &file);
+    let program = &parsed.program;
+
+    let budgets = vec![
+        {
+            let limit = limit_of("Refactor.CyclomaticComplexity", 10);
+            let current =
+                cofferdam_checks::refactor::max_cyclomatic_complexity_in_file(&file, program);
+            AnalyzeBudget {
+                rule: "Refactor.CyclomaticComplexity".to_string(),
+                limit,
+                current,
+                remaining: (limit - i64::from(current)).max(0),
+            }
+        },
+        {
+            let limit = limit_of("Refactor.CognitiveComplexity", 15);
+            let current =
+                cofferdam_checks::refactor::max_cognitive_complexity_in_file(&file, program);
+            AnalyzeBudget {
+                rule: "Refactor.CognitiveComplexity".to_string(),
+                limit,
+                current,
+                remaining: (limit - i64::from(current)).max(0),
+            }
+        },
+        {
+            let limit = limit_of("Design.MaxParameters", 5);
+            let current = cofferdam_checks::design::max_parameters_in_file(&file, program);
+            AnalyzeBudget {
+                rule: "Design.MaxParameters".to_string(),
+                limit,
+                current,
+                remaining: (limit - i64::from(current)).max(0),
+            }
+        },
+        {
+            let limit = limit_of("Readability.MaxFunctionLength", 50);
+            let current =
+                cofferdam_checks::readability::max_function_length_in_file(&file, program);
+            AnalyzeBudget {
+                rule: "Readability.MaxFunctionLength".to_string(),
+                limit,
+                current,
+                remaining: (limit - i64::from(current)).max(0),
+            }
+        },
+        {
+            let limit = limit_of("Readability.MaxLineLength", 120);
+            let current = cofferdam_checks::readability::max_line_width_in_file(&file);
+            AnalyzeBudget {
+                rule: "Readability.MaxLineLength".to_string(),
+                limit,
+                current,
+                remaining: (limit - i64::from(current)).max(0),
+            }
+        },
+    ];
+
+    let envelope = AnalyzeEnvelope {
+        schema_version: ADVISE_SCHEMA_VERSION,
+        file: path.to_string_lossy().replace('\\', "/"),
+        budgets,
+    };
+    let s = if pretty {
+        serde_json::to_string_pretty(&envelope)
+    } else {
+        serde_json::to_string(&envelope)
+    }
+    .expect("AnalyzeEnvelope serializes infallibly");
+    println!("{}", s);
+
+    ExitCode::SUCCESS
+}
+
 /// Library entry point: resolve config, discover files, and build one
 /// `FileAdvisory` per path. Pure projection — used by both the CLI's
 /// `run()` (which additionally formats + prints) and `cofferdam-mcp`'s
@@ -679,6 +847,31 @@ fn build_glob_set(specs: &[String]) -> Result<globset::GlobSet, globset::Error> 
     builder.build()
 }
 
+/// Schema version for the `advise` JSON envelope (CD-65 A5). Bump only
+/// on a breaking change to `AdviseEnvelope`/`FileAdvisory`/`Constraint`'s
+/// shape; new fields are additive within a major and don't need a bump.
+/// Published at `/schemas/advise-v1.json` — see `docs/reference/advise.md`.
+pub const ADVISE_SCHEMA_VERSION: u32 = 1;
+
+/// Top-level JSON envelope for `cofferdam advise` (mirrors `checks.json`'s
+/// `schema_version` convention). Shared by the CLI's `--format=json` and
+/// `cofferdam-mcp`'s `cofferdam.advise` tool so both surfaces emit the
+/// identical shape (CD-60).
+#[derive(Serialize)]
+pub struct AdviseEnvelope<'a> {
+    pub schema_version: u32,
+    pub files: &'a [FileAdvisory],
+}
+
+impl<'a> AdviseEnvelope<'a> {
+    pub fn new(files: &'a [FileAdvisory]) -> Self {
+        Self {
+            schema_version: ADVISE_SCHEMA_VERSION,
+            files,
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct FileAdvisory {
     pub path: String,
@@ -725,12 +918,13 @@ pub enum ParamValue {
 }
 
 fn emit_json(advisories: &[FileAdvisory], pretty: bool) {
+    let envelope = AdviseEnvelope::new(advisories);
     let s = if pretty {
-        serde_json::to_string_pretty(advisories)
+        serde_json::to_string_pretty(&envelope)
     } else {
-        serde_json::to_string(advisories)
+        serde_json::to_string(&envelope)
     }
-    .expect("FileAdvisory serializes infallibly");
+    .expect("AdviseEnvelope serializes infallibly");
     println!("{}", s);
 }
 

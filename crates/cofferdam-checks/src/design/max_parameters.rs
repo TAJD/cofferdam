@@ -3,7 +3,7 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, Issue, Location, OptionDefault, OptionKind,
     OptionSpec, Priority, Severity, SourceFile,
 };
-use oxc_ast::ast::{ArrowFunctionExpression, Function};
+use oxc_ast::ast::{ArrowFunctionExpression, Function, Program};
 use oxc_ast_visit::Visit;
 
 /// `Design.MaxParameters` — flag function signatures over `limit` params.
@@ -65,20 +65,39 @@ impl Check for MaxParameters {
             file,
             limit,
             issues: Vec::new(),
+            max: 0,
         };
         visitor.visit_program(parsed.program);
         visitor.issues
     }
 }
 
+/// Highest parameter count found on any function signature in the file,
+/// independent of `limit` — used by `cofferdam advise --analyze` (CD-65
+/// A4). Returns 0 for a file with no functions.
+pub fn max_in_file(file: &SourceFile, program: &Program<'_>) -> u32 {
+    let mut visitor = Collector {
+        file,
+        limit: u32::MAX,
+        issues: Vec::new(),
+        max: 0,
+    };
+    visitor.visit_program(program);
+    visitor.max
+}
+
 struct Collector<'a> {
     file: &'a SourceFile,
     limit: u32,
     issues: Vec<Issue>,
+    /// Highest count seen across any function so far, tracked regardless
+    /// of `limit` so [`max_in_file`] can reuse this same visitor.
+    max: u32,
 }
 
 impl<'a> Collector<'a> {
     fn check_params(&mut self, count: usize, name: &str, span_start: u32, span_end: u32) {
+        self.max = self.max.max(count as u32);
         if count as u32 > self.limit {
             let span = span_from_bytes(&self.file.text, span_start, span_end);
             self.issues.push(Issue {

@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tajd.github.io/cofferdam/schemas/advise-v1.json",
+  "title": "cofferdam advise output (schema_version 1)",
+  "description": "Envelope emitted by `cofferdam advise --format=json` and the `cofferdam.advise` MCP tool.",
+  "type": "object",
+  "required": ["schema_version", "files"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/fileAdvisory" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "fileAdvisory": {
+      "type": "object",
+      "required": ["path", "public_api", "constraints"],
+      "properties": {
+        "path": { "type": "string" },
+        "layer": { "type": "string" },
+        "public_api": { "type": "boolean" },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/constraint" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["rule", "category", "severity", "applies", "rationale"],
+      "properties": {
+        "rule": { "type": "string" },
+        "category": {
+          "type": "string",
+          "enum": ["consistency", "design", "readability", "refactor", "warning"]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "low", "medium", "high", "critical"]
+        },
+        "applies": { "type": "string" },
+        "rationale": { "type": "string" },
+        "parameters": { "type": "object" },
+        "allowed": { "type": "array", "items": { "type": "string" } },
+        "forbidden": { "type": "array", "items": { "type": "string" } },
+        "exempt": { "type": "boolean" },
+        "exempt_reason": { "type": "string" },
+        "public_api_unresolved": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "analyzeEnvelope": {
+      "description": "Shape emitted by `cofferdam advise --analyze <file>`.",
+      "type": "object",
+      "required": ["schema_version", "file", "budgets"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "file": { "type": "string" },
+        "budgets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "limit", "current", "remaining"],
+            "properties": {
+              "rule": { "type": "string" },
+              "limit": { "type": "integer" },
+              "current": { "type": "integer", "minimum": 0 },
+              "remaining": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

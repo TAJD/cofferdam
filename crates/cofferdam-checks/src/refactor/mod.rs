@@ -18,8 +18,12 @@ mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
 mod unused_variable;
 
-pub use cognitive_complexity::CognitiveComplexity;
-pub use cyclomatic_complexity::CyclomaticComplexity;
+pub use cognitive_complexity::{
+    max_in_file as max_cognitive_complexity_in_file, CognitiveComplexity,
+};
+pub use cyclomatic_complexity::{
+    max_in_file as max_cyclomatic_complexity_in_file, CyclomaticComplexity,
+};
 pub use dead_export::DeadExport;
 pub use duplicate_block::DuplicateBlock;
 pub use long_and_complex::LongAndComplex;

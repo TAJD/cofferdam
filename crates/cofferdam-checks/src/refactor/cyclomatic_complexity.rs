@@ -5,8 +5,8 @@ use cofferdam_core::{
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, ConditionalExpression, DoWhileStatement, ForInStatement,
-    ForOfStatement, ForStatement, Function, IfStatement, LogicalExpression, SwitchStatement,
-    TryStatement, WhileStatement,
+    ForOfStatement, ForStatement, Function, IfStatement, LogicalExpression, Program,
+    SwitchStatement, TryStatement, WhileStatement,
 };
 use oxc_ast_visit::Visit;
 
@@ -71,10 +71,27 @@ impl Check for CyclomaticComplexity {
             limit,
             issues: Vec::new(),
             stack: Vec::new(),
+            max: 0,
         };
         visitor.visit_program(parsed.program);
         visitor.issues
     }
+}
+
+/// Highest per-function cyclomatic complexity found anywhere in the file,
+/// independent of `limit` — used by `cofferdam advise --analyze` (CD-65
+/// A4) to report current/remaining budget without needing a threshold.
+/// Returns 0 for a file with no functions.
+pub fn max_in_file(file: &SourceFile, program: &Program<'_>) -> u32 {
+    let mut visitor = CycVisitor {
+        file,
+        limit: u32::MAX,
+        issues: Vec::new(),
+        stack: Vec::new(),
+        max: 0,
+    };
+    visitor.visit_program(program);
+    visitor.max
 }
 
 struct CycVisitor<'a> {
@@ -85,6 +102,9 @@ struct CycVisitor<'a> {
     /// Nested functions get their own entry — outer function's tally is
     /// undisturbed by inner branching.
     stack: Vec<u32>,
+    /// Highest count seen across any function so far, tracked regardless
+    /// of `limit` so [`max_in_file`] can reuse this same visitor.
+    max: u32,
 }
 
 impl<'a> CycVisitor<'a> {
@@ -94,6 +114,7 @@ impl<'a> CycVisitor<'a> {
 
     fn exit(&mut self, name: String, span_start: u32, span_end: u32) {
         let count = self.stack.pop().unwrap_or(1);
+        self.max = self.max.max(count);
         if count > self.limit {
             let span = span_from_bytes(&self.file.text, span_start, span_end);
             self.issues.push(Issue {

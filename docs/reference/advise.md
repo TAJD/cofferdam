@@ -88,12 +88,20 @@ For each file:
 
 ## JSON output (for agents)
 
-`cofferdam advise --robot --pretty path/to/file.ts` produces a JSON
-array — one object per file, each with a `constraints` array. Stable
-keys; additional optional keys may be added in future minor releases.
+`cofferdam advise --robot --pretty path/to/file.ts` produces a
+schema-versioned envelope: `{schema_version, files}`, where `files` is
+one object per requested file, each with a `constraints` array. Stable
+keys within a `schema_version`; additional optional keys may be added
+in future minor releases. Published schema: `/schemas/advise-v1.json`.
+
+> **Breaking change (CD-65, schema_version 1):** prior releases emitted
+> a bare JSON array with no envelope. Any consumer parsing the top-level
+> value as an array must now read `.files` instead.
 
 ```json
-[
+{
+  "schema_version": 1,
+  "files": [
   {
     "path": "src/ui/Button.tsx",
     "layer": "ui",
@@ -131,10 +139,18 @@ keys; additional optional keys may be added in future minor releases.
       }
     ]
   }
-]
+  ]
+}
 ```
 
 ### Field reference
+
+Envelope:
+
+| Key | Type | Notes |
+|---|---|---|
+| `schema_version` | integer | `1` today. Bumped only on a breaking shape change. |
+| `files` | array | One entry per requested file. |
 
 Per file:
 
@@ -159,6 +175,54 @@ Per constraint:
 | `forbidden` | string[] \| omitted | `Design.LayerViolation` only — layers this file may **not** import from. |
 | `exempt` | bool \| omitted | `Design.OrphanExport` only — `true` when the file matches a framework-entry or test pattern. |
 | `exempt_reason` | string \| omitted | Set when `exempt: true`. |
+
+## State-of-play mode — `--analyze <file>`
+
+`cofferdam advise --analyze <file>` answers a different question than
+the rest of `advise`: not "what rules apply" but **"how close is this
+file to its limits right now?"** It parses the one file given (the only
+place in `advise` that touches an AST) and reports the current
+value and remaining headroom for every check that measures a
+magnitude against a configurable `limit`:
+
+- `Refactor.CyclomaticComplexity` — highest per-function McCabe count
+- `Refactor.CognitiveComplexity` — highest per-function Sonar-style score
+- `Design.MaxParameters` — highest per-function parameter count
+- `Readability.MaxFunctionLength` — longest function body, in lines
+- `Readability.MaxLineLength` — widest line, in display columns
+
+Each measurement reuses the real check's own visitor (extended with an
+unconditional running-max), so the numbers here always agree with what
+`cofferdam check` would flag — there's no separate, drift-prone counting
+logic. `limit` is resolved from `cofferdam.toml` the same way `check`
+resolves it; with no config or no override, the check's built-in default
+applies.
+
+```bash
+cofferdam advise --analyze src/big-module.ts --pretty
+```
+
+```json
+{
+  "schema_version": 1,
+  "file": "src/big-module.ts",
+  "budgets": [
+    { "rule": "Refactor.CyclomaticComplexity", "limit": 10, "current": 12, "remaining": 0 },
+    { "rule": "Refactor.CognitiveComplexity", "limit": 15, "current": 19, "remaining": 0 },
+    { "rule": "Design.MaxParameters", "limit": 5, "current": 4, "remaining": 1 },
+    { "rule": "Readability.MaxFunctionLength", "limit": 50, "current": 22, "remaining": 28 },
+    { "rule": "Readability.MaxLineLength", "limit": 120, "current": 80, "remaining": 40 }
+  ]
+}
+```
+
+`remaining` is `max(limit - current, 0)` — it never goes negative; a
+file already over budget just reads `0`. `--analyze` requires exactly
+one path (no directories, no globs — it parses a single file) and
+ignores `--format`/`--diff`; output is always JSON. Timing on a
+2258-line real-world file (`bestefforttools/lib/seoAnalyzer.ts`): ~47ms
+warm, comfortably inside the ~500ms budget for single-file advisory
+calls.
 
 ## Diff mode — `--diff <git-ref>`
 

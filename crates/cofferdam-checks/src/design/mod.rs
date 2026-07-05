@@ -17,7 +17,7 @@ pub use duplicate_export_name::DuplicateExportName;
 pub use import_cycle::ImportCycle;
 pub use invariant_violation::InvariantViolation;
 pub use layer_violation::LayerViolation;
-pub use max_parameters::MaxParameters;
+pub use max_parameters::{max_in_file as max_parameters_in_file, MaxParameters};
 pub use orphan_export::OrphanExport;
 pub use scripted_invariant::ScriptedInvariant;
 

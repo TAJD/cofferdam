@@ -258,7 +258,8 @@ fn run_advise(args: &Value) -> Result<String, String> {
     let advisories = advise::build_advisories(paths, None, false, false, false)
         .map_err(|_| "advise failed: could not resolve config or discover files".to_string())?;
 
-    serde_json::to_string(&advisories).map_err(|e| format!("failed to serialize advisories: {e}"))
+    let envelope = advise::AdviseEnvelope::new(&advisories);
+    serde_json::to_string(&envelope).map_err(|e| format!("failed to serialize advisories: {e}"))
 }
 
 fn run_advise_diff(args: &Value) -> Result<String, String> {
@@ -424,7 +425,10 @@ mod tests {
     }
 
     #[test]
-    fn tools_call_advise_returns_file_advisory_array() {
+    fn tools_call_advise_returns_schema_versioned_envelope() {
+        // CD-65 A5: the bare-array shape became a `{schema_version, files}`
+        // envelope so `advise` matches `checks.json`'s convention. This is
+        // a deliberate breaking change to the JSON output shape.
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../examples/triple_equals.ts"
@@ -445,9 +449,10 @@ mod tests {
         let text = response["result"]["content"][0]["text"]
             .as_str()
             .expect("text content");
-        let advisories: Value = serde_json::from_str(text).expect("valid JSON array");
-        assert!(advisories.is_array());
-        assert!(advisories[0]["path"].as_str().is_some());
+        let envelope: Value = serde_json::from_str(text).expect("valid JSON object");
+        assert_eq!(envelope["schema_version"].as_u64(), Some(1));
+        let files = envelope["files"].as_array().expect("files array");
+        assert!(files[0]["path"].as_str().is_some());
     }
 
     #[test]

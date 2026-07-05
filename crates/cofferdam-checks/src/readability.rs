@@ -5,7 +5,7 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, Issue, LineView, Lines, Location, OptionDefault,
     OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
 };
-use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Statement};
+use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Program, Statement};
 use oxc_ast_visit::Visit;
 use unicode_width::UnicodeWidthStr;
 
@@ -111,6 +111,16 @@ impl Check for MaxLineLength {
     }
 }
 
+/// Widest line in the file, in display columns — independent of `limit`.
+/// Used by `cofferdam advise --analyze` (CD-65 A4). Returns 0 for an
+/// empty file.
+pub fn max_line_width_in_file(file: &SourceFile) -> u32 {
+    file.lines()
+        .map(|(_, line)| UnicodeWidthStr::width(line) as u32)
+        .max()
+        .unwrap_or(0)
+}
+
 // ---------- Readability.MaxFunctionLength ----------
 
 /// `Readability.MaxFunctionLength` — flag function bodies whose effective
@@ -181,10 +191,28 @@ impl Check for MaxFunctionLength {
             limit,
             line_views: &line_views,
             issues: Vec::new(),
+            max: 0,
         };
         visitor.visit_program(parsed.program);
         visitor.issues
     }
+}
+
+/// Longest effective function body (blanks/comments excluded), in lines,
+/// found anywhere in the file — independent of `limit`. Used by
+/// `cofferdam advise --analyze` (CD-65 A4). Returns 0 for a file with no
+/// functions.
+pub fn max_function_length_in_file(file: &SourceFile, program: &Program<'_>) -> u32 {
+    let line_views: Vec<LineView<'_>> = Lines::build(&file.text, program).collect();
+    let mut visitor = MFLCollector {
+        file,
+        limit: u32::MAX,
+        line_views: &line_views,
+        issues: Vec::new(),
+        max: 0,
+    };
+    visitor.visit_program(program);
+    visitor.max
 }
 
 struct MFLCollector<'a> {
@@ -192,6 +220,10 @@ struct MFLCollector<'a> {
     limit: u32,
     line_views: &'a [LineView<'a>],
     issues: Vec<Issue>,
+    /// Longest effective length seen across any function so far, tracked
+    /// regardless of `limit` so [`max_function_length_in_file`] can reuse
+    /// this same visitor.
+    max: u32,
 }
 
 impl<'a> MFLCollector<'a> {
@@ -214,6 +246,7 @@ impl<'a> MFLCollector<'a> {
         let inner_hi = end_span.line.saturating_sub(1);
         let skipped = count_skippable_lines(self.line_views, inner_lo, inner_hi);
         let length = raw.saturating_sub(skipped);
+        self.max = self.max.max(length);
         if length > self.limit {
             let span = span_from_bytes(&self.file.text, node_start, node_end);
             self.issues.push(Issue {

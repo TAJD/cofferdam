@@ -379,6 +379,7 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
 
   Possible values: `info`, `low`, `medium`, `high`, `critical`
 
+* `--analyze` — State-of-play mode (CD-65 A4): parse exactly one file (no project graph) and report `current`/`remaining` budget for the complexity/length checks (`Refactor.CyclomaticComplexity`, `Refactor.CognitiveComplexity`, `Readability.MaxFunctionLength`, `Readability.MaxLineLength`, `Design.MaxParameters`) alongside their configured `limit`. Requires exactly one path in `paths`. Always JSON; `--format`/`--diff` are ignored
 
 
 

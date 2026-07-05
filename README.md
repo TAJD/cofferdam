@@ -28,6 +28,7 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 
 - [Check catalog](https://tajd.github.io/cofferdam/checks/) — every built-in check with bad/good examples
 - [CLI reference](https://tajd.github.io/cofferdam/reference/cli/) — flags and exit codes
+- [`advise` reference](https://tajd.github.io/cofferdam/reference/advise/) — the JSON envelope agents branch on, plus `advise --analyze` budget headroom
 - [llms.txt](https://tajd.github.io/cofferdam/llms.txt) — the entrypoint for LLM agents: version, subcommands, agent workflow, docs links
 - [Install guide](docs/install.md) — binary overrides, air-gapped installs, building from source
 - [CI recipes](docs/ci-recipes.md) — GitHub Actions, GitLab, CircleCI, Drone, pre-commit
@@ -37,7 +38,11 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 - [Type-aware checks](docs/type-aware-checks.md) — checks backed by the TypeScript type system (requires Node + ts-morph; opt out with `[engine] type_aware = false`)
 - [Output formats](docs/output-formats.md) — text, JSON, compact, SARIF
 - [Architectural specs](docs/invariants.md) — `cofferdam.invariants.toml`, `Design.LayerViolation`, `Design.BoundaryFrozen`
-- [AI agent workflow](docs/agents.md) — `cofferdam agents` onboarding prompt
+- [Budgets & ratchet](docs/budgets.md) — `[budgets]` hard caps, `baseline ratchet`/`prune`, `check --trend`
+- [AI agent workflow](docs/agents.md) — `cofferdam agents` onboarding prompt, plus `agents --hooks`
+- [Agent hooks](docs/hooks.md) — wire `advise` into a PreToolUse hook
+- [MCP server](docs/mcp.md) — `cofferdam-mcp` exposing advise/check/explain/invariants to agent hosts
+- [Doctor](docs/doctor.md) — environment + config diagnostics (`cofferdam doctor`)
 
 ## Install
 

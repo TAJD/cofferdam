@@ -143,12 +143,13 @@ struct CheckEntry {
     badges: Vec<&'static str>,
 }
 
-/// Checks whose findings require the whole-project import/export graph
-/// (built via the corpus + `finalize()`), not just the file in front of
-/// them — the "Biome/ESLint structurally can't do this" differentiator
-/// (CD-54). Hand-maintained: a new graph-based check should add itself
-/// here. `Design.BoundaryFrozen` is deliberately excluded — it matches a
-/// per-file glob against `[boundaries]`, no cross-file graph needed.
+/// Checks whose findings require cross-file context — the whole-project
+/// import/export graph or a duplicate-detection corpus (both built via the
+/// corpus + `finalize()`), not just the file in front of them — the
+/// "Biome/ESLint structurally can't do this" differentiator (CD-54).
+/// Hand-maintained: a new cross-file check should add itself here.
+/// `Design.BoundaryFrozen` is deliberately excluded — it matches a
+/// per-file glob against `[boundaries]`, no cross-file context needed.
 const GRAPH_CHECK_IDS: &[&str] = &[
     "Design.ImportCycle",
     "Design.InvariantViolation",
@@ -157,6 +158,7 @@ const GRAPH_CHECK_IDS: &[&str] = &[
     "Design.ScriptedInvariant",
     "Design.DuplicateExportName",
     "Refactor.DeadExport",
+    "Refactor.DuplicateBlock",
 ];
 
 /// Checks `advise` gives file-specific, non-generic treatment to today
@@ -332,8 +334,9 @@ fn build_index_md(metas: &[&'static CheckMeta]) -> String {
     );
     out.push('\n');
     out.push_str(
-        "**Badges:** `graph` — needs the whole-project import/export graph \
-         (what Biome/ESLint structurally can't do); `file` — analyzes one \
+        "**Badges:** `graph` — needs cross-file context: the whole-project \
+         import/export graph or a duplicate-detection corpus (what Biome/ESLint \
+         structurally can't do); `file` — analyzes one \
          file in isolation; `type-aware` — routes through the ts-morph type \
          host; `advisable` — `cofferdam advise` emits a file-specific \
          constraint for it (not just the generic explanation).\n",

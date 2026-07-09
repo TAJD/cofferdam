@@ -211,7 +211,9 @@ enum Cmd {
         /// baseline, and the exit-code gate all see only this check's
         /// findings. Useful for a CI hook that gates on a single
         /// project-specific plugin check without turning on the full
-        /// suite (CD-74).
+        /// suite (CD-74). An id that matches no built-in check (and no
+        /// plugins are configured) exits 2 rather than silently returning
+        /// zero findings — a typo here must not make a CI gate pass.
         #[arg(long, value_name = "CHECK_ID")]
         only: Option<String>,
     },
@@ -1571,17 +1573,25 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
     // --only <CheckId> (CD-74): restrict to one check's findings, applied
     // after plugin merge so it covers plugin-emitted ids too. A check that
-    // legitimately found nothing this run must NOT warn — so validate
+    // legitimately found nothing this run must NOT error — so validate
     // against the known-id registry, not against whether it fired here.
     // Plugin ids aren't statically known (same reason the cofferdam.toml
     // unknown-check-id warning above is silenced when plugins are
     // configured), so skip the typo check in that case.
+    //
+    // A typo hard-errors (exit 2) rather than warning-and-continuing: the
+    // primary use case is a CI hook gating on one check's exit code, and a
+    // silently-empty `signed` from an unmatched id would make that gate
+    // pass regardless of real violations — the exact false-green failure
+    // mode `--fail-on-type-unavailable` (cd-260l) and the `[budgets]` key
+    // warning both exist to prevent.
     if let Some(only_id) = only.as_deref() {
         let has_plugins = project_config
             .as_ref()
             .is_some_and(|cfg| !cfg.plugins.is_empty());
         if !has_plugins && !registered.contains(&only_id) {
-            eprintln!("warning: --only '{only_id}' matches no known check id — check for a typo");
+            eprintln!("error: --only '{only_id}' matches no known check id — check for a typo");
+            return ExitCode::from(2);
         }
         signed.retain(|(issue, _sig)| issue.check_id == only_id);
     }

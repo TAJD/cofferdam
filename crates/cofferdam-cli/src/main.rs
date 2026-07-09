@@ -205,6 +205,17 @@ enum Cmd {
         /// external tool if you want a chart. (CD-64 D3)
         #[arg(long)]
         trend: bool,
+        /// Restrict output to findings from one check (dotted id, e.g.
+        /// `Warning.IslandApiConvention`). Applied after plugin merge, so
+        /// it covers both built-in and plugin-emitted findings; budgets,
+        /// baseline, and the exit-code gate all see only this check's
+        /// findings. Useful for a CI hook that gates on a single
+        /// project-specific plugin check without turning on the full
+        /// suite (CD-74). An id that matches no built-in check (and no
+        /// plugins are configured) exits 2 rather than silently returning
+        /// zero findings — a typo here must not make a CI gate pass.
+        #[arg(long, value_name = "CHECK_ID")]
+        only: Option<String>,
     },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
@@ -684,6 +695,7 @@ fn main() -> ExitCode {
             fail_on_type_unavailable,
             time_checks,
             trend,
+            only,
         } => run_check(CheckArgs {
             paths,
             hidden,
@@ -709,6 +721,7 @@ fn main() -> ExitCode {
             fail_on_type_unavailable,
             time_checks,
             trend,
+            only,
         }),
         Cmd::Explain {
             check_id,
@@ -1264,6 +1277,7 @@ struct CheckArgs {
     fail_on_type_unavailable: bool,
     time_checks: bool,
     trend: bool,
+    only: Option<String>,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -1288,6 +1302,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         fail_on_type_unavailable,
         time_checks,
         trend,
+        only,
     } = args;
 
     let roots: Vec<PathBuf> = if paths.is_empty() {
@@ -1555,6 +1570,31 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // COMMON: report scope filter (--since). Applied after plugin merge so
     // both engine and plugin findings respect the narrowed output window.
     signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
+
+    // --only <CheckId> (CD-74): restrict to one check's findings, applied
+    // after plugin merge so it covers plugin-emitted ids too. A check that
+    // legitimately found nothing this run must NOT error — so validate
+    // against the known-id registry, not against whether it fired here.
+    // Plugin ids aren't statically known (same reason the cofferdam.toml
+    // unknown-check-id warning above is silenced when plugins are
+    // configured), so skip the typo check in that case.
+    //
+    // A typo hard-errors (exit 2) rather than warning-and-continuing: the
+    // primary use case is a CI hook gating on one check's exit code, and a
+    // silently-empty `signed` from an unmatched id would make that gate
+    // pass regardless of real violations — the exact false-green failure
+    // mode `--fail-on-type-unavailable` (cd-260l) and the `[budgets]` key
+    // warning both exist to prevent.
+    if let Some(only_id) = only.as_deref() {
+        let has_plugins = project_config
+            .as_ref()
+            .is_some_and(|cfg| !cfg.plugins.is_empty());
+        if !has_plugins && !registered.contains(&only_id) {
+            eprintln!("error: --only '{only_id}' matches no known check id — check for a typo");
+            return ExitCode::from(2);
+        }
+        signed.retain(|(issue, _sig)| issue.check_id == only_id);
+    }
 
     // COMMON: [budgets] enforcement + --trend (CD-64 D2/D3). Both tally
     // the full finding set INCLUDING baselined findings — a budget is a

@@ -2480,10 +2480,7 @@ fn resolve_baseline_path(explicit: Option<&Path>) -> Option<PathBuf> {
         if dir.join(".git").exists() {
             return None;
         }
-        match dir.parent() {
-            Some(p) => dir = p,
-            None => return None,
-        }
+        dir = dir.parent()?;
     }
 }
 

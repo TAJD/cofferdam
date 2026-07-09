@@ -210,10 +210,9 @@ impl CompiledScriptedRule {
         };
         let body = if let Some(src) = spec.require.as_deref() {
             TopPredicate::Require(Box::new(parse_predicate(src).ok()?))
-        } else if let Some(src) = spec.forbid.as_deref() {
-            TopPredicate::Forbid(Box::new(parse_predicate(src).ok()?))
         } else {
-            return None;
+            let src = spec.forbid.as_deref()?;
+            TopPredicate::Forbid(Box::new(parse_predicate(src).ok()?))
         };
         Some(Self {
             name: name.to_string(),

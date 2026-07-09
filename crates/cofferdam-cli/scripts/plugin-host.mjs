@@ -73,8 +73,14 @@ const VISITOR_METHODS = {
 // mutated per "file" record, read by "end"'s finalize pass.
 let cwd = "";
 let optionsCfg = {};
+let filesSeen = 0;
 const loadedPlugins = [];
 const corpusStores = new Map();
+// CD-71: per-check count of files that matched `check.files`'s include
+// patterns, so a plugin whose pathPatterns typo'd into matching nothing
+// (e.g. the CD-70 bare-`**` bug) gets a loud warning instead of silently
+// never firing.
+const scopeMatchCounts = new Map();
 // Dump the wire payload as JSON to a file when COFFERDAM_PLUGIN_HOST_DUMP_WIRE
 // is set — used by scripts/check-ast-spans.mjs to verify byte-range
 // round-trip without instrumenting the host script's main path. cd-svf
@@ -119,6 +125,7 @@ async function loadPlugins(pluginPaths) {
       }
       loadedPlugins.push({ pluginPath, check });
       corpusStores.set(check.id, buildCorpusStore());
+      scopeMatchCounts.set(check.id, 0);
     } catch (err) {
       errors.push({
         kind: "load_failed",
@@ -139,9 +146,11 @@ function processFile(rec) {
         `astNodes=${rec.ast?.nodes?.length ?? 0} plugins=${loadedPlugins.length}\n`,
     );
   }
+  filesSeen++;
   const sourceFile = buildSourceFile(rec);
   for (const { pluginPath, check } of loadedPlugins) {
     if (!fileMatchesScope(rec.path, check.files, rec.layer ?? null)) continue;
+    scopeMatchCounts.set(check.id, (scopeMatchCounts.get(check.id) ?? 0) + 1);
 
     const opts = resolveOptions(check, optionsCfg);
     const corpusStore = corpusStores.get(check.id);
@@ -221,6 +230,22 @@ async function finalizeAndEmit() {
         plugin: pluginPath,
         file: "",
         message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // CD-71: a check whose `files.pathPattern(s)` matched zero of the
+  // discovered files never reports anything, indistinguishable from "no
+  // violations found" — surface it as a warning instead of silence.
+  if (filesSeen > 0) {
+    for (const { pluginPath, check } of loadedPlugins) {
+      if (!hasIncludePatterns(check.files) || (scopeMatchCounts.get(check.id) ?? 0) > 0) continue;
+      writeRecord({
+        type: "error",
+        kind: "zero_scope_match",
+        plugin: pluginPath,
+        file: "",
+        message: `plugin check '${check.id}' matched 0 of ${filesSeen} discovered file(s) — check files.pathPattern(s) for a typo or an unreachable glob`,
       });
     }
   }
@@ -649,6 +674,12 @@ function resolveOptions(check, perCheckOverrides) {
   return out;
 }
 
+function hasIncludePatterns(scope) {
+  if (!scope) return false;
+  if (typeof scope.pathPattern === "string" && scope.pathPattern) return true;
+  return Array.isArray(scope.pathPatterns) && scope.pathPatterns.some((p) => typeof p === "string" && p);
+}
+
 function fileMatchesScope(absFilePath, scope, layer = null) {
   if (!scope) return true;
 
@@ -741,7 +772,16 @@ function globMatchSingle(pattern, path) {
         // surrounding `/` so `a/**/b` matches `a/b` as well as `a/x/b`.
         i += 2;
         if (pattern[i] === "/") i++; // consume trailing slash
-        re += "(?:.+/)?"; // zero or more segments with trailing slash
+        if (i >= pattern.length) {
+          // Trailing `**` (e.g. `dir/**`) — gitignore semantics match
+          // everything under `dir`, including a file directly inside it
+          // (CD-70). `(?:.+/)?` below requires either nothing or full
+          // segments ending in `/`, which can never match a bare trailing
+          // filename — so the trailing case gets an unrestricted `.*`.
+          re += ".*";
+        } else {
+          re += "(?:.+/)?"; // zero or more segments with trailing slash
+        }
         continue;
       }
       // Single `*` — match anything except `/`.

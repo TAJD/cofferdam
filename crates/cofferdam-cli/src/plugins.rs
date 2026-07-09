@@ -793,6 +793,7 @@ pub fn run_plugins_with_sources(
                     err.plugin, err.message
                 ),
             ),
+            "zero_scope_match" => ("Warning.PluginZeroScopeMatch", err.message.clone()),
             other => (
                 "Warning.PluginHostFailed",
                 format!("plugin host error ({}): {}", other, err.message),

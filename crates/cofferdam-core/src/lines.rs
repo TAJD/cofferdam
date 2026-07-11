@@ -265,10 +265,17 @@ fn apply_span_ranges(
             continue;
         };
         let line_start = line_starts[li as usize];
-        let line_end = line_starts
+        let mut line_end = line_starts
             .get(li as usize + 1)
             .map(|&s| s.saturating_sub(1))
             .unwrap_or(text.len() as u32);
+        // `LineView.text` additionally strips a trailing '\r' (CRLF line
+        // endings) beyond the '\n'-relative `line_end` computed above —
+        // match that here so a range ending at the true line end never
+        // points one byte past `text.len()` on a CRLF source.
+        if line_end > line_start && text.as_bytes().get(line_end as usize - 1) == Some(&b'\r') {
+            line_end -= 1;
+        }
         let clipped_start = span.start.max(line_start);
         let clipped_end = span.end.min(line_end);
         if clipped_start < clipped_end {

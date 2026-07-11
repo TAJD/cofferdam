@@ -66,12 +66,38 @@ const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG
 const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
 const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
 
-/// Version-scoped subdirectory of the OS temp dir that holds this
-/// build's materialised host + core scripts (CD-89). Shared by
+/// Version- and user-scoped subdirectory of the OS temp dir that holds
+/// this build's materialised host + core scripts (CD-89). Shared by
 /// `plugins.rs` and `type_host.rs`, which each ensure it exists
-/// independently.
+/// independently. The user component matters on a shared multi-user
+/// Linux box: the OS temp dir is commonly world-writable, so without it
+/// the first user to run on a given version would own the directory and
+/// every other user's `fs::write` into it would fail with `EACCES`.
 fn scripts_dir() -> PathBuf {
-    std::env::temp_dir().join(concat!("cofferdam-scripts-", env!("CARGO_PKG_VERSION")))
+    std::env::temp_dir().join(format!(
+        "cofferdam-scripts-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        current_user_tag()
+    ))
+}
+
+/// Best-effort, filesystem-safe tag for the current user, read straight
+/// from the platform's conventional env var (no extra dependency for
+/// something this approximate). Falls back to a fixed placeholder when
+/// unset/empty/unusable so `scripts_dir` always returns a valid path.
+fn current_user_tag() -> String {
+    let raw = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let sanitized: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// Wire version for the streamed manifest protocol (CD-33). Bump and

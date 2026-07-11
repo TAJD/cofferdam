@@ -39,11 +39,32 @@ const HOST_SCRIPT_NAME: &str = concat!("cofferdam-type-host-", env!("CARGO_PKG_V
 const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
 const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
 
-/// Mirrors `plugins.rs::scripts_dir` — each materialiser ensures the
-/// same version-scoped directory independently rather than sharing
-/// state across the two call sites.
+/// Mirrors `plugins.rs::scripts_dir` (including the per-user component,
+/// CD-89) — each materialiser ensures the same version- and user-scoped
+/// directory independently rather than sharing state across the two
+/// call sites.
 fn scripts_dir() -> PathBuf {
-    std::env::temp_dir().join(concat!("cofferdam-scripts-", env!("CARGO_PKG_VERSION")))
+    std::env::temp_dir().join(format!(
+        "cofferdam-scripts-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        current_user_tag()
+    ))
+}
+
+/// Mirrors `plugins.rs::current_user_tag`.
+fn current_user_tag() -> String {
+    let raw = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let sanitized: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// Materialise the embedded host script to the OS temp dir on first

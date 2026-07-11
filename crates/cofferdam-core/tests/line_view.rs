@@ -347,6 +347,36 @@ fn string_literal_ranges_empty_when_no_literal() {
 }
 
 #[test]
+fn string_literal_ranges_clip_before_crlf_not_after() {
+    // A multi-line template literal on a CRLF source: the interior/
+    // continuation lines are fully covered by the literal, so a naive
+    // clip against the '\n'-relative line end (rather than the
+    // CR-stripped end `LineView.text` actually exposes) would emit a
+    // range end one byte past `text.len()` on those lines.
+    let view = view_for("const t = `line one\r\nline two\r\nline three`;\r\n");
+    let lines = collect(&view);
+    assert_eq!(lines.len(), 4, "3 content lines + trailing empty");
+
+    for l in &lines[..3] {
+        assert!(
+            !l.string_literal_ranges.is_empty(),
+            "line {} should have a literal range",
+            l.line_no
+        );
+        for &(s, e) in &l.string_literal_ranges {
+            assert!(
+                (e as usize) <= l.text.len(),
+                "line {}: range end {e} must not exceed text.len() {} (text: {:?})",
+                l.line_no,
+                l.text.len(),
+                l.text
+            );
+            let _ = &l.text[s as usize..e as usize]; // must not panic
+        }
+    }
+}
+
+#[test]
 fn plain_lines_have_no_string_literal_ranges() {
     let lines: Vec<_> = cofferdam_core::Lines::plain("some\ntext").collect();
     for l in &lines {

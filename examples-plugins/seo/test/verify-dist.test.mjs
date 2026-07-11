@@ -77,4 +77,17 @@ test("cofferdam verify --dist finds SeoDuplicateTitle in the same fixture coffer
   for (const f of doc.findings) {
     assert.ok(!f.file.endsWith(".tsx"), `no .tsx file should appear in verify --dist output, got ${f.file}`);
   }
+
+  // Regression: this plugin registry also configures three
+  // non-output-mode checks scoped to **/page.tsx (SeoMissingMetadataExport,
+  // SeoImgMissingAlt, SeoNonEmptyDescription). Before the fix, verify
+  // --dist invoked every configured plugin against the .html-only file
+  // set, so those checks matched 0 files and the host emitted a spurious
+  // high-severity Warning.PluginZeroScopeMatch for each — a clean dist
+  // tree would fail a `--fail-on medium` CI gate on false alarms alone.
+  assert.equal(
+    doc.findings.filter((f) => f.check_id === "Warning.PluginZeroScopeMatch").length,
+    0,
+    `verify --dist must not run non-output-mode plugin checks at all, so none can report a zero-scope match; findings=${JSON.stringify(doc.findings)}`,
+  );
 });

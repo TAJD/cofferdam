@@ -325,7 +325,7 @@ function reportTypeHostUnavailableOnce(reason) {
 // Request shape: { "mode": "metadata", "cwd": "...", "plugins": [...] }
 // Response shape: {
 //   "checks": [{
-//     id, category, basePriority, defaultSeverity, explanation, body,
+//     path, id, category, basePriority, defaultSeverity, explanation, body,
 //     requiresTypes, outputMode, files,
 //     options: [{ name, kind, default, doc }]
 //   }],
@@ -334,7 +334,8 @@ function reportTypeHostUnavailableOnce(reason) {
 async function runMetadataMode(rec) {
   cwd = rec.cwd;
   const errors = await loadPlugins(rec.plugins ?? []);
-  const checks = loadedPlugins.map(({ check }) => ({
+  const checks = loadedPlugins.map(({ pluginPath, check }) => ({
+    path: pluginPath,
     id: check.id,
     category: check.category ?? "warning",
     basePriority: check.basePriority ?? 0,

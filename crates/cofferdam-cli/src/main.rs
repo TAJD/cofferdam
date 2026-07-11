@@ -1963,6 +1963,15 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
         no_config,
     } = args;
 
+    // A missing --dist directory (typo'd path, renamed build output, a
+    // failed build step that never ran) must be a hard error, not "0
+    // files found, exit 0" — the latter makes a broken CI pipeline look
+    // like a passing verify gate.
+    if !dist.is_dir() {
+        eprintln!("error: --dist directory does not exist: {}", dist.display());
+        return ExitCode::from(2);
+    }
+
     // `respect_ignore: false` is deliberate: dist/build dirs are commonly
     // gitignored, but the user explicitly named this directory, so ignore
     // rules must not silently exclude files from it.
@@ -2072,8 +2081,27 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
                 } else {
                     None
                 };
+                // Only invoke checks that are actually output-mode
+                // eligible against this .html/.htm file set. Running
+                // every configured plugin (including source-only checks
+                // scoped to e.g. `**/page.tsx`) against a dist tree with
+                // zero matching files makes the host emit a spurious
+                // `Warning.PluginZeroScopeMatch` for every one of them —
+                // a clean dist would otherwise fail CI on a false alarm.
+                let output_mode_paths: HashSet<String> = plugin_metas
+                    .iter()
+                    .filter(|m| m.output_mode)
+                    .map(|m| m.path.clone())
+                    .collect();
+                let mut filtered_cfg = cfg.clone();
+                filtered_cfg.plugins = cfg
+                    .plugins
+                    .iter()
+                    .filter(|p| output_mode_paths.contains(&plugins::canonical_plugin_path_str(p)))
+                    .cloned()
+                    .collect();
                 let plugin_issues = run_plugins_filtered(
-                    cfg,
+                    &filtered_cfg,
                     resolved_config_path.as_deref(),
                     &files,
                     tsconfig_path.as_deref(),

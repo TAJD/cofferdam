@@ -688,6 +688,7 @@ mod tests {
     fn suggestions_includes_plugin_ids() {
         let metas = vec![&NO_OPTS_META];
         let plugin_metas = vec![crate::plugins::PluginCheckMeta {
+            path: "./plugin".to_string(),
             id: "Warning.MaxFoo".to_string(),
             category: "warning".to_string(),
             base_priority: 5,

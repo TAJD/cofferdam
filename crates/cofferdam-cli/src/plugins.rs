@@ -279,6 +279,12 @@ pub struct PluginOptionMeta {
 /// `query_plugin_metadata` for the advise and explain subcommands.
 #[derive(Debug, Clone)]
 pub struct PluginCheckMeta {
+    /// The `cofferdam.toml` `plugins = [...]` entry (as sent to the host)
+    /// this check was loaded from — lets callers correlate a metadata
+    /// entry back to the config path that produced it, e.g. to filter
+    /// `cfg.plugins` down to only output-mode-eligible entries before
+    /// invoking the host again for `verify --dist`.
+    pub path: String,
     pub id: String,
     pub category: String,
     pub base_priority: i64,
@@ -307,6 +313,8 @@ struct MetadataHostResponse {
 
 #[derive(Deserialize)]
 struct MetadataCheckEntry {
+    #[serde(default)]
+    path: String,
     id: String,
     #[serde(default)]
     category: String,
@@ -336,6 +344,15 @@ struct MetadataManifest<'a> {
     plugins: &'a [String],
 }
 
+/// Canonicalize a plugin path the same way it's sent to the host, so a
+/// `PluginCheckMeta::path` (round-tripped verbatim through the host) can
+/// be matched back against a `cofferdam.toml` `plugins = [...]` entry.
+pub fn canonical_plugin_path_str(p: &Path) -> String {
+    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = abs.to_string_lossy().replace('\\', "/");
+    s.trim_start_matches("//?/").to_string()
+}
+
 /// Run the plugin host in metadata-only mode. Returns one
 /// `PluginCheckMeta` per successfully loaded plugin. Load errors are
 /// silently dropped (they'd be surfaced again in `run_plugins` anyway).
@@ -354,11 +371,7 @@ pub fn query_plugin_metadata(
 
     let plugin_paths_str: Vec<String> = plugin_paths
         .iter()
-        .map(|p| {
-            let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-            let s = abs.to_string_lossy().replace('\\', "/");
-            s.trim_start_matches("//?/").to_string()
-        })
+        .map(|p| canonical_plugin_path_str(p))
         .collect();
 
     let manifest = MetadataManifest {
@@ -432,6 +445,7 @@ pub fn query_plugin_metadata(
         .checks
         .into_iter()
         .map(|e| PluginCheckMeta {
+            path: e.path,
             id: e.id,
             category: e.category,
             base_priority: e.base_priority,

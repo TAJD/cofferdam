@@ -79,3 +79,31 @@ fn plain_check_still_applies_normal_checks_to_dist_fixture_html() {
         "output-mode-eligible checks must still run normally under plain `cofferdam check`; stdout={stdout}"
     );
 }
+
+// A missing --dist directory (typo, renamed build output, a build step
+// that silently never ran) must be a hard error — "0 files found, exit
+// 0" would make a broken CI pipeline look like a passing verify gate.
+#[test]
+fn verify_dist_errors_on_nonexistent_directory() {
+    let out = Command::new(cofferdam_bin())
+        .args([
+            "verify",
+            "--dist",
+            "examples/this-directory-does-not-exist",
+            "--format",
+            "json",
+        ])
+        .current_dir(repo_root())
+        .output()
+        .expect("spawn cofferdam verify");
+
+    assert!(
+        !out.status.success(),
+        "verify --dist against a nonexistent directory must not exit 0"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("does not exist"),
+        "expected a clear does-not-exist error; stderr={stderr}"
+    );
+}

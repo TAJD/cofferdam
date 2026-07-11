@@ -992,3 +992,38 @@ resolution, not a second file read. It returns
 Each `resolveLiteral` call is an in-process ts-morph query — same as
 `typeAt`, there's no Rust↔Node round trip per call to batch away; calling it
 once per candidate identifier in a loop is the expected usage pattern.
+
+## 8. Worked example: `examples-plugins/seo/` (CD-86)
+
+`examples-plugins/seo/` is the flagship end-to-end proof for this epic — one
+plugin package (`@cofferdam-fixtures/seo`) composing every SDK surface
+documented above into checks a real SEO/accessibility audit would want:
+
+| Check | Pattern | SDK surface |
+|---|---|---|
+| `SeoMissingMetadataExport` | A (line/text scan) | No AST kind exposes export declarations, so a page missing `export const metadata` / `export function generateMetadata` is caught the same way BrandCasing catches a missing magic comment. |
+| `SeoImgMissingAlt` | B (AST `findAll`) | `findAll("JSXElement")` + `JSXAttributeNode` (CD-80) — see [JSX findAll](#jsx-findall-flag-img-with-no-alt) above. |
+| `SeoDuplicateTitle` | C (corpus + `finalize`) | `findAll("Element")` over the HTML AstView (CD-84) to read `<title>`/`<link rel="canonical">`, aggregated via `ctx.corpus` the same way as [DuplicateClassName](#quick-example), with a second corpus slot for canonical URLs. `outputMode: true` (CD-85) makes it eligible for `cofferdam verify --dist` against a build's HTML output *in addition to* running under plain `cofferdam check` against any `.html` files in scope — one check serves both the source-adjacent and build-output angle on duplicate titles/canonicals. |
+| `SeoNonEmptyDescription` | Type-aware (`ctx.types.resolveLiteral`, CD-82) | The `NonEmptySeoDescription` example above, ported verbatim — `examples-plugins/seo/fixture/empty-description/page.tsx` imports an empty-string constant aliased to `description` so the check's `IdentifierReference` match fires. |
+
+The fixture (`examples-plugins/seo/fixture/`) has one directory per
+violation plus a fully-compliant `good/page.tsx`, and three built HTML pages
+(`page-a.html`, `page-b.html`, `page-c.html`) exercising `SeoDuplicateTitle`'s
+output-mode path. See `examples-plugins/seo/README.md` for the full
+violation-by-violation breakdown and how to build + run it locally.
+
+**A note on where `SeoNonEmptyDescription` actually resolves types.**
+`cofferdam`'s tsconfig discovery for type-aware *plugin* checks walks UP
+from the invoking process's current directory only — it never searches
+into subdirectories of whatever path `check`/`verify` was pointed at. The
+repo-root-anchored `scripts/check-plugin-fixtures.mjs` pipeline that
+generates every plugin fixture's `expected.json` therefore never
+discovers `examples-plugins/seo/fixture/tsconfig.json`, so that golden
+file legitimately shows `Warning.PluginTypeHostUnavailable` rather than a
+firing `SeoNonEmptyDescription` finding. The check is still real and
+end-to-end tested with a live ts-morph resolution — see
+`examples-plugins/seo/test/type-aware-description.test.mjs`, which runs
+`cofferdam check` with its working directory set to `fixture/` (mirroring
+`scripts/check-type-host-smoke.mjs`'s convention for the built-in
+type host) and asserts the cross-file empty-string resolution actually
+fires.

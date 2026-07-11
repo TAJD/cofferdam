@@ -2046,10 +2046,24 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
                 .unwrap_or_else(|| PathBuf::from("."));
             let project_root = cfg_dir.clone();
             let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &project_root);
+            // Findings carry category-prefixed check_ids (`Warning.Foo`,
+            // idempotent if the plugin author already dotted their own id
+            // — see `plugins::run_plugins_with_sources`), but plugin
+            // metadata's `id` is the bare `defineCheck({ id: "Foo" })`
+            // value. Prefix here the same way so the containment check
+            // below actually matches real findings instead of silently
+            // dropping every output-mode plugin check's output.
             let output_mode_ids: HashSet<String> = plugin_metas
                 .iter()
                 .filter(|m| m.output_mode)
-                .map(|m| m.id.clone())
+                .map(|m| {
+                    if m.id.contains('.') {
+                        m.id.clone()
+                    } else {
+                        let prefix = plugins::capitalize_category(&m.category).unwrap_or("Warning");
+                        format!("{}.{}", prefix, m.id)
+                    }
+                })
                 .collect();
             if !output_mode_ids.is_empty() {
                 let type_aware_enabled = cfg::ProjectConfig::type_aware_enabled(cfg);

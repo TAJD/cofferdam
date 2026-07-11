@@ -969,7 +969,7 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
     }
 }
 
-fn capitalize_category(wire: &str) -> Option<&'static str> {
+pub fn capitalize_category(wire: &str) -> Option<&'static str> {
     match wire {
         "consistency" => Some("Consistency"),
         "design" => Some("Design"),

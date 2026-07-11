@@ -56,7 +56,6 @@ impl<'a> HtmlWireBuilder<'a> {
         self.enter(idx);
         self.visit_children(root);
         self.exit();
-        self.nodes[idx as usize].extras = WireExtras::None {};
 
         let root_idx = if self.nodes.is_empty() { -1 } else { 0 };
         AstWire {

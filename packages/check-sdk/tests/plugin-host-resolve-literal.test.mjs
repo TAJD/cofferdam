@@ -143,6 +143,95 @@ test("ctx.types.resolveLiteral resolves a cross-file string literal end-to-end v
   }
 });
 
+/** A plugin whose `run()` resolves whichever identifier import the test
+ * points it at and reports the full LiteralFacts as JSON, so isNullable/
+ * isEmptyObject are asserted directly (not just literalString). */
+const RESOLVE_LITERAL_FACTS_PLUGIN = `
+export default {
+  id: "Test.ResolveLiteralFacts",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "reports full ctx.types.resolveLiteral facts for CD-82 tests",
+  requiresTypes: true,
+  options: {},
+  async run(file, ctx) {
+    // "import { " is 9 bytes; the imported name follows immediately.
+    const nameLen = file.text.slice(9).match(/^[A-Za-z_$][\\w$]*/)[0].length;
+    const facts = await ctx.types.resolveLiteral(9, 9 + nameLen);
+    ctx.report({ message: JSON.stringify(facts), span: { start_byte: 0, end_byte: 1 } });
+  },
+};
+`;
+
+test("ctx.types.resolveLiteral reports isNullable for a nullable const and isEmptyObject for an empty-object const", async () => {
+  const tsMorphRoot = process.env.COFFERDAM_TYPE_HOST_TS_MORPH_ROOT;
+  if (!tsMorphRoot) {
+    return; // not configured — skip, matches type_host.rs's Rust test gating
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "cofferdam-plugin-host-resolve-literal-facts-"));
+  try {
+    const pluginDir = join(dir, "plugin");
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, "index.mjs"), RESOLVE_LITERAL_FACTS_PLUGIN);
+
+    writeFileSync(
+      join(dir, "constants.ts"),
+      'export const maybeDescription: string | null = null;\n' +
+        "export const emptyConfig = {};\n",
+    );
+    const tsconfigPath = join(dir, "tsconfig.json");
+    writeFileSync(
+      tsconfigPath,
+      JSON.stringify({
+        compilerOptions: { strict: true, noEmit: true },
+        include: ["constants.ts", "nullable.ts", "empty.ts"],
+      }),
+    );
+
+    async function resolveOne(importName, fileBaseName) {
+      const filePath = join(dir, fileBaseName);
+      const text = `import { ${importName} } from "./constants";\nexport { ${importName} };\n`;
+      writeFileSync(filePath, text);
+
+      const { lines, stderr } = await runHost([
+        {
+          type: "header",
+          wireVersion: 2,
+          cwd: tsMorphRoot.replace(/\\/g, "/"),
+          plugins: [pluginDir.replace(/\\/g, "/")],
+          options: {},
+          tsconfigPath: tsconfigPath.replace(/\\/g, "/"),
+        },
+        {
+          type: "file",
+          path: filePath.replace(/\\/g, "/"),
+          text,
+          lineViews: [],
+          layer: null,
+          ast: null,
+        },
+        { type: "end" },
+      ]);
+
+      const reports = lines.filter((l) => l.type === "report");
+      assert.equal(reports.length, 1, `expected one report; got ${JSON.stringify(lines)}\nstderr=${stderr}`);
+      return JSON.parse(reports[0].message);
+    }
+
+    const nullableFacts = await resolveOne("maybeDescription", "nullable.ts");
+    assert.equal(nullableFacts.isNullable, true, "string | null const must report isNullable");
+    assert.equal(nullableFacts.isEmptyObject, false);
+
+    const emptyObjectFacts = await resolveOne("emptyConfig", "empty.ts");
+    assert.equal(emptyObjectFacts.isEmptyObject, true, "= {} const must report isEmptyObject");
+    assert.equal(emptyObjectFacts.isNullable, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ctx.types is undefined and the resolveLiteral plugin runs fine when no tsconfig is supplied", async () => {
   const dir = mkdtempSync(join(tmpdir(), "cofferdam-plugin-host-resolve-literal-notsconfig-"));
   try {

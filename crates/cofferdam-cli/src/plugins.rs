@@ -604,6 +604,12 @@ pub fn run_plugins_with_sources(
             // own oxc/tree-sitter calls).
             let (line_views, ast): (Vec<ManifestLineView>, Option<crate::ast_wire::AstWire>) =
                 match file.language {
+                    // Unlike the engine path (which rejects a tree with
+                    // `has_errors()` and emits `Warning.ParseError`),
+                    // plugins get a best-effort wire even from a
+                    // partially error-recovered parse — plugins have no
+                    // channel to emit a parse-error finding themselves,
+                    // so a partial tree is more useful than none.
                     Language::Html => match cofferdam_html::parse_html(text) {
                         Ok(tree) => {
                             let line_views = cofferdam_html::html_lines(text, &tree)

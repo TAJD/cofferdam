@@ -322,6 +322,13 @@ export function resolveTsMorph(startDir) {
   let dir = resolvePath(startDir);
   for (let depth = 0; depth < 32; depth++) {
     const pkgPath = joinPath(dir, "node_modules", "ts-morph", "package.json");
+    // CD-92: every non-success path below must fall through to the
+    // parent-dir advance at the bottom of the loop — a bare `continue`
+    // here re-checks the *same* `dir` next iteration instead of climbing,
+    // so a directory with a broken/unresolvable ts-morph install could
+    // exhaust the whole 32-iteration budget without ever reaching a
+    // working install further up the tree.
+    let resolved = null;
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
       const pkgDir = dirname(pkgPath);
@@ -329,21 +336,22 @@ export function resolveTsMorph(startDir) {
       const entryPath = entry
         ? joinPath(pkgDir, entry)
         : findIndexFallback(pkgDir);
-      if (!entryPath) {
-        continue;
+      if (entryPath) {
+        try {
+          statSync(entryPath);
+          resolved = {
+            entryPath,
+            version: typeof pkg.version === "string" ? pkg.version : null,
+          };
+        } catch {
+          // entry file doesn't actually exist — fall through to parent
+        }
       }
-      try {
-        statSync(entryPath);
-      } catch {
-        continue;
-      }
-      return {
-        entryPath,
-        version: typeof pkg.version === "string" ? pkg.version : null,
-      };
     } catch {
-      // try parent
+      // no ts-morph package.json here — fall through to parent
     }
+    if (resolved) return resolved;
+
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;

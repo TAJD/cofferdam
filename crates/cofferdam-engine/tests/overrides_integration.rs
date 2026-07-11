@@ -169,6 +169,32 @@ limit = 10
 }
 
 #[test]
+fn disabled_override_should_suppress_finalize_emitted_checks() {
+    // CD-97: `disabled = true` must also suppress findings emitted from a
+    // check's `finalize()` (cross-file checks like Design.OrphanExport),
+    // not just per-file `run()` output.
+    let toml = r#"
+[[overrides]]
+paths = ["src/unused.ts"]
+[overrides.checks."Design.OrphanExport"]
+disabled = true
+"#;
+    let (issues, paths) = analyze_project(
+        toml,
+        &[(
+            "src/unused.ts",
+            "export const neverImported = 1;\n".to_string(),
+        )],
+    );
+    let f = &paths[0];
+    assert!(
+        !fired_on(&issues, "Design.OrphanExport", f),
+        "disabled override should suppress finalize-emitted OrphanExport too, got: {:?}",
+        issues.iter().map(|i| &i.check_id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn no_overrides_is_unaffected() {
     // Sanity: a config with no [[overrides]] behaves exactly as before.
     let (issues, paths) = analyze_project("", &[("src/Lobby.tsx", long_function())]);

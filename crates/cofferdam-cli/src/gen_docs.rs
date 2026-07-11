@@ -435,6 +435,8 @@ fn build_llms_txt() -> String {
             "\n",
             "- `cofferdam check [paths...]`: run all checks. The default workflow. \
              `--robot` switches to token-economical machine-readable output.\n",
+            "- `cofferdam verify --dist <dir>`: opt-in check mode for built HTML output — runs \
+             only output-mode-tagged checks against a `--dist` tree, separate from `check`.\n",
             "- `cofferdam agents`: print a version-pinned onboarding prompt for AI coding agents \
              — pipe into AGENTS.md / CLAUDE.md.\n",
             "- `cofferdam advise <file>`: print the rules and constraints that apply to a file \

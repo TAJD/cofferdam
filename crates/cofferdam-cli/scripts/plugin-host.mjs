@@ -13,7 +13,8 @@
 // plugins.rs), one JSON object per stdin line:
 //   {"type":"header","wireVersion":2,"cwd":"/abs/project-root",
 //    "plugins":["./examples-plugins/brand-casing"],
-//    "options":{"<checkId>":{"<key>":<RawOptionValue>}}}
+//    "options":{"<checkId>":{"<key>":<RawOptionValue>}},
+//    "tsconfigPath":"/abs/project-root/tsconfig.json"}   // null/absent when none found
 //   {"type":"file","path":"/abs/file.ts","text":"...",
 //    "lineViews":[{...}],"layer":null,"ast":{...}}
 //   ... (one "file" record per source file, in order) ...
@@ -28,7 +29,10 @@
 //   {"type":"error","kind":"load_failed"|"run_threw"|"finalize_threw",
 //    "plugin":"./examples-plugins/brand-casing",
 //    "file":"/abs/.../foo.ts","message":"..."}   // file empty for load_failed
-//   {"type":"done"}
+//   {"type":"done","typeHostUnavailable":null}   // typeHostUnavailable field
+//     // present only when a loaded check declared requiresTypes:true;
+//     // null when ts-morph resolved fine, else a human-readable reason
+//     // (CD-81 — see type-host-core.mjs).
 //
 // A separate, still one-shot METADATA mode (`query_plugin_metadata` in
 // plugins.rs) sends a single `{"mode":"metadata","cwd":...,"plugins":[...]}`
@@ -45,6 +49,12 @@ import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { createInterface } from "node:readline";
+import {
+  createTypeHostState,
+  ensureTsMorphLoaded,
+  typeAt as coreTypeAt,
+  resolveLiteral as coreResolveLiteral,
+} from "./type-host-core.mjs";
 
 // SDK major versions this host knows how to drive (cd-b1q). Plugins
 // vendor their own `@cofferdam/check-sdk` via their package.json, so
@@ -67,6 +77,15 @@ const VISITOR_METHODS = {
   ObjectExpression: "visitObjectExpression",
   MemberExpression: "visitMemberExpression",
   IdentifierReference: "visitIdentifierReference",
+  JSXElement: "visitJSXElement",
+  JSXAttribute: "visitJSXAttribute",
+  JSXExpressionContainer: "visitJSXExpressionContainer",
+  Document: "visitDocument",
+  Element: "visitElement",
+  Attribute: "visitAttribute",
+  Text: "visitText",
+  Comment: "visitComment",
+  Doctype: "visitDoctype",
 };
 
 // State for the streaming run — populated by the "header" record,
@@ -75,6 +94,21 @@ let cwd = "";
 let optionsCfg = {};
 let filesSeen = 0;
 const loadedPlugins = [];
+
+// CD-81: type-aware plugin routing. `tsconfigPath` comes from the
+// header record (Rust-side discovery, same tsconfig the built-in type
+// oracle uses); `null` means no tsconfig was found / type-awareness is
+// disabled. `typeHostState` is this process's own ts-morph cache — a
+// separate instance from the standalone type-host worker's, since each
+// is a distinct Node process (see type-host-core.mjs's module doc).
+// ts-morph is loaded eagerly, once, right after `loadPlugins` in the
+// header handler (only when a loaded check declares `requiresTypes`),
+// so `ctx.types` is ready before the first "file" record arrives.
+const typeHostState = createTypeHostState();
+let tsconfigPath = null;
+let typeHostUnavailableReason = null;
+let typeHostUnavailableReported = false;
+let anyCheckRequiresTypes = false;
 const corpusStores = new Map();
 // CD-71: per-check count of files that matched `check.files`'s include
 // patterns, so a plugin whose pathPatterns typo'd into matching nothing
@@ -116,13 +150,6 @@ async function loadPlugins(pluginPaths) {
           }`,
         );
       }
-      if (check.requiresTypes === true) {
-        process.stderr.write(
-          `[cofferdam] plugin "${check.id}" sets requiresTypes:true — type-aware routing` +
-            ` (ts-morph) is not yet wired in 0.2.x; the check will run without type information.` +
-            ` Track cd-l58 / gh #16 for status.\n`,
-        );
-      }
       loadedPlugins.push({ pluginPath, check });
       corpusStores.set(check.id, buildCorpusStore());
       scopeMatchCounts.set(check.id, 0);
@@ -138,7 +165,7 @@ async function loadPlugins(pluginPaths) {
   return errors;
 }
 
-function processFile(rec) {
+async function processFile(rec) {
   if (dumpEntries) dumpEntries.push({ path: rec.path, text: rec.text, ast: rec.ast ?? null });
   if (process.env.COFFERDAM_PLUGIN_HOST_DEBUG) {
     process.stderr.write(
@@ -175,9 +202,26 @@ function processFile(rec) {
       },
       corpus: corpusStore.view(),
     };
+    // CD-81: `ctx.types` is present only when this check declared
+    // `requiresTypes: true` AND a tsconfig was found AND ts-morph
+    // loaded successfully. Absent (not just null) otherwise — plugins
+    // test `if (ctx.types)` rather than a null-check per call.
+    if (check.requiresTypes === true && tsconfigPath && !typeHostState.tsMorphLoadError) {
+      ctx.types = {
+        async typeAt(startByte, endByte) {
+          return coreTypeAt(typeHostState, tsconfigPath, rec.path, startByte, endByte);
+        },
+        // CD-82: resolves an identifier/import reference to a literal
+        // value (cross-file, via ts-morph symbol resolution). Same
+        // in-process pattern as `typeAt` above — no new IPC hop.
+        async resolveLiteral(startByte, endByte) {
+          return coreResolveLiteral(typeHostState, tsconfigPath, rec.path, startByte, endByte);
+        },
+      };
+    }
 
     try {
-      check.run(sourceFile, ctx, opts);
+      await check.run(sourceFile, ctx, opts);
     } catch (err) {
       writeRecord({
         type: "error",
@@ -256,15 +300,33 @@ async function finalizeAndEmit() {
     writeFileSync(dumpPath, JSON.stringify(dumpEntries, null, 2));
   }
 
-  writeRecord({ type: "done" });
+  // CD-81: only report type-host status when at least one loaded check
+  // actually declared `requiresTypes: true` — no point surfacing
+  // ts-morph availability when nothing needed it.
+  const done = { type: "done" };
+  if (anyCheckRequiresTypes) done.typeHostUnavailable = typeHostUnavailableReason;
+  writeRecord(done);
+}
+
+// Record the type-host-unavailable reason once (module state) and emit
+// exactly one stderr diagnostic across the whole run, no matter how many
+// files/checks would have wanted `ctx.types`.
+function reportTypeHostUnavailableOnce(reason) {
+  typeHostUnavailableReason = reason;
+  if (typeHostUnavailableReported) return;
+  typeHostUnavailableReported = true;
+  process.stderr.write(
+    `[cofferdam] type-aware plugin check(s) declared requiresTypes:true but the type host is ` +
+      `unavailable (${reason}) — those checks will run with ctx.types undefined.\n`,
+  );
 }
 
 // Metadata mode: return check metadata without processing any files.
 // Request shape: { "mode": "metadata", "cwd": "...", "plugins": [...] }
 // Response shape: {
 //   "checks": [{
-//     id, category, basePriority, defaultSeverity, explanation, body,
-//     requiresTypes, files,
+//     path, id, category, basePriority, defaultSeverity, explanation, body,
+//     requiresTypes, outputMode, files,
 //     options: [{ name, kind, default, doc }]
 //   }],
 //   "errors": [...]
@@ -272,7 +334,8 @@ async function finalizeAndEmit() {
 async function runMetadataMode(rec) {
   cwd = rec.cwd;
   const errors = await loadPlugins(rec.plugins ?? []);
-  const checks = loadedPlugins.map(({ check }) => ({
+  const checks = loadedPlugins.map(({ pluginPath, check }) => ({
+    path: pluginPath,
     id: check.id,
     category: check.category ?? "warning",
     basePriority: check.basePriority ?? 0,
@@ -280,6 +343,7 @@ async function runMetadataMode(rec) {
     explanation: check.explanation ?? "",
     body: check.body ?? null,
     requiresTypes: check.requiresTypes ?? false,
+    outputMode: check.outputMode ?? false,
     files: check.files ?? null,
     options: check.options
       ? Object.entries(check.options).map(([name, spec]) => ({
@@ -309,12 +373,26 @@ async function handleRecord(rec) {
     case "header": {
       cwd = rec.cwd;
       optionsCfg = rec.options ?? {};
+      tsconfigPath = typeof rec.tsconfigPath === "string" ? rec.tsconfigPath : null;
       const errors = await loadPlugins(rec.plugins ?? []);
       for (const e of errors) writeRecord({ type: "error", ...e });
+
+      anyCheckRequiresTypes = loadedPlugins.some(({ check }) => check.requiresTypes === true);
+      // Load ts-morph once, up front, so every `ctx.types.typeAt` call
+      // during `processFile` can await an already-resolved import
+      // instead of re-triggering the dynamic import per call.
+      if (anyCheckRequiresTypes && tsconfigPath) {
+        await ensureTsMorphLoaded(typeHostState, cwd);
+        if (typeHostState.tsMorphLoadError) {
+          reportTypeHostUnavailableOnce(typeHostState.tsMorphLoadError);
+        }
+      } else if (anyCheckRequiresTypes && !tsconfigPath) {
+        reportTypeHostUnavailableOnce("no tsconfig.json found for type-aware plugin checks");
+      }
       break;
     }
     case "file":
-      processFile(rec);
+      await processFile(rec);
       break;
     case "end":
       await finalizeAndEmit();
@@ -560,6 +638,62 @@ function buildAstView(wire) {
         out.name = w.name;
         break;
       }
+      case "JSXElement": {
+        out.tagName = w.tagName;
+        out.selfClosing = !!w.selfClosing;
+        Object.defineProperty(out, "attributes", {
+          enumerable: true,
+          get: () => (w.attributeIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "JSXAttribute": {
+        out.name = w.name ?? undefined;
+        out.value = w.value ?? undefined;
+        out.isExpression = !!w.isExpression;
+        out.isSpread = !!w.isSpread;
+        break;
+      }
+      case "JSXExpressionContainer": {
+        break;
+      }
+      case "Document": {
+        Object.defineProperty(out, "children", {
+          enumerable: true,
+          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+        });
+        break;
+      }
+      case "Element": {
+        out.tagName = w.tagName;
+        out.selfClosing = !!w.selfClosing;
+        Object.defineProperty(out, "attributes", {
+          enumerable: true,
+          get: () => (w.attributeIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        Object.defineProperty(out, "children", {
+          enumerable: true,
+          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+        });
+        break;
+      }
+      case "Attribute": {
+        out.name = w.name ?? undefined;
+        out.value = w.value ?? undefined;
+        break;
+      }
+      case "Text": {
+        out.text = w.text;
+        break;
+      }
+      case "Comment": {
+        out.text = w.text;
+        break;
+      }
+      case "Doctype": {
+        out.text = w.text;
+        break;
+      }
     }
     built[idx] = out;
     return out;
@@ -624,6 +758,8 @@ function buildLineView(native) {
     isStringLiteral: native.isStringLiteral,
     isJsxText: native.isJsxText,
     isPragma: native.isPragma,
+    isTag: native.isTag,
+    isText: native.isText,
     spanFor(charStart, charEnd) {
       return {
         line: native.lineNo,

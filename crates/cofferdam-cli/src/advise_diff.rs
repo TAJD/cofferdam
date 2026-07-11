@@ -273,12 +273,21 @@ pub fn build_diff_report(
                 .and_then(Path::parent)
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
+            // CD-81: `advise --diff` doesn't wire the built-in type
+            // oracle either (see `make_engine` above — no
+            // `install_type_oracle_if_needed` call on this path), so
+            // type-aware plugin checks likewise run without `ctx.types`
+            // here rather than paying tsconfig discovery on every diff.
+            // `warn_on_type_unavailable: false` matches the built-in
+            // oracle's silent skip on this path (no Issue either way).
             let pre_plugin_issues = crate::plugins::run_plugins_with_sources(
                 &cfg.plugins,
                 &pre_for_plugins,
                 &cfg_dir,
                 &cfg.checks,
                 cfg.layers.as_ref(),
+                None,
+                false,
             );
             let post_plugin_issues = crate::plugins::run_plugins_with_sources(
                 &cfg.plugins,
@@ -286,6 +295,8 @@ pub fn build_diff_report(
                 &cfg_dir,
                 &cfg.checks,
                 cfg.layers.as_ref(),
+                None,
+                false,
             );
             pre_issues.extend(pre_plugin_issues);
             post_issues.extend(post_plugin_issues);

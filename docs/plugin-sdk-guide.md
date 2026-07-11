@@ -25,11 +25,13 @@ Three check shapes cover almost every rule class:
 Pattern A is the fastest and has the widest applicability. Reach for B or C
 only when the rule cannot be expressed on individual lines.
 
-The `AstView` surface exposes nine node kinds today: `Program`,
+The `AstView` surface exposes eighteen node kinds today: `Program`,
 `CallExpression`, `ImportDeclaration`, `Function`, `ArrowFunctionExpression`,
-`Class`, `ObjectExpression`, `MemberExpression`, `IdentifierReference`. New
-kinds are additive — minor releases may add them without breaking existing
-plugins.
+`Class`, `ObjectExpression`, `MemberExpression`, `IdentifierReference`,
+`JSXElement`, `JSXAttribute`, `JSXExpressionContainer` (against `.ts`/`.tsx`
+files), plus `Document`, `Element`, `Attribute`, `Text`, `Comment`, `Doctype`
+(against `.html` files, CD-84 — see §2 below). New kinds are additive — minor
+releases may add them without breaking existing plugins.
 
 ## 2. Pattern examples
 
@@ -156,6 +158,112 @@ Key points:
   replace `findAll("ImportDeclaration")` with `findAll("CallExpression")` and
   inspect `node.callee`.
 
+#### JSX findAll — flag `<img>` with no `alt`
+
+**Use case:** an SEO/accessibility check that flags `<img>` elements missing an
+`alt` attribute, without a `{...spread}` that might supply one dynamically.
+See [SEO-grade checking](/seo-checking) for this pattern composed with three
+others (cross-file HTML duplicates, type-aware literal resolution, and
+`verify --dist`) into one worked plugin.
+
+```ts
+// src/index.ts
+import { defineCheck, Category, Severity } from "@cofferdam/check-sdk";
+
+export default defineCheck({
+  id: "ImgMissingAlt",
+  category: Category.Warning,
+  basePriority: 10,
+  defaultSeverity: Severity.Medium,
+  explanation: "An <img> element has no `alt` attribute.",
+  files: { extensions: ["tsx", "jsx"] },
+  run(file, ctx) {
+    if (!file.ast) return;
+    for (const el of file.ast.findAll("JSXElement")) {
+      if (el.tagName !== "img") continue;
+      const hasAlt = el.attributes.some((a) => a.isSpread || a.name === "alt");
+      if (!hasAlt) {
+        ctx.report({ message: "<img> is missing an `alt` attribute", span: el.span });
+      }
+    }
+  },
+});
+```
+
+Key points:
+
+- `findAll("JSXElement")` returns `readonly JSXElementNode[]`. `tagName`
+  flattens member-expression tags too — `<Image.Src />` reports
+  `tagName === "Image.Src"`.
+- `el.attributes` is `readonly JSXAttributeNode[]`, one entry per attribute
+  item on the opening tag — including `{...spread}` attributes. Check
+  `a.isSpread` before treating `a.name === undefined` as "no name given";
+  a spread might supply the attribute you're looking for at runtime, so
+  most checks should treat a spread as "can't tell, don't flag."
+- `a.value` is the literal string for `name="value"`, and `undefined` with
+  `a.isExpression === true` for `name={expr}` — the check above only cares
+  whether `alt` is present at all, but a stricter check could also flag
+  `alt={undefined}` via `findAll("JSXExpressionContainer")`.
+
+#### HTML findAll — flag `<img>` with no `alt` (CD-84)
+
+**Use case:** the same SEO/accessibility rule as above, but against `.html`
+files directly (no JSX/framework involved) — a static HTML page's `<img>`
+elements.
+
+```ts
+// src/index.ts
+import { defineCheck, Category, Severity } from "@cofferdam/check-sdk";
+
+export default defineCheck({
+  id: "HtmlImgMissingAlt",
+  category: Category.Warning,
+  basePriority: 10,
+  defaultSeverity: Severity.Medium,
+  explanation: "An <img> element has no `alt` attribute.",
+  files: { extensions: ["html"] },
+  run(file, ctx) {
+    if (!file.ast) return;
+    for (const el of file.ast.findAll("Element")) {
+      if (el.tagName !== "img") continue;
+      const hasAlt = el.attributes.some((a) => a.name === "alt");
+      if (!hasAlt) {
+        ctx.report({ message: "<img> is missing an `alt` attribute", span: el.span });
+      }
+    }
+  },
+});
+```
+
+Key points:
+
+- `file.ast` against an `.html` file is built from tree-sitter-html
+  (`crates/cofferdam-html`) rather than oxc — the same `AstView` shape,
+  a different parser underneath.
+- `findAll("Element")` returns `readonly ElementNode[]`: `tagName`,
+  `selfClosing`, `attributes` (`readonly AttributeNode[]`), and `children`
+  (non-attribute child nodes — `Text`, nested `Element`s, `Comment`).
+  `AttributeNode.value` is `undefined` for a boolean attribute
+  (`disabled`) and `""` (not `undefined`) for an empty quoted value
+  (`alt=""`) — check which one you mean before treating a falsy value as
+  "missing".
+- To read an element's text content (e.g. a `<title>`'s contents), filter
+  `el.children` for `c.kind === "Text"` and join `.text`:
+  ```ts
+  const text = el.children.filter((c) => c.kind === "Text").map((c) => c.text).join("");
+  ```
+- `file.lines()` against an `.html` file carries HTML-shaped classification
+  flags — `isTag`, `isText`, `isComment` — instead of the JS-specific
+  `isStringLiteral`/`isJsxText` (which are always `false` for `.html`
+  files; `isDocComment`/`isPragma` are JS-only too and also always
+  `false`).
+- A duplicate-`<title>`-across-files check follows the exact same
+  `ctx.corpus` + `finalize` pattern as `DuplicateClassName` above — collect
+  `{ file, text, span }` records per file in `run`, group by title text in
+  `finalize`, and report cross-file duplicates. See
+  `packages/check-sdk/tests/html-ast-view.test.mjs` for a full working
+  example (`"duplicate <title> text across two files..."`).
+
 ### Pattern C — stateful walk
 
 **Use case:** collect all Prisma model queries in a file; flag any that omit a
@@ -247,7 +355,8 @@ Key points:
 - Pattern C often has a heuristic quality — `ObjectExpression.properties` are
   `AstNode[]` and a thorough `where`-clause analysis requires resolved types.
   Note the limitation in the `explanation` if the check is approximate.
-  Full type-aware routing (ts-morph) is on the roadmap; see §7 below.
+  Full type-aware routing (ts-morph, via `requiresTypes: true`) is
+  available; see §7 below.
 - Override only the visitor methods you need. Omitted kinds default to
   `Walk.Continue`.
 
@@ -302,9 +411,9 @@ as `readonly string[]`, typed without any casting.
 
 ESLint flags `let` declarations that are never reassigned. This rule requires
 flow analysis and is type-aware — it belongs in the `requiresTypes: true`
-bucket. In 0.2.x, type-aware routing is not yet wired (see §7). A weaker
-heuristic — flag `let` declarations whose identifier is never referenced again
-on the same line — is expressible as a line walk:
+bucket (see §7). A weaker heuristic — flag `let` declarations whose identifier
+is never referenced again on the same line — is expressible as a line walk
+and doesn't need `ctx.types` at all:
 
 ```ts
 export default defineCheck({
@@ -772,18 +881,157 @@ The engine resolves each entry to a module, calls `loadPlugins`, and runs the
 resulting checks alongside the built-ins. Options in the `[checks."<id>"]`
 block override the `default` values declared in your `options` schema.
 
-## 7. Type-aware checks (ts-morph routing status — 0.2.x)
+## 7. Type-aware checks
 
 `DefineCheckInput` exposes `requiresTypes?: boolean` for checks that need
-resolved types, inferred generics, or call signatures. **In 0.2.x this field is
-reserved.** Setting `requiresTypes: true` is accepted by the type system and
-recorded on the `Check` object, but the engine does not route the check through
-ts-morph and no type information is available inside `run()`. The plugin host
-emits a one-time warning to stderr at load time when it encounters a plugin with
-`requiresTypes: true`.
+resolved types, inferred generics, or call signatures. Setting `requiresTypes:
+true` routes the check through ts-morph: the plugin host resolves a
+`tsconfig.json` (the same discovery `cofferdam check` already does for
+built-in type-aware checks) and loads ts-morph in-process, then exposes a
+query surface on `ctx.types` inside `run()`.
 
-Track cd-l58 / [gh #16](https://github.com/TAJD/cofferdam/issues/16) for status.
-Until that work lands, treat the field as a declaration of intent. Rules that
-fundamentally require type data (control-flow, binding liveness, call-site
-resolution) should document the limitation clearly and either ship as a
-heuristic or wait for the ts-morph wiring.
+```ts
+export default defineCheck({
+  id: "NoNullableReturn",
+  category: Category.Warning,
+  basePriority: 10,
+  explanation: "Function return type should not include null.",
+  requiresTypes: true,
+  async run(file, ctx) {
+    if (!file.ast) return;
+    for (const fn of file.ast.findAll("Function")) {
+      if (!ctx.types) continue; // no tsconfig / ts-morph unavailable — skip
+      const facts = await ctx.types.typeAt(fn.span.start_byte, fn.span.end_byte);
+      if (facts?.includesNull) {
+        ctx.report({ message: "Return type includes null.", span: fn.span });
+      }
+    }
+  },
+});
+```
+
+`ctx.types` is `undefined` — not present on the object — when no `tsconfig.json`
+was discovered, or ts-morph failed to load. Guard every use with `if
+(ctx.types)` rather than assuming presence; a project without ts-morph
+installed, or `[engine] type_aware = false` in `cofferdam.toml`, is a normal
+configuration, not an error. `ctx.types.typeAt(startByte, endByte)` returns a
+`Promise<TypeFacts | null>` — `null` means "resolved fine, no type at that
+span" (not an error); `run()` may be declared `async` so it can `await` the
+call. `TypeFacts` mirrors the built-in type oracle's shape: `{ text,
+isNullable, includesNull, includesUndefined, isAny }`.
+
+When `--fail-on-type-unavailable` is passed to `cofferdam check` and a loaded
+plugin check declares `requiresTypes: true` but the type host couldn't be
+started, the run exits with code 2 instead of silently skipping type
+information — the same gate `--fail-on-type-unavailable` already applies to
+built-in type-aware checks.
+
+`DefineCheckInput` also exposes `outputMode?: boolean` (defaulting to
+`false`, mirroring `requiresTypes`'s plumbing) — set it to opt a check
+into `cofferdam verify --dist`. See [Verifying built output](/verify-dist).
+
+### Resolving imported literals (`ctx.types.resolveLiteral`)
+
+`ctx.types` also exposes `resolveLiteral(startByte, endByte)`, which resolves
+an identifier — including one imported from another file — to its literal
+value via ts-morph's cross-file symbol resolution. This is the SEO
+metadata use case this epic is building toward: a check that inspects a
+page component's exported metadata often needs the *value* behind an
+imported constant, not just its type.
+
+Given a shared constants file:
+
+```ts
+// constants.ts
+export const description = "A great page about widgets";
+```
+
+...imported and used in a page file:
+
+```ts
+// page.ts
+import { description } from "./constants";
+
+export const metadata = { description };
+```
+
+A check can resolve `description`'s value at its use site in `page.ts`:
+
+```ts
+export default defineCheck({
+  id: "NonEmptySeoDescription",
+  category: Category.Warning,
+  basePriority: 10,
+  explanation: "SEO description metadata should not be empty.",
+  requiresTypes: true,
+  async run(file, ctx) {
+    if (!file.ast || !ctx.types) return;
+    for (const id of file.ast.findAll("IdentifierReference")) {
+      if (id.name !== "description") continue;
+      const facts = await ctx.types.resolveLiteral(id.span.start_byte, id.span.end_byte);
+      if (facts?.literalString !== undefined && facts.literalString.trim() === "") {
+        ctx.report({ message: "SEO description resolves to an empty string.", span: id.span });
+      }
+    }
+  },
+});
+```
+
+`resolveLiteral` follows the import from `page.ts` to `description`'s origin
+declaration in `constants.ts` — both files are already part of the resolved
+tsconfig's project, so the cross-file lookup is a normal ts-morph symbol
+resolution, not a second file read. It returns
+`Promise<LiteralFacts | null>`:
+
+- `null` means nothing was resolvable at all — the span isn't an identifier,
+  it has no symbol, or the symbol has no declarations.
+- Otherwise, `{ literalString?, isNullable, isEmptyObject }`: `literalString`
+  is set only when the resolved declaration's initializer is a string (or
+  no-substitution template) literal; `isNullable` and `isEmptyObject` are
+  reported independently — a resolved declaration with a non-literal
+  initializer (a function call, a computed value) still comes back with
+  best-effort `isNullable`/`isEmptyObject` facts rather than `null`.
+
+Each `resolveLiteral` call is an in-process ts-morph query — same as
+`typeAt`, there's no Rust↔Node round trip per call to batch away; calling it
+once per candidate identifier in a loop is the expected usage pattern.
+
+This exact check ships as `SeoNonEmptyDescription` in
+[SEO-grade checking](/seo-checking#_4-type-aware-description-resolved-across-an-import),
+including the shorthand-property resolution gap you'll hit if the check
+matches `{ description }` instead of `description: description`.
+
+## 8. Worked example: `examples-plugins/seo/` (CD-86)
+
+`examples-plugins/seo/` is the flagship end-to-end proof for this epic — one
+plugin package (`@cofferdam-fixtures/seo`) composing every SDK surface
+documented above into checks a real SEO/accessibility audit would want:
+
+| Check | Pattern | SDK surface |
+|---|---|---|
+| `SeoMissingMetadataExport` | A (line/text scan) | No AST kind exposes export declarations, so a page missing `export const metadata` / `export function generateMetadata` is caught the same way BrandCasing catches a missing magic comment. |
+| `SeoImgMissingAlt` | B (AST `findAll`) | `findAll("JSXElement")` + `JSXAttributeNode` (CD-80) — see [JSX findAll](#jsx-findall-flag-img-with-no-alt) above. |
+| `SeoDuplicateTitle` | C (corpus + `finalize`) | `findAll("Element")` over the HTML AstView (CD-84) to read `<title>`/`<link rel="canonical">`, aggregated via `ctx.corpus` the same way as [DuplicateClassName](#quick-example), with a second corpus slot for canonical URLs. `outputMode: true` (CD-85) makes it eligible for `cofferdam verify --dist` against a build's HTML output *in addition to* running under plain `cofferdam check` against any `.html` files in scope — one check serves both the source-adjacent and build-output angle on duplicate titles/canonicals. |
+| `SeoNonEmptyDescription` | Type-aware (`ctx.types.resolveLiteral`, CD-82) | The `NonEmptySeoDescription` example above, ported verbatim — `examples-plugins/seo/fixture/empty-description/page.tsx` imports an empty-string constant aliased to `description` so the check's `IdentifierReference` match fires. |
+
+The fixture (`examples-plugins/seo/fixture/`) has one directory per
+violation plus a fully-compliant `good/page.tsx`, and three built HTML pages
+(`page-a.html`, `page-b.html`, `page-c.html`) exercising `SeoDuplicateTitle`'s
+output-mode path. See `examples-plugins/seo/README.md` for the full
+violation-by-violation breakdown and how to build + run it locally.
+
+**A note on where `SeoNonEmptyDescription` actually resolves types.**
+`cofferdam`'s tsconfig discovery for type-aware *plugin* checks walks UP
+from the invoking process's current directory only — it never searches
+into subdirectories of whatever path `check`/`verify` was pointed at. The
+repo-root-anchored `scripts/check-plugin-fixtures.mjs` pipeline that
+generates every plugin fixture's `expected.json` therefore never
+discovers `examples-plugins/seo/fixture/tsconfig.json`, so that golden
+file legitimately shows `Warning.PluginTypeHostUnavailable` rather than a
+firing `SeoNonEmptyDescription` finding. The check is still real and
+end-to-end tested with a live ts-morph resolution — see
+`examples-plugins/seo/test/type-aware-description.test.mjs`, which runs
+`cofferdam check` with its working directory set to `fixture/` (mirroring
+`scripts/check-type-host-smoke.mjs`'s convention for the built-in
+type host) and asserts the cross-file empty-string resolution actually
+fires.

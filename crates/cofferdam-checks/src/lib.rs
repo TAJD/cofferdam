@@ -87,6 +87,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(warning::NoEval),
     ];
     checks.extend(cofferdam_rust::all_rust_checks());
+    checks.extend(cofferdam_html::all_html_checks());
     checks
 }
 

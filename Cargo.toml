@@ -7,6 +7,7 @@ members = [
     "crates/cofferdam-formatters",
     "crates/cofferdam-cli",
     "crates/cofferdam-graph",
+    "crates/cofferdam-html",
     "crates/cofferdam-lsp",
     "crates/cofferdam-mcp",
     "crates/cofferdam-napi",
@@ -29,6 +30,7 @@ cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.7" }
 cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.7" }
 cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.7" }
 cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.7" }
+cofferdam-html = { path = "crates/cofferdam-html", version = "0.3.7" }
 cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.7" }
 cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.3.7" }
 

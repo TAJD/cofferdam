@@ -273,3 +273,204 @@ fn plugin_finding_baselined_is_not_a_new_failure() {
          stdout={stdout}\nstderr={stderr}"
     );
 }
+
+// ---- CD-81: requiresTypes plugin routing through the in-process ts-morph
+// type host ------------------------------------------------------------
+//
+// Gated on COFFERDAM_TYPE_HOST_TS_MORPH_ROOT (same var `type_host.rs`'s
+// Rust tests use) pointing at a directory whose `node_modules` contains
+// ts-morph — skips silently when unset so CI without ts-morph stays
+// green. The test project is created *inside* that directory (via
+// `tempfile::Builder::tempdir_in`) so `plugin-host.mjs`'s
+// `cwd`-relative `node_modules` walk (see
+// `type-host-core.mjs::resolveTsMorph`) finds the same install.
+
+/// Plugin that reports whether `ctx.types` was available and, if so,
+/// whether the type at a fixed byte span includes `null`.
+const TYPE_AWARE_PLUGIN: &str = r#"
+export default {
+  id: "Test.TypeAware",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "CD-81 integration test plugin",
+  requiresTypes: true,
+  options: {},
+  async run(file, ctx) {
+    if (!ctx.types) {
+      ctx.report({ message: "ctx.types is undefined", span: { start_byte: 0, end_byte: 1 } });
+      return;
+    }
+    // byte 6 is 'x' in "const x: string | null = null;"
+    const facts = await ctx.types.typeAt(6, 7);
+    ctx.report({
+      message: facts && facts.includesNull ? "resolved includesNull=true" : "resolved includesNull=false",
+      span: { start_byte: 0, end_byte: 1 },
+    });
+  },
+};
+"#;
+
+#[test]
+fn requires_types_plugin_resolves_type_via_in_process_ts_morph() {
+    if !node_present() {
+        return;
+    }
+    let Ok(ts_morph_root) = std::env::var("COFFERDAM_TYPE_HOST_TS_MORPH_ROOT") else {
+        return; // not configured — skip
+    };
+    let _host = serialize_plugin_host();
+
+    let dir = tempfile::Builder::new()
+        .prefix("cofferdam-cd81-")
+        .tempdir_in(&ts_morph_root)
+        .expect("tempdir_in ts_morph_root");
+    let plugin_dir = dir.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+    std::fs::write(plugin_dir.join("index.mjs"), TYPE_AWARE_PLUGIN).expect("write plugin");
+    std::fs::write(
+        dir.path().join("cofferdam.toml"),
+        "plugins = [\"./plugin\"]\n",
+    )
+    .expect("write toml");
+    std::fs::write(
+        dir.path().join("tsconfig.json"),
+        r#"{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["a.ts"] }"#,
+    )
+    .expect("write tsconfig");
+    std::fs::write(
+        dir.path().join("a.ts"),
+        "const x: string | null = null;\nexport { x };\n",
+    )
+    .expect("write a.ts");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-baseline"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("resolved includesNull=true"),
+        "type-aware plugin check should resolve the nullable type via ts-morph; \
+         stdout={stdout}\nstderr={stderr}"
+    );
+}
+
+// ---- CD-82: ctx.types.resolveLiteral cross-file literal resolution ---
+
+/// Plugin that resolves the `description` identifier — imported from
+/// `constants.ts` — to its literal value via `ctx.types.resolveLiteral`.
+const RESOLVE_LITERAL_PLUGIN: &str = r#"
+export default {
+  id: "Test.ResolveLiteral",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "CD-82 integration test plugin",
+  requiresTypes: true,
+  options: {},
+  async run(file, ctx) {
+    if (!ctx.types) {
+      ctx.report({ message: "ctx.types is undefined", span: { start_byte: 0, end_byte: 1 } });
+      return;
+    }
+    // "import { " is 9 bytes; "description" (11 chars) spans [9, 20).
+    const facts = await ctx.types.resolveLiteral(9, 20);
+    ctx.report({
+      message: facts && facts.literalString !== undefined
+        ? "resolved literalString=" + facts.literalString
+        : "unresolved",
+      span: { start_byte: 0, end_byte: 1 },
+    });
+  },
+};
+"#;
+
+#[test]
+fn requires_types_plugin_resolves_cross_file_literal_via_in_process_ts_morph() {
+    if !node_present() {
+        return;
+    }
+    let Ok(ts_morph_root) = std::env::var("COFFERDAM_TYPE_HOST_TS_MORPH_ROOT") else {
+        return; // not configured — skip
+    };
+    let _host = serialize_plugin_host();
+
+    let dir = tempfile::Builder::new()
+        .prefix("cofferdam-cd82-")
+        .tempdir_in(&ts_morph_root)
+        .expect("tempdir_in ts_morph_root");
+    let plugin_dir = dir.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+    std::fs::write(plugin_dir.join("index.mjs"), RESOLVE_LITERAL_PLUGIN).expect("write plugin");
+    std::fs::write(
+        dir.path().join("cofferdam.toml"),
+        "plugins = [\"./plugin\"]\n",
+    )
+    .expect("write toml");
+    std::fs::write(
+        dir.path().join("tsconfig.json"),
+        r#"{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["constants.ts", "page.ts"] }"#,
+    )
+    .expect("write tsconfig");
+    std::fs::write(
+        dir.path().join("constants.ts"),
+        "export const description = \"A great page about widgets\";\n",
+    )
+    .expect("write constants.ts");
+    std::fs::write(
+        dir.path().join("page.ts"),
+        "import { description } from \"./constants\";\nexport { description };\n",
+    )
+    .expect("write page.ts");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-baseline"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("resolved literalString=A great page about widgets"),
+        "type-aware plugin check should resolve the cross-file literal via ts-morph; \
+         stdout={stdout}\nstderr={stderr}"
+    );
+}
+
+/// Without a tsconfig in the project, a `requiresTypes: true` plugin
+/// check must still run (no crash) with `ctx.types` undefined. Does not
+/// require ts-morph on PATH — the no-tsconfig path is short-circuited
+/// in the plugin host before ts-morph is ever touched.
+#[test]
+fn requires_types_plugin_runs_without_ctx_types_when_no_tsconfig() {
+    if !node_present() {
+        return;
+    }
+    let _host = serialize_plugin_host();
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let plugin_dir = dir.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+    std::fs::write(plugin_dir.join("index.mjs"), TYPE_AWARE_PLUGIN).expect("write plugin");
+    std::fs::write(
+        dir.path().join("cofferdam.toml"),
+        "plugins = [\"./plugin\"]\n",
+    )
+    .expect("write toml");
+    std::fs::write(dir.path().join("a.ts"), "export const a = 1;\n").expect("write a.ts");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-baseline"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("ctx.types is undefined"),
+        "with no tsconfig, ctx.types must be undefined and the plugin must still run cleanly; \
+         stdout={stdout}\nstderr={stderr}"
+    );
+}

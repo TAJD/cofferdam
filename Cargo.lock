@@ -278,6 +278,7 @@ version = "0.3.7"
 dependencies = [
  "cofferdam-core",
  "cofferdam-graph",
+ "cofferdam-html",
  "cofferdam-rust",
  "globset",
  "oxc_ast",
@@ -300,6 +301,7 @@ dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
  "cofferdam-formatters",
+ "cofferdam-html",
  "cofferdam-lsp",
  "cofferdam-typst",
  "globset",
@@ -314,6 +316,7 @@ dependencies = [
  "thiserror",
  "toml",
  "toml_edit",
+ "tree-sitter",
 ]
 
 [[package]]
@@ -344,6 +347,7 @@ dependencies = [
  "cofferdam-checks",
  "cofferdam-core",
  "cofferdam-graph",
+ "cofferdam-html",
  "cofferdam-rust",
  "criterion",
  "globset",
@@ -386,6 +390,16 @@ dependencies = [
  "sha2",
  "smol_str",
  "thiserror",
+]
+
+[[package]]
+name = "cofferdam-html"
+version = "0.3.7"
+dependencies = [
+ "cofferdam-core",
+ "thiserror",
+ "tree-sitter",
+ "tree-sitter-html",
 ]
 
 [[package]]
@@ -2231,6 +2245,16 @@ dependencies = [
  "regex-syntax",
  "serde_json",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-html"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

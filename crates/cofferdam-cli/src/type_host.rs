@@ -23,11 +23,18 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use cofferdam_core::{TypeFacts, TypeOracle};
+use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle};
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/type-host.mjs");
 const HOST_SCRIPT_NAME: &str = concat!("cofferdam-type-host-", env!("CARGO_PKG_VERSION"), ".mjs");
+
+/// CD-81: `type-host.mjs` imports `./type-host-core.mjs` (shared with
+/// the plugin host — see `plugins.rs::CORE_SCRIPT`) as a relative ESM
+/// specifier; the materialised copy must sit next to it under this
+/// exact, unversioned name.
+const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
+const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
 
 /// Materialise the embedded host script to the OS temp dir on first
 /// call, reuse the path on subsequent calls in this process. Same
@@ -35,6 +42,12 @@ const HOST_SCRIPT_NAME: &str = concat!("cofferdam-type-host-", env!("CARGO_PKG_V
 fn materialise_host_script() -> std::io::Result<PathBuf> {
     static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
     let result = CACHED.get_or_init(|| {
+        // See `plugins.rs::materialise_host_script` — both host scripts
+        // share this file and each ensures it's present so either one
+        // can be spawned independently of the other.
+        let core_path = std::env::temp_dir().join(CORE_SCRIPT_NAME);
+        std::fs::write(&core_path, CORE_SCRIPT)?;
+
         let path = std::env::temp_dir().join(HOST_SCRIPT_NAME);
         std::fs::write(&path, HOST_SCRIPT)?;
         Ok(path)
@@ -161,6 +174,36 @@ impl From<TypeFactsWire> for TypeFacts {
             includes_null: w.includes_null,
             includes_undefined: w.includes_undefined,
             is_any: w.is_any,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveLiteralRpcParams<'a> {
+    tsconfig_path: &'a str,
+    file: &'a str,
+    start_byte: u32,
+    end_byte: u32,
+}
+
+/// Worker-side projection of `LiteralFacts` (CD-82). Mapped into the
+/// core type by the oracle. A `null` JSON response (nothing resolvable)
+/// deserialises to `None` at the call site, not here.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiteralFactsWire {
+    literal_string: Option<String>,
+    is_nullable: bool,
+    is_empty_object: bool,
+}
+
+impl From<LiteralFactsWire> for LiteralFacts {
+    fn from(w: LiteralFactsWire) -> Self {
+        LiteralFacts {
+            literal_string: w.literal_string,
+            is_nullable: w.is_nullable,
+            is_empty_object: w.is_empty_object,
         }
     }
 }
@@ -422,6 +465,22 @@ impl TypeOracle for WorkerTypeOracle {
         let wire: Option<TypeFactsWire> = worker.request_nullable(&id, "typeAt", &params).ok()?;
         wire.map(Into::into)
     }
+
+    fn resolve_literal(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<LiteralFacts> {
+        let file_fwd = file.to_string_lossy().replace('\\', "/");
+        let params = ResolveLiteralRpcParams {
+            tsconfig_path: &self.tsconfig_path,
+            file: &file_fwd,
+            start_byte,
+            end_byte,
+        };
+        let id = self.next_id();
+        let mut worker = self.next_worker().lock().ok()?;
+        let wire: Option<LiteralFactsWire> = worker
+            .request_nullable(&id, "resolveLiteral", &params)
+            .ok()?;
+        wire.map(Into::into)
+    }
 }
 
 /// Spawn a pool of type-host workers (CD-31; size from [`pool_size`]),
@@ -636,5 +695,62 @@ mod tests {
                 });
             }
         });
+    }
+
+    /// CD-82: `WorkerTypeOracle::resolve_literal` resolves a cross-file
+    /// string literal via the wire protocol — `constants.ts` declares
+    /// `export const description = "..."`; `page.ts` imports it. ts-morph
+    /// symbol resolution follows the import to the origin declaration
+    /// since both files are part of the same opened Project. Same gating
+    /// as `worker_oracle_resolves_nullable_type`.
+    #[test]
+    fn worker_oracle_resolves_cross_file_literal() {
+        let Ok(ts_morph_root) = std::env::var("COFFERDAM_TYPE_HOST_TS_MORPH_ROOT") else {
+            return; // not configured — skip
+        };
+        let ts_morph_root = PathBuf::from(ts_morph_root);
+
+        let project = tempfile::tempdir().expect("tempdir");
+        let constants = project.path().join("constants.ts");
+        std::fs::write(
+            &constants,
+            "export const description = \"A great page about widgets\";\n",
+        )
+        .expect("write constants");
+        let page = project.path().join("page.ts");
+        // `description` (the imported identifier reference) starts at
+        // byte 9 of the import line: `import { description } from "./constants";`
+        std::fs::write(
+            &page,
+            "import { description } from \"./constants\";\nexport { description };\n",
+        )
+        .expect("write page");
+        let tsconfig = project.path().join("tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "compilerOptions": { "strict": true, "noEmit": true }, "include": ["constants.ts", "page.ts"] }"#,
+        )
+        .expect("write tsconfig");
+
+        let oracle = match build_type_oracle(&ts_morph_root, &tsconfig) {
+            Ok(o) => o,
+            Err(e) => panic!(
+                "build_type_oracle failed (is ts-morph installed at {}?): {e}",
+                ts_morph_root.display()
+            ),
+        };
+
+        // "import { " is 9 bytes ("import { "); `description` (11 chars)
+        // spans [9, 20).
+        let facts = oracle
+            .resolve_literal(&page, 9, 20)
+            .expect("resolve_literal should resolve the imported identifier");
+        assert_eq!(
+            facts.literal_string.as_deref(),
+            Some("A great page about widgets"),
+            "should resolve through the import to constants.ts's literal; got {facts:?}"
+        );
+        assert!(!facts.is_nullable, "got {facts:?}");
+        assert!(!facts.is_empty_object, "got {facts:?}");
     }
 }

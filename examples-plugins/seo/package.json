@@ -1,0 +1,23 @@
+{
+  "name": "@cofferdam-fixtures/seo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "CD-86 flagship SEO integration-proof plugin: JSX AstView (CD-80), cross-file type resolution via resolveLiteral (CD-82), HTML AstView (CD-83/84), and verify --dist output-mode eligibility (CD-85), composed into 4 checks.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/missing-metadata-export.js",
+  "types": "dist/missing-metadata-export.d.ts",
+  "scripts": {
+    "build": "tsc -p ."
+  },
+  "dependencies": {
+    "@cofferdam/check-sdk": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "ts-morph": "^28.0.0"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

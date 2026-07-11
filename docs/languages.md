@@ -4,6 +4,18 @@
 
 TypeScript is cofferdam's primary surface: every flagship check — orphan exports, layering, complexity, suppression hygiene — targets TS / TSX / JS / JSX / MJS / CJS via the [oxc](https://oxc.rs/) parser.
 
+## HTML (build-output / plugin surface)
+
+An HTML adapter ships under `crates/cofferdam-html`, built on
+tree-sitter-html. It backs two entry points: built-in and plugin checks can
+target `.html` files directly under `cofferdam check` (`files: {
+extensions: ["html"] }` for plugins), and `.html`/`.htm` files under a
+built output directory via [`cofferdam verify --dist`](/verify-dist). The
+plugin `AstView`/`LineView` surface is the same shape used for TypeScript —
+`findAll("Element")`, `.attributes`, `.children` — documented in the
+[Author guide](/plugin-sdk-guide#html-findall-—-flag-img-with-no-alt-cd-84)
+and demonstrated end-to-end in [SEO-grade checking](/seo-checking).
+
 ## Rust (second language, dogfood)
 
 A Rust adapter ships under `crates/cofferdam-rust`, exercising the engine's per-language dispatch (cd-91zc). Three checks today:

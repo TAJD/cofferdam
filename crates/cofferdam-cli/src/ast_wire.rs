@@ -25,8 +25,9 @@
 use cofferdam_core::span_from_bytes;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, CallExpression, Class, Expression, Function,
-    ImportDeclaration, ImportDeclarationSpecifier, MemberExpression, ObjectExpression,
-    ObjectPropertyKind, Program,
+    ImportDeclaration, ImportDeclarationSpecifier, JSXAttribute, JSXAttributeName,
+    JSXAttributeValue, JSXElement, JSXExpressionContainer, JSXSpreadAttribute, MemberExpression,
+    ObjectExpression, ObjectPropertyKind, Program,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -99,6 +100,36 @@ pub enum WireExtras {
     },
     Identifier {
         name: String,
+    },
+    Element {
+        #[serde(rename = "tagName")]
+        tag_name: String,
+        #[serde(rename = "selfClosing")]
+        self_closing: bool,
+        #[serde(rename = "attributeIdxs")]
+        attribute_idxs: Vec<i32>,
+    },
+    Attribute {
+        name: Option<String>,
+        value: Option<String>,
+        #[serde(rename = "isExpression")]
+        is_expression: bool,
+        #[serde(rename = "isSpread")]
+        is_spread: bool,
+    },
+    /// CD-84: HTML `Text` node — the raw text content between tags.
+    Text {
+        text: String,
+    },
+    /// CD-84: HTML `Comment` node — raw comment text, delimiters
+    /// (`<!--`/`-->`) included, matching `HtmlParseTree::text_of`.
+    Comment {
+        text: String,
+    },
+    /// CD-84: HTML `Doctype` node — raw doctype declaration text
+    /// (e.g. `<!DOCTYPE html>`).
+    Doctype {
+        text: String,
     },
 }
 
@@ -427,6 +458,83 @@ impl<'a> Visit<'a> for WireBuilder<'a> {
             name: it.name.to_string(),
         };
     }
+
+    fn visit_jsx_element(&mut self, it: &JSXElement<'a>) {
+        let idx = self.push("JSXElement", it.span);
+        self.enter(idx);
+
+        let tag_name = it.opening_element.name.to_string();
+        let self_closing = it.closing_element.is_none();
+
+        let mut attribute_idxs = Vec::with_capacity(it.opening_element.attributes.len());
+        for attr_item in &it.opening_element.attributes {
+            let attr_idx = self.nodes.len() as i32;
+            self.visit_jsx_attribute_item(attr_item);
+            attribute_idxs.push(attr_idx);
+        }
+
+        for child in &it.children {
+            self.visit_jsx_child(child);
+        }
+
+        self.exit();
+        self.nodes[idx as usize].extras = WireExtras::Element {
+            tag_name,
+            self_closing,
+            attribute_idxs,
+        };
+    }
+
+    fn visit_jsx_attribute(&mut self, it: &JSXAttribute<'a>) {
+        let idx = self.push("JSXAttribute", it.span);
+        self.enter(idx);
+
+        let name = match &it.name {
+            JSXAttributeName::Identifier(id) => id.name.to_string(),
+            JSXAttributeName::NamespacedName(ns) => {
+                format!("{}:{}", ns.namespace.name, ns.name.name)
+            }
+        };
+        let (value, is_expression) = match &it.value {
+            Some(JSXAttributeValue::StringLiteral(s)) => (Some(s.value.to_string()), false),
+            Some(JSXAttributeValue::ExpressionContainer(_)) => (None, true),
+            Some(JSXAttributeValue::Element(_) | JSXAttributeValue::Fragment(_)) | None => {
+                (None, false)
+            }
+        };
+        if let Some(v) = &it.value {
+            self.visit_jsx_attribute_value(v);
+        }
+
+        self.exit();
+        self.nodes[idx as usize].extras = WireExtras::Attribute {
+            name: Some(name),
+            value,
+            is_expression,
+            is_spread: false,
+        };
+    }
+
+    fn visit_jsx_spread_attribute(&mut self, it: &JSXSpreadAttribute<'a>) {
+        let idx = self.push("JSXAttribute", it.span);
+        self.enter(idx);
+        self.visit_expression(&it.argument);
+        self.exit();
+        self.nodes[idx as usize].extras = WireExtras::Attribute {
+            name: None,
+            value: None,
+            is_expression: false,
+            is_spread: true,
+        };
+    }
+
+    fn visit_jsx_expression_container(&mut self, it: &JSXExpressionContainer<'a>) {
+        let idx = self.push("JSXExpressionContainer", it.span);
+        self.enter(idx);
+        self.visit_jsx_expression(&it.expression);
+        self.exit();
+        self.nodes[idx as usize].extras = WireExtras::None {};
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +545,13 @@ mod tests {
 
     fn build_wire(text: &str) -> AstWire {
         let file = SourceFile::new(PathBuf::from("repro.ts"), text.to_string());
+        let allocator = Allocator::default();
+        let parsed = parse_into(&allocator, &file);
+        WireBuilder::new(text).build(&parsed.program)
+    }
+
+    fn build_wire_tsx(text: &str) -> AstWire {
+        let file = SourceFile::new(PathBuf::from("repro.tsx"), text.to_string());
         let allocator = Allocator::default();
         let parsed = parse_into(&allocator, &file);
         WireBuilder::new(text).build(&parsed.program)
@@ -519,5 +634,138 @@ mod tests {
         assert_eq!(ident_node.kind, "IdentifierReference");
         assert_eq!(ident_node.span.start_byte, 15);
         assert_eq!(ident_node.span.end_byte, 21);
+    }
+
+    fn element_extras(wire: &AstWire, idx: i32) -> (&str, bool, &[i32]) {
+        match &wire.nodes[idx as usize].extras {
+            WireExtras::Element {
+                tag_name,
+                self_closing,
+                attribute_idxs,
+            } => (tag_name, *self_closing, attribute_idxs),
+            _ => panic!("node {idx} is not a JSXElement"),
+        }
+    }
+
+    fn attribute_extras(wire: &AstWire, idx: i32) -> (Option<&str>, Option<&str>, bool, bool) {
+        match &wire.nodes[idx as usize].extras {
+            WireExtras::Attribute {
+                name,
+                value,
+                is_expression,
+                is_spread,
+            } => (
+                name.as_deref(),
+                value.as_deref(),
+                *is_expression,
+                *is_spread,
+            ),
+            _ => panic!("node {idx} is not a JSXAttribute"),
+        }
+    }
+
+    #[test]
+    fn jsx_element_with_static_and_expression_attributes() {
+        let wire = build_wire_tsx(r#"const x = <img src="cat.png" alt={caption} />;"#);
+
+        let el_idx = wire
+            .nodes
+            .iter()
+            .position(|n| n.kind == "JSXElement")
+            .expect("JSXElement must be emitted") as i32;
+        let (tag_name, self_closing, attribute_idxs) = element_extras(&wire, el_idx);
+        assert_eq!(tag_name, "img");
+        assert!(self_closing, "`<img ... />` has no closing element");
+        assert_eq!(attribute_idxs.len(), 2, "src + alt attributes");
+
+        let (src_name, src_value, src_is_expr, src_is_spread) =
+            attribute_extras(&wire, attribute_idxs[0]);
+        assert_eq!(src_name, Some("src"));
+        assert_eq!(src_value, Some("cat.png"));
+        assert!(!src_is_expr);
+        assert!(!src_is_spread);
+
+        let (alt_name, alt_value, alt_is_expr, alt_is_spread) =
+            attribute_extras(&wire, attribute_idxs[1]);
+        assert_eq!(alt_name, Some("alt"));
+        assert_eq!(alt_value, None, "expression container has no literal value");
+        assert!(alt_is_expr);
+        assert!(!alt_is_spread);
+
+        // The expression container wraps an IdentifierReference (`caption`) —
+        // it must still be discoverable via the flat array.
+        assert!(
+            wire.nodes
+                .iter()
+                .any(|n| n.kind == "JSXExpressionContainer"),
+            "JSXExpressionContainer must be emitted for `alt={{caption}}`"
+        );
+        assert!(
+            wire.nodes.iter().any(|n| n.kind == "IdentifierReference"
+                && matches!(&n.extras, WireExtras::Identifier { name } if name == "caption")),
+            "the identifier inside the expression container must still be discoverable"
+        );
+    }
+
+    #[test]
+    fn jsx_member_expression_tag_name() {
+        let wire = build_wire_tsx(r#"const x = <Image.Src url="a.png" />;"#);
+        let el_idx = wire
+            .nodes
+            .iter()
+            .position(|n| n.kind == "JSXElement")
+            .expect("JSXElement must be emitted") as i32;
+        let (tag_name, _, _) = element_extras(&wire, el_idx);
+        assert_eq!(
+            tag_name, "Image.Src",
+            "member-expression tag names flatten via Display"
+        );
+    }
+
+    #[test]
+    fn jsx_spread_attribute_is_marked_not_missing() {
+        let wire = build_wire_tsx(r#"const x = <Foo {...rest} />;"#);
+        let el_idx = wire
+            .nodes
+            .iter()
+            .position(|n| n.kind == "JSXElement")
+            .expect("JSXElement must be emitted") as i32;
+        let (_, _, attribute_idxs) = element_extras(&wire, el_idx);
+        assert_eq!(
+            attribute_idxs.len(),
+            1,
+            "the spread counts as one attribute item"
+        );
+
+        let (name, value, is_expression, is_spread) = attribute_extras(&wire, attribute_idxs[0]);
+        assert_eq!(name, None, "spread attributes have no name");
+        assert_eq!(value, None);
+        assert!(!is_expression);
+        assert!(
+            is_spread,
+            "spread must be flagged so it isn't mistaken for a missing attribute"
+        );
+    }
+
+    #[test]
+    fn jsx_namespaced_attribute_name() {
+        let wire = build_wire_tsx(r#"const x = <svg xml:lang="en" />;"#);
+        let el_idx = wire
+            .nodes
+            .iter()
+            .position(|n| n.kind == "JSXElement")
+            .expect("JSXElement must be emitted") as i32;
+        let (_, _, attribute_idxs) = element_extras(&wire, el_idx);
+        assert_eq!(attribute_idxs.len(), 1);
+
+        let (name, value, is_expression, is_spread) = attribute_extras(&wire, attribute_idxs[0]);
+        assert_eq!(
+            name,
+            Some("xml:lang"),
+            "namespaced attribute names flatten to `namespace:name`"
+        );
+        assert_eq!(value, Some("en"));
+        assert!(!is_expression);
+        assert!(!is_spread);
     }
 }

@@ -23,6 +23,8 @@ pub enum Language {
     /// import edges out of the frontmatter fence (cd-45); no built-in
     /// check declares this language today.
     Astro,
+    /// HTML — handled by tree-sitter-html via `cofferdam-html` (CD-83).
+    Html,
 }
 
 impl Language {
@@ -34,6 +36,7 @@ impl Language {
             Some(ext) => match ext.to_ascii_lowercase().as_str() {
                 "rs" => Language::Rust,
                 "astro" => Language::Astro,
+                "html" | "htm" => Language::Html,
                 "ts" | "tsx" | "js" | "jsx" | "cjs" | "mjs" | "mts" | "cts" => Language::TypeScript,
                 _ => Language::TypeScript,
             },

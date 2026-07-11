@@ -347,6 +347,16 @@ pub trait Check: Send + Sync {
     fn language(&self) -> Language {
         Language::TypeScript
     }
+    /// Whether this check is eligible to run against `origin: build_output`
+    /// files discovered by `cofferdam verify --dist` (CD-85). Defaults to
+    /// `false` so every existing check compiles unchanged and is excluded
+    /// from verify runs unless it opts in. A check with `output_mode() ==
+    /// true` still runs normally under `cofferdam check` too (unchanged
+    /// dispatch) — this flag only gates *eligibility for verify*, it does
+    /// not remove a check from the default path.
+    fn output_mode(&self) -> bool {
+        false
+    }
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue>;
     /// Per-file second pass. Runs AFTER all checks' first-pass `run`
     /// completes for every file. Use when a check needs to see all files
@@ -394,5 +404,35 @@ mod tests {
             docs_url("Warning.TripleEquals"),
             "https://tajd.github.io/cofferdam/checks/Warning.TripleEquals"
         );
+    }
+
+    struct DummyCheck;
+
+    const DUMMY_META: CheckMeta = CheckMeta {
+        id: "Warning.Dummy",
+        category: Category::Warning,
+        base_priority: 0,
+        default_severity: Severity::Low,
+        explanation: "test-only check double",
+        body: "test-only check double",
+        requires_types: false,
+        consistency: false,
+        options: &[],
+        autofix: false,
+        pure_run: true,
+    };
+
+    impl Check for DummyCheck {
+        fn meta(&self) -> &'static CheckMeta {
+            &DUMMY_META
+        }
+        fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn output_mode_defaults_to_false() {
+        assert!(!DummyCheck.output_mode());
     }
 }

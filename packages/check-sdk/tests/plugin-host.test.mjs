@@ -360,3 +360,159 @@ test("plugin magic comments filter inside run(); engine suppression filters at t
   // The second at line 4.
   assert.ok(reports[1].startByte > 86);
 });
+
+// CD-80: JSXElement/JSXAttribute/JSXExpressionContainer plugin AST surface.
+test("findAll(JSXElement) surfaces tag name, attributes, and spread marker", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  const check = defineCheck({
+    id: "JsxSmoke",
+    category: Category.Warning,
+    basePriority: 0,
+    explanation: "Reports one finding per JSXElement, describing its attributes.",
+    run(file, ctx) {
+      if (!file.ast) return;
+      for (const el of file.ast.findAll("JSXElement")) {
+        const attrs = el.attributes.map((a) =>
+          a.isSpread ? "...spread" : `${a.name}=${a.isExpression ? "{expr}" : JSON.stringify(a.value)}`,
+        );
+        ctx.report({
+          message: `${el.tagName}(${el.selfClosing ? "self" : "open"}):${attrs.join(",")}`,
+          span: el.span,
+        });
+      }
+    },
+  });
+
+  // Wire matching what ast_wire.rs emits for:
+  //   const x = <img src="cat.png" alt={caption} {...rest} />;
+  const S = { line: 1, column: 1, start_byte: 0, end_byte: 1 };
+  const ast = {
+    rootIdx: 0,
+    nodes: [
+      // 0: Program
+      { kind: "Program", span: S, firstChild: 1, nextSibling: -1 },
+      // 1: JSXElement <img ... />
+      {
+        kind: "JSXElement",
+        span: S,
+        firstChild: 2,
+        nextSibling: -1,
+        tagName: "img",
+        selfClosing: true,
+        attributeIdxs: [2, 3, 5],
+      },
+      // 2: src="cat.png"
+      {
+        kind: "JSXAttribute",
+        span: S,
+        firstChild: -1,
+        nextSibling: 3,
+        name: "src",
+        value: "cat.png",
+        isExpression: false,
+        isSpread: false,
+      },
+      // 3: alt={caption}
+      {
+        kind: "JSXAttribute",
+        span: S,
+        firstChild: 4,
+        nextSibling: 5,
+        name: "alt",
+        value: null,
+        isExpression: true,
+        isSpread: false,
+      },
+      // 4: JSXExpressionContainer wrapping `caption`
+      { kind: "JSXExpressionContainer", span: S, firstChild: -1, nextSibling: -1 },
+      // 5: {...rest} spread
+      {
+        kind: "JSXAttribute",
+        span: S,
+        firstChild: -1,
+        nextSibling: -1,
+        name: null,
+        value: null,
+        isExpression: false,
+        isSpread: true,
+      },
+    ],
+  };
+
+  const reports = runPlugin(check, {
+    path: "smoke.tsx",
+    text: 'const x = <img src="cat.png" alt={caption} {...rest} />;\n',
+    lineViews: [],
+    ast,
+  });
+
+  assert.equal(reports.length, 1);
+  assert.equal(
+    reports[0].message,
+    'img(self):src="cat.png",alt={expr},...spread',
+    "tagName, selfClosing, literal/expression/spread attribute shapes all surface",
+  );
+});
+
+// CD-85: `outputMode` round-trips through the plugin host's metadata mode
+// the same way `requiresTypes` does — asserted by spawning the real host
+// script (crates/cofferdam-cli/scripts/plugin-host.mjs) in metadata mode,
+// mirroring what `query_plugin_metadata` (Rust) does.
+function runMetadataMode(pluginPath) {
+  const hostScript = resolve(PKG, "..", "..", "crates", "cofferdam-cli", "scripts", "plugin-host.mjs");
+  const manifest = JSON.stringify({ mode: "metadata", cwd: dirname(pluginPath), plugins: [pluginPath] });
+  const out = execFileSync("node", [hostScript], { input: manifest, encoding: "utf8" });
+  return JSON.parse(out);
+}
+
+test("cd-85: outputMode: true round-trips through metadata mode", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const tmp = fs.mkdtempSync(resolve(os.tmpdir(), "cofferdam-metadata-"));
+  const path = resolve(tmp, "output-mode-check.mjs");
+  fs.writeFileSync(
+    path,
+    `import { defineCheck } from ${JSON.stringify(`file://${PKG.replace(/\\/g, "/")}/dist/index.js`)};\n` +
+      `export default defineCheck({\n` +
+      `  id: "OutputModeCheck",\n` +
+      `  category: "warning",\n` +
+      `  basePriority: 5,\n` +
+      `  explanation: "x",\n` +
+      `  outputMode: true,\n` +
+      `  run() {},\n` +
+      `});\n`,
+  );
+
+  const response = runMetadataMode(path);
+  assert.equal(response.checks.length, 1);
+  assert.equal(response.checks[0].outputMode, true);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("cd-85: outputMode defaults to false when omitted", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const tmp = fs.mkdtempSync(resolve(os.tmpdir(), "cofferdam-metadata-"));
+  const path = resolve(tmp, "default-check.mjs");
+  fs.writeFileSync(
+    path,
+    `import { defineCheck } from ${JSON.stringify(`file://${PKG.replace(/\\/g, "/")}/dist/index.js`)};\n` +
+      `export default defineCheck({\n` +
+      `  id: "DefaultOutputModeCheck",\n` +
+      `  category: "warning",\n` +
+      `  basePriority: 5,\n` +
+      `  explanation: "x",\n` +
+      `  run() {},\n` +
+      `});\n`,
+  );
+
+  const response = runMetadataMode(path);
+  assert.equal(response.checks.length, 1);
+  assert.equal(response.checks[0].outputMode, false);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});

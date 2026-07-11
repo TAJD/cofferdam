@@ -19,6 +19,13 @@ The current type-aware built-ins:
   equality check against `null`/`undefined` whose other operand's type
   already excludes that value, so the guard is dead code.
 
+This page covers built-in check routing. **Plugin checks** can declare
+`requiresTypes: true` too, through the same ts-morph type host — including
+`resolveLiteral`, a cross-file query that follows an imported identifier to
+its literal value. See the [Author guide](/plugin-sdk-guide#_7-type-aware-checks)
+for the plugin-side API and [SEO-grade checking](/seo-checking#_4-type-aware-description-resolved-across-an-import)
+for a worked example.
+
 ## What a type-aware check needs
 
 A type-aware check only runs when cofferdam can reach a type host. That

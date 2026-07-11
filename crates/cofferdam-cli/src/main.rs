@@ -217,6 +217,45 @@ enum Cmd {
         #[arg(long, value_name = "CHECK_ID")]
         only: Option<String>,
     },
+    /// Opt-in check mode for built HTML output (CD-85). Discovers only the
+    /// given output directory (e.g. `dist/`, `.next/`, `build/`) and runs
+    /// ONLY checks explicitly tagged as output-mode-eligible
+    /// (`Check::output_mode() == true`) against it — plain `cofferdam
+    /// check` runs never see this tree and are completely unaffected.
+    ///
+    /// Limitations (v1): CSR/SPA apps with no static HTML output are not
+    /// supported (would need a headless-render step); findings are NOT
+    /// mapped back to source locations (build-tool-specific, not
+    /// attempted) — the reported location is always in the built HTML.
+    Verify {
+        /// Directory containing built HTML output to check.
+        #[arg(long, value_name = "DIR")]
+        dist: PathBuf,
+        /// Output format. Default: text. With --robot and no explicit
+        /// --format, defaults to json.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<OutputFormat>,
+        /// Default to a machine-readable format when `--format` is not set.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output (only with `--format=json` / `--robot`).
+        #[arg(long)]
+        pretty: bool,
+        /// Severity threshold for the exit-1 gate.
+        #[arg(long, value_enum, value_name = "LEVEL", default_value_t = FailOnLevel::Medium)]
+        fail_on: FailOnLevel,
+        /// Suppress informational output.
+        #[arg(long)]
+        quiet: bool,
+        /// Path to a `cofferdam.toml` config file. Used for `[plugins]`
+        /// discovery only. Defaults to walking up from the current
+        /// directory. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+    },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
     /// failing CI on every pre-existing finding.
@@ -722,6 +761,28 @@ fn main() -> ExitCode {
             time_checks,
             trend,
             only,
+        }),
+        Cmd::Verify {
+            dist,
+            format,
+            robot,
+            pretty,
+            fail_on,
+            quiet,
+            config,
+            no_config,
+        } => run_verify(VerifyArgs {
+            dist,
+            format: format.unwrap_or(if robot {
+                OutputFormat::Json
+            } else {
+                OutputFormat::Text
+            }),
+            pretty,
+            fail_on: fail_on.into(),
+            quiet,
+            config_path: config,
+            no_config,
         }),
         Cmd::Explain {
             check_id,
@@ -1499,6 +1560,19 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
+    // CD-81: tsconfig for type-aware *plugin* checks (`requiresTypes:
+    // true` in a plugin's `defineCheck`). Discovered independently of
+    // `engine.needs_type_oracle()` — that flag only reflects registered
+    // *built-in* checks, but a plugin's need for types isn't known until
+    // the plugin host loads it. Cheap to discover unconditionally (a
+    // filesystem walk, no Node spawn); the plugin host itself decides
+    // whether to spend ts-morph load time on it.
+    let tsconfig_path_for_plugins: Option<PathBuf> = if type_aware_enabled {
+        find_tsconfig(&type_root)
+    } else {
+        None
+    };
+
     // Disk-backed findings + run cache (cd-9hp.4 cp4). Resolves to
     // `Some(dir)` when caching is requested (default on); load
     // findings.json + run.json into in-memory caches before analyze,
@@ -1561,11 +1635,32 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // report-scoped below. Both paths use the signed-pair variant so the
     // merge step is shared.
     if let Some(cfg) = project_config.as_ref() {
-        signed.extend(run_plugins_filtered_with_signatures(
+        let plugin_signed = run_plugins_filtered_with_signatures(
             cfg,
             resolved_config_path.as_deref(),
             &files,
-        ));
+            tsconfig_path_for_plugins.as_deref(),
+            true,
+        );
+        // CD-81: mirror the built-in oracle's --fail-on-type-unavailable
+        // gating (above) for type-aware *plugin* checks. The plugin host
+        // surfaces its own type-host-unavailable state as a synthetic
+        // `Warning.PluginTypeHostUnavailable` finding (see
+        // `plugins.rs::run_plugins_with_sources`) rather than a second
+        // return value, so this checks for that finding's presence.
+        if fail_on_type_unavailable
+            && plugin_signed
+                .iter()
+                .any(|(issue, _)| issue.check_id == "Warning.PluginTypeHostUnavailable")
+        {
+            eprintln!(
+                "error: type host unavailable for one or more type-aware plugin checks. \
+                 Remove --fail-on-type-unavailable, install Node + ts-morph, \
+                 or set `[engine] type_aware = false` to opt out."
+            );
+            return ExitCode::from(2);
+        }
+        signed.extend(plugin_signed);
     }
     // COMMON: report scope filter (--since). Applied after plugin merge so
     // both engine and plugin findings respect the narrowed output window.
@@ -1841,6 +1936,265 @@ fn run_check(args: CheckArgs) -> ExitCode {
     exit_code
 }
 
+struct VerifyArgs {
+    dist: PathBuf,
+    format: OutputFormat,
+    pretty: bool,
+    fail_on: Severity,
+    quiet: bool,
+    config_path: Option<PathBuf>,
+    no_config: bool,
+}
+
+/// `cofferdam verify --dist <dir>` (CD-85). Discovers only `dist` and
+/// runs ONLY checks tagged `Check::output_mode() == true` against it —
+/// a wholly separate discovery + analysis pass from `run_check`. No
+/// baseline, no findings/run cache, no `--since`, no `[budgets]`: this
+/// is a leaner pipeline than `check` by design (see the ticket for the
+/// deliberately-omitted-flags list).
+fn run_verify(args: VerifyArgs) -> ExitCode {
+    let VerifyArgs {
+        dist,
+        format,
+        pretty,
+        fail_on,
+        quiet,
+        config_path,
+        no_config,
+    } = args;
+
+    // A missing --dist directory (typo'd path, renamed build output, a
+    // failed build step that never ran) must be a hard error, not "0
+    // files found, exit 0" — the latter makes a broken CI pipeline look
+    // like a passing verify gate.
+    if !dist.is_dir() {
+        eprintln!("error: --dist directory does not exist: {}", dist.display());
+        return ExitCode::from(2);
+    }
+
+    // `respect_ignore: false` is deliberate: dist/build dirs are commonly
+    // gitignored, but the user explicitly named this directory, so ignore
+    // rules must not silently exclude files from it.
+    let opts = DiscoveryOptions {
+        extensions: vec!["html".to_string(), "htm".to_string()],
+        respect_ignore: false,
+        include_hidden: true,
+        skip_declaration_files: false,
+    };
+    let files = match discover(std::slice::from_ref(&dist), &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if files.is_empty() {
+        match format {
+            OutputFormat::Json => {
+                let body = serde_json::json!({
+                    "origin": "build_output",
+                    "dist": dist.display().to_string(),
+                    "findings": Vec::<cofferdam_core::Issue>::new(),
+                });
+                let text = if pretty {
+                    serde_json::to_string_pretty(&body)
+                } else {
+                    serde_json::to_string(&body)
+                };
+                println!(
+                    "{}",
+                    text.unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+                );
+            }
+            OutputFormat::Text if !quiet => {
+                eprintln!(
+                    "no .html/.htm files found under: {} (origin: build_output)",
+                    dist.display()
+                );
+            }
+            _ => {}
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(files.len());
+    for path in &files {
+        match std::fs::read_to_string(path) {
+            Ok(text) => sources.push((path.clone(), text)),
+            Err(e) => eprintln!("warning: failed to read {}: {e}", path.display()),
+        }
+    }
+
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+
+    // Built-in checks: only those tagged output-mode-eligible. No
+    // `Engine::with_config` / per-check option overrides — no
+    // output-mode built-in check has options today, so this is safe to
+    // defer (see ticket).
+    let output_checks: Vec<Box<dyn cofferdam_core::Check>> = all_builtins()
+        .into_iter()
+        .filter(|c| c.output_mode())
+        .collect();
+    let engine = Engine::new(output_checks);
+    let (mut issues, _texts) = engine.analyze_with_sources(sources);
+
+    // Plugins tagged `outputMode: true` (CD-85 / CD-86). Only fires when
+    // plugins are configured; skips the host entirely when nothing is
+    // output-mode-eligible.
+    if let Some(cfg) = project_config.as_ref() {
+        if !cfg.plugins.is_empty() {
+            let cfg_dir = resolved_config_path
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let project_root = cfg_dir.clone();
+            let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &project_root);
+            // Findings carry category-prefixed check_ids (`Warning.Foo`,
+            // idempotent if the plugin author already dotted their own id
+            // — see `plugins::run_plugins_with_sources`), but plugin
+            // metadata's `id` is the bare `defineCheck({ id: "Foo" })`
+            // value. Prefix here the same way so the containment check
+            // below actually matches real findings instead of silently
+            // dropping every output-mode plugin check's output.
+            let output_mode_ids: HashSet<String> = plugin_metas
+                .iter()
+                .filter(|m| m.output_mode)
+                .map(|m| {
+                    if m.id.contains('.') {
+                        m.id.clone()
+                    } else {
+                        let prefix = plugins::capitalize_category(&m.category).unwrap_or("Warning");
+                        format!("{}.{}", prefix, m.id)
+                    }
+                })
+                .collect();
+            if !output_mode_ids.is_empty() {
+                let type_aware_enabled = cfg::ProjectConfig::type_aware_enabled(cfg);
+                let tsconfig_path = if type_aware_enabled {
+                    find_tsconfig(&project_root)
+                } else {
+                    None
+                };
+                // Only invoke checks that are actually output-mode
+                // eligible against this .html/.htm file set. Running
+                // every configured plugin (including source-only checks
+                // scoped to e.g. `**/page.tsx`) against a dist tree with
+                // zero matching files makes the host emit a spurious
+                // `Warning.PluginZeroScopeMatch` for every one of them —
+                // a clean dist would otherwise fail CI on a false alarm.
+                let output_mode_paths: HashSet<String> = plugin_metas
+                    .iter()
+                    .filter(|m| m.output_mode)
+                    .map(|m| m.path.clone())
+                    .collect();
+                let mut filtered_cfg = cfg.clone();
+                filtered_cfg.plugins = cfg
+                    .plugins
+                    .iter()
+                    .filter(|p| output_mode_paths.contains(&plugins::canonical_plugin_path_str(p)))
+                    .cloned()
+                    .collect();
+                let plugin_issues = run_plugins_filtered(
+                    &filtered_cfg,
+                    resolved_config_path.as_deref(),
+                    &files,
+                    tsconfig_path.as_deref(),
+                    true,
+                );
+                // Keep synthetic host-error findings unfiltered — a
+                // broken plugin should be visible in verify mode too —
+                // but restrict real check findings to the
+                // output-mode-tagged set. Exact-match allowlist rather
+                // than a `Warning.Plugin` prefix test: a plugin author
+                // could otherwise name a real (non-output-mode) check
+                // `Warning.PluginSomething` and smuggle its findings
+                // past the gate.
+                const SYNTHETIC_PLUGIN_ERROR_IDS: &[&str] = &[
+                    "Warning.PluginHostFailed",
+                    "Warning.PluginLoadFailed",
+                    "Warning.PluginCrashed",
+                    "Warning.PluginZeroScopeMatch",
+                    "Warning.PluginTypeHostUnavailable",
+                    "Warning.PluginRuntimeUnavailable",
+                ];
+                issues.extend(plugin_issues.into_iter().filter(|issue| {
+                    output_mode_ids.contains(&issue.check_id)
+                        || SYNTHETIC_PLUGIN_ERROR_IDS.contains(&issue.check_id.as_str())
+                }));
+            }
+        }
+    }
+
+    issues.sort_by(|a, b| {
+        b.priority
+            .0
+            .cmp(&a.priority.0)
+            .then_with(|| a.check_id.cmp(&b.check_id))
+            .then_with(|| a.file.cmp(&b.file))
+    });
+
+    let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+
+    match format {
+        OutputFormat::Text => {
+            println!(
+                "cofferdam verify --dist {} — build-output findings (origin: build_output)\n",
+                dist.display()
+            );
+            if issues.is_empty() {
+                if !quiet {
+                    println!("no output-mode findings");
+                }
+            } else {
+                let opts = TextRenderOpts {
+                    quiet,
+                    ..Default::default()
+                };
+                print!("{}", TextFormatter::render_with_opts(&issues, opts));
+            }
+        }
+        OutputFormat::Json => {
+            let body = serde_json::json!({
+                "origin": "build_output",
+                "dist": dist.display().to_string(),
+                "findings": issues,
+            });
+            let text = if pretty {
+                serde_json::to_string_pretty(&body)
+            } else {
+                serde_json::to_string(&body)
+            };
+            println!(
+                "{}",
+                text.unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+            );
+        }
+        // Compact/SARIF are out of scope for v1 (see ticket) — fall back
+        // to the JSON shape rather than adding a second unsupported-format
+        // error path.
+        OutputFormat::Compact | OutputFormat::Sarif => {
+            let body = serde_json::json!({
+                "origin": "build_output",
+                "dist": dist.display().to_string(),
+                "findings": issues,
+            });
+            println!("{}", serde_json::to_string(&body).unwrap_or_default());
+        }
+    }
+
+    if triggering == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 /// Run Node-side plugins declared in `cofferdam.toml`, then re-apply the
 /// suppression directive parser to plugin findings (plugins bypass the
 /// engine's built-in suppression pass since they emit out-of-band).
@@ -1853,6 +2207,8 @@ fn run_plugins_filtered(
     cfg: &ProjectConfig,
     resolved_config_path: Option<&Path>,
     files: &[PathBuf],
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<cofferdam_core::Issue> {
     if cfg.plugins.is_empty() {
         return Vec::new();
@@ -1867,6 +2223,8 @@ fn run_plugins_filtered(
         &cfg_dir,
         &cfg.checks,
         cfg.layers.as_ref(),
+        tsconfig_path,
+        warn_on_type_unavailable,
     );
     let suppression_cache: HashMap<PathBuf, cofferdam_engine::suppress::Suppressions> = files
         .iter()
@@ -1900,8 +2258,16 @@ fn run_plugins_filtered_with_signatures(
     cfg: &ProjectConfig,
     resolved_config_path: Option<&Path>,
     files: &[PathBuf],
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<(cofferdam_core::Issue, String)> {
-    let issues = run_plugins_filtered(cfg, resolved_config_path, files);
+    let issues = run_plugins_filtered(
+        cfg,
+        resolved_config_path,
+        files,
+        tsconfig_path,
+        warn_on_type_unavailable,
+    );
     if issues.is_empty() {
         return Vec::new();
     }
@@ -2059,11 +2425,18 @@ fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
     };
     // Include plugin findings in the baseline so existing plugin-flagged
     // tech debt can be acknowledged and gradually paid down (cd-1c7).
+    // CD-81: `baseline write` doesn't install the built-in type oracle
+    // either, so type-aware plugin checks likewise run without
+    // `ctx.types` on this path — and `warn_on_type_unavailable: false`
+    // keeps that from baking a `Warning.PluginTypeHostUnavailable`
+    // finding into the baseline snapshot on every write.
     if let Some(cfg) = project_config.as_ref() {
         signed.extend(run_plugins_filtered_with_signatures(
             cfg,
             resolved_config_path.as_deref(),
             &files,
+            None,
+            false,
         ));
     }
 
@@ -2228,11 +2601,17 @@ fn run_baseline_prune(args: BaselinePruneArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // CD-81: `baseline prune` doesn't install the built-in type oracle
+    // either, so type-aware plugin checks likewise run without
+    // `ctx.types` on this path — see `baseline write`'s comment above
+    // for why `warn_on_type_unavailable` is `false` here.
     if let Some(cfg) = project_config.as_ref() {
         signed.extend(run_plugins_filtered_with_signatures(
             cfg,
             resolved_config_path.as_deref(),
             &files,
+            None,
+            false,
         ));
     }
 
@@ -2399,10 +2778,16 @@ fn run_baseline_ratchet(args: BaselineRatchetArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // CD-81: `baseline ratchet` doesn't install the built-in type
+    // oracle either, so type-aware plugin checks likewise run without
+    // `ctx.types` on this path — see `baseline write`'s comment above
+    // for why `warn_on_type_unavailable` is `false` here.
     signed.extend(run_plugins_filtered_with_signatures(
         &project_config,
         Some(resolved_config_path.as_path()),
         &files,
+        None,
+        false,
     ));
 
     let mut counts_by_check: BTreeMap<String, u32> = BTreeMap::new();

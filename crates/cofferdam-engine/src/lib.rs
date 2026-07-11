@@ -39,6 +39,7 @@ use cofferdam_core::{
     INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
+use cofferdam_html::{parse_html, HtmlParseTree};
 use cofferdam_rust::{parse_rust, RustParseTree};
 use rayon::prelude::*;
 
@@ -986,6 +987,47 @@ impl Engine {
             }
             return issues;
         }
+        // HTML (CD-83): same shape as the Rust branch above — parse
+        // once via `cofferdam_html::parse_html`, install the tree on
+        // `parsed_lang`, and dispatch to checks declaring
+        // `Language::Html`. Must run BEFORE the Astro branch and the
+        // defensive catch-all below, otherwise the catch-all (which
+        // never parses) would swallow `.html` files with
+        // `parsed_lang = None`.
+        if file.language == Language::Html {
+            let tree = match parse_html(&file.text) {
+                Ok(t) if !t.has_errors() => t,
+                Ok(t) => {
+                    issues.push(html_parse_error_issue(&file, &t));
+                    return issues;
+                }
+                Err(e) => {
+                    issues.push(html_load_error_issue(&file, &e));
+                    return issues;
+                }
+            };
+            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                if check.language() != file.language {
+                    continue;
+                }
+                let (disabled, ov_opts) = match &file_key {
+                    Some(k) => self.effective_options(k, check.meta().id, check.meta().options),
+                    None => (false, None),
+                };
+                if disabled {
+                    continue;
+                }
+                let opts = ov_opts.as_ref().unwrap_or(opts);
+                let mut ctx = CheckContext::new(&file)
+                    .with_options(opts)
+                    .with_corpus(corpus)
+                    .with_parsed_lang(&tree);
+                issues.extend(timed_run(timing, check.meta().id, || {
+                    check.run(&file, &mut ctx)
+                }));
+            }
+            return issues;
+        }
         // Astro (cd-45): no whole-file parse — only the frontmatter
         // fence's imports get pulled into the shared IMPORTS slot so
         // islands referenced solely from `.astro` pages aren't flagged
@@ -1634,6 +1676,51 @@ fn rust_parse_error_issue(file: &SourceFile, tree: &RustParseTree) -> Issue {
 /// cancellation, timeout). Distinct from `rust_parse_error_issue`
 /// because there's no tree to extract error spans from.
 fn rust_load_error_issue(file: &SourceFile, err: &cofferdam_rust::RustParseError) -> Issue {
+    Issue {
+        check_id: "Warning.ParseError".to_string(),
+        message: format!("parse error: {err}"),
+        file: file.path.clone(),
+        location: Location::from_span(
+            &file.path,
+            Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+        ),
+        priority: Priority(20),
+        severity: Severity::Critical,
+        related: Vec::new(),
+    }
+}
+
+/// Build a `Warning.ParseError` for an HTML file whose tree-sitter
+/// parse recovered with ERROR / MISSING nodes. Mirrors
+/// `rust_parse_error_issue` — see its docs for the "first span only"
+/// rationale.
+fn html_parse_error_issue(file: &SourceFile, tree: &HtmlParseTree) -> Issue {
+    let span = tree.error_spans().first().copied().unwrap_or(Span {
+        start_byte: 0,
+        end_byte: 0,
+        line: 1,
+        column: 1,
+    });
+    Issue {
+        check_id: "Warning.ParseError".to_string(),
+        message: "parse error: tree-sitter recovered with ERROR / MISSING nodes (HTML adapter)"
+            .to_string(),
+        file: file.path.clone(),
+        location: Location::from_span(&file.path, span),
+        priority: Priority(20),
+        severity: Severity::Critical,
+        related: Vec::new(),
+    }
+}
+
+/// Build a `Warning.ParseError` for the rare case where tree-sitter
+/// itself fails to produce a tree at all. Mirrors `rust_load_error_issue`.
+fn html_load_error_issue(file: &SourceFile, err: &cofferdam_html::HtmlParseError) -> Issue {
     Issue {
         check_id: "Warning.ParseError".to_string(),
         message: format!("parse error: {err}"),

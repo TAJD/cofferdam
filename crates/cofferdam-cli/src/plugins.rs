@@ -45,12 +45,20 @@ use std::time::{Duration, Instant};
 use cofferdam_core::layers::{self, LayerMatcher};
 use cofferdam_core::lines::Lines;
 use cofferdam_core::{
-    parse_into, Allocator, Issue, Location, Priority, RawOptionValue, Severity, SourceFile, Span,
+    parse_into, Allocator, Issue, Language, Location, Priority, RawOptionValue, Severity,
+    SourceFile, Span,
 };
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/plugin-host.mjs");
 const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG_VERSION"), ".mjs");
+
+/// CD-81: `plugin-host.mjs` imports `./type-host-core.mjs` (shared
+/// ts-morph plumbing with `type_host.rs`'s worker) as a relative ESM
+/// specifier, so the materialised copy must sit next to it under this
+/// exact, unversioned name — see `materialise_host_script`.
+const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
+const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
 
 /// Wire version for the streamed manifest protocol (CD-33). Bump and
 /// document in `design/sdk-ast-wire.md` on any breaking change to the
@@ -69,6 +77,13 @@ struct HeaderRecord<'a> {
     cwd: String,
     plugins: &'a [String],
     options: &'a BTreeMap<String, BTreeMap<String, ManifestOptionValue>>,
+    /// CD-81: absolute tsconfig path, forward-slashed, for type-aware
+    /// plugin checks (`requiresTypes: true`) to resolve types against
+    /// in-process via ts-morph. `None` (serialised as JSON `null`) when
+    /// no tsconfig was discovered or type-awareness is disabled — the
+    /// host treats `null` the same as an absent field.
+    #[serde(rename = "tsconfigPath", skip_serializing_if = "Option::is_none")]
+    tsconfig_path: Option<String>,
 }
 
 /// One streamed file record. Same fields the one-shot manifest used to
@@ -113,7 +128,16 @@ enum StreamRecord {
     #[serde(rename = "error")]
     Error(HostError),
     #[serde(rename = "done")]
-    Done,
+    Done {
+        /// CD-81: set only when at least one loaded plugin check declared
+        /// `requiresTypes: true`. `None` (missing key or JSON `null`)
+        /// means either no check needed types, or ts-morph resolved
+        /// fine; `Some(reason)` means type-aware plugin checks ran with
+        /// `ctx.types` undefined because the host couldn't load ts-morph
+        /// or find a tsconfig.
+        #[serde(rename = "typeHostUnavailable", default)]
+        type_host_unavailable: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -131,6 +155,15 @@ struct ManifestLineView {
     is_jsx_text: bool,
     #[serde(rename = "isPragma")]
     is_pragma: bool,
+    /// CD-84: HTML-only — `true` when a tag (`start_tag`/`end_tag`/
+    /// `self_closing_tag`/`doctype`) overlaps this line. Always `false`
+    /// for TS/JS files.
+    #[serde(rename = "isTag")]
+    is_tag: bool,
+    /// CD-84: HTML-only — `true` when an HTML `text` node overlaps this
+    /// line. Always `false` for TS/JS files.
+    #[serde(rename = "isText")]
+    is_text: bool,
     #[serde(rename = "lineStart")]
     line_start: u32,
 }
@@ -246,6 +279,12 @@ pub struct PluginOptionMeta {
 /// `query_plugin_metadata` for the advise and explain subcommands.
 #[derive(Debug, Clone)]
 pub struct PluginCheckMeta {
+    /// The `cofferdam.toml` `plugins = [...]` entry (as sent to the host)
+    /// this check was loaded from — lets callers correlate a metadata
+    /// entry back to the config path that produced it, e.g. to filter
+    /// `cfg.plugins` down to only output-mode-eligible entries before
+    /// invoking the host again for `verify --dist`.
+    pub path: String,
     pub id: String,
     pub category: String,
     pub base_priority: i64,
@@ -255,6 +294,10 @@ pub struct PluginCheckMeta {
     /// `None` when the plugin didn't ship a body.
     pub body: Option<String>,
     pub requires_types: bool,
+    /// Whether this check is eligible to run against build-output files
+    /// discovered by `cofferdam verify --dist` (CD-85). Mirrors
+    /// `requires_types`'s plumbing end to end.
+    pub output_mode: bool,
     pub options: Vec<PluginOptionMeta>,
     /// `None` means "applies to every file".
     pub files: Option<PluginFileScope>,
@@ -270,6 +313,8 @@ struct MetadataHostResponse {
 
 #[derive(Deserialize)]
 struct MetadataCheckEntry {
+    #[serde(default)]
+    path: String,
     id: String,
     #[serde(default)]
     category: String,
@@ -284,6 +329,8 @@ struct MetadataCheckEntry {
     body: Option<String>,
     #[serde(rename = "requiresTypes", default)]
     requires_types: bool,
+    #[serde(rename = "outputMode", default)]
+    output_mode: bool,
     #[serde(default)]
     options: Vec<PluginOptionMeta>,
     /// `None` when the check has no file-scope filter.
@@ -295,6 +342,15 @@ struct MetadataManifest<'a> {
     mode: &'static str,
     cwd: String,
     plugins: &'a [String],
+}
+
+/// Canonicalize a plugin path the same way it's sent to the host, so a
+/// `PluginCheckMeta::path` (round-tripped verbatim through the host) can
+/// be matched back against a `cofferdam.toml` `plugins = [...]` entry.
+pub fn canonical_plugin_path_str(p: &Path) -> String {
+    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = abs.to_string_lossy().replace('\\', "/");
+    s.trim_start_matches("//?/").to_string()
 }
 
 /// Run the plugin host in metadata-only mode. Returns one
@@ -315,11 +371,7 @@ pub fn query_plugin_metadata(
 
     let plugin_paths_str: Vec<String> = plugin_paths
         .iter()
-        .map(|p| {
-            let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-            let s = abs.to_string_lossy().replace('\\', "/");
-            s.trim_start_matches("//?/").to_string()
-        })
+        .map(|p| canonical_plugin_path_str(p))
         .collect();
 
     let manifest = MetadataManifest {
@@ -393,6 +445,7 @@ pub fn query_plugin_metadata(
         .checks
         .into_iter()
         .map(|e| PluginCheckMeta {
+            path: e.path,
             id: e.id,
             category: e.category,
             base_priority: e.base_priority,
@@ -400,6 +453,7 @@ pub fn query_plugin_metadata(
             default_severity: e.default_severity,
             body: e.body,
             requires_types: e.requires_types,
+            output_mode: e.output_mode,
             options: e.options,
             files: e.files,
         })
@@ -421,6 +475,8 @@ pub fn run_plugins(
     project_root: &Path,
     check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
     layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<Issue> {
     // Disk-read entry: hydrate `(path, text)` from the working tree,
     // then delegate to the source-driven entry point. Files that fail
@@ -438,6 +494,8 @@ pub fn run_plugins(
         project_root,
         check_options,
         layers_cfg,
+        tsconfig_path,
+        warn_on_type_unavailable,
     )
 }
 
@@ -451,12 +509,22 @@ pub fn run_plugins(
 /// All other behaviour is identical to `run_plugins`. The scoped file
 /// set, layer membership, options bag, and host timeout all flow
 /// through unchanged.
+///
+/// `warn_on_type_unavailable` mirrors `install_type_oracle_if_needed`'s
+/// silent-skip contract for the built-in oracle: callers that don't
+/// install a tsconfig on purpose (`baseline write/prune/ratchet`,
+/// `advise --diff`) pass `false` so a `requiresTypes: true` plugin check
+/// doesn't bake a `Warning.PluginTypeHostUnavailable` finding into
+/// `baseline.json` on every run — the built-in oracle produces no
+/// Issue at all on those paths (CD-81 review).
 pub fn run_plugins_with_sources(
     plugin_paths: &[PathBuf],
     sources: &[(PathBuf, String)],
     project_root: &Path,
     check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
     layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<Issue> {
     if plugin_paths.is_empty() {
         return Vec::new();
@@ -539,39 +607,91 @@ pub fn run_plugins_with_sources(
         cwd: forward_slash(project_root),
         plugins: &plugin_paths_str,
         options: &options_payload,
+        tsconfig_path: tsconfig_path.map(forward_slash),
     };
     let mut write_error = write_record(&mut stdin, &header).err();
 
     if write_error.is_none() {
         for (path, text) in sources {
             let file = SourceFile::new(path.clone(), text.clone());
-            let allocator = Allocator::default();
-            let parsed = parse_into(&allocator, &file);
-            let line_views: Vec<ManifestLineView> = Lines::build(text, &parsed.program)
-                .map(|lv| ManifestLineView {
-                    line_no: lv.line_no,
-                    text: lv.text.to_string(),
-                    is_comment: lv.is_comment,
-                    is_doc_comment: lv.is_doc_comment,
-                    is_string_literal: lv.is_string_literal,
-                    is_jsx_text: lv.is_jsx_text,
-                    is_pragma: lv.is_pragma,
-                    line_start: lv.line_start,
-                })
-                .collect();
+            // Per-language dispatch (CD-84): oxc only understands
+            // TS/JS/JSX — feeding it an `.html` file would parse
+            // garbage. HTML gets its own tree-sitter-html parse +
+            // wire builder; any other language (Rust, Astro,
+            // unrecognised) gets no whole-file parse at all, mirroring
+            // the engine's own per-language dispatch in
+            // `cofferdam-engine/src/lib.rs::pass1_one_file` (a
+            // separate code path from this one — plugins.rs has its
+            // own oxc/tree-sitter calls).
+            let (line_views, ast): (Vec<ManifestLineView>, Option<crate::ast_wire::AstWire>) =
+                match file.language {
+                    // Unlike the engine path (which rejects a tree with
+                    // `has_errors()` and emits `Warning.ParseError`),
+                    // plugins get a best-effort wire even from a
+                    // partially error-recovered parse — plugins have no
+                    // channel to emit a parse-error finding themselves,
+                    // so a partial tree is more useful than none.
+                    Language::Html => match cofferdam_html::parse_html(text) {
+                        Ok(tree) => {
+                            let line_views = cofferdam_html::html_lines(text, &tree)
+                                .into_iter()
+                                .map(|lv| ManifestLineView {
+                                    line_no: lv.line_no,
+                                    text: lv.text.to_string(),
+                                    is_comment: lv.is_comment,
+                                    is_doc_comment: false,
+                                    is_string_literal: false,
+                                    is_jsx_text: false,
+                                    is_pragma: false,
+                                    is_tag: lv.is_tag,
+                                    is_text: lv.is_text,
+                                    line_start: lv.line_start,
+                                })
+                                .collect();
+                            let ast = crate::html_wire::HtmlWireBuilder::new(&tree).build();
+                            (line_views, Some(ast))
+                        }
+                        Err(_) => (Vec::new(), None),
+                    },
+                    Language::TypeScript => {
+                        let allocator = Allocator::default();
+                        let parsed = parse_into(&allocator, &file);
+                        let line_views = Lines::build(text, &parsed.program)
+                            .map(|lv| ManifestLineView {
+                                line_no: lv.line_no,
+                                text: lv.text.to_string(),
+                                is_comment: lv.is_comment,
+                                is_doc_comment: lv.is_doc_comment,
+                                is_string_literal: lv.is_string_literal,
+                                is_jsx_text: lv.is_jsx_text,
+                                is_pragma: lv.is_pragma,
+                                is_tag: false,
+                                is_text: false,
+                                line_start: lv.line_start,
+                            })
+                            .collect();
+                        // Build the flat-array AST wire (cd-svf). One
+                        // Visit pass per file; re-uses the parse
+                        // already done for line views.
+                        let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
+                        (line_views, Some(ast))
+                    }
+                    // Rust, Astro, unrecognised: no whole-file parse
+                    // for plugins today (matches the engine's
+                    // catch-all — no built-in check declares these
+                    // languages for the plugin surface yet).
+                    Language::Rust | Language::Astro => (Vec::new(), None),
+                };
             // Resolve layer membership for this file. `None` → JSON `null`.
             let layer: Option<String> = layers_cfg
                 .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
-            // Build the flat-array AST wire (cd-svf). One Visit pass per
-            // file; re-uses the parse already done for line views.
-            let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
             let record = ManifestFile {
                 kind: "file",
                 path: forward_slash(path),
                 text,
                 line_views,
                 layer,
-                ast: Some(ast),
+                ast,
             };
             if let Err(e) = write_record(&mut stdin, &record) {
                 write_error = Some(e);
@@ -621,14 +741,16 @@ pub fn run_plugins_with_sources(
         }
     };
 
-    let (reports, errors, malformed, saw_done) = reader_handle.join().unwrap_or_else(|_| {
-        (
-            Vec::new(),
-            Vec::new(),
-            vec!["reader thread panicked".to_string()],
-            false,
-        )
-    });
+    let (reports, errors, malformed, saw_done, type_host_unavailable) =
+        reader_handle.join().unwrap_or_else(|_| {
+            (
+                Vec::new(),
+                Vec::new(),
+                vec!["reader thread panicked".to_string()],
+                false,
+                None,
+            )
+        });
     let stderr_text = stderr_handle.join().unwrap_or_default();
 
     if let Some(e) = write_error {
@@ -807,6 +929,27 @@ pub fn run_plugins_with_sources(
         issues.push(synthetic_warning(check_id, &file, message));
     }
 
+    // CD-81: at least one loaded plugin check declared `requiresTypes:
+    // true` but the host couldn't resolve types for it (no tsconfig, or
+    // ts-morph failed to load). Surfaced as a synthetic finding — same
+    // pattern as `host_unavailable_issue`/`host_failed_issue` — rather
+    // than a new return shape, so `--fail-on-type-unavailable` gating
+    // can inspect the merged issue set the same way it already does for
+    // the built-in type oracle. Gated on `warn_on_type_unavailable` so
+    // callers that never intended to install types this run (baseline
+    // write/prune/ratchet, advise --diff) don't bake this into their
+    // snapshot — see the doc comment on `run_plugins_with_sources`.
+    if let Some(reason) = type_host_unavailable.filter(|_| warn_on_type_unavailable) {
+        issues.push(synthetic_warning(
+            "Warning.PluginTypeHostUnavailable",
+            project_root,
+            format!(
+                "type-aware plugin check(s) declared requiresTypes:true but the type host is \
+                 unavailable ({reason}) — those checks ran with ctx.types undefined."
+            ),
+        ));
+    }
+
     issues
 }
 
@@ -818,6 +961,15 @@ pub fn run_plugins_with_sources(
 fn materialise_host_script() -> std::io::Result<PathBuf> {
     static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
     let result = CACHED.get_or_init(|| {
+        // Write the shared core module first — plugin-host.mjs's
+        // `import "./type-host-core.mjs"` must resolve by the time the
+        // host script is spawned. Unversioned name (unlike the host
+        // script itself) because it's a static import specifier, not a
+        // path we control at spawn time; always overwritten for the
+        // same reason the host script is.
+        let core_path = std::env::temp_dir().join(CORE_SCRIPT_NAME);
+        std::fs::write(&core_path, CORE_SCRIPT)?;
+
         let path = std::env::temp_dir().join(HOST_SCRIPT_NAME);
         // Always overwrite — the embedded script changes when the CLI
         // is rebuilt. Compared to file-content-hash-named caching, this
@@ -831,7 +983,7 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
     }
 }
 
-fn capitalize_category(wire: &str) -> Option<&'static str> {
+pub fn capitalize_category(wire: &str) -> Option<&'static str> {
     match wire {
         "consistency" => Some("Consistency"),
         "design" => Some("Design"),
@@ -883,12 +1035,19 @@ fn write_record<T: Serialize>(stdin: &mut impl Write, record: &T) -> std::io::Re
 /// result, even when the child's exit status is success.
 fn read_stream_records(
     stdout: ChildStdout,
-) -> (Vec<HostReport>, Vec<HostError>, Vec<String>, bool) {
+) -> (
+    Vec<HostReport>,
+    Vec<HostError>,
+    Vec<String>,
+    bool,
+    Option<String>,
+) {
     let mut reader = BufReader::new(stdout);
     let mut reports = Vec::new();
     let mut errors = Vec::new();
     let mut malformed = Vec::new();
     let mut saw_done = false;
+    let mut type_host_unavailable = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -902,8 +1061,11 @@ fn read_stream_records(
                 match serde_json::from_str::<StreamRecord>(trimmed) {
                     Ok(StreamRecord::Report(r)) => reports.push(r),
                     Ok(StreamRecord::Error(e)) => errors.push(e),
-                    Ok(StreamRecord::Done) => {
+                    Ok(StreamRecord::Done {
+                        type_host_unavailable: reason,
+                    }) => {
                         saw_done = true;
+                        type_host_unavailable = reason;
                         break;
                     }
                     Err(e) => malformed.push(format!(
@@ -915,7 +1077,7 @@ fn read_stream_records(
             Err(_) => break,
         }
     }
-    (reports, errors, malformed, saw_done)
+    (reports, errors, malformed, saw_done, type_host_unavailable)
 }
 
 /// Wall-clock budget for one invocation of the plugin host. Default 60s;

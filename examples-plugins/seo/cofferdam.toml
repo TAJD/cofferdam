@@ -1,0 +1,14 @@
+# cofferdam.toml — local config for the seo e2e fixture (CD-86).
+#
+# Lives next to the fixture rather than at the repo root so the e2e run
+# is self-contained: `cofferdam check examples-plugins/seo/fixture`
+# auto-discovers this file via the engine's walk-up search and loads the
+# plugins from directory-relative paths. Four separate plugin paths —
+# one per compiled entry point — because the plugin host's `loadPlugins`
+# requires each configured path to resolve to a single `Check` object.
+plugins = [
+  "./dist/missing-metadata-export.js",
+  "./dist/img-missing-alt.js",
+  "./dist/duplicate-title.js",
+  "./dist/non-empty-description.js",
+]

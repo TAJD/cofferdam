@@ -140,6 +140,76 @@ export interface PluginCorpus {
 }
 
 /**
+ * Type facts about a resolved TypeScript type (CD-81). Mirrors
+ * `cofferdam_core::TypeFacts` and the wire shape ts-morph resolution
+ * returns from `type-host-core.mjs`'s `typeAt`.
+ */
+export interface TypeFacts {
+  /** The type's rendered text, e.g. `"string | null"`. */
+  readonly text: string;
+  /** Whether ts-morph considers the type nullable (null or undefined). */
+  readonly isNullable: boolean;
+  /** Whether the type's union includes `null`. */
+  readonly includesNull: boolean;
+  /** Whether the type's union includes `undefined`. */
+  readonly includesUndefined: boolean;
+  /** Whether the type is `any` or `unknown`. */
+  readonly isAny: boolean;
+}
+
+/**
+ * Literal-resolution facts for an identifier/import reference (CD-82).
+ * Mirrors the wire shape `type-host-core.mjs`'s `resolveLiteral`
+ * returns. `literalString` is only present when the resolved
+ * declaration's initializer is a string (or no-substitution template)
+ * literal; `isNullable` and `isEmptyObject` are reported independently
+ * even when `literalString` can't be determined — e.g. a `let` with a
+ * `string | null` type annotation reports `isNullable: true` with
+ * `literalString` left `undefined`.
+ */
+export interface LiteralFacts {
+  /** The resolved string literal value, when the declaration's
+   *  initializer is a string or no-substitution template literal. */
+  readonly literalString?: string;
+  /** Whether the declared/inferred type includes `null` or `undefined`,
+   *  or the initializer is a `null`/`undefined` literal. */
+  readonly isNullable: boolean;
+  /** Whether the initializer is an object literal with zero properties. */
+  readonly isEmptyObject: boolean;
+}
+
+/**
+ * Type-aware query surface (CD-81, extended CD-82). Present on
+ * `ctx.types` only when the check declared `requiresTypes: true` on
+ * `defineCheck` AND a tsconfig was discovered AND ts-morph loaded
+ * successfully in the plugin host process — `undefined` (not present on
+ * the object) in every other case, so plugins should guard with `if
+ * (ctx.types)` rather than expect it unconditionally.
+ */
+export interface TypeQuery {
+  /**
+   * Resolve the type of the node spanning `[startByte, endByte)` in the
+   * current file. Returns `null` when no meaningful type could be
+   * resolved at that span (not an error — e.g. the span doesn't line up
+   * with a typed node). Async because the plugin host may still be
+   * warming up its ts-morph project cache for this tsconfig.
+   */
+  typeAt(startByte: number, endByte: number): Promise<TypeFacts | null>;
+
+  /**
+   * Resolve the identifier spanning `[startByte, endByte)` to a literal
+   * value via ts-morph symbol resolution — follows `import { x } from
+   * "./constants"` across files to the origin `const x = "..."`
+   * declaration when both files are part of the resolved project.
+   * Returns `null` only when nothing at all is resolvable (not an
+   * identifier, no symbol, no declarations); a resolved declaration with
+   * a non-literal initializer still returns best-effort facts (e.g.
+   * `isNullable` from its type) rather than `null`.
+   */
+  resolveLiteral(startByte: number, endByte: number): Promise<LiteralFacts | null>;
+}
+
+/**
  * Mutable per-file scratch passed to `Check.run`. The check emits
  * findings via `ctx.report(...)`; the engine collects, suppresses,
  * baselines, and renders.
@@ -154,6 +224,13 @@ export interface CheckContext {
    * depend on the aggregate corpus state.
    */
   readonly corpus: PluginCorpus;
+
+  /**
+   * Type-aware query surface (CD-81). `undefined` unless the check
+   * declared `requiresTypes: true` and the plugin host resolved a
+   * tsconfig + ts-morph for this run.
+   */
+  readonly types?: TypeQuery;
 }
 
 /**

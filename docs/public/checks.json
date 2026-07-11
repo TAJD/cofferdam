@@ -257,6 +257,21 @@
       ]
     },
     {
+      "id": "Html.MissingLangAttribute",
+      "category": "Warning",
+      "base_priority": 12,
+      "default_severity": "Medium",
+      "explanation": "The document's `<html>` element has no `lang` attribute, so assistive technology and search engines can't determine the page's language.",
+      "body": "---\nid: Html.MissingLangAttribute\ncategory: Warning\nbase_priority: 12\ndefault_severity: Medium\noptions: []\n---\n\nThe document's `<html>` element has no `lang` attribute. Without it,\nscreen readers can't pick the right pronunciation rules and search\nengines can't serve the page to the right locale — both an\naccessibility and an SEO concern.\n\nThis check flags the **absence** of the attribute only. An empty\n`lang=\"\"` still counts as present; fixing the value is a separate\nconcern from declaring the language at all.\n\n## Example\n\n```html\n<!-- FIRES: no lang attribute. -->\n<html>\n  <head><title>Untitled</title></head>\n  <body></body>\n</html>\n\n<!-- DOES NOT FIRE: lang declared. -->\n<html lang=\"en\">\n  <head><title>Untitled</title></head>\n  <body></body>\n</html>\n```\n\n## What to do\n\nAdd a `lang` attribute to the `<html>` tag with a valid\n[BCP 47](https://www.rfc-editor.org/rfc/bcp/bcp47.txt) language tag,\ne.g. `lang=\"en\"`, `lang=\"en-GB\"`, `lang=\"fr\"`.\n\n## Suppression\n\n```html\n<!-- cofferdam-ignore: Html.MissingLangAttribute: intentionally omitted for this template -->\n<html>\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Readability.MaxFunctionLength",
       "category": "Readability",
       "base_priority": -5,

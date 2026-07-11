@@ -23,6 +23,7 @@ import type {
 } from "./check-context.js";
 import type { LineView } from "./line-view.js";
 import type { Span } from "./span.js";
+import type { AstNode, AstView, AstVisitor, NodeKind, Walk } from "./ast.js";
 
 // ---- shapes the napi addon hands us ---------------------------------
 
@@ -34,6 +35,8 @@ export interface NativeLineView {
   readonly isStringLiteral: boolean;
   readonly isJsxText: boolean;
   readonly isPragma: boolean;
+  readonly isTag: boolean;
+  readonly isText: boolean;
   readonly lineStart: number;
 }
 
@@ -63,6 +66,27 @@ export interface PluginRunInput {
   readonly lineViews: readonly NativeLineView[];
   /** Layer name from `cofferdam.invariants.toml` `[layers]`. `null` when not in any layer. */
   readonly layer: string | null;
+  /**
+   * Flat-array AST wire payload (see `design/sdk-ast-wire.md` and
+   * `crates/cofferdam-cli/src/ast_wire.rs`). `undefined`/`null` when the
+   * caller has no parsed AST for this file (e.g. a non-JS/TS source).
+   */
+  readonly ast?: AstWireInput | null;
+}
+
+/** One flat-array node in the AST wire payload. Per-kind extras are
+ * flattened onto the object (see `WireExtras` in `ast_wire.rs`). */
+export interface AstWireNode {
+  readonly kind: NodeKind;
+  readonly span: Span;
+  readonly firstChild: number;
+  readonly nextSibling: number;
+  readonly [extra: string]: unknown;
+}
+
+export interface AstWireInput {
+  readonly rootIdx: number;
+  readonly nodes: readonly AstWireNode[];
 }
 
 // ---- runtime construction --------------------------------------------
@@ -76,6 +100,8 @@ function buildLineView(native: NativeLineView): LineView {
     isStringLiteral: native.isStringLiteral,
     isJsxText: native.isJsxText,
     isPragma: native.isPragma,
+    isTag: native.isTag,
+    isText: native.isText,
     spanFor(charStart: number, charEnd: number): Span {
       return {
         line: native.lineNo,
@@ -87,11 +113,212 @@ function buildLineView(native: NativeLineView): LineView {
   };
 }
 
+// Map from wire-side AST node kind to the visitor method name plugins
+// implement. Kept in sync by hand with `VISITOR_METHODS` in
+// `crates/cofferdam-cli/scripts/plugin-host.mjs` — that script is the
+// production NDJSON-subprocess host and is deliberately self-contained
+// (no import of this package), so the two copies can't share source.
+const VISITOR_METHODS: Partial<Record<NodeKind, keyof AstVisitor>> = {
+  Program: "visitProgram",
+  CallExpression: "visitCallExpression",
+  ImportDeclaration: "visitImportDeclaration",
+  Function: "visitFunction",
+  ArrowFunctionExpression: "visitArrowFunctionExpression",
+  Class: "visitClass",
+  ObjectExpression: "visitObjectExpression",
+  MemberExpression: "visitMemberExpression",
+  IdentifierReference: "visitIdentifierReference",
+  JSXElement: "visitJSXElement",
+  JSXAttribute: "visitJSXAttribute",
+  JSXExpressionContainer: "visitJSXExpressionContainer",
+  Document: "visitDocument",
+  Element: "visitElement",
+  Attribute: "visitAttribute",
+  Text: "visitText",
+  Comment: "visitComment",
+  Doctype: "visitDoctype",
+};
+
+/**
+ * Reconstruct a typed {@link AstView} from the flat-array wire payload
+ * (see `design/sdk-ast-wire.md`). Mirrors `buildAstView` in
+ * `crates/cofferdam-cli/scripts/plugin-host.mjs` — both must be kept in
+ * sync when a new `NodeKind` is added.
+ */
+// Per-kind population of the flat `out` object for `buildAstView`'s
+// `get()`. Split out of `get()` itself (formerly one 137-line switch,
+// cyclomatic complexity 30) so each kind's shape is a small, independently
+// readable function; `get()` is left as just cache-check + dispatch.
+type NodeBuilder = (
+  w: AstWireNode,
+  out: Record<string, unknown>,
+  idx: number,
+  ctx: { get: (idx: number) => AstNode | null; collectChildren: (idx: number) => AstNode[] },
+) => void;
+
+const NODE_BUILDERS: Partial<Record<NodeKind, NodeBuilder>> = {
+  Program: (_w, out, idx, ctx) => {
+    Object.defineProperty(out, "body", { enumerable: true, get: () => ctx.collectChildren(idx) });
+  },
+  CallExpression: (w, out, _idx, ctx) => {
+    Object.defineProperty(out, "callee", { enumerable: true, get: () => ctx.get(w["calleeIdx"] as number) });
+    Object.defineProperty(out, "arguments", {
+      enumerable: true,
+      get: () => ((w["argumentIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  ImportDeclaration: (w, out) => {
+    out["source"] = w["source"];
+    out["specifiers"] = w["specifiers"] ?? [];
+  },
+  Function: (w, out, _idx, ctx) => {
+    out["name"] = w["name"] ?? undefined;
+    out["async"] = !!w["async"];
+    out["generator"] = !!w["generator"];
+    Object.defineProperty(out, "params", {
+      enumerable: true,
+      get: () => ((w["paramIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  ArrowFunctionExpression: (w, out, _idx, ctx) => {
+    out["async"] = !!w["async"];
+    out["expression"] = !!w["expression"];
+    Object.defineProperty(out, "params", {
+      enumerable: true,
+      get: () => ((w["paramIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  Class: (w, out) => {
+    out["name"] = w["name"] ?? undefined;
+  },
+  ObjectExpression: (w, out, _idx, ctx) => {
+    Object.defineProperty(out, "properties", {
+      enumerable: true,
+      get: () => ((w["propertyIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  MemberExpression: (w, out, _idx, ctx) => {
+    out["property"] = w["property"] ?? undefined;
+    out["computed"] = !!w["computed"];
+    Object.defineProperty(out, "object", { enumerable: true, get: () => ctx.get(w["objectIdx"] as number) });
+  },
+  IdentifierReference: (w, out) => {
+    out["name"] = w["name"];
+  },
+  JSXElement: (w, out, _idx, ctx) => {
+    out["tagName"] = w["tagName"];
+    out["selfClosing"] = !!w["selfClosing"];
+    Object.defineProperty(out, "attributes", {
+      enumerable: true,
+      get: () => ((w["attributeIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  JSXAttribute: (w, out) => {
+    out["name"] = w["name"] ?? undefined;
+    out["value"] = w["value"] ?? undefined;
+    out["isExpression"] = !!w["isExpression"];
+    out["isSpread"] = !!w["isSpread"];
+  },
+  Document: (_w, out, idx, ctx) => {
+    Object.defineProperty(out, "children", {
+      enumerable: true,
+      get: () => ctx.collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+    });
+  },
+  Element: (w, out, idx, ctx) => {
+    out["tagName"] = w["tagName"];
+    out["selfClosing"] = !!w["selfClosing"];
+    Object.defineProperty(out, "attributes", {
+      enumerable: true,
+      get: () => ((w["attributeIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+    Object.defineProperty(out, "children", {
+      enumerable: true,
+      get: () => ctx.collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+    });
+  },
+  Attribute: (w, out) => {
+    out["name"] = w["name"] ?? undefined;
+    out["value"] = w["value"] ?? undefined;
+  },
+  Text: (w, out) => {
+    out["text"] = w["text"];
+  },
+  Comment: (w, out) => {
+    out["text"] = w["text"];
+  },
+  Doctype: (w, out) => {
+    out["text"] = w["text"];
+  },
+};
+
+export function buildAstView(wire: AstWireInput): AstView {
+  const { rootIdx, nodes } = wire;
+  const built = new Array<AstNode | null>(nodes.length).fill(null);
+
+  function get(idx: number): AstNode | null {
+    if (idx < 0 || idx >= nodes.length) return null;
+    const cached = built[idx];
+    if (cached) return cached;
+    const w = nodes[idx]!;
+    const out: Record<string, unknown> = { kind: w.kind, span: w.span };
+    NODE_BUILDERS[w.kind]?.(w, out, idx, { get, collectChildren });
+    const node = out as unknown as AstNode;
+    built[idx] = node;
+    return node;
+  }
+
+  function collectChildren(idx: number): AstNode[] {
+    const out: AstNode[] = [];
+    let cursor = nodes[idx]?.firstChild ?? -1;
+    while (cursor >= 0) {
+      const node = get(cursor);
+      if (node) out.push(node);
+      cursor = nodes[cursor]!.nextSibling;
+    }
+    return out;
+  }
+
+  const indexByKind = new Map<NodeKind, number[]>();
+  for (let i = 0; i < nodes.length; i++) {
+    const k = nodes[i]!.kind;
+    let idxs = indexByKind.get(k);
+    if (!idxs) {
+      idxs = [];
+      indexByKind.set(k, idxs);
+    }
+    idxs.push(i);
+  }
+
+  return {
+    get root(): AstNode {
+      // rootIdx is always 0 (the Program node) for any non-empty wire.
+      return get(rootIdx) as AstNode;
+    },
+    findAll<K extends NodeKind>(kind: K) {
+      const idxs = indexByKind.get(kind) ?? [];
+      return idxs.map(get) as never;
+    },
+    walk(visitor: AstVisitor): void {
+      const visit = (idx: number): void => {
+        if (idx < 0) return;
+        const w = nodes[idx]!;
+        const methodName = VISITOR_METHODS[w.kind];
+        const fn = methodName ? visitor[methodName] : undefined;
+        const node = get(idx);
+        const decision: Walk = fn && node ? (fn as (n: AstNode) => Walk).call(visitor, node) : "continue";
+        if (decision !== "skip" && w.firstChild >= 0) visit(w.firstChild);
+        visit(w.nextSibling);
+      };
+      visit(rootIdx);
+    },
+  };
+}
+
 /**
  * Build the `SourceFile` shape a plugin's `run()` callback expects.
- * `ast` is `null` here — AST access lives behind a separate napi call
- * the loader can route through worker_threads in a follow-up bead. The
- * line-walk Pattern A checks (BrandCasing) work today.
+ * `ast` is `null` when `input.ast` is absent — full AST access requires
+ * the caller (loader / test harness) to supply the wire payload.
  */
 export function buildSourceFile(input: PluginRunInput) {
   const lineViews = input.lineViews.map(buildLineView);
@@ -118,7 +345,7 @@ export function buildSourceFile(input: PluginRunInput) {
       };
       return it;
     },
-    ast: null,
+    ast: input.ast ? buildAstView(input.ast) : null,
   };
 }
 

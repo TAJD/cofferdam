@@ -46,22 +46,14 @@ jobs:
           pnpm install --frozen-lockfile=false --ignore-scripts
           pnpm build
 
-      - name: Bundle SDK into each plugin's local node_modules
+      - name: Build every example plugin (TS → dist)
         # The plugins declare `@cofferdam/check-sdk: "*"` but the SDK
-        # isn't published to npm yet; copy the built dist into each
-        # plugin's node_modules so the host script's `import` resolves.
-        run: |
-          for plugin in brand-casing no-http-client tenant-isolation duplicate-class plugin-scope-glob; do
-            mkdir -p examples-plugins/$plugin/node_modules/@cofferdam/check-sdk
-            cp -r packages/check-sdk/package.json packages/check-sdk/dist \
-              examples-plugins/$plugin/node_modules/@cofferdam/check-sdk/
-          done
-
-      - name: Build plugins (TS → dist)
-        run: |
-          for plugin in brand-casing no-http-client tenant-isolation duplicate-class plugin-scope-glob; do
-            (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p .)
-          done
+        # isn't published to npm yet; the script bundles the built dist
+        # into each plugin's node_modules so the host script's `import`
+        # resolves, then runs `tsc -p .`. Plugins are discovered by
+        # directory, not hardcoded here, so a new plugin under
+        # examples-plugins/ is picked up automatically.
+        run: node scripts/build-example-plugins.mjs
 
       - name: Run cofferdam against every fixture, diff against goldens
         run: node scripts/check-plugin-fixtures.mjs

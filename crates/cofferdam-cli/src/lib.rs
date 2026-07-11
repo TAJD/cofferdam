@@ -14,6 +14,7 @@ pub mod baseline_lint;
 pub mod doctor;
 pub mod explain;
 pub mod gen_docs;
+pub mod html_wire;
 pub mod init;
 pub mod invariants_tool;
 pub mod plugins;

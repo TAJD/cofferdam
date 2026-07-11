@@ -460,19 +460,35 @@ the bestefforttools corpus) is the size of that one blob.
 type-host's framing (`design/type-host-wire.md`). Stdin carries:
 
 ```json
-{"type":"header","wireVersion":2,"cwd":"...","plugins":[...],"options":{...}}
+{"type":"header","wireVersion":2,"cwd":"...","plugins":[...],"options":{...},"tsconfigPath":"..."}
 {"type":"file","path":"...","text":"...","lineViews":[...],"layer":null,"ast":{...}}
 ... (one "file" record per source file, in order) ...
 {"type":"end"}
 ```
+
+`tsconfigPath` (CD-81) is `null`/absent when no tsconfig was discovered or
+type-awareness is disabled; when present, it's the same tsconfig the built-in
+type oracle would use, and lets `plugin-host.mjs` resolve types in-process via
+ts-morph (`crates/cofferdam-cli/scripts/type-host-core.mjs`, shared with the
+standalone type-host worker in `design/type-host-wire.md`) for any loaded
+check declaring `requiresTypes: true`.
 
 Stdout carries, streamed as each file is processed:
 
 ```json
 {"type":"report","checkId":"...","message":"...","file":"...","startByte":0,"endByte":0,"severity":"..."}
 {"type":"error","kind":"load_failed"|"run_threw"|"finalize_threw","plugin":"...","file":"...","message":"..."}
-{"type":"done"}
+{"type":"done","typeHostUnavailable":null}
 ```
+
+`typeHostUnavailable` (CD-81) is present on the `done` record only when at
+least one loaded check declared `requiresTypes: true`: `null` when ts-morph
+resolved fine, or a human-readable reason string when it couldn't (no
+tsconfig, ts-morph not installed). `plugins.rs` surfaces a non-null reason as
+a synthetic `Warning.PluginTypeHostUnavailable` finding so it flows through
+baselining/suppression/`--fail-on` like any other finding, and so
+`--fail-on-type-unavailable` can gate on it the same way it gates on the
+built-in type oracle's availability.
 
 Peak memory is now O(one file) on both sides instead of O(repo) — each
 `ManifestFile` (with its `AstWire`) is built, written, and dropped

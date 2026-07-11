@@ -46,6 +46,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 ## Warning
 
+- [`Html.MissingLangAttribute`](Html.MissingLangAttribute.md) `file` — The document's `<html>` element has no `lang` attribute, so assistive technology and search engines can't determine the page's language.
 - [`Rust.NoUnimplementedInNonTest`](Rust.NoUnimplementedInNonTest.md) `file` — `unimplemented!()` / `todo!()` panic at runtime; calling them outside test code ships a guaranteed crash. Implement the function or move it into a `#[test]`.
 - [`Rust.NoUnwrapInLib`](Rust.NoUnwrapInLib.md) `file` — Calling `.unwrap()` in library code panics on `None`/`Err(_)` with no diagnostic context. Return `Result` and propagate via `?`, or use `.expect("<reason>")` when the value is provably infallible.
 - [`Warning.NoConsoleLog`](Warning.NoConsoleLog.md) `file` `advisable` — `console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.

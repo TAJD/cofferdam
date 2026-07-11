@@ -45,6 +45,7 @@ export default withMermaid(defineConfig({
           { text: 'Per-path overrides', link: '/overrides' },
           { text: 'Budgets & ratchet', link: '/budgets' },
           { text: 'Type-aware checks', link: '/type-aware-checks' },
+          { text: 'Verifying built output (verify --dist)', link: '/verify-dist' },
         ],
       },
       {
@@ -70,6 +71,12 @@ export default withMermaid(defineConfig({
         items: [
           { text: 'Author guide', link: '/plugin-sdk-guide' },
           { text: 'End-to-end fixture contract', link: '/plugin-sdk-e2e' },
+        ],
+      },
+      {
+        text: 'Use cases',
+        items: [
+          { text: 'SEO-grade checking', link: '/seo-checking' },
         ],
       },
       {

@@ -57,6 +57,7 @@ export const checksItems = [
     text: 'Warning',
     collapsed: true,
     items: [
+      { text: 'MissingLangAttribute', link: '/checks/Html.MissingLangAttribute' },
       { text: 'NoUnimplementedInNonTest', link: '/checks/Rust.NoUnimplementedInNonTest' },
       { text: 'NoUnwrapInLib', link: '/checks/Rust.NoUnwrapInLib' },
       { text: 'NoConsoleLog', link: '/checks/Warning.NoConsoleLog' },

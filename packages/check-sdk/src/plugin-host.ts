@@ -145,6 +145,113 @@ const VISITOR_METHODS: Partial<Record<NodeKind, keyof AstVisitor>> = {
  * `crates/cofferdam-cli/scripts/plugin-host.mjs` — both must be kept in
  * sync when a new `NodeKind` is added.
  */
+// Per-kind population of the flat `out` object for `buildAstView`'s
+// `get()`. Split out of `get()` itself (formerly one 137-line switch,
+// cyclomatic complexity 30) so each kind's shape is a small, independently
+// readable function; `get()` is left as just cache-check + dispatch.
+type NodeBuilder = (
+  w: AstWireNode,
+  out: Record<string, unknown>,
+  idx: number,
+  ctx: { get: (idx: number) => AstNode | null; collectChildren: (idx: number) => AstNode[] },
+) => void;
+
+const NODE_BUILDERS: Partial<Record<NodeKind, NodeBuilder>> = {
+  Program: (_w, out, idx, ctx) => {
+    Object.defineProperty(out, "body", { enumerable: true, get: () => ctx.collectChildren(idx) });
+  },
+  CallExpression: (w, out, _idx, ctx) => {
+    Object.defineProperty(out, "callee", { enumerable: true, get: () => ctx.get(w["calleeIdx"] as number) });
+    Object.defineProperty(out, "arguments", {
+      enumerable: true,
+      get: () => ((w["argumentIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  ImportDeclaration: (w, out) => {
+    out["source"] = w["source"];
+    out["specifiers"] = w["specifiers"] ?? [];
+  },
+  Function: (w, out, _idx, ctx) => {
+    out["name"] = w["name"] ?? undefined;
+    out["async"] = !!w["async"];
+    out["generator"] = !!w["generator"];
+    Object.defineProperty(out, "params", {
+      enumerable: true,
+      get: () => ((w["paramIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  ArrowFunctionExpression: (w, out, _idx, ctx) => {
+    out["async"] = !!w["async"];
+    out["expression"] = !!w["expression"];
+    Object.defineProperty(out, "params", {
+      enumerable: true,
+      get: () => ((w["paramIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  Class: (w, out) => {
+    out["name"] = w["name"] ?? undefined;
+  },
+  ObjectExpression: (w, out, _idx, ctx) => {
+    Object.defineProperty(out, "properties", {
+      enumerable: true,
+      get: () => ((w["propertyIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  MemberExpression: (w, out, _idx, ctx) => {
+    out["property"] = w["property"] ?? undefined;
+    out["computed"] = !!w["computed"];
+    Object.defineProperty(out, "object", { enumerable: true, get: () => ctx.get(w["objectIdx"] as number) });
+  },
+  IdentifierReference: (w, out) => {
+    out["name"] = w["name"];
+  },
+  JSXElement: (w, out, _idx, ctx) => {
+    out["tagName"] = w["tagName"];
+    out["selfClosing"] = !!w["selfClosing"];
+    Object.defineProperty(out, "attributes", {
+      enumerable: true,
+      get: () => ((w["attributeIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+  },
+  JSXAttribute: (w, out) => {
+    out["name"] = w["name"] ?? undefined;
+    out["value"] = w["value"] ?? undefined;
+    out["isExpression"] = !!w["isExpression"];
+    out["isSpread"] = !!w["isSpread"];
+  },
+  Document: (_w, out, idx, ctx) => {
+    Object.defineProperty(out, "children", {
+      enumerable: true,
+      get: () => ctx.collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+    });
+  },
+  Element: (w, out, idx, ctx) => {
+    out["tagName"] = w["tagName"];
+    out["selfClosing"] = !!w["selfClosing"];
+    Object.defineProperty(out, "attributes", {
+      enumerable: true,
+      get: () => ((w["attributeIdxs"] as number[]) ?? []).map(ctx.get).filter((n) => n !== null),
+    });
+    Object.defineProperty(out, "children", {
+      enumerable: true,
+      get: () => ctx.collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+    });
+  },
+  Attribute: (w, out) => {
+    out["name"] = w["name"] ?? undefined;
+    out["value"] = w["value"] ?? undefined;
+  },
+  Text: (w, out) => {
+    out["text"] = w["text"];
+  },
+  Comment: (w, out) => {
+    out["text"] = w["text"];
+  },
+  Doctype: (w, out) => {
+    out["text"] = w["text"];
+  },
+};
+
 export function buildAstView(wire: AstWireInput): AstView {
   const { rootIdx, nodes } = wire;
   const built = new Array<AstNode | null>(nodes.length).fill(null);
@@ -155,134 +262,7 @@ export function buildAstView(wire: AstWireInput): AstView {
     if (cached) return cached;
     const w = nodes[idx]!;
     const out: Record<string, unknown> = { kind: w.kind, span: w.span };
-    switch (w.kind) {
-      case "Program": {
-        Object.defineProperty(out, "body", {
-          enumerable: true,
-          get: () => collectChildren(idx),
-        });
-        break;
-      }
-      case "CallExpression": {
-        Object.defineProperty(out, "callee", {
-          enumerable: true,
-          get: () => get(w["calleeIdx"] as number),
-        });
-        Object.defineProperty(out, "arguments", {
-          enumerable: true,
-          get: () =>
-            ((w["argumentIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
-        });
-        break;
-      }
-      case "ImportDeclaration": {
-        out["source"] = w["source"];
-        out["specifiers"] = w["specifiers"] ?? [];
-        break;
-      }
-      case "Function": {
-        out["name"] = w["name"] ?? undefined;
-        out["async"] = !!w["async"];
-        out["generator"] = !!w["generator"];
-        Object.defineProperty(out, "params", {
-          enumerable: true,
-          get: () => ((w["paramIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
-        });
-        break;
-      }
-      case "ArrowFunctionExpression": {
-        out["async"] = !!w["async"];
-        out["expression"] = !!w["expression"];
-        Object.defineProperty(out, "params", {
-          enumerable: true,
-          get: () => ((w["paramIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
-        });
-        break;
-      }
-      case "Class": {
-        out["name"] = w["name"] ?? undefined;
-        break;
-      }
-      case "ObjectExpression": {
-        Object.defineProperty(out, "properties", {
-          enumerable: true,
-          get: () =>
-            ((w["propertyIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
-        });
-        break;
-      }
-      case "MemberExpression": {
-        out["property"] = w["property"] ?? undefined;
-        out["computed"] = !!w["computed"];
-        Object.defineProperty(out, "object", {
-          enumerable: true,
-          get: () => get(w["objectIdx"] as number),
-        });
-        break;
-      }
-      case "IdentifierReference": {
-        out["name"] = w["name"];
-        break;
-      }
-      case "JSXElement": {
-        out["tagName"] = w["tagName"];
-        out["selfClosing"] = !!w["selfClosing"];
-        Object.defineProperty(out, "attributes", {
-          enumerable: true,
-          get: () =>
-            ((w["attributeIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
-        });
-        break;
-      }
-      case "JSXAttribute": {
-        out["name"] = w["name"] ?? undefined;
-        out["value"] = w["value"] ?? undefined;
-        out["isExpression"] = !!w["isExpression"];
-        out["isSpread"] = !!w["isSpread"];
-        break;
-      }
-      case "JSXExpressionContainer": {
-        break;
-      }
-      case "Document": {
-        Object.defineProperty(out, "children", {
-          enumerable: true,
-          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
-        });
-        break;
-      }
-      case "Element": {
-        out["tagName"] = w["tagName"];
-        out["selfClosing"] = !!w["selfClosing"];
-        Object.defineProperty(out, "attributes", {
-          enumerable: true,
-          get: () =>
-            ((w["attributeIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
-        });
-        Object.defineProperty(out, "children", {
-          enumerable: true,
-          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
-        });
-        break;
-      }
-      case "Attribute": {
-        out["name"] = w["name"] ?? undefined;
-        out["value"] = w["value"] ?? undefined;
-        break;
-      }
-      case "Text": {
-        out["text"] = w["text"];
-        break;
-      }
-      case "Comment": {
-        out["text"] = w["text"];
-        break;
-      }
-      case "Doctype": {
-        out["text"] = w["text"];
-        break;
-      }
-    }
+    NODE_BUILDERS[w.kind]?.(w, out, idx, { get, collectChildren });
     const node = out as unknown as AstNode;
     built[idx] = node;
     return node;

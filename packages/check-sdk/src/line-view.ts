@@ -16,6 +16,12 @@
 //   ships the flag.
 // - `isPragma` — an annotation-style comment (`/* #__PURE__ */`,
 //   `/* @vite-ignore */`, etc.) overlaps. *Not* JSDoc.
+// - `isTag` — HTML-only (CD-84): a tag (`<p>`, `</p>`, `<img ...>`, or a
+//   doctype declaration) overlaps this line. Always `false` for
+//   TS/JS/JSX files.
+// - `isText` — HTML-only (CD-84): HTML text content overlaps this line.
+//   Always `false` for TS/JS/JSX files. Not the same concept as
+//   `isJsxText` — `isJsxText` marks JSX child text inside a `.tsx` file.
 
 import type { Span } from "./span.js";
 
@@ -29,6 +35,8 @@ export interface LineView {
   readonly isStringLiteral: boolean;
   readonly isJsxText: boolean;
   readonly isPragma: boolean;
+  readonly isTag: boolean;
+  readonly isText: boolean;
 
   /**
    * Build a `Span` covering bytes `[charStart, charEnd)` *within this

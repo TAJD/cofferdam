@@ -6,9 +6,11 @@
 //! — and differs only in the parser layer and the per-language checks.
 
 pub mod checks;
+pub mod lines;
 pub mod parser;
 
 pub use checks::all_html_checks;
+pub use lines::{html_lines, HtmlLineView};
 pub use parser::{parse_html, HtmlParseError, HtmlParseTree};
 
 use cofferdam_core::{Adapter, Language};

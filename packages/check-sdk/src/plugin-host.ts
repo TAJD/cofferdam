@@ -35,6 +35,8 @@ export interface NativeLineView {
   readonly isStringLiteral: boolean;
   readonly isJsxText: boolean;
   readonly isPragma: boolean;
+  readonly isTag: boolean;
+  readonly isText: boolean;
   readonly lineStart: number;
 }
 
@@ -98,6 +100,8 @@ function buildLineView(native: NativeLineView): LineView {
     isStringLiteral: native.isStringLiteral,
     isJsxText: native.isJsxText,
     isPragma: native.isPragma,
+    isTag: native.isTag,
+    isText: native.isText,
     spanFor(charStart: number, charEnd: number): Span {
       return {
         line: native.lineNo,
@@ -127,6 +131,12 @@ const VISITOR_METHODS: Partial<Record<NodeKind, keyof AstVisitor>> = {
   JSXElement: "visitJSXElement",
   JSXAttribute: "visitJSXAttribute",
   JSXExpressionContainer: "visitJSXExpressionContainer",
+  Document: "visitDocument",
+  Element: "visitElement",
+  Attribute: "visitAttribute",
+  Text: "visitText",
+  Comment: "visitComment",
+  Doctype: "visitDoctype",
 };
 
 /**
@@ -232,6 +242,44 @@ export function buildAstView(wire: AstWireInput): AstView {
         break;
       }
       case "JSXExpressionContainer": {
+        break;
+      }
+      case "Document": {
+        Object.defineProperty(out, "children", {
+          enumerable: true,
+          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+        });
+        break;
+      }
+      case "Element": {
+        out["tagName"] = w["tagName"];
+        out["selfClosing"] = !!w["selfClosing"];
+        Object.defineProperty(out, "attributes", {
+          enumerable: true,
+          get: () =>
+            ((w["attributeIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
+        });
+        Object.defineProperty(out, "children", {
+          enumerable: true,
+          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+        });
+        break;
+      }
+      case "Attribute": {
+        out["name"] = w["name"] ?? undefined;
+        out["value"] = w["value"] ?? undefined;
+        break;
+      }
+      case "Text": {
+        out["text"] = w["text"];
+        break;
+      }
+      case "Comment": {
+        out["text"] = w["text"];
+        break;
+      }
+      case "Doctype": {
+        out["text"] = w["text"];
         break;
       }
     }

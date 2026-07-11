@@ -45,7 +45,8 @@ use std::time::{Duration, Instant};
 use cofferdam_core::layers::{self, LayerMatcher};
 use cofferdam_core::lines::Lines;
 use cofferdam_core::{
-    parse_into, Allocator, Issue, Location, Priority, RawOptionValue, Severity, SourceFile, Span,
+    parse_into, Allocator, Issue, Language, Location, Priority, RawOptionValue, Severity,
+    SourceFile, Span,
 };
 use serde::{Deserialize, Serialize};
 
@@ -154,6 +155,15 @@ struct ManifestLineView {
     is_jsx_text: bool,
     #[serde(rename = "isPragma")]
     is_pragma: bool,
+    /// CD-84: HTML-only — `true` when a tag (`start_tag`/`end_tag`/
+    /// `self_closing_tag`/`doctype`) overlaps this line. Always `false`
+    /// for TS/JS files.
+    #[serde(rename = "isTag")]
+    is_tag: bool,
+    /// CD-84: HTML-only — `true` when an HTML `text` node overlaps this
+    /// line. Always `false` for TS/JS files.
+    #[serde(rename = "isText")]
+    is_text: bool,
     #[serde(rename = "lineStart")]
     line_start: u32,
 }
@@ -583,33 +593,78 @@ pub fn run_plugins_with_sources(
     if write_error.is_none() {
         for (path, text) in sources {
             let file = SourceFile::new(path.clone(), text.clone());
-            let allocator = Allocator::default();
-            let parsed = parse_into(&allocator, &file);
-            let line_views: Vec<ManifestLineView> = Lines::build(text, &parsed.program)
-                .map(|lv| ManifestLineView {
-                    line_no: lv.line_no,
-                    text: lv.text.to_string(),
-                    is_comment: lv.is_comment,
-                    is_doc_comment: lv.is_doc_comment,
-                    is_string_literal: lv.is_string_literal,
-                    is_jsx_text: lv.is_jsx_text,
-                    is_pragma: lv.is_pragma,
-                    line_start: lv.line_start,
-                })
-                .collect();
+            // Per-language dispatch (CD-84): oxc only understands
+            // TS/JS/JSX — feeding it an `.html` file would parse
+            // garbage. HTML gets its own tree-sitter-html parse +
+            // wire builder; any other language (Rust, Astro,
+            // unrecognised) gets no whole-file parse at all, mirroring
+            // the engine's own per-language dispatch in
+            // `cofferdam-engine/src/lib.rs::pass1_one_file` (a
+            // separate code path from this one — plugins.rs has its
+            // own oxc/tree-sitter calls).
+            let (line_views, ast): (Vec<ManifestLineView>, Option<crate::ast_wire::AstWire>) =
+                match file.language {
+                    Language::Html => match cofferdam_html::parse_html(text) {
+                        Ok(tree) => {
+                            let line_views = cofferdam_html::html_lines(text, &tree)
+                                .into_iter()
+                                .map(|lv| ManifestLineView {
+                                    line_no: lv.line_no,
+                                    text: lv.text.to_string(),
+                                    is_comment: lv.is_comment,
+                                    is_doc_comment: false,
+                                    is_string_literal: false,
+                                    is_jsx_text: false,
+                                    is_pragma: false,
+                                    is_tag: lv.is_tag,
+                                    is_text: lv.is_text,
+                                    line_start: lv.line_start,
+                                })
+                                .collect();
+                            let ast = crate::html_wire::HtmlWireBuilder::new(&tree).build();
+                            (line_views, Some(ast))
+                        }
+                        Err(_) => (Vec::new(), None),
+                    },
+                    Language::TypeScript => {
+                        let allocator = Allocator::default();
+                        let parsed = parse_into(&allocator, &file);
+                        let line_views = Lines::build(text, &parsed.program)
+                            .map(|lv| ManifestLineView {
+                                line_no: lv.line_no,
+                                text: lv.text.to_string(),
+                                is_comment: lv.is_comment,
+                                is_doc_comment: lv.is_doc_comment,
+                                is_string_literal: lv.is_string_literal,
+                                is_jsx_text: lv.is_jsx_text,
+                                is_pragma: lv.is_pragma,
+                                is_tag: false,
+                                is_text: false,
+                                line_start: lv.line_start,
+                            })
+                            .collect();
+                        // Build the flat-array AST wire (cd-svf). One
+                        // Visit pass per file; re-uses the parse
+                        // already done for line views.
+                        let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
+                        (line_views, Some(ast))
+                    }
+                    // Rust, Astro, unrecognised: no whole-file parse
+                    // for plugins today (matches the engine's
+                    // catch-all — no built-in check declares these
+                    // languages for the plugin surface yet).
+                    Language::Rust | Language::Astro => (Vec::new(), None),
+                };
             // Resolve layer membership for this file. `None` → JSON `null`.
             let layer: Option<String> = layers_cfg
                 .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
-            // Build the flat-array AST wire (cd-svf). One Visit pass per
-            // file; re-uses the parse already done for line views.
-            let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
             let record = ManifestFile {
                 kind: "file",
                 path: forward_slash(path),
                 text,
                 line_views,
                 layer,
-                ast: Some(ast),
+                ast,
             };
             if let Err(e) = write_record(&mut stdin, &record) {
                 write_error = Some(e);

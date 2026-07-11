@@ -117,6 +117,20 @@ pub enum WireExtras {
         #[serde(rename = "isSpread")]
         is_spread: bool,
     },
+    /// CD-84: HTML `Text` node — the raw text content between tags.
+    Text {
+        text: String,
+    },
+    /// CD-84: HTML `Comment` node — raw comment text, delimiters
+    /// (`<!--`/`-->`) included, matching `HtmlParseTree::text_of`.
+    Comment {
+        text: String,
+    },
+    /// CD-84: HTML `Doctype` node — raw doctype declaration text
+    /// (e.g. `<!DOCTYPE html>`).
+    Doctype {
+        text: String,
+    },
 }
 
 #[derive(Serialize)]

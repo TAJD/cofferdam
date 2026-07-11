@@ -49,7 +49,12 @@ import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { createInterface } from "node:readline";
-import { createTypeHostState, ensureTsMorphLoaded, typeAt as coreTypeAt } from "./type-host-core.mjs";
+import {
+  createTypeHostState,
+  ensureTsMorphLoaded,
+  typeAt as coreTypeAt,
+  resolveLiteral as coreResolveLiteral,
+} from "./type-host-core.mjs";
 
 // SDK major versions this host knows how to drive (cd-b1q). Plugins
 // vendor their own `@cofferdam/check-sdk` via their package.json, so
@@ -75,6 +80,12 @@ const VISITOR_METHODS = {
   JSXElement: "visitJSXElement",
   JSXAttribute: "visitJSXAttribute",
   JSXExpressionContainer: "visitJSXExpressionContainer",
+  Document: "visitDocument",
+  Element: "visitElement",
+  Attribute: "visitAttribute",
+  Text: "visitText",
+  Comment: "visitComment",
+  Doctype: "visitDoctype",
 };
 
 // State for the streaming run — populated by the "header" record,
@@ -199,6 +210,12 @@ async function processFile(rec) {
       ctx.types = {
         async typeAt(startByte, endByte) {
           return coreTypeAt(typeHostState, tsconfigPath, rec.path, startByte, endByte);
+        },
+        // CD-82: resolves an identifier/import reference to a literal
+        // value (cross-file, via ts-morph symbol resolution). Same
+        // in-process pattern as `typeAt` above — no new IPC hop.
+        async resolveLiteral(startByte, endByte) {
+          return coreResolveLiteral(typeHostState, tsconfigPath, rec.path, startByte, endByte);
         },
       };
     }
@@ -638,6 +655,43 @@ function buildAstView(wire) {
       case "JSXExpressionContainer": {
         break;
       }
+      case "Document": {
+        Object.defineProperty(out, "children", {
+          enumerable: true,
+          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+        });
+        break;
+      }
+      case "Element": {
+        out.tagName = w.tagName;
+        out.selfClosing = !!w.selfClosing;
+        Object.defineProperty(out, "attributes", {
+          enumerable: true,
+          get: () => (w.attributeIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        Object.defineProperty(out, "children", {
+          enumerable: true,
+          get: () => collectChildren(idx).filter((n) => n.kind !== "Attribute"),
+        });
+        break;
+      }
+      case "Attribute": {
+        out.name = w.name ?? undefined;
+        out.value = w.value ?? undefined;
+        break;
+      }
+      case "Text": {
+        out.text = w.text;
+        break;
+      }
+      case "Comment": {
+        out.text = w.text;
+        break;
+      }
+      case "Doctype": {
+        out.text = w.text;
+        break;
+      }
     }
     built[idx] = out;
     return out;
@@ -702,6 +756,8 @@ function buildLineView(native) {
     isStringLiteral: native.isStringLiteral,
     isJsxText: native.isJsxText,
     isPragma: native.isPragma,
+    isTag: native.isTag,
+    isText: native.isText,
     spanFor(charStart, charEnd) {
       return {
         line: native.lineNo,

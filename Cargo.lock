@@ -301,6 +301,7 @@ dependencies = [
  "cofferdam-core",
  "cofferdam-engine",
  "cofferdam-formatters",
+ "cofferdam-html",
  "cofferdam-lsp",
  "cofferdam-typst",
  "globset",
@@ -315,6 +316,7 @@ dependencies = [
  "thiserror",
  "toml",
  "toml_edit",
+ "tree-sitter",
 ]
 
 [[package]]

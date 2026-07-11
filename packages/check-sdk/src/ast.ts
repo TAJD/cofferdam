@@ -33,6 +33,11 @@ export type Walk = (typeof Walk)[keyof typeof Walk];
  * `JSXElement`/`JSXAttribute`/`JSXExpressionContainer` added in CD-80 —
  * additive per the freeze rule above, needed for JSX-aware plugin checks
  * (e.g. `<img>` missing `alt`).
+ *
+ * `Document`/`Element`/`Attribute`/`Text`/`Comment`/`Doctype` added in
+ * CD-84 — the HTML AST surface, walkable via `file.ast` against `.html`
+ * files the same way the JS/JSX kinds above are walkable against
+ * `.ts`/`.tsx` files. `Document` is the HTML root (mirrors `Program`).
  */
 export type NodeKind =
   | "Program"
@@ -46,7 +51,13 @@ export type NodeKind =
   | "IdentifierReference"
   | "JSXElement"
   | "JSXAttribute"
-  | "JSXExpressionContainer";
+  | "JSXExpressionContainer"
+  | "Document"
+  | "Element"
+  | "Attribute"
+  | "Text"
+  | "Comment"
+  | "Doctype";
 
 /**
  * Common base for every AST node exposed across the FFI. Concrete
@@ -145,6 +156,52 @@ export interface JSXAttributeNode extends AstNodeBase<"JSXAttribute"> {
 export interface JSXExpressionContainerNode
   extends AstNodeBase<"JSXExpressionContainer"> {}
 
+/**
+ * The HTML document root — entry point for `view.root` against an
+ * `.html` file. `children` holds every top-level node (`Doctype`,
+ * `Element`, `Text`, `Comment`) in document order. Mirrors `ProgramNode`
+ * for the JS/JSX surface (CD-84).
+ */
+export interface DocumentNode extends AstNodeBase<"Document"> {
+  readonly children: readonly AstNode[];
+}
+
+/**
+ * An HTML element, e.g. `<img src="cat.png">` or `<p>text</p>`.
+ * `children` excludes `Attribute` nodes — use `.attributes` for those.
+ */
+export interface ElementNode extends AstNodeBase<"Element"> {
+  readonly tagName: string;
+  readonly selfClosing: boolean;
+  readonly attributes: readonly AttributeNode[];
+  readonly children: readonly AstNode[];
+}
+
+/**
+ * An attribute on an HTML element's opening tag. `value` is `undefined`
+ * for a boolean attribute (`disabled`) with no `=value` at all; an empty
+ * quoted value (`alt=""`) is `value === ""`, distinct from "absent".
+ */
+export interface AttributeNode extends AstNodeBase<"Attribute"> {
+  readonly name: string | undefined;
+  readonly value: string | undefined;
+}
+
+/** A run of text content between tags. */
+export interface TextNode extends AstNodeBase<"Text"> {
+  readonly text: string;
+}
+
+/** An HTML comment (`<!-- ... -->`), `text` includes the delimiters. */
+export interface CommentNode extends AstNodeBase<"Comment"> {
+  readonly text: string;
+}
+
+/** The document's doctype declaration (e.g. `<!DOCTYPE html>`). */
+export interface DoctypeNode extends AstNodeBase<"Doctype"> {
+  readonly text: string;
+}
+
 /** Discriminated union of every node kind {@link AstView} surfaces. */
 export type AstNode =
   | ProgramNode
@@ -158,7 +215,13 @@ export type AstNode =
   | IdentifierReferenceNode
   | JSXElementNode
   | JSXAttributeNode
-  | JSXExpressionContainerNode;
+  | JSXExpressionContainerNode
+  | DocumentNode
+  | ElementNode
+  | AttributeNode
+  | TextNode
+  | CommentNode
+  | DoctypeNode;
 
 /** Map from kind string to typed node — drives `findAll`'s return type. */
 export type NodeOfKind<K extends NodeKind> = Extract<AstNode, { kind: K }>;
@@ -182,6 +245,12 @@ export interface AstVisitor {
   visitJSXElement?(node: JSXElementNode): Walk;
   visitJSXAttribute?(node: JSXAttributeNode): Walk;
   visitJSXExpressionContainer?(node: JSXExpressionContainerNode): Walk;
+  visitDocument?(node: DocumentNode): Walk;
+  visitElement?(node: ElementNode): Walk;
+  visitAttribute?(node: AttributeNode): Walk;
+  visitText?(node: TextNode): Walk;
+  visitComment?(node: CommentNode): Walk;
+  visitDoctype?(node: DoctypeNode): Walk;
 }
 
 /**

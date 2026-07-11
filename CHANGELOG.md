@@ -10,9 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- File-level `.gitignore` / `.cofferdamignore` patterns targeting a cofferdam-managed extension (`.ts`, `.tsx`, `.rs`, `.astro`, `.html`, etc.) were silently ignored — the extension whitelist used for discovery was implemented as an `ignore`-crate `Override`, which takes precedence over ignore-file exclusion by design, so any file matching an allowed extension bypassed `.gitignore`/`.cofferdamignore` entirely. Directory-level rules (`dist/`, `node_modules/`) were unaffected. Discovery now applies ignore rules first and filters by extension afterward (CD-103).
-
 ## [0.3.8] - 2026-07-11
 
 ### Added
@@ -39,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `defineCheck()` no longer silently drops plugin-supplied fields outside its hardcoded copy list (CD-94).
   - The materialised plugin-host/type-host Node scripts now live in a version- and user-scoped temp directory instead of one shared, unversioned path, fixing a cross-version race on a machine running two cofferdam versions concurrently (CD-89).
   - `resolveTsMorph`'s ancestor-directory walk no longer stalls on a broken `ts-morph` install partway up the tree — it now correctly continues climbing to find a working install further up (CD-92).
+- File-level `.gitignore` / `.cofferdamignore` patterns targeting a cofferdam-managed extension (`.ts`, `.tsx`, `.rs`, `.astro`, `.html`, etc.) were silently ignored — the extension whitelist used for discovery was implemented as an `ignore`-crate `Override`, which takes precedence over ignore-file exclusion by design, so any file matching an allowed extension bypassed `.gitignore`/`.cofferdamignore` entirely. Directory-level rules (`dist/`, `node_modules/`) were unaffected. Discovery now applies ignore rules first and filters by extension afterward (CD-103).
 
 ### Changed
 - Docs site repositioned around the two loops (advisory + debt) and cofferdam's place in the toolchain (CD-47): new homepage hero, "where cofferdam sits" / "the two loops" sections with Mermaid diagrams, an `advise` demo replacing the `Warning.TripleEquals` demo, a Biome/ESLint coexistence section, and a "why the name" footer. `docs/reference/advise.md` now leads with the JSON envelope and schema link and adds a "what agents should branch on" field guide. `docs/agents.md` and `docs/hooks.md` gained the two-loops diagram and hooks-wiring diagram; `docs/invariants.md` gained a 10-line starter spec and an annotated invariants-anatomy diagram; `docs/budgets.md` and `docs/output-formats.md` gained signature-stability, would_fire/would_clear set-difference, ratchet, and priority×severity diagrams. README mirrors the new hero and stack diagram with a single `advise` demo.

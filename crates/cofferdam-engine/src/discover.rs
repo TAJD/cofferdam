@@ -8,7 +8,6 @@
 
 use std::path::{Path, PathBuf};
 
-use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 
 /// File extensions cofferdam analyzes by default.
@@ -78,18 +77,20 @@ pub fn discover<P: AsRef<Path>>(
         return Ok(Vec::new());
     }
 
-    let mut overrides = OverrideBuilder::new(roots[0].as_ref());
-    for ext in &opts.extensions {
-        overrides.add(&format!("*.{}", ext))?;
-    }
-    let overrides = overrides.build()?;
-
+    // cd-103: extension filtering used to go through `WalkBuilder::overrides`
+    // (an `ignore`-crate whitelist). Overrides take precedence over ignore
+    // files by design, so a gitignore-style glob like `*.ts` in
+    // `.gitignore`/`.cofferdamignore` was silently defeated for any file
+    // whose name also happened to satisfy the extension whitelist — i.e.
+    // every file cofferdam would otherwise care about. Filtering by
+    // extension after the walk (instead of via an override) lets ignore
+    // rules apply normally; only directory-level pruning still comes from
+    // the walker itself.
     let mut builder = WalkBuilder::new(roots[0].as_ref());
     for root in roots.iter().skip(1) {
         builder.add(root.as_ref());
     }
     builder
-        .overrides(overrides)
         .standard_filters(opts.respect_ignore)
         .hidden(!opts.include_hidden)
         .add_custom_ignore_filename(".cofferdamignore");
@@ -100,16 +101,23 @@ pub fn discover<P: AsRef<Path>>(
             Ok(entry) => {
                 if entry.file_type().is_some_and(|ft| ft.is_file()) {
                     let path = entry.into_path();
+                    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    if !opts
+                        .extensions
+                        .iter()
+                        .any(|ext| name.ends_with(&format!(".{ext}")))
+                    {
+                        continue;
+                    }
                     // Skip declaration files if requested
-                    if opts.skip_declaration_files {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name.ends_with(".d.ts")
-                                || name.ends_with(".d.cts")
-                                || name.ends_with(".d.mts")
-                            {
-                                continue;
-                            }
-                        }
+                    if opts.skip_declaration_files
+                        && (name.ends_with(".d.ts")
+                            || name.ends_with(".d.cts")
+                            || name.ends_with(".d.mts"))
+                    {
+                        continue;
                     }
                     out.push(path);
                 }

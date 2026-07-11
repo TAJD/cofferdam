@@ -1681,14 +1681,44 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // mode `--fail-on-type-unavailable` (cd-260l) and the `[budgets]` key
     // warning both exist to prevent.
     if let Some(only_id) = only.as_deref() {
-        let has_plugins = project_config
+        let plugin_cfg = project_config
             .as_ref()
-            .is_some_and(|cfg| !cfg.plugins.is_empty());
-        if !has_plugins && !registered.contains(&only_id) {
-            eprintln!("error: --only '{only_id}' matches no known check id — check for a typo");
+            .filter(|cfg| !cfg.plugins.is_empty());
+        // CD-96: when plugins are configured, `only_id` might be the bare
+        // id a plugin author wrote in their own `defineCheck({ id: ... })`
+        // rather than the category-prefixed id its findings actually
+        // carry at runtime. Resolve via plugin metadata (available even
+        // for a check that found nothing this run) so both forms work,
+        // and so a genuine typo still hard-errors instead of silently
+        // matching zero findings — the previous behaviour blanket-skipped
+        // this validation whenever any plugin was configured.
+        let resolved_only = match plugin_cfg {
+            Some(cfg) => {
+                let cfg_dir = resolved_config_path
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir);
+                let matched = plugin_metas.iter().find(|m| {
+                    let prefixed = plugin_prefixed_id(m);
+                    m.id == only_id || prefixed == only_id
+                });
+                match matched {
+                    Some(m) => Some(plugin_prefixed_id(m)),
+                    None if registered.contains(&only_id) => Some(only_id.to_string()),
+                    None => None,
+                }
+            }
+            None => registered.contains(&only_id).then(|| only_id.to_string()),
+        };
+        let Some(resolved_only) = resolved_only else {
+            eprintln!(
+                "error: --only '{only_id}' matches no known check id (built-in or plugin) — check for a typo"
+            );
             return ExitCode::from(2);
-        }
-        signed.retain(|(issue, _sig)| issue.check_id == only_id);
+        };
+        signed.retain(|(issue, _sig)| issue.check_id == resolved_only);
     }
 
     // COMMON: [budgets] enforcement + --trend (CD-64 D2/D3). Both tally
@@ -1972,12 +2002,18 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // `respect_ignore: false` is deliberate: dist/build dirs are commonly
-    // gitignored, but the user explicitly named this directory, so ignore
-    // rules must not silently exclude files from it.
+    // `respect_ignore: true` (CD-95): the `ignore` crate never excludes an
+    // explicitly-passed walk root just because it (or an ancestor) matches
+    // a `.gitignore` pattern — only its *descendants* are filtered — so
+    // this already scans the named `--dist` directory in full even when
+    // `dist/` itself is gitignored, while still correctly skipping
+    // genuinely-nested ignored subdirectories inside it (a `coverage/`
+    // report or cache dir that happens to sit under the build output).
+    // A blanket `respect_ignore: false` here previously swept those
+    // nested ignored subtrees too, with no way to opt back out.
     let opts = DiscoveryOptions {
         extensions: vec!["html".to_string(), "htm".to_string()],
-        respect_ignore: false,
+        respect_ignore: true,
         include_hidden: true,
         skip_declaration_files: false,
     };
@@ -2192,6 +2228,19 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+/// The category-prefixed id a plugin check's findings actually carry at
+/// runtime (`Warning.SeoImgMissingAlt`), derived from its metadata the
+/// same way `plugins::run_plugins_with_sources` derives it for each
+/// `HostReport` (CD-96). Idempotent when `meta.id` is already dotted.
+fn plugin_prefixed_id(meta: &plugins::PluginCheckMeta) -> String {
+    if meta.id.contains('.') {
+        meta.id.clone()
+    } else {
+        let prefix = plugins::capitalize_category(&meta.category).unwrap_or("Warning");
+        format!("{prefix}.{}", meta.id)
     }
 }
 

@@ -80,6 +80,146 @@ fn plain_check_still_applies_normal_checks_to_dist_fixture_html() {
     );
 }
 
+fn node_present() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// CD-88: `verify --dist` must never invoke a non-output-mode plugin check
+// at all — not just filter its findings out afterward — so it can't leak
+// a synthetic host-error finding (or anything else) into verify output.
+// `TsOnly` below is scoped to `.ts` (never matches the `.html` dist tree)
+// and throws unconditionally if `run()` is ever called; its presence in
+// `cofferdam.toml` alongside a real output-mode HTML check must not
+// affect verify's output at all.
+#[test]
+fn verify_dist_never_invokes_non_output_mode_plugin_checks() {
+    if !node_present() {
+        return;
+    }
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let html_plugin = dir.path().join("plugin-html");
+    let ts_plugin = dir.path().join("plugin-ts");
+    std::fs::create_dir_all(&html_plugin).expect("mkdir plugin-html");
+    std::fs::create_dir_all(&ts_plugin).expect("mkdir plugin-ts");
+    std::fs::write(
+        html_plugin.join("index.mjs"),
+        r#"
+export default {
+  id: "HtmlOut",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "output-mode html check",
+  requiresTypes: false,
+  outputMode: true,
+  options: {},
+  files: { extensions: ["html", "htm"] },
+  run(file, ctx) {
+    ctx.report({ message: "html finding", span: { line: 1, column: 1, start_byte: 0, end_byte: 0 } });
+  },
+};
+"#,
+    )
+    .expect("write plugin-html");
+    std::fs::write(
+        ts_plugin.join("index.mjs"),
+        r#"
+export default {
+  id: "TsOnly",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "non-output-mode ts-only check that must never run under verify --dist",
+  requiresTypes: false,
+  outputMode: false,
+  options: {},
+  files: { extensions: ["ts"] },
+  run(file, ctx) {
+    throw new Error("should never run under verify --dist");
+  },
+};
+"#,
+    )
+    .expect("write plugin-ts");
+    std::fs::write(
+        dir.path().join("cofferdam.toml"),
+        "plugins = [\"./plugin-html\", \"./plugin-ts\"]\n",
+    )
+    .expect("write cofferdam.toml");
+    std::fs::create_dir_all(dir.path().join("dist")).expect("mkdir dist");
+    std::fs::write(
+        dir.path().join("dist/index.html"),
+        "<html><head><title>Home</title></head><body>ok</body></html>",
+    )
+    .expect("write dist/index.html");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["verify", "--dist", "dist", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam verify");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("Warning.HtmlOut"),
+        "the real output-mode check must still fire; stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("TsOnly") && !stdout.contains("PluginCrashed"),
+        "the non-output-mode check must never be invoked, so it can't leak a \
+         finding or a synthetic error; stdout={stdout}\nstderr={stderr}"
+    );
+}
+
+// CD-95: `verify --dist` must still scan the named directory in full even
+// when it's itself gitignored (the whole point of naming it explicitly),
+// but must not blanket-sweep genuinely-nested ignored subdirectories
+// inside it (a coverage report or cache dir that happens to sit under the
+// build output) — a prior blanket `respect_ignore: false` swept those too.
+#[test]
+fn verify_dist_skips_nested_gitignored_subdirectory_but_scans_the_rest() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git init");
+    std::fs::write(dir.path().join(".gitignore"), "dist/\ndist/coverage/\n")
+        .expect("write .gitignore");
+    std::fs::create_dir_all(dir.path().join("dist/coverage")).expect("mkdir");
+    std::fs::write(
+        dir.path().join("dist/index.html"),
+        "<html><head><title>Home</title></head><body>ok</body></html>",
+    )
+    .expect("write dist/index.html");
+    std::fs::write(
+        dir.path().join("dist/coverage/report.html"),
+        "<html><body>coverage noise</body></html>",
+    )
+    .expect("write dist/coverage/report.html");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["verify", "--dist", "dist", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam verify");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("dist/index.html") || stdout.contains(r"dist\\index.html"),
+        "the explicitly-named dist root must still be scanned even though dist/ is gitignored; stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("coverage"),
+        "a nested gitignored subdirectory inside dist must not be swept; stdout={stdout}"
+    );
+}
+
 // A missing --dist directory (typo, renamed build output, a build step
 // that silently never ran) must be a hard error — "0 files found, exit
 // 0" would make a broken CI pipeline look like a passing verify gate.

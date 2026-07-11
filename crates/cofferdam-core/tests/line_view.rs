@@ -302,3 +302,85 @@ fn flags_compose_on_a_single_line() {
     assert!(l.is_pragma, "vite-ignore on line");
     assert!(l.is_string_literal, "string on line");
 }
+
+// ============================================================
+// CD-100: string_literal_ranges is span-aware, unlike the whole-line
+// is_string_literal flag.
+// ============================================================
+
+#[test]
+fn string_literal_ranges_covers_only_the_literal_span() {
+    let view = view_for(r#"const src = "/x.png"; const tag = "<img>";"#);
+    let lines = collect(&view);
+    assert_eq!(lines.len(), 1);
+    let l = &lines[0];
+    assert!(l.is_string_literal, "whole-line flag still set");
+    assert_eq!(l.string_literal_ranges.len(), 2, "two literals on the line");
+    let (s0, e0) = l.string_literal_ranges[0];
+    assert_eq!(&l.text[s0 as usize..e0 as usize], r#""/x.png""#);
+    let (s1, e1) = l.string_literal_ranges[1];
+    assert_eq!(&l.text[s1 as usize..e1 as usize], r#""<img>""#);
+}
+
+#[test]
+fn string_literal_ranges_excludes_non_literal_text_sharing_the_line() {
+    // The ticket's repro: a tag sharing a line with a string-valued
+    // attribute must not have the tag portion counted as a literal
+    // range, even though is_string_literal is true for the whole line.
+    let view = view_for(r#"const html = tag + "/x.png";"#);
+    let lines = collect(&view);
+    let l = &lines[0];
+    let (s, e) = l.string_literal_ranges[0];
+    let literal_text = &l.text[s as usize..e as usize];
+    assert_eq!(literal_text, r#""/x.png""#);
+    assert!(
+        !l.text[..s as usize].is_empty(),
+        "non-literal prefix exists and is outside the range"
+    );
+}
+
+#[test]
+fn string_literal_ranges_empty_when_no_literal() {
+    let view = view_for("const a = 1;");
+    let lines = collect(&view);
+    assert!(lines[0].string_literal_ranges.is_empty());
+}
+
+#[test]
+fn string_literal_ranges_clip_before_crlf_not_after() {
+    // A multi-line template literal on a CRLF source: the interior/
+    // continuation lines are fully covered by the literal, so a naive
+    // clip against the '\n'-relative line end (rather than the
+    // CR-stripped end `LineView.text` actually exposes) would emit a
+    // range end one byte past `text.len()` on those lines.
+    let view = view_for("const t = `line one\r\nline two\r\nline three`;\r\n");
+    let lines = collect(&view);
+    assert_eq!(lines.len(), 4, "3 content lines + trailing empty");
+
+    for l in &lines[..3] {
+        assert!(
+            !l.string_literal_ranges.is_empty(),
+            "line {} should have a literal range",
+            l.line_no
+        );
+        for &(s, e) in &l.string_literal_ranges {
+            assert!(
+                (e as usize) <= l.text.len(),
+                "line {}: range end {e} must not exceed text.len() {} (text: {:?})",
+                l.line_no,
+                l.text.len(),
+                l.text
+            );
+            let _ = &l.text[s as usize..e as usize]; // must not panic
+        }
+    }
+}
+
+#[test]
+fn plain_lines_have_no_string_literal_ranges() {
+    let lines: Vec<_> = cofferdam_core::Lines::plain("some\ntext").collect();
+    for l in &lines {
+        assert!(l.string_literal_ranges.is_empty());
+        assert!(!l.is_string_literal);
+    }
+}

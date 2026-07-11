@@ -10,7 +10,11 @@
 // - `isDocComment` — a JSDoc-style block (`/** ... */`) overlaps. Implies
 //   `isComment`.
 // - `isStringLiteral` — a `StringLiteral` or `TemplateLiteral` span
-//   overlaps this line.
+//   overlaps this line *anywhere*. This is a whole-line flag, not a
+//   span-level one: `<img src="/x.png" />` flags the entire line,
+//   tag included, because a literal touches it somewhere (CD-100).
+//   Use `stringLiteralRanges` to know *where* on the line a literal
+//   sits instead of just whether one exists.
 // - `isJsxText` — JSX text content overlaps this line. Filed as cd-0ne;
 //   present in the SDK so plugins can target it as soon as the engine
 //   ships the flag.
@@ -33,6 +37,16 @@ export interface LineView {
   readonly isComment: boolean;
   readonly isDocComment: boolean;
   readonly isStringLiteral: boolean;
+  /**
+   * Byte ranges `[start, end)` *within this line* (relative to `text`,
+   * after CRLF stripping) covered by a string/template literal, clipped
+   * to the line's own bounds. The span-aware counterpart to
+   * `isStringLiteral` (CD-100) — lets a check skip only the literal
+   * text on a line instead of the whole line. Empty when the line has
+   * no literal, or for languages with no literal-span data (HTML,
+   * Astro).
+   */
+  readonly stringLiteralRanges: ReadonlyArray<readonly [number, number]>;
   readonly isJsxText: boolean;
   readonly isPragma: boolean;
   readonly isTag: boolean;

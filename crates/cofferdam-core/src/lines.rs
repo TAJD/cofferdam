@@ -23,7 +23,12 @@
 //! - `is_doc_comment` — a JSDoc-style block (`/** ... */`) overlaps.
 //!   Implies `is_comment`.
 //! - `is_string_literal` — a `StringLiteral` or `TemplateLiteral` span
-//!   overlaps this line.
+//!   overlaps this line **anywhere** — this is a whole-line flag, not a
+//!   span-level one (CD-100). A line with `<img src="/x.png" />` is
+//!   entirely flagged, tag included, because a literal touches it
+//!   somewhere. Checks that need to know *where* on the line a literal
+//!   sits (e.g. to skip only the literal text, not the whole line) should
+//!   use [`LineView::string_literal_ranges`] instead.
 //! - `is_pragma` — an annotation-style comment overlaps. Pragmas are
 //!   compiler-hint comments like `/* #__PURE__ */`, `/* @vite-ignore */`,
 //!   `/* webpackChunkName: "x" */` — *not* JSDoc and *not* legal
@@ -36,7 +41,7 @@ use oxc_span::Span as OxcSpan;
 use oxc_syntax::scope::ScopeFlags;
 
 /// One line of source plus classification flags.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LineView<'a> {
     /// 1-based line number.
     pub line_no: u32,
@@ -51,6 +56,15 @@ pub struct LineView<'a> {
     /// scan via JSXAttributeValue (cd-0ne).
     pub is_jsx_text: bool,
     pub is_pragma: bool,
+    /// Byte ranges `[start, end)` *within this line* (relative to
+    /// `text`, after CRLF stripping) covered by a string/template
+    /// literal, clipped to the line's own bounds. Unlike
+    /// `is_string_literal` (which is true for the whole line if a
+    /// literal touches it anywhere — see CD-100), this lets a check
+    /// tell where on the line the literal actually sits, e.g. to avoid
+    /// skipping a non-literal match that shares the line with one.
+    /// Empty for lines built via [`Lines::plain`].
+    pub string_literal_ranges: Vec<(u32, u32)>,
     /// 0-based byte offset of the start of this line in the full source
     /// text. Drives [`span_for`](Self::span_for) — kept public so AST
     /// checks that have already computed offsets can build spans
@@ -81,10 +95,32 @@ pub struct Lines<'a> {
     /// Byte offset of the start of each line. `len() == number of lines`.
     line_starts: Vec<u32>,
     flags: Vec<LineFlags>,
+    /// Per-line list of string/template literal byte ranges, relative to
+    /// each line's own start (CD-100). Parallel to `flags`/`line_starts`.
+    literal_ranges: Vec<Vec<(u32, u32)>>,
     idx: usize,
 }
 
 impl<'a> Lines<'a> {
+    /// Build a [`Lines`] iterator with every classification flag false —
+    /// for languages with no oxc AST to derive flags from (currently
+    /// `.astro`, CD-93). Plugin authors doing Pattern-A line-walk checks
+    /// (`file.lines()`) still get real line text and byte-accurate spans;
+    /// only comment/string/JSX-text detection is unavailable.
+    pub fn plain(text: &'a str) -> Self {
+        let line_starts = compute_line_starts(text);
+        let n = line_starts.len().max(1);
+        let flags = vec![LineFlags::default(); n];
+        let literal_ranges = vec![Vec::new(); n];
+        Self {
+            text,
+            line_starts,
+            flags,
+            literal_ranges,
+            idx: 0,
+        }
+    }
+
     /// Build a [`Lines`] iterator with classification flags populated
     /// from `program`'s comment table + AST walk. Public so the CLI
     /// plugin host can build line views without going through the
@@ -92,6 +128,7 @@ impl<'a> Lines<'a> {
     pub fn build(text: &'a str, program: &'a oxc_ast::ast::Program<'a>) -> Self {
         let line_starts = compute_line_starts(text);
         let mut flags = vec![LineFlags::default(); line_starts.len().max(1)];
+        let mut literal_ranges = vec![Vec::new(); line_starts.len().max(1)];
 
         for c in &program.comments {
             apply_comment(&line_starts, &mut flags, c);
@@ -104,6 +141,7 @@ impl<'a> Lines<'a> {
         literal.visit_program(program);
         for sp in literal.string_spans {
             apply_span(&line_starts, &mut flags, sp, |f| f.is_string_literal = true);
+            apply_span_ranges(&line_starts, &mut literal_ranges, sp, text);
         }
         for sp in literal.jsx_text_spans {
             apply_span(&line_starts, &mut flags, sp, |f| f.is_jsx_text = true);
@@ -113,6 +151,7 @@ impl<'a> Lines<'a> {
             text,
             line_starts,
             flags,
+            literal_ranges,
             idx: 0,
         }
     }
@@ -149,6 +188,7 @@ impl<'a> Iterator for Lines<'a> {
             is_string_literal: f.is_string_literal,
             is_jsx_text: f.is_jsx_text,
             is_pragma: f.is_pragma,
+            string_literal_ranges: self.literal_ranges[i].clone(),
             line_start: self.line_starts[i],
         })
     }
@@ -204,6 +244,42 @@ fn apply_span(
     for li in start_line..=end_line {
         if let Some(f) = flags.get_mut(li as usize) {
             set(f);
+        }
+    }
+}
+
+/// Record `span`, clipped to each line it overlaps, as a line-relative
+/// `(start, end)` byte range (CD-100) — the span-aware counterpart to
+/// `apply_span`'s whole-line boolean flag.
+fn apply_span_ranges(
+    line_starts: &[u32],
+    ranges: &mut [Vec<(u32, u32)>],
+    span: OxcSpan,
+    text: &str,
+) {
+    let start_line = byte_to_line(line_starts, span.start);
+    let last_byte = span.end.saturating_sub(1).max(span.start);
+    let end_line = byte_to_line(line_starts, last_byte);
+    for li in start_line..=end_line {
+        let Some(bucket) = ranges.get_mut(li as usize) else {
+            continue;
+        };
+        let line_start = line_starts[li as usize];
+        let mut line_end = line_starts
+            .get(li as usize + 1)
+            .map(|&s| s.saturating_sub(1))
+            .unwrap_or(text.len() as u32);
+        // `LineView.text` additionally strips a trailing '\r' (CRLF line
+        // endings) beyond the '\n'-relative `line_end` computed above —
+        // match that here so a range ending at the true line end never
+        // points one byte past `text.len()` on a CRLF source.
+        if line_end > line_start && text.as_bytes().get(line_end as usize - 1) == Some(&b'\r') {
+            line_end -= 1;
+        }
+        let clipped_start = span.start.max(line_start);
+        let clipped_end = span.end.min(line_end);
+        if clipped_start < clipped_end {
+            bucket.push((clipped_start - line_start, clipped_end - line_start));
         }
     }
 }

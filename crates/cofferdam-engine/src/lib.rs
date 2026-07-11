@@ -853,6 +853,28 @@ impl Engine {
             t.record_phase("finalize_b", finalize_b_start.elapsed());
         }
 
+        // Per-glob `disabled` overrides (cd-97): `run()` call sites already
+        // skip a disabled check per-file (cd-m5tu), but finalize-emitted
+        // checks (OrphanExport, DeadExport, ImportCycle, etc.) run once over
+        // the whole corpus with no per-file gate, so a `disabled = true`
+        // block previously had no effect on their findings. Apply it here,
+        // post-hoc, keyed on each issue's own file. Cheap no-op when the
+        // project has no `[[overrides]]` at all.
+        if !self.overrides.is_empty() {
+            issues.retain(|issue| {
+                let disabled = self
+                    .checks
+                    .iter()
+                    .find(|c| c.meta().id == issue.check_id)
+                    .is_some_and(|check| {
+                        let file_key = path_key(&issue.file);
+                        self.effective_options(&file_key, &issue.check_id, check.meta().options)
+                            .0
+                    });
+                !disabled
+            });
+        }
+
         // Post-collection filter (cd-5t7): suppress findings based on
         // inline directives. The per-file suppression map is built by the
         // caller (from-scratch parses it fresh; incremental keeps a

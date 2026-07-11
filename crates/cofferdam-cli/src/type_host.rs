@@ -29,12 +29,43 @@ use serde::{Deserialize, Serialize};
 const HOST_SCRIPT: &str = include_str!("../scripts/type-host.mjs");
 const HOST_SCRIPT_NAME: &str = concat!("cofferdam-type-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
-/// CD-81: `type-host.mjs` imports `./type-host-core.mjs` (shared with
-/// the plugin host — see `plugins.rs::CORE_SCRIPT`) as a relative ESM
-/// specifier; the materialised copy must sit next to it under this
-/// exact, unversioned name.
+/// CD-81/CD-89: `type-host.mjs` imports `./type-host-core.mjs` (shared
+/// with the plugin host — see `plugins.rs::CORE_SCRIPT`) as a relative
+/// ESM specifier; the materialised copy must sit next to it under this
+/// exact name, inside the version-scoped directory `scripts_dir` builds
+/// (see `plugins.rs::scripts_dir` for why: an unversioned, flat temp
+/// path let two concurrently-running cofferdam versions race to
+/// overwrite each other's copy of this file).
 const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
 const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
+
+/// Mirrors `plugins.rs::scripts_dir` (including the per-user component,
+/// CD-89) — each materialiser ensures the same version- and user-scoped
+/// directory independently rather than sharing state across the two
+/// call sites.
+fn scripts_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "cofferdam-scripts-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        current_user_tag()
+    ))
+}
+
+/// Mirrors `plugins.rs::current_user_tag`.
+fn current_user_tag() -> String {
+    let raw = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let sanitized: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
 
 /// Materialise the embedded host script to the OS temp dir on first
 /// call, reuse the path on subsequent calls in this process. Same
@@ -42,13 +73,16 @@ const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
 fn materialise_host_script() -> std::io::Result<PathBuf> {
     static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
     let result = CACHED.get_or_init(|| {
+        let dir = scripts_dir();
+        std::fs::create_dir_all(&dir)?;
+
         // See `plugins.rs::materialise_host_script` — both host scripts
         // share this file and each ensures it's present so either one
         // can be spawned independently of the other.
-        let core_path = std::env::temp_dir().join(CORE_SCRIPT_NAME);
+        let core_path = dir.join(CORE_SCRIPT_NAME);
         std::fs::write(&core_path, CORE_SCRIPT)?;
 
-        let path = std::env::temp_dir().join(HOST_SCRIPT_NAME);
+        let path = dir.join(HOST_SCRIPT_NAME);
         std::fs::write(&path, HOST_SCRIPT)?;
         Ok(path)
     });

@@ -53,12 +53,52 @@ use serde::{Deserialize, Serialize};
 const HOST_SCRIPT: &str = include_str!("../scripts/plugin-host.mjs");
 const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
-/// CD-81: `plugin-host.mjs` imports `./type-host-core.mjs` (shared
+/// CD-81/CD-89: `plugin-host.mjs` imports `./type-host-core.mjs` (shared
 /// ts-morph plumbing with `type_host.rs`'s worker) as a relative ESM
 /// specifier, so the materialised copy must sit next to it under this
-/// exact, unversioned name — see `materialise_host_script`.
+/// exact name. The pair lives inside a version-scoped subdirectory (see
+/// `materialise_host_script` / `scripts_dir`) rather than flat in the OS
+/// temp dir: two different cofferdam versions running concurrently on
+/// the same machine (e.g. two projects each on their own npm-installed
+/// version) previously raced to overwrite this one shared, unversioned
+/// path, so a host process could import a core module from a different
+/// build than the one that spawned it.
 const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
 const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
+
+/// Version- and user-scoped subdirectory of the OS temp dir that holds
+/// this build's materialised host + core scripts (CD-89). Shared by
+/// `plugins.rs` and `type_host.rs`, which each ensure it exists
+/// independently. The user component matters on a shared multi-user
+/// Linux box: the OS temp dir is commonly world-writable, so without it
+/// the first user to run on a given version would own the directory and
+/// every other user's `fs::write` into it would fail with `EACCES`.
+fn scripts_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "cofferdam-scripts-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        current_user_tag()
+    ))
+}
+
+/// Best-effort, filesystem-safe tag for the current user, read straight
+/// from the platform's conventional env var (no extra dependency for
+/// something this approximate). Falls back to a fixed placeholder when
+/// unset/empty/unusable so `scripts_dir` always returns a valid path.
+fn current_user_tag() -> String {
+    let raw = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let sanitized: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
 
 /// Wire version for the streamed manifest protocol (CD-33). Bump and
 /// document in `design/sdk-ast-wire.md` on any breaking change to the
@@ -151,6 +191,13 @@ struct ManifestLineView {
     is_doc_comment: bool,
     #[serde(rename = "isStringLiteral")]
     is_string_literal: bool,
+    /// CD-100: span-aware counterpart to `is_string_literal` — byte
+    /// ranges `[start, end)` relative to this line's own text, one per
+    /// literal that touches the line. Empty when the line has no
+    /// literal (or for languages/wire paths that only ever produce the
+    /// whole-line flag, e.g. HTML/Astro).
+    #[serde(rename = "stringLiteralRanges")]
+    string_literal_ranges: Vec<(u32, u32)>,
     #[serde(rename = "isJsxText")]
     is_jsx_text: bool,
     #[serde(rename = "isPragma")]
@@ -641,6 +688,7 @@ pub fn run_plugins_with_sources(
                                     is_comment: lv.is_comment,
                                     is_doc_comment: false,
                                     is_string_literal: false,
+                                    string_literal_ranges: Vec::new(),
                                     is_jsx_text: false,
                                     is_pragma: false,
                                     is_tag: lv.is_tag,
@@ -663,6 +711,7 @@ pub fn run_plugins_with_sources(
                                 is_comment: lv.is_comment,
                                 is_doc_comment: lv.is_doc_comment,
                                 is_string_literal: lv.is_string_literal,
+                                string_literal_ranges: lv.string_literal_ranges.clone(),
                                 is_jsx_text: lv.is_jsx_text,
                                 is_pragma: lv.is_pragma,
                                 is_tag: false,
@@ -676,18 +725,41 @@ pub fn run_plugins_with_sources(
                         let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
                         (line_views, Some(ast))
                     }
-                    // Rust, Astro, unrecognised: no whole-file parse
-                    // for plugins today (matches the engine's
-                    // catch-all — no built-in check declares these
-                    // languages for the plugin surface yet).
-                    Language::Rust | Language::Astro => (Vec::new(), None),
+                    // Astro has no oxc/tree-sitter adapter to build an
+                    // AST from, but Pattern-A line-scan checks (CD-93)
+                    // still need real line text/spans rather than
+                    // silently iterating zero lines — `Lines::plain`
+                    // gives unclassified (all flags false) line views.
+                    Language::Astro => {
+                        let line_views = cofferdam_core::Lines::plain(text)
+                            .map(|lv| ManifestLineView {
+                                line_no: lv.line_no,
+                                text: lv.text.to_string(),
+                                is_comment: false,
+                                is_doc_comment: false,
+                                is_string_literal: false,
+                                string_literal_ranges: Vec::new(),
+                                is_jsx_text: false,
+                                is_pragma: false,
+                                is_tag: false,
+                                is_text: false,
+                                line_start: lv.line_start,
+                            })
+                            .collect();
+                        (line_views, None)
+                    }
+                    // Rust, unrecognised: no whole-file parse for
+                    // plugins today (matches the engine's catch-all —
+                    // no built-in check declares Rust for the plugin
+                    // surface yet).
+                    Language::Rust => (Vec::new(), None),
                 };
             // Resolve layer membership for this file. `None` → JSON `null`.
             let layer: Option<String> = layers_cfg
                 .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
             let record = ManifestFile {
                 kind: "file",
-                path: forward_slash(path),
+                path: forward_slash(&absolutize(path)),
                 text,
                 line_views,
                 layer,
@@ -799,9 +871,15 @@ pub fn run_plugins_with_sources(
     for m in malformed {
         issues.push(host_failed_issue(&format!("malformed stream record: {m}")));
     }
-    let text_index: BTreeMap<&Path, &str> = sources
+    // Keyed by the same `absolutize()` transform used when building each
+    // file's wire `path` (CD-99), so a report's echoed `file` — which is
+    // that same absolutized, forward-slashed string round-tripped through
+    // the host — looks itself up successfully instead of appearing
+    // "outside the analyzed file set" whenever the original discovery
+    // path was relative.
+    let text_index: BTreeMap<PathBuf, &str> = sources
         .iter()
-        .map(|(p, t)| (p.as_path(), t.as_str()))
+        .map(|(p, t)| (absolutize(p).into_owned(), t.as_str()))
         .collect();
 
     // Reject reports whose path is outside the scoped source set (cd-neav).
@@ -961,16 +1039,18 @@ pub fn run_plugins_with_sources(
 fn materialise_host_script() -> std::io::Result<PathBuf> {
     static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
     let result = CACHED.get_or_init(|| {
+        let dir = scripts_dir();
+        std::fs::create_dir_all(&dir)?;
+
         // Write the shared core module first — plugin-host.mjs's
         // `import "./type-host-core.mjs"` must resolve by the time the
-        // host script is spawned. Unversioned name (unlike the host
-        // script itself) because it's a static import specifier, not a
-        // path we control at spawn time; always overwritten for the
-        // same reason the host script is.
-        let core_path = std::env::temp_dir().join(CORE_SCRIPT_NAME);
+        // host script is spawned. The version-scoped directory (CD-89)
+        // keeps this from colliding with another cofferdam build's copy;
+        // always overwritten for the same reason the host script is.
+        let core_path = dir.join(CORE_SCRIPT_NAME);
         std::fs::write(&core_path, CORE_SCRIPT)?;
 
-        let path = std::env::temp_dir().join(HOST_SCRIPT_NAME);
+        let path = dir.join(HOST_SCRIPT_NAME);
         // Always overwrite — the embedded script changes when the CLI
         // is rebuilt. Compared to file-content-hash-named caching, this
         // is one extra write per process. Fine for a multi-second run.
@@ -1007,6 +1087,26 @@ fn parse_severity(s: &str) -> Option<Severity> {
 
 fn forward_slash(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
+}
+
+/// `SourceFile.path` is documented (check-sdk's `ast.d.ts`) as "Absolute
+/// path as cofferdam discovered it" — but discovery yields whatever form
+/// the CLI's target argument took, so a relative target (`cofferdam check
+/// app`, the common case) previously produced relative wire paths,
+/// silently breaking any plugin author's path-prefix logic that trusted
+/// the doc (CD-99). Absolutizing here makes the wire's `path` field match
+/// its documented contract; existing glob-based `pathPatterns` are
+/// unaffected since `globMatch`'s `**/`-prefix fallback already matches
+/// at any path depth, absolute or relative.
+fn absolutize(path: &Path) -> std::borrow::Cow<'_, Path> {
+    if path.is_absolute() {
+        std::borrow::Cow::Borrowed(path)
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => std::borrow::Cow::Owned(cwd.join(path)),
+            Err(_) => std::borrow::Cow::Borrowed(path),
+        }
+    }
 }
 
 /// Serialise one NDJSON record and write it (plus a trailing newline) to

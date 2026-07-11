@@ -368,6 +368,55 @@ fn discover_excludes_hidden_directories() {
 }
 
 // ============================================================
+// Ignore-file precedence over extension filtering (cd-103)
+// ============================================================
+
+#[test]
+fn discover_respects_gitignore_for_matching_extension() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let root = temp_dir.path();
+
+    // .gitignore is only honored inside a git worktree.
+    std::process::Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(root)
+        .status()
+        .expect("git init");
+    fs::write(root.join(".gitignore"), "*.test.ts\n").unwrap();
+    fs::write(root.join("a.test.ts"), "").unwrap();
+    fs::write(root.join("a.ts"), "").unwrap();
+
+    let opts = DiscoveryOptions::default();
+    let files = discover(&[root], &opts).unwrap();
+
+    let names: Vec<String> = files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_string))
+        .collect();
+    assert_eq!(names, vec!["a.ts".to_string()]);
+}
+
+#[test]
+fn discover_respects_cofferdamignore_for_matching_extension() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let root = temp_dir.path();
+
+    fs::write(root.join(".cofferdamignore"), "*.probe.ts\n").unwrap();
+    fs::write(root.join("a.probe.ts"), "").unwrap();
+    fs::write(root.join("a.ts"), "").unwrap();
+
+    let opts = DiscoveryOptions::default();
+    let files = discover(&[root], &opts).unwrap();
+
+    let names: Vec<String> = files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_string))
+        .collect();
+    assert_eq!(names, vec!["a.ts".to_string()]);
+}
+
+// ============================================================
 // Empty input
 // ============================================================
 

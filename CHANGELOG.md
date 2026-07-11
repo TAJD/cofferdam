@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- File-level `.gitignore` / `.cofferdamignore` patterns targeting a cofferdam-managed extension (`.ts`, `.tsx`, `.rs`, `.astro`, `.html`, etc.) were silently ignored — the extension whitelist used for discovery was implemented as an `ignore`-crate `Override`, which takes precedence over ignore-file exclusion by design, so any file matching an allowed extension bypassed `.gitignore`/`.cofferdamignore` entirely. Directory-level rules (`dist/`, `node_modules/`) were unaffected. Discovery now applies ignore rules first and filters by extension afterward (CD-103).
+
 ## [0.3.8] - 2026-07-11
 
 ### Added

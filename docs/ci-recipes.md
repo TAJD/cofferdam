@@ -12,6 +12,7 @@ Drop-in workflows for the major CI systems. Each recipe runs `cofferdam check`, 
 | AI-agent-friendly output for review bots | [§4 Robot mode](#4-robot-mode-for-ai-review-bots) |
 | Faster builds via caching | [§5 Caching](#5-caching) |
 | Findings on the PR + Security tab via SARIF | [§6 SARIF upload](#6-sarif-upload-to-github-code-scanning) |
+| Catching regressions in built HTML output | [§7 verify --dist](#_7-verifying-build-output-verify-dist) |
 
 Each recipe is shown for GitHub Actions first because it's the most common; GitLab / CircleCI / Drone equivalents are at the bottom.
 
@@ -196,6 +197,25 @@ Notes:
 - For private repos, GitHub Code Scanning requires GitHub Advanced Security; public repos get it for free.
 
 If you want the gate exit code to also fail the workflow (in addition to driving alerts), drop `continue-on-error: true` and accept that the SARIF upload step won't run on red builds — or add a separate `cofferdam check` step (no `--format=sarif`) before the SARIF emitter and let the upload step run with `if: always()`.
+
+### 7. Verifying build output (`verify --dist`)
+
+`cofferdam check` never looks at build output — [`cofferdam verify
+--dist`](/verify-dist) is a separate, opt-in subcommand for catching
+regressions that only exist in *rendered* HTML (a templating bug that
+duplicates a `<title>` across routes, a build step that drops `lang` from
+`<html>`). Run it as its own step, after the build, pointed at the build
+output directory:
+
+```yaml
+      - run: npm run build
+      - run: npx --yes @cofferdam/cofferdam verify --dist dist/
+```
+
+It only runs checks explicitly tagged output-mode-eligible (see
+[Verifying built output](/verify-dist)), so it's safe to add alongside a
+normal `cofferdam check` step without double-reporting the same finding
+twice.
 
 ## GitLab CI
 

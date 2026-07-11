@@ -31,7 +31,7 @@ const META: CheckMeta = CheckMeta {
     category: Category::Warning,
     base_priority: 12,
     default_severity: Severity::Medium,
-    explanation: "The document's <html> element has no `lang` attribute, so assistive technology and search engines can't determine the page's language.",
+    explanation: "The document's `<html>` element has no `lang` attribute, so assistive technology and search engines can't determine the page's language.",
     body: include_str!("../../docs/Html.MissingLangAttribute.md"),
     requires_types: false,
     consistency: false,

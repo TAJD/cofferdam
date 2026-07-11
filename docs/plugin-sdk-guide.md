@@ -162,6 +162,9 @@ Key points:
 
 **Use case:** an SEO/accessibility check that flags `<img>` elements missing an
 `alt` attribute, without a `{...spread}` that might supply one dynamically.
+See [SEO-grade checking](/seo-checking) for this pattern composed with three
+others (cross-file HTML duplicates, type-aware literal resolution, and
+`verify --dist`) into one worked plugin.
 
 ```ts
 // src/index.ts
@@ -992,6 +995,11 @@ resolution, not a second file read. It returns
 Each `resolveLiteral` call is an in-process ts-morph query — same as
 `typeAt`, there's no Rust↔Node round trip per call to batch away; calling it
 once per candidate identifier in a loop is the expected usage pattern.
+
+This exact check ships as `SeoNonEmptyDescription` in
+[SEO-grade checking](/seo-checking#_4-type-aware-description-resolved-across-an-import),
+including the shorthand-property resolution gap you'll hit if the check
+matches `{ description }` instead of `description: description`.
 
 ## 8. Worked example: `examples-plugins/seo/` (CD-86)
 

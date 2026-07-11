@@ -17,6 +17,7 @@ cofferdam-core = { workspace = true }
 # IMPORTS/EXPORTS evidence so finalize-stage checks (OrphanExport
 # first) can run graph queries instead of joining flat tables.
 cofferdam-graph = { workspace = true }
+cofferdam-html = { workspace = true }
 cofferdam-rust = { workspace = true }
 globset = { workspace = true }
 ignore = { workspace = true }

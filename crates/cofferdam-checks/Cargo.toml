@@ -17,6 +17,7 @@ cofferdam-core = { workspace = true }
 # finalize. Once DeadExport / ImportCycle / LayerViolation migrate,
 # this dep covers them too.
 cofferdam-graph = { workspace = true }
+cofferdam-html = { workspace = true }
 cofferdam-rust = { workspace = true }
 globset = { workspace = true }
 smol_str = { workspace = true }

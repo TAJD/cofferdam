@@ -28,7 +28,11 @@ use ignore::WalkBuilder;
 /// (their template body isn't valid TS/JS), but the engine extracts
 /// import edges from the frontmatter fence so islands referenced only
 /// from `.astro` pages aren't flagged as orphan exports.
-pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "rs", "astro"];
+///
+/// `html`/`htm` land via CD-83 — the HTML adapter. Same per-language
+/// dispatch story as `rs`: `.html`/`.htm` files route only to checks
+/// declaring `Language::Html`.
+pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "rs", "astro", "html", "htm"];
 
 /// Configuration for the file walker. Controls which extensions are
 /// included, whether to honour `.gitignore` / `.cofferdamignore`, and

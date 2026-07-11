@@ -29,8 +29,8 @@
 
 use oxc_ast::ast::{
     ArrowFunctionExpression, BinaryExpression, CallExpression, Class, Function,
-    IdentifierReference, ImportDeclaration, MemberExpression, NewExpression, NumericLiteral,
-    ObjectExpression, Program, StringLiteral,
+    IdentifierReference, ImportDeclaration, JSXAttribute, JSXElement, JSXExpressionContainer,
+    MemberExpression, NewExpression, NumericLiteral, ObjectExpression, Program, StringLiteral,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_syntax::scope::ScopeFlags;
@@ -158,6 +158,15 @@ pub trait AstVisitor<'a> {
     fn visit_numeric_literal(&mut self, node: &'a NumericLiteral<'a>) -> Walk {
         Walk::Continue
     }
+    fn visit_jsx_element(&mut self, node: &'a JSXElement<'a>) -> Walk {
+        Walk::Continue
+    }
+    fn visit_jsx_attribute(&mut self, node: &'a JSXAttribute<'a>) -> Walk {
+        Walk::Continue
+    }
+    fn visit_jsx_expression_container(&mut self, node: &'a JSXExpressionContainer<'a>) -> Walk {
+        Walk::Continue
+    }
 }
 
 /// Kinds exposed via [`AstView::find_all`] and [`NodeRef`]. Deliberately
@@ -177,6 +186,9 @@ pub enum NodeKind {
     IdentifierReference,
     StringLiteral,
     NumericLiteral,
+    JSXElement,
+    JSXAttribute,
+    JSXExpressionContainer,
 }
 
 /// Borrowed reference to a discovered node, tagged by kind. Pattern-match
@@ -195,6 +207,9 @@ pub enum NodeRef<'a> {
     IdentifierReference(&'a IdentifierReference<'a>),
     StringLiteral(&'a StringLiteral<'a>),
     NumericLiteral(&'a NumericLiteral<'a>),
+    JSXElement(&'a JSXElement<'a>),
+    JSXAttribute(&'a JSXAttribute<'a>),
+    JSXExpressionContainer(&'a JSXExpressionContainer<'a>),
 }
 
 impl<'a> NodeRef<'a> {
@@ -217,6 +232,9 @@ impl<'a> NodeRef<'a> {
             Self::IdentifierReference(n) => n.span,
             Self::StringLiteral(n) => n.span,
             Self::NumericLiteral(n) => n.span,
+            Self::JSXElement(n) => n.span,
+            Self::JSXAttribute(n) => n.span,
+            Self::JSXExpressionContainer(n) => n.span,
         }
     }
 
@@ -237,6 +255,9 @@ impl<'a> NodeRef<'a> {
             Self::IdentifierReference(_) => NodeKind::IdentifierReference,
             Self::StringLiteral(_) => NodeKind::StringLiteral,
             Self::NumericLiteral(_) => NodeKind::NumericLiteral,
+            Self::JSXElement(_) => NodeKind::JSXElement,
+            Self::JSXAttribute(_) => NodeKind::JSXAttribute,
+            Self::JSXExpressionContainer(_) => NodeKind::JSXExpressionContainer,
         }
     }
 }
@@ -328,6 +349,25 @@ impl<'a> Visit<'a> for FindAllCollector<'a> {
             self.found.push(NodeRef::NumericLiteral(unsafe_extend(it)));
         }
         walk::walk_numeric_literal(self, it);
+    }
+    fn visit_jsx_element(&mut self, it: &JSXElement<'a>) {
+        if self.kind == NodeKind::JSXElement {
+            self.found.push(NodeRef::JSXElement(unsafe_extend(it)));
+        }
+        walk::walk_jsx_element(self, it);
+    }
+    fn visit_jsx_attribute(&mut self, it: &JSXAttribute<'a>) {
+        if self.kind == NodeKind::JSXAttribute {
+            self.found.push(NodeRef::JSXAttribute(unsafe_extend(it)));
+        }
+        walk::walk_jsx_attribute(self, it);
+    }
+    fn visit_jsx_expression_container(&mut self, it: &JSXExpressionContainer<'a>) {
+        if self.kind == NodeKind::JSXExpressionContainer {
+            self.found
+                .push(NodeRef::JSXExpressionContainer(unsafe_extend(it)));
+        }
+        walk::walk_jsx_expression_container(self, it);
     }
 }
 
@@ -440,6 +480,30 @@ impl<'a, 'v, V: AstVisitor<'a> + ?Sized> Visit<'a> for WalkAdapter<'v, V> {
             Walk::Continue
         ) {
             walk::walk_numeric_literal(self, it);
+        }
+    }
+    fn visit_jsx_element(&mut self, it: &JSXElement<'a>) {
+        if matches!(
+            self.inner.visit_jsx_element(unsafe_extend(it)),
+            Walk::Continue
+        ) {
+            walk::walk_jsx_element(self, it);
+        }
+    }
+    fn visit_jsx_attribute(&mut self, it: &JSXAttribute<'a>) {
+        if matches!(
+            self.inner.visit_jsx_attribute(unsafe_extend(it)),
+            Walk::Continue
+        ) {
+            walk::walk_jsx_attribute(self, it);
+        }
+    }
+    fn visit_jsx_expression_container(&mut self, it: &JSXExpressionContainer<'a>) {
+        if matches!(
+            self.inner.visit_jsx_expression_container(unsafe_extend(it)),
+            Walk::Continue
+        ) {
+            walk::walk_jsx_expression_container(self, it);
         }
     }
 }

@@ -67,6 +67,9 @@ const VISITOR_METHODS = {
   ObjectExpression: "visitObjectExpression",
   MemberExpression: "visitMemberExpression",
   IdentifierReference: "visitIdentifierReference",
+  JSXElement: "visitJSXElement",
+  JSXAttribute: "visitJSXAttribute",
+  JSXExpressionContainer: "visitJSXExpressionContainer",
 };
 
 // State for the streaming run — populated by the "header" record,
@@ -558,6 +561,25 @@ function buildAstView(wire) {
       }
       case "IdentifierReference": {
         out.name = w.name;
+        break;
+      }
+      case "JSXElement": {
+        out.tagName = w.tagName;
+        out.selfClosing = !!w.selfClosing;
+        Object.defineProperty(out, "attributes", {
+          enumerable: true,
+          get: () => (w.attributeIdxs ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "JSXAttribute": {
+        out.name = w.name ?? undefined;
+        out.value = w.value ?? undefined;
+        out.isExpression = !!w.isExpression;
+        out.isSpread = !!w.isSpread;
+        break;
+      }
+      case "JSXExpressionContainer": {
         break;
       }
     }

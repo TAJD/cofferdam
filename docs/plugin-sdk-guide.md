@@ -25,11 +25,11 @@ Three check shapes cover almost every rule class:
 Pattern A is the fastest and has the widest applicability. Reach for B or C
 only when the rule cannot be expressed on individual lines.
 
-The `AstView` surface exposes nine node kinds today: `Program`,
+The `AstView` surface exposes twelve node kinds today: `Program`,
 `CallExpression`, `ImportDeclaration`, `Function`, `ArrowFunctionExpression`,
-`Class`, `ObjectExpression`, `MemberExpression`, `IdentifierReference`. New
-kinds are additive — minor releases may add them without breaking existing
-plugins.
+`Class`, `ObjectExpression`, `MemberExpression`, `IdentifierReference`,
+`JSXElement`, `JSXAttribute`, `JSXExpressionContainer`. New kinds are
+additive — minor releases may add them without breaking existing plugins.
 
 ## 2. Pattern examples
 
@@ -155,6 +155,50 @@ Key points:
 - For `CallExpression` patterns (e.g. detecting direct `fetch(...)` calls),
   replace `findAll("ImportDeclaration")` with `findAll("CallExpression")` and
   inspect `node.callee`.
+
+#### JSX findAll — flag `<img>` with no `alt`
+
+**Use case:** an SEO/accessibility check that flags `<img>` elements missing an
+`alt` attribute, without a `{...spread}` that might supply one dynamically.
+
+```ts
+// src/index.ts
+import { defineCheck, Category, Severity } from "@cofferdam/check-sdk";
+
+export default defineCheck({
+  id: "ImgMissingAlt",
+  category: Category.Warning,
+  basePriority: 10,
+  defaultSeverity: Severity.Medium,
+  explanation: "An <img> element has no `alt` attribute.",
+  files: { extensions: ["tsx", "jsx"] },
+  run(file, ctx) {
+    if (!file.ast) return;
+    for (const el of file.ast.findAll("JSXElement")) {
+      if (el.tagName !== "img") continue;
+      const hasAlt = el.attributes.some((a) => a.isSpread || a.name === "alt");
+      if (!hasAlt) {
+        ctx.report({ message: "<img> is missing an `alt` attribute", span: el.span });
+      }
+    }
+  },
+});
+```
+
+Key points:
+
+- `findAll("JSXElement")` returns `readonly JSXElementNode[]`. `tagName`
+  flattens member-expression tags too — `<Image.Src />` reports
+  `tagName === "Image.Src"`.
+- `el.attributes` is `readonly JSXAttributeNode[]`, one entry per attribute
+  item on the opening tag — including `{...spread}` attributes. Check
+  `a.isSpread` before treating `a.name === undefined` as "no name given";
+  a spread might supply the attribute you're looking for at runtime, so
+  most checks should treat a spread as "can't tell, don't flag."
+- `a.value` is the literal string for `name="value"`, and `undefined` with
+  `a.isExpression === true` for `name={expr}` — the check above only cares
+  whether `alt` is present at all, but a stricter check could also flag
+  `alt={undefined}` via `findAll("JSXExpressionContainer")`.
 
 ### Pattern C — stateful walk
 

@@ -23,6 +23,7 @@ import type {
 } from "./check-context.js";
 import type { LineView } from "./line-view.js";
 import type { Span } from "./span.js";
+import type { AstNode, AstView, AstVisitor, NodeKind, Walk } from "./ast.js";
 
 // ---- shapes the napi addon hands us ---------------------------------
 
@@ -63,6 +64,27 @@ export interface PluginRunInput {
   readonly lineViews: readonly NativeLineView[];
   /** Layer name from `cofferdam.invariants.toml` `[layers]`. `null` when not in any layer. */
   readonly layer: string | null;
+  /**
+   * Flat-array AST wire payload (see `design/sdk-ast-wire.md` and
+   * `crates/cofferdam-cli/src/ast_wire.rs`). `undefined`/`null` when the
+   * caller has no parsed AST for this file (e.g. a non-JS/TS source).
+   */
+  readonly ast?: AstWireInput | null;
+}
+
+/** One flat-array node in the AST wire payload. Per-kind extras are
+ * flattened onto the object (see `WireExtras` in `ast_wire.rs`). */
+export interface AstWireNode {
+  readonly kind: NodeKind;
+  readonly span: Span;
+  readonly firstChild: number;
+  readonly nextSibling: number;
+  readonly [extra: string]: unknown;
+}
+
+export interface AstWireInput {
+  readonly rootIdx: number;
+  readonly nodes: readonly AstWireNode[];
 }
 
 // ---- runtime construction --------------------------------------------
@@ -87,11 +109,188 @@ function buildLineView(native: NativeLineView): LineView {
   };
 }
 
+// Map from wire-side AST node kind to the visitor method name plugins
+// implement. Kept in sync by hand with `VISITOR_METHODS` in
+// `crates/cofferdam-cli/scripts/plugin-host.mjs` — that script is the
+// production NDJSON-subprocess host and is deliberately self-contained
+// (no import of this package), so the two copies can't share source.
+const VISITOR_METHODS: Partial<Record<NodeKind, keyof AstVisitor>> = {
+  Program: "visitProgram",
+  CallExpression: "visitCallExpression",
+  ImportDeclaration: "visitImportDeclaration",
+  Function: "visitFunction",
+  ArrowFunctionExpression: "visitArrowFunctionExpression",
+  Class: "visitClass",
+  ObjectExpression: "visitObjectExpression",
+  MemberExpression: "visitMemberExpression",
+  IdentifierReference: "visitIdentifierReference",
+  JSXElement: "visitJSXElement",
+  JSXAttribute: "visitJSXAttribute",
+  JSXExpressionContainer: "visitJSXExpressionContainer",
+};
+
+/**
+ * Reconstruct a typed {@link AstView} from the flat-array wire payload
+ * (see `design/sdk-ast-wire.md`). Mirrors `buildAstView` in
+ * `crates/cofferdam-cli/scripts/plugin-host.mjs` — both must be kept in
+ * sync when a new `NodeKind` is added.
+ */
+export function buildAstView(wire: AstWireInput): AstView {
+  const { rootIdx, nodes } = wire;
+  const built = new Array<AstNode | null>(nodes.length).fill(null);
+
+  function get(idx: number): AstNode | null {
+    if (idx < 0 || idx >= nodes.length) return null;
+    const cached = built[idx];
+    if (cached) return cached;
+    const w = nodes[idx]!;
+    const out: Record<string, unknown> = { kind: w.kind, span: w.span };
+    switch (w.kind) {
+      case "Program": {
+        Object.defineProperty(out, "body", {
+          enumerable: true,
+          get: () => collectChildren(idx),
+        });
+        break;
+      }
+      case "CallExpression": {
+        Object.defineProperty(out, "callee", {
+          enumerable: true,
+          get: () => get(w["calleeIdx"] as number),
+        });
+        Object.defineProperty(out, "arguments", {
+          enumerable: true,
+          get: () =>
+            ((w["argumentIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "ImportDeclaration": {
+        out["source"] = w["source"];
+        out["specifiers"] = w["specifiers"] ?? [];
+        break;
+      }
+      case "Function": {
+        out["name"] = w["name"] ?? undefined;
+        out["async"] = !!w["async"];
+        out["generator"] = !!w["generator"];
+        Object.defineProperty(out, "params", {
+          enumerable: true,
+          get: () => ((w["paramIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "ArrowFunctionExpression": {
+        out["async"] = !!w["async"];
+        out["expression"] = !!w["expression"];
+        Object.defineProperty(out, "params", {
+          enumerable: true,
+          get: () => ((w["paramIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "Class": {
+        out["name"] = w["name"] ?? undefined;
+        break;
+      }
+      case "ObjectExpression": {
+        Object.defineProperty(out, "properties", {
+          enumerable: true,
+          get: () =>
+            ((w["propertyIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "MemberExpression": {
+        out["property"] = w["property"] ?? undefined;
+        out["computed"] = !!w["computed"];
+        Object.defineProperty(out, "object", {
+          enumerable: true,
+          get: () => get(w["objectIdx"] as number),
+        });
+        break;
+      }
+      case "IdentifierReference": {
+        out["name"] = w["name"];
+        break;
+      }
+      case "JSXElement": {
+        out["tagName"] = w["tagName"];
+        out["selfClosing"] = !!w["selfClosing"];
+        Object.defineProperty(out, "attributes", {
+          enumerable: true,
+          get: () =>
+            ((w["attributeIdxs"] as number[]) ?? []).map(get).filter((n) => n !== null),
+        });
+        break;
+      }
+      case "JSXAttribute": {
+        out["name"] = w["name"] ?? undefined;
+        out["value"] = w["value"] ?? undefined;
+        out["isExpression"] = !!w["isExpression"];
+        out["isSpread"] = !!w["isSpread"];
+        break;
+      }
+      case "JSXExpressionContainer": {
+        break;
+      }
+    }
+    const node = out as unknown as AstNode;
+    built[idx] = node;
+    return node;
+  }
+
+  function collectChildren(idx: number): AstNode[] {
+    const out: AstNode[] = [];
+    let cursor = nodes[idx]?.firstChild ?? -1;
+    while (cursor >= 0) {
+      const node = get(cursor);
+      if (node) out.push(node);
+      cursor = nodes[cursor]!.nextSibling;
+    }
+    return out;
+  }
+
+  const indexByKind = new Map<NodeKind, number[]>();
+  for (let i = 0; i < nodes.length; i++) {
+    const k = nodes[i]!.kind;
+    let idxs = indexByKind.get(k);
+    if (!idxs) {
+      idxs = [];
+      indexByKind.set(k, idxs);
+    }
+    idxs.push(i);
+  }
+
+  return {
+    get root(): AstNode {
+      // rootIdx is always 0 (the Program node) for any non-empty wire.
+      return get(rootIdx) as AstNode;
+    },
+    findAll<K extends NodeKind>(kind: K) {
+      const idxs = indexByKind.get(kind) ?? [];
+      return idxs.map(get) as never;
+    },
+    walk(visitor: AstVisitor): void {
+      const visit = (idx: number): void => {
+        if (idx < 0) return;
+        const w = nodes[idx]!;
+        const methodName = VISITOR_METHODS[w.kind];
+        const fn = methodName ? visitor[methodName] : undefined;
+        const node = get(idx);
+        const decision: Walk = fn && node ? (fn as (n: AstNode) => Walk).call(visitor, node) : "continue";
+        if (decision !== "skip" && w.firstChild >= 0) visit(w.firstChild);
+        visit(w.nextSibling);
+      };
+      visit(rootIdx);
+    },
+  };
+}
+
 /**
  * Build the `SourceFile` shape a plugin's `run()` callback expects.
- * `ast` is `null` here — AST access lives behind a separate napi call
- * the loader can route through worker_threads in a follow-up bead. The
- * line-walk Pattern A checks (BrandCasing) work today.
+ * `ast` is `null` when `input.ast` is absent — full AST access requires
+ * the caller (loader / test harness) to supply the wire payload.
  */
 export function buildSourceFile(input: PluginRunInput) {
   const lineViews = input.lineViews.map(buildLineView);
@@ -118,7 +317,7 @@ export function buildSourceFile(input: PluginRunInput) {
       };
       return it;
     },
-    ast: null,
+    ast: input.ast ? buildAstView(input.ast) : null,
   };
 }
 

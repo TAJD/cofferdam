@@ -41,7 +41,7 @@ export default defineCheck({
   id: "SeoMissingMetadataExport",
   category: Category.Warning,
   basePriority: 12,
-  explanation: "Page component has no `metadata` or `generateMetadata` export.",
+  explanation: "A page component has no `metadata` or `generateMetadata` export, so it has no page title/description for search engines or social previews.",
   files: { extensions: ["ts", "tsx"], pathPatterns: ["**/page.ts", "**/page.tsx"] },
   run(file, ctx) {
     if (HAS_METADATA.test(file.text) || HAS_GENERATE_METADATA.test(file.text)) return;

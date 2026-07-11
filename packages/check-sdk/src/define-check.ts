@@ -87,6 +87,14 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
    * guard with `if (ctx.types)` rather than assuming presence.
    */
   readonly requiresTypes: boolean;
+  /**
+   * Whether this check is eligible to run against build-output files
+   * discovered by `cofferdam verify --dist` (CD-85). Defaults to
+   * `false` — a check must opt in explicitly to run in output mode. A
+   * check with `outputMode: true` still runs normally under `cofferdam
+   * check` too; this flag only gates eligibility for `verify`.
+   */
+  readonly outputMode: boolean;
   /** Two-pass consistency mode. */
   readonly consistency: boolean;
   readonly options: S;
@@ -133,6 +141,12 @@ export interface DefineCheckInput<S extends OptionsSchema> {
    * (ctx.types)` rather than assuming presence.
    */
   readonly requiresTypes?: boolean;
+  /**
+   * Whether this check is eligible to run against build-output files
+   * discovered by `cofferdam verify --dist` (CD-85). Defaults to
+   * `false`.
+   */
+  readonly outputMode?: boolean;
   readonly consistency?: boolean;
   /** Schema; defaults to `{}`. Inferred at the call site. */
   readonly options?: S;
@@ -194,6 +208,7 @@ export function defineCheck<const S extends OptionsSchema = {}>(
     explanation: input.explanation,
     body: input.body,
     requiresTypes: input.requiresTypes ?? false,
+    outputMode: input.outputMode ?? false,
     consistency: input.consistency ?? false,
     options: input.options ?? ({} as S),
     files: input.files,

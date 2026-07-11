@@ -326,7 +326,7 @@ function reportTypeHostUnavailableOnce(reason) {
 // Response shape: {
 //   "checks": [{
 //     id, category, basePriority, defaultSeverity, explanation, body,
-//     requiresTypes, files,
+//     requiresTypes, outputMode, files,
 //     options: [{ name, kind, default, doc }]
 //   }],
 //   "errors": [...]
@@ -342,6 +342,7 @@ async function runMetadataMode(rec) {
     explanation: check.explanation ?? "",
     body: check.body ?? null,
     requiresTypes: check.requiresTypes ?? false,
+    outputMode: check.outputMode ?? false,
     files: check.files ?? null,
     options: check.options
       ? Object.entries(check.options).map(([name, spec]) => ({

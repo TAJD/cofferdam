@@ -923,6 +923,10 @@ started, the run exits with code 2 instead of silently skipping type
 information — the same gate `--fail-on-type-unavailable` already applies to
 built-in type-aware checks.
 
+`DefineCheckInput` also exposes `outputMode?: boolean` (defaulting to
+`false`, mirroring `requiresTypes`'s plumbing) — set it to opt a check
+into `cofferdam verify --dist`. See [Verifying built output](/verify-dist).
+
 ### Resolving imported literals (`ctx.types.resolveLiteral`)
 
 `ctx.types` also exposes `resolveLiteral(startByte, endByte)`, which resolves

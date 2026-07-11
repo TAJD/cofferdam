@@ -13,6 +13,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam`↴](#cofferdam)
 * [`cofferdam hello`↴](#cofferdam-hello)
 * [`cofferdam check`↴](#cofferdam-check)
+* [`cofferdam verify`↴](#cofferdam-verify)
 * [`cofferdam baseline`↴](#cofferdam-baseline)
 * [`cofferdam baseline write`↴](#cofferdam-baseline-write)
 * [`cofferdam baseline lint`↴](#cofferdam-baseline-lint)
@@ -40,6 +41,7 @@ TypeScript code-quality analyzer
 
 * `hello` — Print the project banner
 * `check` — Run all checks against files or directories. With no arguments, walks the current directory
+* `verify` — Opt-in check mode for built HTML output (CD-85). Discovers only the given output directory (e.g. `dist/`, `.next/`, `build/`) and runs ONLY checks explicitly tagged as output-mode-eligible (`Check::output_mode() == true`) against it — plain `cofferdam check` runs never see this tree and are completely unaffected
 * `baseline` — Manage the baseline of accepted findings. The baseline lets you drop cofferdam into an existing project without immediately failing CI on every pre-existing finding
 * `explain` — Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog
 * `init` — Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries so a new project has a working `cofferdam check` after one command. Refuses to overwrite an existing cofferdam.toml without `--force`
@@ -113,6 +115,43 @@ Run all checks against files or directories. With no arguments, walks the curren
 * `--time-checks` — Print a per-check + per-phase timing breakdown to stderr (discovery, run loop, pass 2, graph build, finalize A/B, and each check's accumulated time, sorted descending). Findings output (JSON/robot/text) is byte-identical with and without this flag (CD-34)
 * `--trend` — Append one `{date, category, count}` JSON row per category to `.cofferdam/trend.jsonl` (creating it if needed). Counts include baselined findings, same as `[budgets]` enforcement. Purely additive — no rendering or dashboard; pair with an external tool if you want a chart. (CD-64 D3)
 * `--only <CHECK_ID>` — Restrict output to findings from one check (dotted id, e.g. `Warning.IslandApiConvention`). Applied after plugin merge, so it covers both built-in and plugin-emitted findings; budgets, baseline, and the exit-code gate all see only this check's findings. Useful for a CI hook that gates on a single project-specific plugin check without turning on the full suite (CD-74). An id that matches no built-in check (and no plugins are configured) exits 2 rather than silently returning zero findings — a typo here must not make a CI gate pass
+
+
+
+## `cofferdam verify`
+
+Opt-in check mode for built HTML output (CD-85). Discovers only the given output directory (e.g. `dist/`, `.next/`, `build/`) and runs ONLY checks explicitly tagged as output-mode-eligible (`Check::output_mode() == true`) against it — plain `cofferdam check` runs never see this tree and are completely unaffected.
+
+Limitations (v1): CSR/SPA apps with no static HTML output are not supported (would need a headless-render step); findings are NOT mapped back to source locations (build-tool-specific, not attempted) — the reported location is always in the built HTML.
+
+**Usage:** `cofferdam verify [OPTIONS] --dist <DIR>`
+
+###### **Options:**
+
+* `--dist <DIR>` — Directory containing built HTML output to check
+* `--format <FORMAT>` — Output format. Default: text. With --robot and no explicit --format, defaults to json
+
+  Possible values:
+  - `text`:
+    Human-readable text grouped by category (default)
+  - `json`:
+    Machine-readable JSON. Stable schema, no ANSI, no decorative output
+  - `compact`:
+    Pipe-delimited line-per-finding format. One header line followed by one record per finding. Most token-economical — use when shovelling findings into an AI prompt
+  - `sarif`:
+    SARIF 2.1.0 — OASIS-standard JSON for static-analysis tools. Upload directly to GitHub Code Scanning via `github/codeql-action/upload-sarif`, or feed Azure DevOps, GitLab, SonarQube, the VS Code Sarif Viewer, etc
+
+* `--robot` — Default to a machine-readable format when `--format` is not set
+* `--pretty` — Pretty-print JSON output (only with `--format=json` / `--robot`)
+* `--fail-on <LEVEL>` — Severity threshold for the exit-1 gate
+
+  Default value: `medium`
+
+  Possible values: `info`, `low`, `medium`, `high`, `critical`
+
+* `--quiet` — Suppress informational output
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Used for `[plugins]` discovery only. Defaults to walking up from the current directory. Conflicts with `--no-config`
+* `--no-config` — Disable config-file discovery entirely
 
 
 

@@ -45,6 +45,7 @@ export default withMermaid(defineConfig({
           { text: 'Per-path overrides', link: '/overrides' },
           { text: 'Budgets & ratchet', link: '/budgets' },
           { text: 'Type-aware checks', link: '/type-aware-checks' },
+          { text: 'Verifying built output (verify --dist)', link: '/verify-dist' },
         ],
       },
       {

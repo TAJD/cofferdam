@@ -456,3 +456,63 @@ test("findAll(JSXElement) surfaces tag name, attributes, and spread marker", asy
     "tagName, selfClosing, literal/expression/spread attribute shapes all surface",
   );
 });
+
+// CD-85: `outputMode` round-trips through the plugin host's metadata mode
+// the same way `requiresTypes` does — asserted by spawning the real host
+// script (crates/cofferdam-cli/scripts/plugin-host.mjs) in metadata mode,
+// mirroring what `query_plugin_metadata` (Rust) does.
+function runMetadataMode(pluginPath) {
+  const hostScript = resolve(PKG, "..", "..", "crates", "cofferdam-cli", "scripts", "plugin-host.mjs");
+  const manifest = JSON.stringify({ mode: "metadata", cwd: dirname(pluginPath), plugins: [pluginPath] });
+  const out = execFileSync("node", [hostScript], { input: manifest, encoding: "utf8" });
+  return JSON.parse(out);
+}
+
+test("cd-85: outputMode: true round-trips through metadata mode", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const tmp = fs.mkdtempSync(resolve(os.tmpdir(), "cofferdam-metadata-"));
+  const path = resolve(tmp, "output-mode-check.mjs");
+  fs.writeFileSync(
+    path,
+    `import { defineCheck } from ${JSON.stringify(`file://${PKG.replace(/\\/g, "/")}/dist/index.js`)};\n` +
+      `export default defineCheck({\n` +
+      `  id: "OutputModeCheck",\n` +
+      `  category: "warning",\n` +
+      `  basePriority: 5,\n` +
+      `  explanation: "x",\n` +
+      `  outputMode: true,\n` +
+      `  run() {},\n` +
+      `});\n`,
+  );
+
+  const response = runMetadataMode(path);
+  assert.equal(response.checks.length, 1);
+  assert.equal(response.checks[0].outputMode, true);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("cd-85: outputMode defaults to false when omitted", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const tmp = fs.mkdtempSync(resolve(os.tmpdir(), "cofferdam-metadata-"));
+  const path = resolve(tmp, "default-check.mjs");
+  fs.writeFileSync(
+    path,
+    `import { defineCheck } from ${JSON.stringify(`file://${PKG.replace(/\\/g, "/")}/dist/index.js`)};\n` +
+      `export default defineCheck({\n` +
+      `  id: "DefaultOutputModeCheck",\n` +
+      `  category: "warning",\n` +
+      `  basePriority: 5,\n` +
+      `  explanation: "x",\n` +
+      `  run() {},\n` +
+      `});\n`,
+  );
+
+  const response = runMetadataMode(path);
+  assert.equal(response.checks.length, 1);
+  assert.equal(response.checks[0].outputMode, false);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});

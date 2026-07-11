@@ -695,6 +695,7 @@ mod tests {
             default_severity: "medium".to_string(),
             body: None,
             requires_types: false,
+            output_mode: false,
             options: Vec::new(),
             files: None,
         }];

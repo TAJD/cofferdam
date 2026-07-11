@@ -217,6 +217,45 @@ enum Cmd {
         #[arg(long, value_name = "CHECK_ID")]
         only: Option<String>,
     },
+    /// Opt-in check mode for built HTML output (CD-85). Discovers only the
+    /// given output directory (e.g. `dist/`, `.next/`, `build/`) and runs
+    /// ONLY checks explicitly tagged as output-mode-eligible
+    /// (`Check::output_mode() == true`) against it — plain `cofferdam
+    /// check` runs never see this tree and are completely unaffected.
+    ///
+    /// Limitations (v1): CSR/SPA apps with no static HTML output are not
+    /// supported (would need a headless-render step); findings are NOT
+    /// mapped back to source locations (build-tool-specific, not
+    /// attempted) — the reported location is always in the built HTML.
+    Verify {
+        /// Directory containing built HTML output to check.
+        #[arg(long, value_name = "DIR")]
+        dist: PathBuf,
+        /// Output format. Default: text. With --robot and no explicit
+        /// --format, defaults to json.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<OutputFormat>,
+        /// Default to a machine-readable format when `--format` is not set.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output (only with `--format=json` / `--robot`).
+        #[arg(long)]
+        pretty: bool,
+        /// Severity threshold for the exit-1 gate.
+        #[arg(long, value_enum, value_name = "LEVEL", default_value_t = FailOnLevel::Medium)]
+        fail_on: FailOnLevel,
+        /// Suppress informational output.
+        #[arg(long)]
+        quiet: bool,
+        /// Path to a `cofferdam.toml` config file. Used for `[plugins]`
+        /// discovery only. Defaults to walking up from the current
+        /// directory. Conflicts with `--no-config`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+    },
     /// Manage the baseline of accepted findings. The baseline lets you
     /// drop cofferdam into an existing project without immediately
     /// failing CI on every pre-existing finding.
@@ -722,6 +761,28 @@ fn main() -> ExitCode {
             time_checks,
             trend,
             only,
+        }),
+        Cmd::Verify {
+            dist,
+            format,
+            robot,
+            pretty,
+            fail_on,
+            quiet,
+            config,
+            no_config,
+        } => run_verify(VerifyArgs {
+            dist,
+            format: format.unwrap_or(if robot {
+                OutputFormat::Json
+            } else {
+                OutputFormat::Text
+            }),
+            pretty,
+            fail_on: fail_on.into(),
+            quiet,
+            config_path: config,
+            no_config,
         }),
         Cmd::Explain {
             check_id,
@@ -1873,6 +1934,223 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     exit_code
+}
+
+struct VerifyArgs {
+    dist: PathBuf,
+    format: OutputFormat,
+    pretty: bool,
+    fail_on: Severity,
+    quiet: bool,
+    config_path: Option<PathBuf>,
+    no_config: bool,
+}
+
+/// `cofferdam verify --dist <dir>` (CD-85). Discovers only `dist` and
+/// runs ONLY checks tagged `Check::output_mode() == true` against it —
+/// a wholly separate discovery + analysis pass from `run_check`. No
+/// baseline, no findings/run cache, no `--since`, no `[budgets]`: this
+/// is a leaner pipeline than `check` by design (see the ticket for the
+/// deliberately-omitted-flags list).
+fn run_verify(args: VerifyArgs) -> ExitCode {
+    let VerifyArgs {
+        dist,
+        format,
+        pretty,
+        fail_on,
+        quiet,
+        config_path,
+        no_config,
+    } = args;
+
+    // `respect_ignore: false` is deliberate: dist/build dirs are commonly
+    // gitignored, but the user explicitly named this directory, so ignore
+    // rules must not silently exclude files from it.
+    let opts = DiscoveryOptions {
+        extensions: vec!["html".to_string(), "htm".to_string()],
+        respect_ignore: false,
+        include_hidden: true,
+        skip_declaration_files: false,
+    };
+    let files = match discover(std::slice::from_ref(&dist), &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if files.is_empty() {
+        match format {
+            OutputFormat::Json => {
+                let body = serde_json::json!({
+                    "origin": "build_output",
+                    "dist": dist.display().to_string(),
+                    "findings": Vec::<cofferdam_core::Issue>::new(),
+                });
+                let text = if pretty {
+                    serde_json::to_string_pretty(&body)
+                } else {
+                    serde_json::to_string(&body)
+                };
+                println!(
+                    "{}",
+                    text.unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+                );
+            }
+            OutputFormat::Text if !quiet => {
+                eprintln!(
+                    "no .html/.htm files found under: {} (origin: build_output)",
+                    dist.display()
+                );
+            }
+            _ => {}
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(files.len());
+    for path in &files {
+        match std::fs::read_to_string(path) {
+            Ok(text) => sources.push((path.clone(), text)),
+            Err(e) => eprintln!("warning: failed to read {}: {e}", path.display()),
+        }
+    }
+
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+
+    // Built-in checks: only those tagged output-mode-eligible. No
+    // `Engine::with_config` / per-check option overrides — no
+    // output-mode built-in check has options today, so this is safe to
+    // defer (see ticket).
+    let output_checks: Vec<Box<dyn cofferdam_core::Check>> = all_builtins()
+        .into_iter()
+        .filter(|c| c.output_mode())
+        .collect();
+    let engine = Engine::new(output_checks);
+    let (mut issues, _texts) = engine.analyze_with_sources(sources);
+
+    // Plugins tagged `outputMode: true` (CD-85 / CD-86). Only fires when
+    // plugins are configured; skips the host entirely when nothing is
+    // output-mode-eligible.
+    if let Some(cfg) = project_config.as_ref() {
+        if !cfg.plugins.is_empty() {
+            let cfg_dir = resolved_config_path
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let project_root = cfg_dir.clone();
+            let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &project_root);
+            let output_mode_ids: HashSet<String> = plugin_metas
+                .iter()
+                .filter(|m| m.output_mode)
+                .map(|m| m.id.clone())
+                .collect();
+            if !output_mode_ids.is_empty() {
+                let type_aware_enabled = cfg::ProjectConfig::type_aware_enabled(cfg);
+                let tsconfig_path = if type_aware_enabled {
+                    find_tsconfig(&project_root)
+                } else {
+                    None
+                };
+                let plugin_issues = run_plugins_filtered(
+                    cfg,
+                    resolved_config_path.as_deref(),
+                    &files,
+                    tsconfig_path.as_deref(),
+                    true,
+                );
+                // Keep synthetic host-error findings unfiltered — a
+                // broken plugin should be visible in verify mode too —
+                // but restrict real check findings to the
+                // output-mode-tagged set. Exact-match allowlist rather
+                // than a `Warning.Plugin` prefix test: a plugin author
+                // could otherwise name a real (non-output-mode) check
+                // `Warning.PluginSomething` and smuggle its findings
+                // past the gate.
+                const SYNTHETIC_PLUGIN_ERROR_IDS: &[&str] = &[
+                    "Warning.PluginHostFailed",
+                    "Warning.PluginLoadFailed",
+                    "Warning.PluginCrashed",
+                    "Warning.PluginZeroScopeMatch",
+                    "Warning.PluginTypeHostUnavailable",
+                    "Warning.PluginRuntimeUnavailable",
+                ];
+                issues.extend(plugin_issues.into_iter().filter(|issue| {
+                    output_mode_ids.contains(&issue.check_id)
+                        || SYNTHETIC_PLUGIN_ERROR_IDS.contains(&issue.check_id.as_str())
+                }));
+            }
+        }
+    }
+
+    issues.sort_by(|a, b| {
+        b.priority
+            .0
+            .cmp(&a.priority.0)
+            .then_with(|| a.check_id.cmp(&b.check_id))
+            .then_with(|| a.file.cmp(&b.file))
+    });
+
+    let triggering = issues.iter().filter(|i| i.severity >= fail_on).count();
+
+    match format {
+        OutputFormat::Text => {
+            println!(
+                "cofferdam verify --dist {} — build-output findings (origin: build_output)\n",
+                dist.display()
+            );
+            if issues.is_empty() {
+                if !quiet {
+                    println!("no output-mode findings");
+                }
+            } else {
+                let opts = TextRenderOpts {
+                    quiet,
+                    ..Default::default()
+                };
+                print!("{}", TextFormatter::render_with_opts(&issues, opts));
+            }
+        }
+        OutputFormat::Json => {
+            let body = serde_json::json!({
+                "origin": "build_output",
+                "dist": dist.display().to_string(),
+                "findings": issues,
+            });
+            let text = if pretty {
+                serde_json::to_string_pretty(&body)
+            } else {
+                serde_json::to_string(&body)
+            };
+            println!(
+                "{}",
+                text.unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+            );
+        }
+        // Compact/SARIF are out of scope for v1 (see ticket) — fall back
+        // to the JSON shape rather than adding a second unsupported-format
+        // error path.
+        OutputFormat::Compact | OutputFormat::Sarif => {
+            let body = serde_json::json!({
+                "origin": "build_output",
+                "dist": dist.display().to_string(),
+                "findings": issues,
+            });
+            println!("{}", serde_json::to_string(&body).unwrap_or_default());
+        }
+    }
+
+    if triggering == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 /// Run Node-side plugins declared in `cofferdam.toml`, then re-apply the

@@ -49,6 +49,12 @@ impl Check for MissingLangAttribute {
         Language::Html
     }
 
+    /// A build-output HTML page missing `lang` is exactly the kind of
+    /// finding `cofferdam verify --dist` should catch (CD-85).
+    fn output_mode(&self) -> bool {
+        true
+    }
+
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
         // cd-0039-style dispatch: the engine parses each `.html` file
         // once and stashes the tree on `ctx.parsed_lang`; we just
@@ -190,6 +196,11 @@ mod tests {
             .with_corpus(&corpus)
             .with_parsed_lang(&tree);
         MissingLangAttribute.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn output_mode_is_enabled() {
+        assert!(MissingLangAttribute.output_mode());
     }
 
     #[test]

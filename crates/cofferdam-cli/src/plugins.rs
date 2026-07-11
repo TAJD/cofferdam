@@ -288,6 +288,10 @@ pub struct PluginCheckMeta {
     /// `None` when the plugin didn't ship a body.
     pub body: Option<String>,
     pub requires_types: bool,
+    /// Whether this check is eligible to run against build-output files
+    /// discovered by `cofferdam verify --dist` (CD-85). Mirrors
+    /// `requires_types`'s plumbing end to end.
+    pub output_mode: bool,
     pub options: Vec<PluginOptionMeta>,
     /// `None` means "applies to every file".
     pub files: Option<PluginFileScope>,
@@ -317,6 +321,8 @@ struct MetadataCheckEntry {
     body: Option<String>,
     #[serde(rename = "requiresTypes", default)]
     requires_types: bool,
+    #[serde(rename = "outputMode", default)]
+    output_mode: bool,
     #[serde(default)]
     options: Vec<PluginOptionMeta>,
     /// `None` when the check has no file-scope filter.
@@ -433,6 +439,7 @@ pub fn query_plugin_metadata(
             default_severity: e.default_severity,
             body: e.body,
             requires_types: e.requires_types,
+            output_mode: e.output_mode,
             options: e.options,
             files: e.files,
         })

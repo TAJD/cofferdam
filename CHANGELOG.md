@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-07-11
+
 ### Added
 - Per-check badges (`graph` / `file` / `type-aware` / `advisable`) in the check catalog (`docs/checks/index.md`, `public/checks.json`), computed by `cofferdam gen-docs` from `CheckMeta` plus a hand-maintained graph-check list (CD-54).
 - `[budgets]` enforcement plus `cofferdam baseline prune | ratchet` and `cofferdam check --trend` (CD-64). A `[budgets]` table in `cofferdam.toml` caps finding counts per check id or bare category name as a hard gate — independent of `--fail-on` severity and baseline status (the count includes baselined findings) — and fails the build (exit 1) when exceeded. `baseline ratchet` lowers each budget to the current count (never raises it); `baseline prune` drops baseline entries whose finding no longer exists; `check --trend` appends per-category counts to a trend file over time. New doc [`docs/budgets.md`](docs/budgets.md).

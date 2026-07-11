@@ -11,22 +11,26 @@
 // dynamic-import ts-morph (optionally), open a Project (optionally),
 // and report wall-clock timings. cp2 adds `resolveTypes` and persistent
 // Project handles between requests.
+//
+// CD-81: the ts-morph plumbing (module resolution, project caching,
+// type resolution) now lives in `type-host-core.mjs`, shared with the
+// plugin host (`plugin-host.mjs`), which resolves types in-process
+// rather than round-tripping through this worker. The handlers below
+// are thin wire-shape adapters around that shared module.
 
-import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join as joinPath, resolve as resolvePath } from "node:path";
+import {
+  createTypeHostState,
+  ensureTsMorphLoaded,
+  getOrCreateProject,
+  typeAt as coreTypeAt,
+} from "./type-host-core.mjs";
 
 // State persisted across requests in this worker's lifetime. The
 // ts-morph module is imported once and reused; Projects are cached by
 // tsconfig path so the costly init (seconds on a large repo) is paid
 // once per analysis run, not per query.
-const state = {
-  tsMorph: null, // null = not loaded, object = loaded module
-  tsMorphVersion: null, // string | null
-  tsMorphLoadError: null, // string | null
-  projects: new Map(), // tsconfigPath -> ts-morph Project
-};
+const state = createTypeHostState();
 
 const rl = createInterface({ input: process.stdin, terminal: false });
 
@@ -97,7 +101,8 @@ async function handlePing(params) {
   let projectInitMs = null;
 
   if (loadTsMorph) {
-    tsMorphImportMs = await ensureTsMorphLoaded();
+    const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
+    tsMorphImportMs = await ensureTsMorphLoaded(state, projectRoot);
     if (state.tsMorphLoadError) {
       // Surface as a structured error to the caller. ts-morph not being
       // available is a normal failure mode for projects that haven't
@@ -113,7 +118,7 @@ async function handlePing(params) {
         // Construct a Project rooted at the supplied tsconfig. Heavy:
         // ts-morph reads + parses every file the tsconfig includes.
         // For ping mode the handle is discarded immediately; cp2
-        // caches per tsconfig path.
+        // caches per tsconfig path (via getOrCreateProject).
         const { Project } = state.tsMorph;
         // Suppress noisy diagnostics during init — we only care about
         // the timing, not the project's correctness.
@@ -155,7 +160,14 @@ async function handleOpenProject(params) {
     err.code = "project_init_failed";
     throw err;
   }
-  const { project, initMs, cached } = await getOrCreateProject(tsconfigPath);
+  // Load ts-morph against this worker's configured project root (the env
+  // var `spawn_worker` in type_host.rs sets) before delegating to the
+  // shared core — `getOrCreateProject` only lazy-loads against the
+  // tsconfig's own directory, which may differ from the project root a
+  // caller explicitly asked this worker to resolve `ts-morph` from.
+  const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
+  await ensureTsMorphLoaded(state, projectRoot);
+  const { project, initMs, cached } = await getOrCreateProject(state, tsconfigPath);
   return {
     sourceFileCount: project.getSourceFiles().length,
     initMs: Math.round(initMs),
@@ -175,244 +187,15 @@ async function handleTypeAt(params) {
     err.code = "internal";
     throw err;
   }
-  const { project } = await getOrCreateProject(tsconfigPath);
-
-  const sourceFile = resolveSourceFile(project, file);
-  if (!sourceFile) {
-    // File isn't part of the project and couldn't be added — the
-    // caller treats a null result as "can't conclude".
-    return null;
-  }
-
-  const fullText = sourceFile.getFullText();
-  const startU16 = utf16PosFromByteOffset(fullText, startByte | 0);
-  const endU16 = utf16PosFromByteOffset(fullText, endByte | 0);
-
-  // Prefer an exact start+width match; fall back to the deepest node at
-  // the start position. ts-morph throws if width is negative or out of
-  // range, so guard.
-  let node = null;
-  const width = endU16 - startU16;
-  try {
-    if (width > 0) {
-      node = sourceFile.getDescendantAtStartWithWidth(startU16, width) ?? null;
-    }
-  } catch {
-    node = null;
-  }
-  if (!node) {
-    try {
-      node = sourceFile.getDescendantAtPos(startU16) ?? null;
-    } catch {
-      node = null;
-    }
-  }
-  if (!node) return null;
-
-  let type;
-  try {
-    type = node.getType();
-  } catch {
-    return null;
-  }
-  if (!type) return null;
-
-  return typeFacts(type, node);
+  // See handleOpenProject — ensure ts-morph is loaded against this
+  // worker's configured project root before delegating. A no-op once
+  // `openProject` (or an earlier `typeAt`) has already loaded it.
+  const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
+  await ensureTsMorphLoaded(state, projectRoot);
+  return coreTypeAt(state, tsconfigPath, file, startByte, endByte);
 }
 
 // --- helpers ----------------------------------------------------------
-
-async function getOrCreateProject(tsconfigPath) {
-  await ensureTsMorphLoaded();
-  if (state.tsMorphLoadError) {
-    const err = new Error(state.tsMorphLoadError);
-    err.code = "ts_morph_unavailable";
-    throw err;
-  }
-  const existing = state.projects.get(tsconfigPath);
-  if (existing) {
-    return { project: existing, initMs: 0, cached: true };
-  }
-  const initStart = nowMs();
-  let project;
-  try {
-    const { Project } = state.tsMorph;
-    project = new Project({ tsConfigFilePath: tsconfigPath });
-    // Force eager source-file resolution so later typeAt lookups hit a
-    // warm project rather than paying lazy-load cost mid-query.
-    project.getSourceFiles();
-  } catch (e) {
-    const err = new Error(
-      `Project init failed for tsconfig ${tsconfigPath}: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
-    err.code = "project_init_failed";
-    throw err;
-  }
-  const initMs = nowMs() - initStart;
-  state.projects.set(tsconfigPath, project);
-  return { project, initMs, cached: false };
-}
-
-// Find the SourceFile for `file` in `project`, tolerating path-shape
-// differences (back/forward slashes, drive-letter case on Windows).
-// Falls back to adding the file to the project if it exists on disk but
-// wasn't picked up by the tsconfig's include globs.
-function resolveSourceFile(project, file) {
-  const fwd = file.replace(/\\/g, "/");
-  let sf = project.getSourceFile(fwd);
-  if (sf) return sf;
-  const lower = fwd.toLowerCase();
-  sf = project.getSourceFiles().find((f) => f.getFilePath().toLowerCase() === lower);
-  if (sf) return sf;
-  try {
-    return project.addSourceFileAtPathIfExists(fwd) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// Build the compact TypeFacts wire object from a ts-morph Type.
-function typeFacts(type, node) {
-  const unionParts = safeCall(() => type.getUnionTypes(), []) ?? [];
-  const parts = unionParts.length > 0 ? unionParts : [type];
-  const includesNull = parts.some((t) => safeCall(() => t.isNull(), false));
-  const includesUndefined = parts.some((t) => safeCall(() => t.isUndefined(), false));
-  const isAny =
-    safeCall(() => type.isAny(), false) || safeCall(() => type.isUnknown(), false);
-  return {
-    text: safeCall(() => type.getText(node), "") ?? "",
-    isNullable: safeCall(() => type.isNullable(), includesNull || includesUndefined),
-    includesNull,
-    includesUndefined,
-    isAny,
-  };
-}
-
-function safeCall(fn, fallback) {
-  try {
-    return fn();
-  } catch {
-    return fallback;
-  }
-}
-
-// Translate a UTF-8 byte offset into a UTF-16 code-unit position (the
-// position model the TS Compiler API uses). Walks code points,
-// accumulating UTF-8 byte length until it reaches the target, summing
-// UTF-16 code units (2 for astral-plane code points) along the way. For
-// ASCII source the two are identical; this only matters for files with
-// multi-byte characters before the queried node.
-function utf16PosFromByteOffset(text, byteOffset) {
-  if (byteOffset <= 0) return 0;
-  let bytes = 0;
-  let utf16 = 0;
-  for (const ch of text) {
-    const chBytes = Buffer.byteLength(ch, "utf8");
-    if (bytes + chBytes > byteOffset) break;
-    bytes += chBytes;
-    utf16 += ch.length;
-    if (bytes >= byteOffset) break;
-  }
-  return utf16;
-}
-
-async function ensureTsMorphLoaded() {
-  if (state.tsMorph) return 0;
-  if (state.tsMorphLoadError) return 0; // cached failure; caller will throw
-
-  const importStart = nowMs();
-  try {
-    // Node ESM ignores NODE_PATH, so we resolve ts-morph by hand:
-    // walk up from the project root (COFFERDAM_TYPE_HOST_PROJECT_ROOT)
-    // looking for `node_modules/ts-morph/package.json`, then construct
-    // a file:// URL to the package's main entry and import that.
-    const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
-    const resolved = resolveTsMorph(projectRoot);
-    if (!resolved) {
-      state.tsMorphLoadError =
-        `ts-morph not found in any node_modules walking up from ${projectRoot}. ` +
-        `Install with: npm install --save-dev ts-morph`;
-      return 0;
-    }
-    const mod = await import(pathToFileURL(resolved.entryPath).href);
-    state.tsMorph = mod;
-    state.tsMorphVersion = resolved.version;
-    return nowMs() - importStart;
-  } catch (e) {
-    state.tsMorphLoadError =
-      `ts-morph load failed: ` + (e instanceof Error ? e.message : String(e));
-    return 0;
-  }
-}
-
-// Walk up from `startDir`, looking for `node_modules/ts-morph/package.json`.
-// Returns `{ entryPath, version }` on success — entryPath is the absolute
-// path to the package's main file (or its `main`/`exports["."]` entry),
-// suitable for a `pathToFileURL(...).href` import.
-function resolveTsMorph(startDir) {
-  let dir = resolvePath(startDir);
-  for (let depth = 0; depth < 32; depth++) {
-    const pkgPath = joinPath(dir, "node_modules", "ts-morph", "package.json");
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      const pkgDir = dirname(pkgPath);
-      const entry = pickEntry(pkg);
-      const entryPath = entry
-        ? joinPath(pkgDir, entry)
-        : findIndexFallback(pkgDir);
-      if (!entryPath) {
-        continue;
-      }
-      try {
-        statSync(entryPath);
-      } catch {
-        continue;
-      }
-      return {
-        entryPath,
-        version: typeof pkg.version === "string" ? pkg.version : null,
-      };
-    } catch {
-      // try parent
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-function pickEntry(pkg) {
-  // Mirror Node's ESM resolution priorities: exports["."].import, then
-  // module, then main. ts-morph publishes both CJS and ESM; we prefer
-  // ESM but accept CJS via Node's interop.
-  const exp = pkg.exports;
-  if (exp && typeof exp === "object") {
-    const dot = exp["."] ?? exp;
-    if (typeof dot === "string") return dot;
-    if (dot && typeof dot === "object") {
-      return dot.import ?? dot.default ?? dot.node ?? null;
-    }
-  }
-  if (typeof pkg.module === "string" && pkg.module) return pkg.module;
-  if (typeof pkg.main === "string" && pkg.main) return pkg.main;
-  return null;
-}
-
-function findIndexFallback(pkgDir) {
-  for (const name of ["index.mjs", "index.js"]) {
-    const p = joinPath(pkgDir, name);
-    try {
-      statSync(p);
-      return p;
-    } catch {
-      // try next
-    }
-  }
-  return null;
-}
 
 function nowMs() {
   // High-resolution wall-clock in ms (float). Integer-cast at emission.

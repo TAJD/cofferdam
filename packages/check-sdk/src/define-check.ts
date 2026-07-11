@@ -79,16 +79,12 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
   /** Optional long-form catalog body used by `cofferdam explain --full`. */
   readonly body: string | undefined;
   /**
-   * Whether the check needs full type-aware analysis (routes through ts-morph).
-   *
-   * **Status (0.2.x): not yet implemented.** Setting this to `true` is
-   * accepted by the type system and recorded on the `Check` object, but the
-   * engine does **not** route the check through ts-morph and no type
-   * information is made available inside `run()`. The field is reserved for
-   * future use; type-aware routing via ts-morph is on the roadmap (tracked
-   * as cd-l58 / gh #16). Until that work lands, treat `requiresTypes: true`
-   * as a declaration of intent only — the check will still run, but without
-   * type data.
+   * Whether the check needs full type-aware analysis (routes through
+   * ts-morph). When `true`, the plugin host resolves types in-process
+   * via ts-morph (CD-81) and exposes `ctx.types.typeAt(startByte,
+   * endByte)` inside `run()` — see {@link TypeQuery}. `ctx.types` is
+   * `undefined` when no tsconfig was found or ts-morph couldn't load;
+   * guard with `if (ctx.types)` rather than assuming presence.
    */
   readonly requiresTypes: boolean;
   /** Two-pass consistency mode. */
@@ -96,7 +92,12 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
   readonly options: S;
   /** File-scope filter. `undefined` = applies to every file. */
   readonly files: FileScope | undefined;
-  run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void;
+  /**
+   * May return a `Promise` — the plugin host awaits `run()`, so a check
+   * that needs to `await ctx.types.typeAt(...)` can declare `async
+   * run(...)`.
+   */
+  run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void | Promise<void>;
   /**
    * Optional cross-file finalize hook (cd-9hp.6). Invoked once per
    * analysis run after every file's `run` has completed, in plugin
@@ -124,17 +125,12 @@ export interface DefineCheckInput<S extends OptionsSchema> {
   readonly explanation: string;
   readonly body?: string;
   /**
-   * Whether the check needs full type-aware analysis (routes through ts-morph).
-   *
-   * **Status (0.2.x): not yet implemented.** Setting this to `true` is
-   * accepted by the type system and recorded on the `Check` object, but the
-   * engine does **not** route the check through ts-morph and no type
-   * information is made available inside `run()`. The field is reserved for
-   * future use; type-aware routing via ts-morph is on the roadmap (tracked
-   * as cd-l58 / gh #16). Until that work lands, treat `requiresTypes: true`
-   * as a declaration of intent only — the check will still run, but without
-   * type data. The plugin host will emit a one-time warning to stderr at
-   * load time when this is `true`.
+   * Whether the check needs full type-aware analysis (routes through
+   * ts-morph). When `true`, the plugin host resolves types in-process
+   * via ts-morph (CD-81) and exposes `ctx.types.typeAt(startByte,
+   * endByte)` inside `run()`. `ctx.types` is `undefined` when no
+   * tsconfig was found or ts-morph couldn't load — guard with `if
+   * (ctx.types)` rather than assuming presence.
    */
   readonly requiresTypes?: boolean;
   readonly consistency?: boolean;
@@ -142,7 +138,12 @@ export interface DefineCheckInput<S extends OptionsSchema> {
   readonly options?: S;
   /** File-scope filter; defaults to "every file". */
   readonly files?: FileScope;
-  run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void;
+  /**
+   * May return a `Promise` — the plugin host awaits `run()`, so a check
+   * that needs to `await ctx.types.typeAt(...)` can declare `async
+   * run(...)`.
+   */
+  run(file: SourceFile, ctx: CheckContext, opts: ResolvedOptions<S>): void | Promise<void>;
   /**
    * Optional cross-file finalize hook (cd-9hp.6). See the
    * {@link Check.finalize} doc on the output interface.

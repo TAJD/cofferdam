@@ -140,6 +140,43 @@ export interface PluginCorpus {
 }
 
 /**
+ * Type facts about a resolved TypeScript type (CD-81). Mirrors
+ * `cofferdam_core::TypeFacts` and the wire shape ts-morph resolution
+ * returns from `type-host-core.mjs`'s `typeAt`.
+ */
+export interface TypeFacts {
+  /** The type's rendered text, e.g. `"string | null"`. */
+  readonly text: string;
+  /** Whether ts-morph considers the type nullable (null or undefined). */
+  readonly isNullable: boolean;
+  /** Whether the type's union includes `null`. */
+  readonly includesNull: boolean;
+  /** Whether the type's union includes `undefined`. */
+  readonly includesUndefined: boolean;
+  /** Whether the type is `any` or `unknown`. */
+  readonly isAny: boolean;
+}
+
+/**
+ * Type-aware query surface (CD-81). Present on `ctx.types` only when
+ * the check declared `requiresTypes: true` on `defineCheck` AND a
+ * tsconfig was discovered AND ts-morph loaded successfully in the
+ * plugin host process — `undefined` (not present on the object) in
+ * every other case, so plugins should guard with `if (ctx.types)`
+ * rather than expect it unconditionally.
+ */
+export interface TypeQuery {
+  /**
+   * Resolve the type of the node spanning `[startByte, endByte)` in the
+   * current file. Returns `null` when no meaningful type could be
+   * resolved at that span (not an error — e.g. the span doesn't line up
+   * with a typed node). Async because the plugin host may still be
+   * warming up its ts-morph project cache for this tsconfig.
+   */
+  typeAt(startByte: number, endByte: number): Promise<TypeFacts | null>;
+}
+
+/**
  * Mutable per-file scratch passed to `Check.run`. The check emits
  * findings via `ctx.report(...)`; the engine collects, suppresses,
  * baselines, and renders.
@@ -154,6 +191,13 @@ export interface CheckContext {
    * depend on the aggregate corpus state.
    */
   readonly corpus: PluginCorpus;
+
+  /**
+   * Type-aware query surface (CD-81). `undefined` unless the check
+   * declared `requiresTypes: true` and the plugin host resolved a
+   * tsconfig + ts-morph for this run.
+   */
+  readonly types?: TypeQuery;
 }
 
 /**

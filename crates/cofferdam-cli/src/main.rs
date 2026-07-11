@@ -1499,6 +1499,19 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
+    // CD-81: tsconfig for type-aware *plugin* checks (`requiresTypes:
+    // true` in a plugin's `defineCheck`). Discovered independently of
+    // `engine.needs_type_oracle()` — that flag only reflects registered
+    // *built-in* checks, but a plugin's need for types isn't known until
+    // the plugin host loads it. Cheap to discover unconditionally (a
+    // filesystem walk, no Node spawn); the plugin host itself decides
+    // whether to spend ts-morph load time on it.
+    let tsconfig_path_for_plugins: Option<PathBuf> = if type_aware_enabled {
+        find_tsconfig(&type_root)
+    } else {
+        None
+    };
+
     // Disk-backed findings + run cache (cd-9hp.4 cp4). Resolves to
     // `Some(dir)` when caching is requested (default on); load
     // findings.json + run.json into in-memory caches before analyze,
@@ -1561,11 +1574,32 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // report-scoped below. Both paths use the signed-pair variant so the
     // merge step is shared.
     if let Some(cfg) = project_config.as_ref() {
-        signed.extend(run_plugins_filtered_with_signatures(
+        let plugin_signed = run_plugins_filtered_with_signatures(
             cfg,
             resolved_config_path.as_deref(),
             &files,
-        ));
+            tsconfig_path_for_plugins.as_deref(),
+            true,
+        );
+        // CD-81: mirror the built-in oracle's --fail-on-type-unavailable
+        // gating (above) for type-aware *plugin* checks. The plugin host
+        // surfaces its own type-host-unavailable state as a synthetic
+        // `Warning.PluginTypeHostUnavailable` finding (see
+        // `plugins.rs::run_plugins_with_sources`) rather than a second
+        // return value, so this checks for that finding's presence.
+        if fail_on_type_unavailable
+            && plugin_signed
+                .iter()
+                .any(|(issue, _)| issue.check_id == "Warning.PluginTypeHostUnavailable")
+        {
+            eprintln!(
+                "error: type host unavailable for one or more type-aware plugin checks. \
+                 Remove --fail-on-type-unavailable, install Node + ts-morph, \
+                 or set `[engine] type_aware = false` to opt out."
+            );
+            return ExitCode::from(2);
+        }
+        signed.extend(plugin_signed);
     }
     // COMMON: report scope filter (--since). Applied after plugin merge so
     // both engine and plugin findings respect the narrowed output window.
@@ -1853,6 +1887,8 @@ fn run_plugins_filtered(
     cfg: &ProjectConfig,
     resolved_config_path: Option<&Path>,
     files: &[PathBuf],
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<cofferdam_core::Issue> {
     if cfg.plugins.is_empty() {
         return Vec::new();
@@ -1867,6 +1903,8 @@ fn run_plugins_filtered(
         &cfg_dir,
         &cfg.checks,
         cfg.layers.as_ref(),
+        tsconfig_path,
+        warn_on_type_unavailable,
     );
     let suppression_cache: HashMap<PathBuf, cofferdam_engine::suppress::Suppressions> = files
         .iter()
@@ -1900,8 +1938,16 @@ fn run_plugins_filtered_with_signatures(
     cfg: &ProjectConfig,
     resolved_config_path: Option<&Path>,
     files: &[PathBuf],
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<(cofferdam_core::Issue, String)> {
-    let issues = run_plugins_filtered(cfg, resolved_config_path, files);
+    let issues = run_plugins_filtered(
+        cfg,
+        resolved_config_path,
+        files,
+        tsconfig_path,
+        warn_on_type_unavailable,
+    );
     if issues.is_empty() {
         return Vec::new();
     }
@@ -2059,11 +2105,18 @@ fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
     };
     // Include plugin findings in the baseline so existing plugin-flagged
     // tech debt can be acknowledged and gradually paid down (cd-1c7).
+    // CD-81: `baseline write` doesn't install the built-in type oracle
+    // either, so type-aware plugin checks likewise run without
+    // `ctx.types` on this path — and `warn_on_type_unavailable: false`
+    // keeps that from baking a `Warning.PluginTypeHostUnavailable`
+    // finding into the baseline snapshot on every write.
     if let Some(cfg) = project_config.as_ref() {
         signed.extend(run_plugins_filtered_with_signatures(
             cfg,
             resolved_config_path.as_deref(),
             &files,
+            None,
+            false,
         ));
     }
 
@@ -2228,11 +2281,17 @@ fn run_baseline_prune(args: BaselinePruneArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // CD-81: `baseline prune` doesn't install the built-in type oracle
+    // either, so type-aware plugin checks likewise run without
+    // `ctx.types` on this path — see `baseline write`'s comment above
+    // for why `warn_on_type_unavailable` is `false` here.
     if let Some(cfg) = project_config.as_ref() {
         signed.extend(run_plugins_filtered_with_signatures(
             cfg,
             resolved_config_path.as_deref(),
             &files,
+            None,
+            false,
         ));
     }
 
@@ -2399,10 +2458,16 @@ fn run_baseline_ratchet(args: BaselineRatchetArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // CD-81: `baseline ratchet` doesn't install the built-in type
+    // oracle either, so type-aware plugin checks likewise run without
+    // `ctx.types` on this path — see `baseline write`'s comment above
+    // for why `warn_on_type_unavailable` is `false` here.
     signed.extend(run_plugins_filtered_with_signatures(
         &project_config,
         Some(resolved_config_path.as_path()),
         &files,
+        None,
+        false,
     ));
 
     let mut counts_by_check: BTreeMap<String, u32> = BTreeMap::new();

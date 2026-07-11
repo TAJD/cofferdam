@@ -291,7 +291,8 @@ Key points:
 - Pattern C often has a heuristic quality — `ObjectExpression.properties` are
   `AstNode[]` and a thorough `where`-clause analysis requires resolved types.
   Note the limitation in the `explanation` if the check is approximate.
-  Full type-aware routing (ts-morph) is on the roadmap; see §7 below.
+  Full type-aware routing (ts-morph, via `requiresTypes: true`) is
+  available; see §7 below.
 - Override only the visitor methods you need. Omitted kinds default to
   `Walk.Continue`.
 
@@ -346,9 +347,9 @@ as `readonly string[]`, typed without any casting.
 
 ESLint flags `let` declarations that are never reassigned. This rule requires
 flow analysis and is type-aware — it belongs in the `requiresTypes: true`
-bucket. In 0.2.x, type-aware routing is not yet wired (see §7). A weaker
-heuristic — flag `let` declarations whose identifier is never referenced again
-on the same line — is expressible as a line walk:
+bucket (see §7). A weaker heuristic — flag `let` declarations whose identifier
+is never referenced again on the same line — is expressible as a line walk
+and doesn't need `ctx.types` at all:
 
 ```ts
 export default defineCheck({
@@ -816,18 +817,47 @@ The engine resolves each entry to a module, calls `loadPlugins`, and runs the
 resulting checks alongside the built-ins. Options in the `[checks."<id>"]`
 block override the `default` values declared in your `options` schema.
 
-## 7. Type-aware checks (ts-morph routing status — 0.2.x)
+## 7. Type-aware checks
 
 `DefineCheckInput` exposes `requiresTypes?: boolean` for checks that need
-resolved types, inferred generics, or call signatures. **In 0.2.x this field is
-reserved.** Setting `requiresTypes: true` is accepted by the type system and
-recorded on the `Check` object, but the engine does not route the check through
-ts-morph and no type information is available inside `run()`. The plugin host
-emits a one-time warning to stderr at load time when it encounters a plugin with
-`requiresTypes: true`.
+resolved types, inferred generics, or call signatures. Setting `requiresTypes:
+true` routes the check through ts-morph: the plugin host resolves a
+`tsconfig.json` (the same discovery `cofferdam check` already does for
+built-in type-aware checks) and loads ts-morph in-process, then exposes a
+query surface on `ctx.types` inside `run()`.
 
-Track cd-l58 / [gh #16](https://github.com/TAJD/cofferdam/issues/16) for status.
-Until that work lands, treat the field as a declaration of intent. Rules that
-fundamentally require type data (control-flow, binding liveness, call-site
-resolution) should document the limitation clearly and either ship as a
-heuristic or wait for the ts-morph wiring.
+```ts
+export default defineCheck({
+  id: "NoNullableReturn",
+  category: Category.Warning,
+  basePriority: 10,
+  explanation: "Function return type should not include null.",
+  requiresTypes: true,
+  async run(file, ctx) {
+    if (!file.ast) return;
+    for (const fn of file.ast.findAll("Function")) {
+      if (!ctx.types) continue; // no tsconfig / ts-morph unavailable — skip
+      const facts = await ctx.types.typeAt(fn.span.start_byte, fn.span.end_byte);
+      if (facts?.includesNull) {
+        ctx.report({ message: "Return type includes null.", span: fn.span });
+      }
+    }
+  },
+});
+```
+
+`ctx.types` is `undefined` — not present on the object — when no `tsconfig.json`
+was discovered, or ts-morph failed to load. Guard every use with `if
+(ctx.types)` rather than assuming presence; a project without ts-morph
+installed, or `[engine] type_aware = false` in `cofferdam.toml`, is a normal
+configuration, not an error. `ctx.types.typeAt(startByte, endByte)` returns a
+`Promise<TypeFacts | null>` — `null` means "resolved fine, no type at that
+span" (not an error); `run()` may be declared `async` so it can `await` the
+call. `TypeFacts` mirrors the built-in type oracle's shape: `{ text,
+isNullable, includesNull, includesUndefined, isAny }`.
+
+When `--fail-on-type-unavailable` is passed to `cofferdam check` and a loaded
+plugin check declares `requiresTypes: true` but the type host couldn't be
+started, the run exits with code 2 instead of silently skipping type
+information — the same gate `--fail-on-type-unavailable` already applies to
+built-in type-aware checks.

@@ -52,6 +52,13 @@ use serde::{Deserialize, Serialize};
 const HOST_SCRIPT: &str = include_str!("../scripts/plugin-host.mjs");
 const HOST_SCRIPT_NAME: &str = concat!("cofferdam-plugin-host-", env!("CARGO_PKG_VERSION"), ".mjs");
 
+/// CD-81: `plugin-host.mjs` imports `./type-host-core.mjs` (shared
+/// ts-morph plumbing with `type_host.rs`'s worker) as a relative ESM
+/// specifier, so the materialised copy must sit next to it under this
+/// exact, unversioned name — see `materialise_host_script`.
+const CORE_SCRIPT: &str = include_str!("../scripts/type-host-core.mjs");
+const CORE_SCRIPT_NAME: &str = "type-host-core.mjs";
+
 /// Wire version for the streamed manifest protocol (CD-33). Bump and
 /// document in `design/sdk-ast-wire.md` on any breaking change to the
 /// record shapes below.
@@ -69,6 +76,13 @@ struct HeaderRecord<'a> {
     cwd: String,
     plugins: &'a [String],
     options: &'a BTreeMap<String, BTreeMap<String, ManifestOptionValue>>,
+    /// CD-81: absolute tsconfig path, forward-slashed, for type-aware
+    /// plugin checks (`requiresTypes: true`) to resolve types against
+    /// in-process via ts-morph. `None` (serialised as JSON `null`) when
+    /// no tsconfig was discovered or type-awareness is disabled — the
+    /// host treats `null` the same as an absent field.
+    #[serde(rename = "tsconfigPath", skip_serializing_if = "Option::is_none")]
+    tsconfig_path: Option<String>,
 }
 
 /// One streamed file record. Same fields the one-shot manifest used to
@@ -113,7 +127,16 @@ enum StreamRecord {
     #[serde(rename = "error")]
     Error(HostError),
     #[serde(rename = "done")]
-    Done,
+    Done {
+        /// CD-81: set only when at least one loaded plugin check declared
+        /// `requiresTypes: true`. `None` (missing key or JSON `null`)
+        /// means either no check needed types, or ts-morph resolved
+        /// fine; `Some(reason)` means type-aware plugin checks ran with
+        /// `ctx.types` undefined because the host couldn't load ts-morph
+        /// or find a tsconfig.
+        #[serde(rename = "typeHostUnavailable", default)]
+        type_host_unavailable: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -421,6 +444,8 @@ pub fn run_plugins(
     project_root: &Path,
     check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
     layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<Issue> {
     // Disk-read entry: hydrate `(path, text)` from the working tree,
     // then delegate to the source-driven entry point. Files that fail
@@ -438,6 +463,8 @@ pub fn run_plugins(
         project_root,
         check_options,
         layers_cfg,
+        tsconfig_path,
+        warn_on_type_unavailable,
     )
 }
 
@@ -451,12 +478,22 @@ pub fn run_plugins(
 /// All other behaviour is identical to `run_plugins`. The scoped file
 /// set, layer membership, options bag, and host timeout all flow
 /// through unchanged.
+///
+/// `warn_on_type_unavailable` mirrors `install_type_oracle_if_needed`'s
+/// silent-skip contract for the built-in oracle: callers that don't
+/// install a tsconfig on purpose (`baseline write/prune/ratchet`,
+/// `advise --diff`) pass `false` so a `requiresTypes: true` plugin check
+/// doesn't bake a `Warning.PluginTypeHostUnavailable` finding into
+/// `baseline.json` on every run — the built-in oracle produces no
+/// Issue at all on those paths (CD-81 review).
 pub fn run_plugins_with_sources(
     plugin_paths: &[PathBuf],
     sources: &[(PathBuf, String)],
     project_root: &Path,
     check_options: &BTreeMap<String, BTreeMap<String, RawOptionValue>>,
     layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
+    tsconfig_path: Option<&Path>,
+    warn_on_type_unavailable: bool,
 ) -> Vec<Issue> {
     if plugin_paths.is_empty() {
         return Vec::new();
@@ -539,6 +576,7 @@ pub fn run_plugins_with_sources(
         cwd: forward_slash(project_root),
         plugins: &plugin_paths_str,
         options: &options_payload,
+        tsconfig_path: tsconfig_path.map(forward_slash),
     };
     let mut write_error = write_record(&mut stdin, &header).err();
 
@@ -621,14 +659,16 @@ pub fn run_plugins_with_sources(
         }
     };
 
-    let (reports, errors, malformed, saw_done) = reader_handle.join().unwrap_or_else(|_| {
-        (
-            Vec::new(),
-            Vec::new(),
-            vec!["reader thread panicked".to_string()],
-            false,
-        )
-    });
+    let (reports, errors, malformed, saw_done, type_host_unavailable) =
+        reader_handle.join().unwrap_or_else(|_| {
+            (
+                Vec::new(),
+                Vec::new(),
+                vec!["reader thread panicked".to_string()],
+                false,
+                None,
+            )
+        });
     let stderr_text = stderr_handle.join().unwrap_or_default();
 
     if let Some(e) = write_error {
@@ -807,6 +847,27 @@ pub fn run_plugins_with_sources(
         issues.push(synthetic_warning(check_id, &file, message));
     }
 
+    // CD-81: at least one loaded plugin check declared `requiresTypes:
+    // true` but the host couldn't resolve types for it (no tsconfig, or
+    // ts-morph failed to load). Surfaced as a synthetic finding — same
+    // pattern as `host_unavailable_issue`/`host_failed_issue` — rather
+    // than a new return shape, so `--fail-on-type-unavailable` gating
+    // can inspect the merged issue set the same way it already does for
+    // the built-in type oracle. Gated on `warn_on_type_unavailable` so
+    // callers that never intended to install types this run (baseline
+    // write/prune/ratchet, advise --diff) don't bake this into their
+    // snapshot — see the doc comment on `run_plugins_with_sources`.
+    if let Some(reason) = type_host_unavailable.filter(|_| warn_on_type_unavailable) {
+        issues.push(synthetic_warning(
+            "Warning.PluginTypeHostUnavailable",
+            project_root,
+            format!(
+                "type-aware plugin check(s) declared requiresTypes:true but the type host is \
+                 unavailable ({reason}) — those checks ran with ctx.types undefined."
+            ),
+        ));
+    }
+
     issues
 }
 
@@ -818,6 +879,15 @@ pub fn run_plugins_with_sources(
 fn materialise_host_script() -> std::io::Result<PathBuf> {
     static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
     let result = CACHED.get_or_init(|| {
+        // Write the shared core module first — plugin-host.mjs's
+        // `import "./type-host-core.mjs"` must resolve by the time the
+        // host script is spawned. Unversioned name (unlike the host
+        // script itself) because it's a static import specifier, not a
+        // path we control at spawn time; always overwritten for the
+        // same reason the host script is.
+        let core_path = std::env::temp_dir().join(CORE_SCRIPT_NAME);
+        std::fs::write(&core_path, CORE_SCRIPT)?;
+
         let path = std::env::temp_dir().join(HOST_SCRIPT_NAME);
         // Always overwrite — the embedded script changes when the CLI
         // is rebuilt. Compared to file-content-hash-named caching, this
@@ -883,12 +953,19 @@ fn write_record<T: Serialize>(stdin: &mut impl Write, record: &T) -> std::io::Re
 /// result, even when the child's exit status is success.
 fn read_stream_records(
     stdout: ChildStdout,
-) -> (Vec<HostReport>, Vec<HostError>, Vec<String>, bool) {
+) -> (
+    Vec<HostReport>,
+    Vec<HostError>,
+    Vec<String>,
+    bool,
+    Option<String>,
+) {
     let mut reader = BufReader::new(stdout);
     let mut reports = Vec::new();
     let mut errors = Vec::new();
     let mut malformed = Vec::new();
     let mut saw_done = false;
+    let mut type_host_unavailable = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -902,8 +979,11 @@ fn read_stream_records(
                 match serde_json::from_str::<StreamRecord>(trimmed) {
                     Ok(StreamRecord::Report(r)) => reports.push(r),
                     Ok(StreamRecord::Error(e)) => errors.push(e),
-                    Ok(StreamRecord::Done) => {
+                    Ok(StreamRecord::Done {
+                        type_host_unavailable: reason,
+                    }) => {
                         saw_done = true;
+                        type_host_unavailable = reason;
                         break;
                     }
                     Err(e) => malformed.push(format!(
@@ -915,7 +995,7 @@ fn read_stream_records(
             Err(_) => break,
         }
     }
-    (reports, errors, malformed, saw_done)
+    (reports, errors, malformed, saw_done, type_host_unavailable)
 }
 
 /// Wall-clock budget for one invocation of the plugin host. Default 60s;

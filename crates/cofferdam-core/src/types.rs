@@ -42,6 +42,27 @@ pub struct TypeFacts {
     pub is_any: bool,
 }
 
+/// Literal-resolution facts for an identifier/import reference (CD-82),
+/// as reported by the type host's `resolveLiteral` query.
+///
+/// Deliberately mirrors [`TypeFacts`]'s "compact, best-effort" shape:
+/// `literal_string` is populated only when the resolved declaration's
+/// initializer is a string (or no-substitution template) literal;
+/// `is_nullable` / `is_empty_object` are reported independently even
+/// when `literal_string` can't be determined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralFacts {
+    /// The resolved string literal value, when the declaration's
+    /// initializer is a string or no-substitution template literal.
+    pub literal_string: Option<String>,
+    /// True when the declared/inferred type includes `null` or
+    /// `undefined`, or the initializer is a `null`/`undefined` literal.
+    pub is_nullable: bool,
+    /// True when the initializer is an object literal with zero
+    /// properties.
+    pub is_empty_object: bool,
+}
+
 /// Read-only handle a type-aware check uses to ask the type host about
 /// nodes in the file currently being analyzed.
 ///
@@ -66,4 +87,23 @@ pub trait TypeOracle: Send + Sync {
     /// node has no type, or the worker failed. Callers treat `None` as
     /// "can't conclude anything" and emit no finding.
     fn type_at(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<TypeFacts>;
+
+    /// Resolve the identifier spanning `[start_byte, end_byte)` in
+    /// `file` to a literal value (CD-82) — follows symbol resolution
+    /// across files, so an imported binding resolves through to its
+    /// origin declaration.
+    ///
+    /// Returns `None` when nothing is resolvable at all (no identifier
+    /// at that span, no symbol, no declarations, or the worker failed).
+    /// A resolved declaration with a non-literal initializer still
+    /// yields `Some(LiteralFacts)` with best-effort fields rather than
+    /// `None` — see [`LiteralFacts`].
+    ///
+    /// Default implementation returns `None` so existing [`TypeOracle`]
+    /// implementors (test stubs, `FixedOracle`) don't need updating
+    /// until they have a reason to support literal resolution.
+    fn resolve_literal(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<LiteralFacts> {
+        let _ = (file, start_byte, end_byte);
+        None
+    }
 }

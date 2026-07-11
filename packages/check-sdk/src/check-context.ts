@@ -158,12 +158,33 @@ export interface TypeFacts {
 }
 
 /**
- * Type-aware query surface (CD-81). Present on `ctx.types` only when
- * the check declared `requiresTypes: true` on `defineCheck` AND a
- * tsconfig was discovered AND ts-morph loaded successfully in the
- * plugin host process — `undefined` (not present on the object) in
- * every other case, so plugins should guard with `if (ctx.types)`
- * rather than expect it unconditionally.
+ * Literal-resolution facts for an identifier/import reference (CD-82).
+ * Mirrors the wire shape `type-host-core.mjs`'s `resolveLiteral`
+ * returns. `literalString` is only present when the resolved
+ * declaration's initializer is a string (or no-substitution template)
+ * literal; `isNullable` and `isEmptyObject` are reported independently
+ * even when `literalString` can't be determined — e.g. a `let` with a
+ * `string | null` type annotation reports `isNullable: true` with
+ * `literalString` left `undefined`.
+ */
+export interface LiteralFacts {
+  /** The resolved string literal value, when the declaration's
+   *  initializer is a string or no-substitution template literal. */
+  readonly literalString?: string;
+  /** Whether the declared/inferred type includes `null` or `undefined`,
+   *  or the initializer is a `null`/`undefined` literal. */
+  readonly isNullable: boolean;
+  /** Whether the initializer is an object literal with zero properties. */
+  readonly isEmptyObject: boolean;
+}
+
+/**
+ * Type-aware query surface (CD-81, extended CD-82). Present on
+ * `ctx.types` only when the check declared `requiresTypes: true` on
+ * `defineCheck` AND a tsconfig was discovered AND ts-morph loaded
+ * successfully in the plugin host process — `undefined` (not present on
+ * the object) in every other case, so plugins should guard with `if
+ * (ctx.types)` rather than expect it unconditionally.
  */
 export interface TypeQuery {
   /**
@@ -174,6 +195,18 @@ export interface TypeQuery {
    * warming up its ts-morph project cache for this tsconfig.
    */
   typeAt(startByte: number, endByte: number): Promise<TypeFacts | null>;
+
+  /**
+   * Resolve the identifier spanning `[startByte, endByte)` to a literal
+   * value via ts-morph symbol resolution — follows `import { x } from
+   * "./constants"` across files to the origin `const x = "..."`
+   * declaration when both files are part of the resolved project.
+   * Returns `null` only when nothing at all is resolvable (not an
+   * identifier, no symbol, no declarations); a resolved declaration with
+   * a non-literal initializer still returns best-effort facts (e.g.
+   * `isNullable` from its type) rather than `null`.
+   */
+  resolveLiteral(startByte: number, endByte: number): Promise<LiteralFacts | null>;
 }
 
 /**

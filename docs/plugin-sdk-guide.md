@@ -25,11 +25,13 @@ Three check shapes cover almost every rule class:
 Pattern A is the fastest and has the widest applicability. Reach for B or C
 only when the rule cannot be expressed on individual lines.
 
-The `AstView` surface exposes twelve node kinds today: `Program`,
+The `AstView` surface exposes eighteen node kinds today: `Program`,
 `CallExpression`, `ImportDeclaration`, `Function`, `ArrowFunctionExpression`,
 `Class`, `ObjectExpression`, `MemberExpression`, `IdentifierReference`,
-`JSXElement`, `JSXAttribute`, `JSXExpressionContainer`. New kinds are
-additive — minor releases may add them without breaking existing plugins.
+`JSXElement`, `JSXAttribute`, `JSXExpressionContainer` (against `.ts`/`.tsx`
+files), plus `Document`, `Element`, `Attribute`, `Text`, `Comment`, `Doctype`
+(against `.html` files, CD-84 — see §2 below). New kinds are additive — minor
+releases may add them without breaking existing plugins.
 
 ## 2. Pattern examples
 
@@ -199,6 +201,65 @@ Key points:
   `a.isExpression === true` for `name={expr}` — the check above only cares
   whether `alt` is present at all, but a stricter check could also flag
   `alt={undefined}` via `findAll("JSXExpressionContainer")`.
+
+#### HTML findAll — flag `<img>` with no `alt` (CD-84)
+
+**Use case:** the same SEO/accessibility rule as above, but against `.html`
+files directly (no JSX/framework involved) — a static HTML page's `<img>`
+elements.
+
+```ts
+// src/index.ts
+import { defineCheck, Category, Severity } from "@cofferdam/check-sdk";
+
+export default defineCheck({
+  id: "HtmlImgMissingAlt",
+  category: Category.Warning,
+  basePriority: 10,
+  defaultSeverity: Severity.Medium,
+  explanation: "An <img> element has no `alt` attribute.",
+  files: { extensions: ["html"] },
+  run(file, ctx) {
+    if (!file.ast) return;
+    for (const el of file.ast.findAll("Element")) {
+      if (el.tagName !== "img") continue;
+      const hasAlt = el.attributes.some((a) => a.name === "alt");
+      if (!hasAlt) {
+        ctx.report({ message: "<img> is missing an `alt` attribute", span: el.span });
+      }
+    }
+  },
+});
+```
+
+Key points:
+
+- `file.ast` against an `.html` file is built from tree-sitter-html
+  (`crates/cofferdam-html`) rather than oxc — the same `AstView` shape,
+  a different parser underneath.
+- `findAll("Element")` returns `readonly ElementNode[]`: `tagName`,
+  `selfClosing`, `attributes` (`readonly AttributeNode[]`), and `children`
+  (non-attribute child nodes — `Text`, nested `Element`s, `Comment`).
+  `AttributeNode.value` is `undefined` for a boolean attribute
+  (`disabled`) and `""` (not `undefined`) for an empty quoted value
+  (`alt=""`) — check which one you mean before treating a falsy value as
+  "missing".
+- To read an element's text content (e.g. a `<title>`'s contents), filter
+  `el.children` for `c.kind === "Text"` and join `.text`:
+  ```ts
+  const text = el.children.filter((c) => c.kind === "Text").map((c) => c.text).join("");
+  ```
+- `file.lines()` against an `.html` file carries HTML-shaped classification
+  flags — `isTag`, `isText`, `isComment` — instead of the JS-specific
+  `isStringLiteral`/`isJsxText` (which are always `false` for `.html`
+  files; `isDocComment`/`isPragma` are JS-only too and also always
+  `false`).
+- A duplicate-`<title>`-across-files check follows the exact same
+  `ctx.corpus` + `finalize` pattern as `DuplicateClassName` above — collect
+  `{ file, text, span }` records per file in `run`, group by title text in
+  `finalize`, and report cross-file duplicates. See
+  `packages/check-sdk/tests/html-ast-view.test.mjs` for a full working
+  example (`"duplicate <title> text across two files..."`).
 
 ### Pattern C — stateful walk
 
@@ -861,3 +922,69 @@ plugin check declares `requiresTypes: true` but the type host couldn't be
 started, the run exits with code 2 instead of silently skipping type
 information — the same gate `--fail-on-type-unavailable` already applies to
 built-in type-aware checks.
+
+### Resolving imported literals (`ctx.types.resolveLiteral`)
+
+`ctx.types` also exposes `resolveLiteral(startByte, endByte)`, which resolves
+an identifier — including one imported from another file — to its literal
+value via ts-morph's cross-file symbol resolution. This is the SEO
+metadata use case this epic is building toward: a check that inspects a
+page component's exported metadata often needs the *value* behind an
+imported constant, not just its type.
+
+Given a shared constants file:
+
+```ts
+// constants.ts
+export const description = "A great page about widgets";
+```
+
+...imported and used in a page file:
+
+```ts
+// page.ts
+import { description } from "./constants";
+
+export const metadata = { description };
+```
+
+A check can resolve `description`'s value at its use site in `page.ts`:
+
+```ts
+export default defineCheck({
+  id: "NonEmptySeoDescription",
+  category: Category.Warning,
+  basePriority: 10,
+  explanation: "SEO description metadata should not be empty.",
+  requiresTypes: true,
+  async run(file, ctx) {
+    if (!file.ast || !ctx.types) return;
+    for (const id of file.ast.findAll("IdentifierReference")) {
+      if (id.name !== "description") continue;
+      const facts = await ctx.types.resolveLiteral(id.span.start_byte, id.span.end_byte);
+      if (facts?.literalString !== undefined && facts.literalString.trim() === "") {
+        ctx.report({ message: "SEO description resolves to an empty string.", span: id.span });
+      }
+    }
+  },
+});
+```
+
+`resolveLiteral` follows the import from `page.ts` to `description`'s origin
+declaration in `constants.ts` — both files are already part of the resolved
+tsconfig's project, so the cross-file lookup is a normal ts-morph symbol
+resolution, not a second file read. It returns
+`Promise<LiteralFacts | null>`:
+
+- `null` means nothing was resolvable at all — the span isn't an identifier,
+  it has no symbol, or the symbol has no declarations.
+- Otherwise, `{ literalString?, isNullable, isEmptyObject }`: `literalString`
+  is set only when the resolved declaration's initializer is a string (or
+  no-substitution template) literal; `isNullable` and `isEmptyObject` are
+  reported independently — a resolved declaration with a non-literal
+  initializer (a function call, a computed value) still comes back with
+  best-effort `isNullable`/`isEmptyObject` facts rather than `null`.
+
+Each `resolveLiteral` call is an in-process ts-morph query — same as
+`typeAt`, there's no Rust↔Node round trip per call to batch away; calling it
+once per candidate identifier in a loop is the expected usage pattern.

@@ -24,6 +24,7 @@ import {
   ensureTsMorphLoaded,
   getOrCreateProject,
   typeAt as coreTypeAt,
+  resolveLiteral as coreResolveLiteral,
 } from "./type-host-core.mjs";
 
 // State persisted across requests in this worker's lifetime. The
@@ -63,6 +64,9 @@ rl.on("line", async (line) => {
       writeResponse({ id, ok: true, result });
     } else if (method === "typeAt") {
       const result = await handleTypeAt(params);
+      writeResponse({ id, ok: true, result });
+    } else if (method === "resolveLiteral") {
+      const result = await handleResolveLiteral(params);
       writeResponse({ id, ok: true, result });
     } else {
       writeResponse({
@@ -193,6 +197,25 @@ async function handleTypeAt(params) {
   const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
   await ensureTsMorphLoaded(state, projectRoot);
   return coreTypeAt(state, tsconfigPath, file, startByte, endByte);
+}
+
+// Resolve an identifier/import reference to a literal value (CD-82).
+// params: { tsconfigPath, file, startByte, endByte }
+// result: LiteralFacts | null
+//   { literalString?, isNullable, isEmptyObject } or null when the node/
+//   symbol can't be resolved at all.
+async function handleResolveLiteral(params) {
+  const { tsconfigPath, file, startByte, endByte } = params;
+  if (typeof tsconfigPath !== "string" || typeof file !== "string") {
+    const err = new Error("resolveLiteral requires tsconfigPath and file");
+    err.code = "internal";
+    throw err;
+  }
+  // See handleTypeAt — ensure ts-morph is loaded against this worker's
+  // configured project root before delegating.
+  const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
+  await ensureTsMorphLoaded(state, projectRoot);
+  return coreResolveLiteral(state, tsconfigPath, file, startByte, endByte);
 }
 
 // --- helpers ----------------------------------------------------------

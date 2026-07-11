@@ -170,6 +170,105 @@ export async function typeAt(state, tsconfigPath, file, startByte, endByte) {
   return typeFacts(type, node);
 }
 
+// Resolve an identifier/import reference to a literal value (CD-82).
+// Follows ts-morph symbol resolution across files — an imported binding's
+// symbol is aliased to the symbol at its origin declaration, so
+// `import { x } from "./constants"` resolves through to `const x = "..."`
+// in constants.ts as long as both files are part of the open Project.
+//
+// Returns LiteralFacts { literalString?, isNullable, isEmptyObject } or
+// `null` when the node/symbol can't be resolved at all (no identifier at
+// that span, no symbol, no declarations). A resolved-but-uninformative
+// declaration (e.g. a function call initializer) still returns facts —
+// `literalString: undefined` plus whatever nullability the declared/
+// inferred type carries — same "best-effort facts, null only when truly
+// nothing resolvable" philosophy as `typeAt`.
+export async function resolveLiteral(state, tsconfigPath, file, startByte, endByte) {
+  const { project } = await getOrCreateProject(state, tsconfigPath);
+
+  const sourceFile = resolveSourceFile(project, file);
+  if (!sourceFile) return null;
+
+  const fullText = sourceFile.getFullText();
+  const startU16 = utf16PosFromByteOffset(fullText, startByte | 0);
+  const endU16 = utf16PosFromByteOffset(fullText, endByte | 0);
+
+  let node = null;
+  const width = endU16 - startU16;
+  try {
+    if (width > 0) {
+      node = sourceFile.getDescendantAtStartWithWidth(startU16, width) ?? null;
+    }
+  } catch {
+    node = null;
+  }
+  if (!node) {
+    try {
+      node = sourceFile.getDescendantAtPos(startU16) ?? null;
+    } catch {
+      node = null;
+    }
+  }
+  if (!node) return null;
+
+  const { Node, SyntaxKind } = state.tsMorph;
+
+  const idNode = Node.isIdentifier(node)
+    ? node
+    : (safeCall(() => node.getFirstDescendantByKind(SyntaxKind.Identifier), null) ?? null);
+  if (!idNode) return null;
+
+  let symbol = safeCall(() => idNode.getSymbol(), null);
+  if (!symbol) return null;
+  const aliased = safeCall(() => symbol.getAliasedSymbol(), null);
+  if (aliased) symbol = aliased;
+
+  const declarations = safeCall(() => symbol.getDeclarations(), []) ?? [];
+  if (declarations.length === 0) return null;
+
+  const target = declarations.find((d) => Node.isVariableDeclaration(d)) ?? declarations[0];
+  return literalFactsFromDeclaration(target, Node, SyntaxKind);
+}
+
+// Build LiteralFacts from a declaration node (typically a
+// VariableDeclaration reached via symbol resolution in `resolveLiteral`).
+function literalFactsFromDeclaration(declNode, Node, SyntaxKind) {
+  let literalString;
+  let isNullable = false;
+  let isEmptyObject = false;
+
+  const initializer = safeCall(() => declNode.getInitializer?.(), null);
+  if (initializer) {
+    if (Node.isStringLiteral(initializer) || Node.isNoSubstitutionTemplateLiteral(initializer)) {
+      literalString = safeCall(() => initializer.getLiteralValue(), undefined);
+    } else if (initializer.getKind() === SyntaxKind.NullKeyword) {
+      isNullable = true;
+    } else if (Node.isIdentifier(initializer) && initializer.getText() === "undefined") {
+      isNullable = true;
+    } else if (
+      Node.isObjectLiteralExpression(initializer) &&
+      initializer.getProperties().length === 0
+    ) {
+      isEmptyObject = true;
+    }
+  }
+
+  // Fold in declared/inferred type nullability regardless of what the
+  // initializer shape told us — a `let` with no initializer, or a type
+  // annotation wider than the initializer, still contributes knowable
+  // facts.
+  const type = safeCall(() => declNode.getType(), null);
+  if (type) {
+    const unionParts = safeCall(() => type.getUnionTypes(), []) ?? [];
+    const parts = unionParts.length > 0 ? unionParts : [type];
+    const includesNull = parts.some((t) => safeCall(() => t.isNull(), false));
+    const includesUndefined = parts.some((t) => safeCall(() => t.isUndefined(), false));
+    if (includesNull || includesUndefined) isNullable = true;
+  }
+
+  return { literalString, isNullable, isEmptyObject };
+}
+
 // Build the compact TypeFacts wire object from a ts-morph Type.
 export function typeFacts(type, node) {
   const unionParts = safeCall(() => type.getUnionTypes(), []) ?? [];

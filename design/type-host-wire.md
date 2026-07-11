@@ -208,6 +208,66 @@ treat as "can't conclude — emit nothing".
   bail on this — the compiler can't prove a guard redundant against a
   type it knows nothing about.
 
+### `resolveLiteral` (CD-82)
+
+Resolve an identifier/import reference to a literal value. Follows
+ts-morph symbol resolution — an imported binding's symbol is aliased to
+the symbol at its origin declaration — so `import { x } from
+"./constants"` resolves through to `const x = "..."` in `constants.ts`
+as long as both files are part of the open Project (the whole tsconfig's
+file set is already loaded, so this "just works" without extra wiring).
+
+Same byte-range-to-node resolution as `typeAt`: UTF-8 byte offsets are
+translated to UTF-16 positions, the node is found via
+`getDescendantAtStartWithWidth` (falling back to `getDescendantAtPos`).
+
+**Request `params`:**
+
+```json
+{
+  "tsconfigPath": "/abs/tsconfig.json",
+  "file": "/abs/src/page.ts",
+  "startByte": 9,
+  "endByte": 20
+}
+```
+
+Same shape as `typeAt`'s params — `startByte`/`endByte` should span the
+identifier reference (e.g. the imported binding's use site, or its
+declaration name).
+
+**Response `result`:** `LiteralFacts`, or JSON `null` when nothing is
+resolvable at all (the node at that span isn't an identifier, has no
+symbol, or the symbol has no declarations). The Rust client maps a
+`null` result to `None`.
+
+```json
+{
+  "literalString": "A great page about widgets",
+  "isNullable": false,
+  "isEmptyObject": false
+}
+```
+
+- `literalString` (string, optional): present only when the resolved
+  declaration's initializer is a string literal or no-substitution
+  template literal.
+- `isNullable` (bool): the declared/inferred type includes `null` or
+  `undefined`, or the initializer is a `null`/`undefined` literal.
+- `isEmptyObject` (bool): the initializer is an object literal with zero
+  properties (`{}`).
+
+A resolved declaration whose initializer isn't a literal (a function
+call, a non-empty object, etc.) still returns `LiteralFacts` with
+`literalString` absent rather than `null` — mirrors `typeAt`'s
+"best-effort facts, `null` only when truly nothing resolvable"
+philosophy. `null` is reserved for "couldn't even identify a symbol to
+resolve", not "resolved to something uninteresting".
+
+No new error codes — failures to open the project or resolve ts-morph
+surface via the same `ts_morph_unavailable` / `project_init_failed`
+codes `typeAt` uses.
+
 ## Worker pool (CD-31)
 
 The Rust client no longer holds a single worker. `build_type_oracle` spawns a

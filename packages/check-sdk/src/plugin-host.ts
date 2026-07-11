@@ -33,6 +33,7 @@ export interface NativeLineView {
   readonly isComment: boolean;
   readonly isDocComment: boolean;
   readonly isStringLiteral: boolean;
+  readonly stringLiteralRanges?: ReadonlyArray<readonly [number, number]>;
   readonly isJsxText: boolean;
   readonly isPragma: boolean;
   readonly isTag: boolean;
@@ -98,6 +99,7 @@ function buildLineView(native: NativeLineView): LineView {
     isComment: native.isComment,
     isDocComment: native.isDocComment,
     isStringLiteral: native.isStringLiteral,
+    stringLiteralRanges: native.stringLiteralRanges ?? [],
     isJsxText: native.isJsxText,
     isPragma: native.isPragma,
     isTag: native.isTag,

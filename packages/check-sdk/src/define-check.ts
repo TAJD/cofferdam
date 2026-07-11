@@ -115,8 +115,12 @@ export interface Check<S extends OptionsSchema = OptionsSchema> {
    *
    * Findings emitted here flow through the same suppression, baseline,
    * and severity machinery as per-file findings.
+   *
+   * May return a `Promise` — the plugin host awaits `finalize()` (CD-91),
+   * so a hook that needs to `await ctx.types.typeAt(...)` or do async
+   * corpus work can declare `async finalize(...)`.
    */
-  finalize?(ctx: FinalizeContext, opts: ResolvedOptions<S>): void;
+  finalize?(ctx: FinalizeContext, opts: ResolvedOptions<S>): void | Promise<void>;
 }
 
 /**
@@ -162,7 +166,7 @@ export interface DefineCheckInput<S extends OptionsSchema> {
    * Optional cross-file finalize hook (cd-9hp.6). See the
    * {@link Check.finalize} doc on the output interface.
    */
-  finalize?(ctx: FinalizeContext, opts: ResolvedOptions<S>): void;
+  finalize?(ctx: FinalizeContext, opts: ResolvedOptions<S>): void | Promise<void>;
 }
 
 /**
@@ -200,19 +204,17 @@ export interface DefineCheckInput<S extends OptionsSchema> {
 export function defineCheck<const S extends OptionsSchema = {}>(
   input: DefineCheckInput<S>,
 ): Check<S> {
+  // Spread first so any field on `input` beyond this SDK version's known
+  // `DefineCheckInput` shape (e.g. a field added by a newer `.d.ts` than
+  // what's actually installed, CD-94) still reaches the returned check
+  // descriptor instead of being silently dropped by a hardcoded copy
+  // list. Only the fields with real defaults get overridden below.
   return {
-    id: input.id,
-    category: input.category,
-    basePriority: input.basePriority,
+    ...input,
     defaultSeverity: input.defaultSeverity ?? "medium",
-    explanation: input.explanation,
-    body: input.body,
     requiresTypes: input.requiresTypes ?? false,
     outputMode: input.outputMode ?? false,
     consistency: input.consistency ?? false,
     options: input.options ?? ({} as S),
-    files: input.files,
-    run: input.run,
-    ...(input.finalize !== undefined ? { finalize: input.finalize } : {}),
-  };
+  } as Check<S>;
 }

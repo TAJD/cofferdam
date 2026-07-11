@@ -266,7 +266,14 @@ async function finalizeAndEmit() {
     };
 
     try {
-      check.finalize(ctx, opts);
+      // CD-91: `finalize` may be `async` (TS's void-return compatibility
+      // rule lets that typecheck against `Check.finalize`'s sync-or-void
+      // signature) — awaiting via `Promise.resolve(...)` handles both a
+      // synchronous return and a real Promise uniformly, the same
+      // treatment `run()` already gets. Without this, a rejected async
+      // finalize never surfaced as `finalize_threw`, and late `ctx.report`
+      // calls inside it could race the host's closing `done` record.
+      await Promise.resolve(check.finalize(ctx, opts));
     } catch (err) {
       writeRecord({
         type: "error",
@@ -756,6 +763,7 @@ function buildLineView(native) {
     isComment: native.isComment,
     isDocComment: native.isDocComment,
     isStringLiteral: native.isStringLiteral,
+    stringLiteralRanges: native.stringLiteralRanges ?? [],
     isJsxText: native.isJsxText,
     isPragma: native.isPragma,
     isTag: native.isTag,

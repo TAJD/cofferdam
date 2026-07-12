@@ -23,9 +23,9 @@ globset = { workspace = true }
 smol_str = { workspace = true }
 oxc_ast = { workspace = true }
 oxc_ast_visit = { workspace = true }
-oxc_semantic = "0.128.0"
+oxc_semantic = "0.138.0"
 oxc_span = { workspace = true }
-oxc_syntax = "0.128"
+oxc_syntax = "0.138"
 # unicode-ident already lives in the dep tree via oxc transitively;
 # pull it in directly so DuplicateBlock's tokeniser can recognise
 # Unicode identifiers (TS allows `λ`, `α`, Han characters, etc.).

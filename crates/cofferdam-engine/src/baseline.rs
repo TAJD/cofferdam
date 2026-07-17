@@ -324,8 +324,24 @@ pub fn entry_for(issue: &Issue, signature: String, root: Option<&Path>) -> Basel
 /// forward-slash form when the path can't be made relative.
 pub fn normalize_path(path: &Path, root: Option<&Path>) -> String {
     let rel = match root {
-        Some(r) => path.strip_prefix(r).unwrap_or(path),
-        None => path,
+        // CD-105: `path` and `root` frequently arrive in different forms
+        // between `baseline write` and `check` — one relative-to-cwd, the
+        // other absolute, or (on Windows) differing only in drive-letter
+        // casing — even though they name the same files. A plain
+        // `strip_prefix` on the raw forms then silently fails (falling
+        // back to the untouched absolute `path`), so the stored baseline
+        // entry and the freshly computed one never string-match and every
+        // finding looks "new". Canonicalizing both sides first (when the
+        // paths actually exist on disk) makes the comparison form-
+        // independent; synthetic/nonexistent paths (unit tests) fall back
+        // to the prior raw-strip behavior unchanged.
+        Some(r) => match (path.canonicalize(), r.canonicalize()) {
+            (Ok(cp), Ok(cr)) => cp
+                .strip_prefix(&cr)
+                .map_or_else(|_| path.to_path_buf(), Path::to_path_buf),
+            _ => path.strip_prefix(r).unwrap_or(path).to_path_buf(),
+        },
+        None => path.to_path_buf(),
     };
     // Filter `.` components introduced by `Path::new(".").join(...)` and
     // similar paths so the stored form is the cleanest representation.
@@ -748,6 +764,34 @@ mod tests {
     fn normalize_path_strips_leading_dot() {
         let p = PathBuf::from("./src/foo.ts");
         assert_eq!(normalize_path(&p, None), "src/foo.ts");
+    }
+
+    /// CD-105: `Path::strip_prefix` compares path components byte-for-byte.
+    /// On Windows the filesystem is case-preserving but case-*insensitive*,
+    /// so the same directory can be reported with different casing by
+    /// different tools/shells (e.g. `cwd()` returning `...\start-line` in
+    /// one invocation and `...\Start-Line` in another) while still naming
+    /// the identical on-disk path. A root path with different casing than
+    /// the file's own absolutized path then silently failed to strip
+    /// (`unwrap_or(path)` swallows the error), falling back to the full
+    /// absolute form — the stored baseline entry (relative, from the write
+    /// side) never matched the freshly computed one (still absolute, from
+    /// the check side), so every finding looked new.
+    #[test]
+    #[cfg(windows)]
+    fn normalize_path_ignores_windows_directory_casing_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let sub = dir.path().join("Src");
+        std::fs::create_dir_all(&sub).expect("mkdir Src");
+        let file = sub.join("a.ts");
+        std::fs::write(&file, "").expect("write a.ts");
+
+        // Same directory, deliberately different case than what's on disk —
+        // simulates a root path sourced from a differently-cased cwd/shell.
+        let root_str = dir.path().to_string_lossy().to_string();
+        let cased_root = PathBuf::from(root_str.to_uppercase());
+
+        assert_eq!(normalize_path(&file, Some(&cased_root)), "Src/a.ts");
     }
 
     #[test]

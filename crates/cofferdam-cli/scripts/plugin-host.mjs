@@ -77,6 +77,7 @@ const VISITOR_METHODS = {
   ObjectExpression: "visitObjectExpression",
   MemberExpression: "visitMemberExpression",
   IdentifierReference: "visitIdentifierReference",
+  VariableDeclaration: "visitVariableDeclaration",
   JSXElement: "visitJSXElement",
   JSXAttribute: "visitJSXAttribute",
   JSXExpressionContainer: "visitJSXExpressionContainer",
@@ -158,11 +159,31 @@ async function loadPlugins(pluginPaths) {
         kind: "load_failed",
         plugin: pluginPath,
         file: "",
-        message: err instanceof Error ? err.message : String(err),
+        message: describeLoadError(err),
       });
     }
   }
   return errors;
+}
+
+// CD-72: Node's dynamic `import()` parses a `.js` file as CommonJS unless
+// the nearest package.json declares `"type": "module"` — a plugin authored
+// with `import`/`export` syntax but missing that field fails with one of
+// these syntax errors, which give no hint about the actual fix. Detect the
+// known error shapes and append one.
+function describeLoadError(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  const looksLikeMissingTypeModule =
+    /Cannot use import statement outside a module/.test(message) ||
+    /Unexpected token ['"]export['"]/.test(message) ||
+    /exports is not defined/.test(message) ||
+    /module is not defined/.test(message);
+  if (!looksLikeMissingTypeModule) return message;
+  return (
+    `${message} ` +
+    `(hint: this looks like ESM syntax loaded as CommonJS — add ` +
+    `"type": "module" to the plugin package's package.json)`
+  );
 }
 
 async function processFile(rec) {
@@ -643,6 +664,14 @@ function buildAstView(wire) {
       }
       case "IdentifierReference": {
         out.name = w.name;
+        break;
+      }
+      case "VariableDeclaration": {
+        out.declarationKind = w.declarationKind;
+        out.declarations = (w.declarations ?? []).map((d) => ({
+          name: d.name ?? undefined,
+          init: get(d.initIdx ?? -1) ?? undefined,
+        }));
         break;
       }
       case "JSXElement": {

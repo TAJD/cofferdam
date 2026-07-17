@@ -38,6 +38,11 @@ export type Walk = (typeof Walk)[keyof typeof Walk];
  * CD-84 — the HTML AST surface, walkable via `file.ast` against `.html`
  * files the same way the JS/JSX kinds above are walkable against
  * `.ts`/`.tsx` files. `Document` is the HTML root (mirrors `Program`).
+ *
+ * `VariableDeclaration` added in CD-78 — one node per `const`/`let`/`var`
+ * statement, exposing declarator name(s) + init so a plugin can flag a
+ * `const`-bound identifier (the modern `const foo = () => {}` form that
+ * `findAll("Function")` can't see). Additive per the freeze rule above.
  */
 export type NodeKind =
   | "Program"
@@ -49,6 +54,7 @@ export type NodeKind =
   | "ObjectExpression"
   | "MemberExpression"
   | "IdentifierReference"
+  | "VariableDeclaration"
   | "JSXElement"
   | "JSXAttribute"
   | "JSXExpressionContainer"
@@ -125,6 +131,23 @@ export interface MemberExpressionNode extends AstNodeBase<"MemberExpression"> {
 
 export interface IdentifierReferenceNode extends AstNodeBase<"IdentifierReference"> {
   readonly name: string;
+}
+
+/**
+ * A `const`/`let`/`var` statement (CD-78). One node covers every
+ * declarator in the statement — iterate `declarations`. `name` is
+ * `undefined` for a destructuring pattern (`const { a } = obj`); `init`
+ * is `undefined` when the initializer isn't a surfaced node kind (e.g. a
+ * numeric/string literal, which the v0 surface doesn't expose). Check
+ * `init?.kind === "ArrowFunctionExpression"` (or `"Function"`) to detect
+ * a `const`-bound function.
+ */
+export interface VariableDeclarationNode extends AstNodeBase<"VariableDeclaration"> {
+  readonly declarationKind: "const" | "let" | "var";
+  readonly declarations: readonly {
+    readonly name: string | undefined;
+    readonly init: AstNode | undefined;
+  }[];
 }
 
 /**
@@ -213,6 +236,7 @@ export type AstNode =
   | ObjectExpressionNode
   | MemberExpressionNode
   | IdentifierReferenceNode
+  | VariableDeclarationNode
   | JSXElementNode
   | JSXAttributeNode
   | JSXExpressionContainerNode
@@ -242,6 +266,7 @@ export interface AstVisitor {
   visitObjectExpression?(node: ObjectExpressionNode): Walk;
   visitMemberExpression?(node: MemberExpressionNode): Walk;
   visitIdentifierReference?(node: IdentifierReferenceNode): Walk;
+  visitVariableDeclaration?(node: VariableDeclarationNode): Walk;
   visitJSXElement?(node: JSXElementNode): Walk;
   visitJSXAttribute?(node: JSXAttributeNode): Walk;
   visitJSXExpressionContainer?(node: JSXExpressionContainerNode): Walk;

@@ -38,3 +38,10 @@ export function pipeline(input: RawInput, currency: Currency, region: Region) {
   return { items: taxed, total: sumItems(taxed) };
 }
 ```
+
+**Suppressing:** each duplicate group is emitted as a single `Issue` covering every
+occurrence — one primary location plus `related` spans for the rest. A
+`cofferdam-ignore: Refactor.DuplicateBlock` comment placed at *any* occurrence (the
+primary one or any related one) suppresses the whole finding, not just that copy.
+You don't need to find and suppress every occurrence individually — one ignore
+comment on either side of a duplicated pair is enough.

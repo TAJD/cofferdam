@@ -1,0 +1,23 @@
+{
+  "name": "@cofferdam-fixtures/no-banned-const",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End-to-end fixture: NoBannedConst plugin — const-bound banned identifiers via findAll(\"VariableDeclaration\") (CD-78).",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "build:fail": "tsc -p ./tsconfig.fail.json"
+  },
+  "dependencies": {
+    "@cofferdam/check-sdk": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

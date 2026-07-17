@@ -1,0 +1,48 @@
+{
+  "findings": [
+    {
+      "id": "Warning.NoBannedConst",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/no-banned-const/fixture.ts",
+      "line": 16,
+      "column": 1,
+      "start_byte": 630,
+      "end_byte": 755,
+      "message": "Local const `buildHeaders` shadows a banned identifier (init kind: ArrowFunctionExpression)."
+    },
+    {
+      "id": "Warning.NoBannedConst",
+      "category": "warning",
+      "priority": 15,
+      "severity": "high",
+      "file": "examples-plugins/no-banned-const/fixture.ts",
+      "line": 28,
+      "column": 8,
+      "start_byte": 1053,
+      "end_byte": 1094,
+      "message": "Local const `fetch` shadows a banned identifier (init kind: ArrowFunctionExpression)."
+    },
+    {
+      "id": "Design.OrphanExport",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.OrphanExport",
+      "priority": 5,
+      "severity": "medium",
+      "file": "examples-plugins/no-banned-const/fixture.ts",
+      "line": 28,
+      "column": 14,
+      "start_byte": 1059,
+      "end_byte": 1064,
+      "message": "`fetch` is exported but never imported in the project"
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "by_category": {
+      "design": 1,
+      "warning": 2
+    }
+  }
+}

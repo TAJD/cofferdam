@@ -394,6 +394,46 @@ fn duplicate_block_default_does_not_emit_token_findings() {
     );
 }
 
+#[test]
+fn duplicate_block_suppressed_from_either_occurrence() {
+    // CD-77: a `cofferdam-ignore` placed at the *related* (non-primary)
+    // occurrence of a DuplicateBlock pair must suppress the finding just
+    // as effectively as one placed at the primary occurrence — the engine
+    // emits a single Issue per duplicate group, so either side should work.
+    let shared = "\
+export const aVal = 111;
+export const bVal = 222;
+export const cVal = 333;
+export const dVal = 444;
+export const eVal = 555;
+export const fVal = 666;
+";
+    let temp_dir = TempDir::new().expect("temp dir");
+    let path_a = temp_dir.path().join("a.ts");
+    let path_b = temp_dir.path().join("b.ts");
+    std::fs::write(&path_a, shared).expect("write a");
+    // b.ts: same statement run, with an ignore comment directly above the
+    // first duplicated statement (suppression targets the next non-blank
+    // line after the directive).
+    let suppressed_b = format!("// cofferdam-ignore: Refactor.DuplicateBlock\n{shared}");
+    std::fs::write(&path_b, &suppressed_b).expect("write b");
+
+    use cofferdam_checks::refactor::DuplicateBlock;
+    let engine = Engine::new(vec![Box::new(DuplicateBlock::default())]);
+    let issues = engine
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
+
+    assert!(
+        issues
+            .iter()
+            .all(|i| i.check_id != "Refactor.DuplicateBlock"),
+        "an ignore comment at the related (non-primary) occurrence should \
+         suppress the whole DuplicateBlock finding. Got: {:?}",
+        issues
+    );
+}
+
 // ============================================================
 // Two-pass consistency checks
 // ============================================================

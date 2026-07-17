@@ -25,13 +25,15 @@ Three check shapes cover almost every rule class:
 Pattern A is the fastest and has the widest applicability. Reach for B or C
 only when the rule cannot be expressed on individual lines.
 
-The `AstView` surface exposes eighteen node kinds today: `Program`,
+The `AstView` surface exposes nineteen node kinds today: `Program`,
 `CallExpression`, `ImportDeclaration`, `Function`, `ArrowFunctionExpression`,
 `Class`, `ObjectExpression`, `MemberExpression`, `IdentifierReference`,
-`JSXElement`, `JSXAttribute`, `JSXExpressionContainer` (against `.ts`/`.tsx`
-files), plus `Document`, `Element`, `Attribute`, `Text`, `Comment`, `Doctype`
-(against `.html` files, CD-84 — see §2 below). New kinds are additive — minor
-releases may add them without breaking existing plugins.
+`VariableDeclaration` (CD-78 — one node per `const`/`let`/`var` statement,
+exposing declarator name(s) + init), `JSXElement`, `JSXAttribute`,
+`JSXExpressionContainer` (against `.ts`/`.tsx` files), plus `Document`,
+`Element`, `Attribute`, `Text`, `Comment`, `Doctype` (against `.html` files,
+CD-84 — see §2 below). New kinds are additive — minor releases may add them
+without breaking existing plugins.
 
 ## 2. Pattern examples
 
@@ -821,6 +823,7 @@ reduces the user's `plugins = [...]` list.
   "name": "@acme/cofferdam-checks-brand",
   "version": "1.0.0",
   "description": "Brand-name enforcement checks for cofferdam.",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -835,6 +838,14 @@ reduces the user's `plugins = [...]` list.
   }
 }
 ```
+
+`"type": "module"` is required: the plugin host loads your compiled entry
+point with a dynamic `import()`, which parses a `.js` file as CommonJS
+unless the nearest `package.json` declares `"type": "module"` — omitting it
+makes an `export default ...` entry point fail to load (recent Node versions
+auto-detect and fall back with a warning; Node 16–19 throw a hard
+`SyntaxError`, and the plugin host's error message will point back here).
+Every example plugin under `examples-plugins/` sets this field; mirror it.
 
 Declare `@cofferdam/check-sdk` as a `peerDependency`, not a `dependency`. The
 cofferdam binary ships its own copy; treating it as a peer prevents version
@@ -1033,14 +1044,16 @@ instead of going through that wrapper. Porting it to cofferdam surfaced two
 lessons worth knowing before you migrate your own grep-based check.
 
 **Lesson 1 — Pattern A and Pattern B often belong in the same check, not two
-checks.** The `buildHeaders` half stayed a line scan (Pattern A) because the
-`const buildHeaders = (token) => ...` arrow-function form isn't visible to
-`file.ast.findAll(...)` — the SDK's AST surface doesn't expose a
-`VariableDeclaration` node kind yet (tracked as CD-78), only `function
-buildHeaders(...)` is. Rather than accept a coverage gap for the common
-`const` form, the check keeps the original grep's line-scan for that half and
-adds a proper `findAll("CallExpression")` walk for the `fetch()` half, which
-*is* a clean AST match:
+checks.** The `buildHeaders` half originally stayed a line scan (Pattern A)
+because the `const buildHeaders = (token) => ...` arrow-function form wasn't
+visible to `file.ast.findAll(...)` — the SDK's AST surface didn't expose a
+`VariableDeclaration` node kind, only `function buildHeaders(...)`. CD-78
+closed that gap: `findAll("VariableDeclaration")` now returns one node per
+`const`/`let`/`var` statement, and each declarator exposes its `name` and
+`init`, so the `const`-bound form is a clean AST match (check
+`declarationKind === "const"` and `init?.kind === "ArrowFunctionExpression"` —
+see the `no-banned-const` example plugin). The `fetch()` half is a
+`findAll("CallExpression")` walk, which *is* also a clean AST match:
 
 ```ts
 // buildHeaders — line scan (Pattern A), because CD-78 means arrow-function

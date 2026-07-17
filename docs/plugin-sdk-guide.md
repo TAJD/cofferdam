@@ -821,6 +821,7 @@ reduces the user's `plugins = [...]` list.
   "name": "@acme/cofferdam-checks-brand",
   "version": "1.0.0",
   "description": "Brand-name enforcement checks for cofferdam.",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -835,6 +836,14 @@ reduces the user's `plugins = [...]` list.
   }
 }
 ```
+
+`"type": "module"` is required: the plugin host loads your compiled entry
+point with a dynamic `import()`, which parses a `.js` file as CommonJS
+unless the nearest `package.json` declares `"type": "module"` — omitting it
+makes an `export default ...` entry point fail to load (recent Node versions
+auto-detect and fall back with a warning; Node 16–19 throw a hard
+`SyntaxError`, and the plugin host's error message will point back here).
+Every example plugin under `examples-plugins/` sets this field; mirror it.
 
 Declare `@cofferdam/check-sdk` as a `peerDependency`, not a `dependency`. The
 cofferdam binary ships its own copy; treating it as a peer prevents version

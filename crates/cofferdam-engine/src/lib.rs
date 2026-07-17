@@ -881,12 +881,28 @@ impl Engine {
         // persistent map and re-parses only changed files — cd-32 perf:
         // parsing all files' directives here dominated the incremental
         // finalize, ~7.7ms on a 325-file repo).
+        //
+        // CD-77: an Issue with `related` spans (e.g. Refactor.DuplicateBlock's
+        // paired occurrences) is suppressed if a `cofferdam-ignore` sits at
+        // EITHER the primary location OR any related location — not just the
+        // primary. Without this, only the occurrence the engine happened to
+        // pick as "primary" (deterministic but not user-visible: earliest
+        // file path, then earliest byte offset) could be suppressed; an
+        // ignore comment placed at the other side of the duplicate had no
+        // effect, which is surprising since both spans describe the same
+        // finding.
         issues.retain(|issue| {
-            if let Some(sup) = suppressions_by_file.get(&issue.file) {
-                !sup.is_suppressed(issue.location.line(), &issue.check_id)
-            } else {
-                true
-            }
+            let is_suppressed_at = |file: &std::path::Path, line: u32| {
+                suppressions_by_file
+                    .get(file)
+                    .is_some_and(|sup| sup.is_suppressed(line, &issue.check_id))
+            };
+            let suppressed = is_suppressed_at(&issue.file, issue.location.line())
+                || issue
+                    .related
+                    .iter()
+                    .any(|r| is_suppressed_at(&r.file, r.location.line()));
+            !suppressed
         });
 
         // Severity post-pass (cd-t1a): stamp each issue with its

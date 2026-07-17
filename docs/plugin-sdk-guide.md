@@ -1020,6 +1020,72 @@ violation plus a fully-compliant `good/page.tsx`, and three built HTML pages
 output-mode path. See `examples-plugins/seo/README.md` for the full
 violation-by-violation breakdown and how to build + run it locally.
 
+## 9. Real-world case study: porting a grep script to a plugin (CD-69)
+
+The examples above are synthetic. This one is a plugin actually running in
+production, in the open-source [projektor](https://github.com/TAJD/projektor)
+repo: `IslandApiConvention`, at
+[`plugins/island-api/src/index.ts`](https://github.com/TAJD/projektor/blob/main/plugins/island-api/src/index.ts).
+It replaced a shell script that grepped island components for two
+convention violations — declaring a local `buildHeaders` function instead of
+using the project's shared `apiFetch` wrapper, and calling `fetch()` directly
+instead of going through that wrapper. Porting it to cofferdam surfaced two
+lessons worth knowing before you migrate your own grep-based check.
+
+**Lesson 1 — Pattern A and Pattern B often belong in the same check, not two
+checks.** The `buildHeaders` half stayed a line scan (Pattern A) because the
+`const buildHeaders = (token) => ...` arrow-function form isn't visible to
+`file.ast.findAll(...)` — the SDK's AST surface doesn't expose a
+`VariableDeclaration` node kind yet (tracked as CD-78), only `function
+buildHeaders(...)` is. Rather than accept a coverage gap for the common
+`const` form, the check keeps the original grep's line-scan for that half and
+adds a proper `findAll("CallExpression")` walk for the `fetch()` half, which
+*is* a clean AST match:
+
+```ts
+// buildHeaders — line scan (Pattern A), because CD-78 means arrow-function
+// declarations aren't visible as an AST node kind yet.
+const BUILD_HEADERS_PATTERN = /\b(function|const)\s+buildHeaders\b/;
+for (const ln of file.lines()) {
+  const m = BUILD_HEADERS_PATTERN.exec(ln.text);
+  if (!m) continue;
+  ctx.report({ message: "...", span: ln.spanFor(m.index, m.index + m[0].length) });
+}
+
+// raw fetch() — AST findAll (Pattern B), including the window.fetch() /
+// globalThis.fetch() / self.fetch() bypasses the original grep missed.
+for (const call of file.ast.findAll("CallExpression")) {
+  const flagged = describeRawFetchCallee(call.callee); // MemberExpression walk
+  if (!flagged) continue;
+  ctx.report({ message: `Raw "${flagged}" call — ...`, span: call.span });
+}
+```
+
+When migrating a grep script, don't force every rule in it into one pattern.
+Match each half of the check to whichever pattern actually expresses it, the
+same way this check keeps a line scan for one violation and an AST walk for
+the other.
+
+**Lesson 2 — a trailing `dir/**` glob has a gap; use `dir/**/*`.** Scoping the
+check to one directory (`files.pathPatterns: ["apps/web/src/islands/**/*"]`)
+hit a real cofferdam bug along the way: a bare trailing `**` (no `/*` suffix)
+never matches a file sitting *directly* in the scoped directory — only files
+nested at least one directory deeper. `examples-plugins/plugin-scope-glob/`
+is the regression fixture for this (filed as CD-70, alongside a related
+silent-zero-match bug, CD-71, that made the gap hard to notice in the first
+place — a plugin whose `pathPatterns` matches nothing now emits
+`Warning.PluginZeroScopeMatch` instead of silently finding zero issues). Until
+CD-70 is fixed upstream, scope a plugin to a single directory with a trailing
+`/*`, not a bare `**`.
+
+The full plugin, its fixture, and its `expected.json` regression contract are
+worth reading end to end if you're about to port your own team's grep/shell
+convention check: [`plugins/island-api/`](https://github.com/TAJD/projektor/tree/main/plugins/island-api)
+in the projektor repo. There's also a public tutorial walking through it —
+[How the island API convention plugin works](https://tajd.github.io/projektor/contributing/island-api-plugin/) —
+aimed at projektor contributors but equally useful as a second worked example
+of this guide's Pattern A/B split.
+
 **A note on where `SeoNonEmptyDescription` actually resolves types.**
 `cofferdam`'s tsconfig discovery for type-aware *plugin* checks walks UP
 from the invoking process's current directory only — it never searches

@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A `cofferdam-ignore` comment placed at the *related* (non-primary) occurrence of a paired `Refactor.DuplicateBlock` finding now suppresses it, matching a comment at the primary occurrence — previously only the primary side had any effect (CD-77).
+
+### Docs
+- The plugin SDK guide's `package.json` example now includes the required `"type": "module"` field; the plugin host also recognizes the classic Node "missing type: module" error shapes and appends a hint pointing at the fix (CD-72).
+
 ## [0.3.8] - 2026-07-11
 
 ### Added

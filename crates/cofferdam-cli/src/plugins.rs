@@ -748,11 +748,31 @@ pub fn run_plugins_with_sources(
                             .collect();
                         (line_views, None)
                     }
-                    // Rust, unrecognised: no whole-file parse for
-                    // plugins today (matches the engine's catch-all —
-                    // no built-in check declares Rust for the plugin
-                    // surface yet).
-                    Language::Rust => (Vec::new(), None),
+                    // Rust: no plugin-facing AST wire builder yet (matches
+                    // the engine's catch-all — no built-in check declares
+                    // Rust for the plugin surface yet), but a Pattern-A
+                    // line-scan check scoped to `.rs` needs real line
+                    // text/spans the same way Astro does (CD-93) —
+                    // `Lines::plain` gives unclassified (all flags false)
+                    // line views rather than silently iterating zero lines.
+                    Language::Rust => {
+                        let line_views = cofferdam_core::Lines::plain(text)
+                            .map(|lv| ManifestLineView {
+                                line_no: lv.line_no,
+                                text: lv.text.to_string(),
+                                is_comment: false,
+                                is_doc_comment: false,
+                                is_string_literal: false,
+                                string_literal_ranges: Vec::new(),
+                                is_jsx_text: false,
+                                is_pragma: false,
+                                is_tag: false,
+                                is_text: false,
+                                line_start: lv.line_start,
+                            })
+                            .collect();
+                        (line_views, None)
+                    }
                 };
             // Resolve layer membership for this file. `None` → JSON `null`.
             let layer: Option<String> = layers_cfg

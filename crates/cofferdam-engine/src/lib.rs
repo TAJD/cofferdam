@@ -1721,6 +1721,16 @@ fn rust_load_error_issue(file: &SourceFile, err: &cofferdam_rust::RustParseError
 /// parse recovered with ERROR / MISSING nodes. Mirrors
 /// `rust_parse_error_issue` — see its docs for the "first span only"
 /// rationale.
+///
+/// Severity is `Low`, not `Critical` (CD-101): real-repo validation against
+/// ERB/EJS/Jinja template directories (Flask `templates/`, Rails
+/// `app/views/`) found this fires routinely on template idioms tree-sitter-
+/// html has no grammar for — a `<% %>` scriptlet, or a Jinja
+/// `{{ url_for("x") }}` nested inside a double-quoted attribute — that are
+/// only invalid as *unrendered* HTML source, not bugs. Unlike a genuine
+/// unparseable file (`html_load_error_issue`, still `Critical`), a
+/// recovered parse is usually a template-source false alarm rather than
+/// "almost always a real bug".
 fn html_parse_error_issue(file: &SourceFile, tree: &HtmlParseTree) -> Issue {
     let span = tree.error_spans().first().copied().unwrap_or(Span {
         start_byte: 0,
@@ -1730,12 +1740,14 @@ fn html_parse_error_issue(file: &SourceFile, tree: &HtmlParseTree) -> Issue {
     });
     Issue {
         check_id: "Warning.ParseError".to_string(),
-        message: "parse error: tree-sitter recovered with ERROR / MISSING nodes (HTML adapter)"
+        message: "parse error: tree-sitter recovered with ERROR / MISSING nodes (HTML adapter) \
+                  — often a template idiom (ERB/EJS `<% %>`, Jinja nested-quote attributes) \
+                  rather than malformed HTML; see docs/languages.md#html-build-output--plugin-surface"
             .to_string(),
         file: file.path.clone(),
         location: Location::from_span(&file.path, span),
         priority: Priority(20),
-        severity: Severity::Critical,
+        severity: Severity::Low,
         related: Vec::new(),
     }
 }

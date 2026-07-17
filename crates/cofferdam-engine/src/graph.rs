@@ -82,6 +82,23 @@ impl GraphBuilder {
                 ".cjs".into(),
                 ".json".into(),
             ],
+            // TS NodeNext/ESM convention (CD-104): source writes a `.js`
+            // specifier (`import "./foo.js"`) that must resolve against
+            // the sibling `.ts`/`.tsx` file actually on disk, since Node's
+            // ESM loader requires the extension the *compiled* output will
+            // have, not the source extension. Without this alias map,
+            // `resolve_file` only ever looks for a literal `foo.js`, so
+            // every such import fails to resolve and `Design.OrphanExport`
+            // treats the target as unimported.
+            extension_alias: vec![
+                (
+                    ".js".into(),
+                    vec![".ts".into(), ".tsx".into(), ".js".into()],
+                ),
+                (".jsx".into(), vec![".tsx".into(), ".jsx".into()]),
+                (".mjs".into(), vec![".mts".into(), ".mjs".into()]),
+                (".cjs".into(), vec![".cts".into(), ".cjs".into()]),
+            ],
             tsconfig: Some(TsconfigDiscovery::Auto),
             ..ResolveOptions::default()
         };

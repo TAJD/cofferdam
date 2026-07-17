@@ -77,6 +77,7 @@ const VISITOR_METHODS = {
   ObjectExpression: "visitObjectExpression",
   MemberExpression: "visitMemberExpression",
   IdentifierReference: "visitIdentifierReference",
+  VariableDeclaration: "visitVariableDeclaration",
   JSXElement: "visitJSXElement",
   JSXAttribute: "visitJSXAttribute",
   JSXExpressionContainer: "visitJSXExpressionContainer",
@@ -663,6 +664,14 @@ function buildAstView(wire) {
       }
       case "IdentifierReference": {
         out.name = w.name;
+        break;
+      }
+      case "VariableDeclaration": {
+        out.declarationKind = w.declarationKind;
+        out.declarations = (w.declarations ?? []).map((d) => ({
+          name: d.name ?? undefined,
+          init: get(d.initIdx ?? -1) ?? undefined,
+        }));
         break;
       }
       case "JSXElement": {

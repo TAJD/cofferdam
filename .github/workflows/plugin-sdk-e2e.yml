@@ -76,13 +76,14 @@ jobs:
         run: |
           node scripts/check-ast-spans.mjs examples-plugins/brand-casing/fixture.ts examples-plugins/brand-casing/cofferdam.toml
           node scripts/check-ast-spans.mjs examples-plugins/no-http-client/fixture.ts examples-plugins/no-http-client/cofferdam.toml
+          node scripts/check-ast-spans.mjs examples-plugins/no-banned-const/fixture.ts examples-plugins/no-banned-const/cofferdam.toml
           node scripts/check-ast-spans.mjs examples-plugins/tenant-isolation/fixture.ts examples-plugins/tenant-isolation/cofferdam.toml
 
       - name: Negative fixtures pin SDK type strictness (cd-81a.2 / cd-svf)
         run: |
           # duplicate-class omits the negative tsconfig — it's the
           # cd-9hp.6 cross-file fixture, not a type-tightness pin.
-          for plugin in brand-casing no-http-client tenant-isolation; do
+          for plugin in brand-casing no-http-client no-banned-const tenant-isolation; do
             (cd examples-plugins/$plugin && ../../packages/check-sdk/node_modules/.bin/tsc -p ./tsconfig.fail.json)
           done
 

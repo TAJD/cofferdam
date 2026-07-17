@@ -27,7 +27,7 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, CallExpression, Class, Expression, Function,
     ImportDeclaration, ImportDeclarationSpecifier, JSXAttribute, JSXAttributeName,
     JSXAttributeValue, JSXElement, JSXExpressionContainer, JSXSpreadAttribute, MemberExpression,
-    ObjectExpression, ObjectPropertyKind, Program,
+    ObjectExpression, ObjectPropertyKind, Program, VariableDeclaration,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -131,6 +131,17 @@ pub enum WireExtras {
     Doctype {
         text: String,
     },
+    /// CD-78: a `const`/`let`/`var` statement. One node per statement,
+    /// covering every declarator. `declarations` mirrors
+    /// `ImportDeclaration`'s inline sub-item list rather than emitting a
+    /// separate `VariableDeclarator` kind. A declarator's `init_idx` is
+    /// the flat-array index of its initializer expression when that
+    /// initializer is itself a v0 node (e.g. an arrow/call), else -1.
+    VariableDeclaration {
+        #[serde(rename = "declarationKind")]
+        declaration_kind: String,
+        declarations: Vec<VariableDeclaratorWire>,
+    },
 }
 
 #[derive(Serialize)]
@@ -139,6 +150,17 @@ pub struct ImportSpecifierWire {
     pub local_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imported: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct VariableDeclaratorWire {
+    /// The bound name for a simple `BindingIdentifier`; `None` for a
+    /// destructuring pattern (`const { a } = ...`) — CD-78 leaves nested
+    /// pattern-path resolution to a follow-up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(rename = "initIdx")]
+    pub init_idx: i32,
 }
 
 struct StackFrame {
@@ -304,6 +326,45 @@ impl<'a> Visit<'a> for WireBuilder<'a> {
         // Don't descend — ImportDeclaration's children (specifiers,
         // source StringLiteral) aren't v0 surface kinds. Leaving them
         // out keeps the wire small without affecting plugin queries.
+    }
+
+    fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
+        let idx = self.push("VariableDeclaration", it.span);
+        self.enter(idx);
+
+        let declaration_kind = it.kind.as_str().to_string();
+        let mut declarations = Vec::with_capacity(it.declarations.len());
+        for decl in &it.declarations {
+            let name = match &decl.id {
+                BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+                _ => None,
+            };
+            // Serialize the initializer as a sub-expression, recording its
+            // idx only when the first pushed node IS the initializer (its
+            // span matches exactly). A non-v0 init (e.g. a numeric literal)
+            // pushes nothing / a descendant, so it's left as -1 — the same
+            // span-match guard visit_call_expression uses for its args.
+            let mut init_idx = -1;
+            if let Some(init) = &decl.init {
+                let init_span = init.span();
+                let init_first_idx = self.nodes.len() as i32;
+                self.visit_expression(init);
+                if let Some(pushed) = self.nodes.get(init_first_idx as usize) {
+                    if pushed.span.start_byte == init_span.start
+                        && pushed.span.end_byte == init_span.end
+                    {
+                        init_idx = init_first_idx;
+                    }
+                }
+            }
+            declarations.push(VariableDeclaratorWire { name, init_idx });
+        }
+
+        self.exit();
+        self.nodes[idx as usize].extras = WireExtras::VariableDeclaration {
+            declaration_kind,
+            declarations,
+        };
     }
 
     fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
@@ -744,6 +805,73 @@ mod tests {
         assert!(
             is_spread,
             "spread must be flagged so it isn't mistaken for a missing attribute"
+        );
+    }
+
+    fn var_decl_extras(wire: &AstWire, idx: i32) -> (&str, &[VariableDeclaratorWire]) {
+        match &wire.nodes[idx as usize].extras {
+            WireExtras::VariableDeclaration {
+                declaration_kind,
+                declarations,
+            } => (declaration_kind, declarations),
+            _ => panic!("node {idx} is not a VariableDeclaration"),
+        }
+    }
+
+    /// CD-78: `findAll("VariableDeclaration")` must surface `const`, `let`,
+    /// and destructuring declarations with correct spans, the declarator
+    /// name(s), the `const`/`let`/`var` kind, and the init node index.
+    #[test]
+    fn variable_declaration_const_let_and_destructuring() {
+        let text = "const a = foo();\nlet b = 2;\nconst { x, y } = obj;\n";
+        let wire = build_wire(text);
+
+        let vd_idxs: Vec<i32> = wire
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.kind == "VariableDeclaration")
+            .map(|(i, _)| i as i32)
+            .collect();
+        assert_eq!(vd_idxs.len(), 3, "one node per declaration statement");
+
+        // `const a = foo();`
+        let (kind0, decls0) = var_decl_extras(&wire, vd_idxs[0]);
+        assert_eq!(kind0, "const");
+        assert_eq!(decls0.len(), 1);
+        assert_eq!(decls0[0].name.as_deref(), Some("a"));
+        let span0 = &wire.nodes[vd_idxs[0] as usize].span;
+        assert_eq!(
+            &text[span0.start_byte as usize..span0.end_byte as usize],
+            "const a = foo();"
+        );
+        // init is a CallExpression (a v0 kind) → linked.
+        let init0 = &wire.nodes[decls0[0].init_idx as usize];
+        assert_eq!(init0.kind, "CallExpression");
+
+        // `let b = 2;` — numeric literal init is not a v0 kind → init_idx == -1.
+        let (kind1, decls1) = var_decl_extras(&wire, vd_idxs[1]);
+        assert_eq!(kind1, "let");
+        assert_eq!(decls1.len(), 1);
+        assert_eq!(decls1[0].name.as_deref(), Some("b"));
+        assert_eq!(
+            decls1[0].init_idx, -1,
+            "numeric literal init has no v0 node"
+        );
+
+        // `const { x, y } = obj;` — one declarator, object-pattern binding →
+        // name is None (destructuring left to a follow-up per CD-78).
+        let (kind2, decls2) = var_decl_extras(&wire, vd_idxs[2]);
+        assert_eq!(kind2, "const");
+        assert_eq!(decls2.len(), 1, "one declarator with an object-pattern id");
+        assert_eq!(
+            decls2[0].name, None,
+            "destructuring declarator has no simple name"
+        );
+        let span2 = &wire.nodes[vd_idxs[2] as usize].span;
+        assert_eq!(
+            &text[span2.start_byte as usize..span2.end_byte as usize],
+            "const { x, y } = obj;"
         );
     }
 

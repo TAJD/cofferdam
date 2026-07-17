@@ -1,0 +1,10 @@
+# cofferdam.toml — local config for the no-banned-const e2e fixture (CD-78).
+#
+# Self-contained next to the fixture so `cofferdam check fixture.ts
+# --config ./cofferdam.toml` is reproducible without polluting the
+# repo-root config.
+
+plugins = ["./"]
+
+[checks."NoBannedConst"]
+bannedNames = ["buildHeaders", "fetch"]

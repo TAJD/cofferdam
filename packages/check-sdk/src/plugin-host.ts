@@ -130,6 +130,7 @@ const VISITOR_METHODS: Partial<Record<NodeKind, keyof AstVisitor>> = {
   ObjectExpression: "visitObjectExpression",
   MemberExpression: "visitMemberExpression",
   IdentifierReference: "visitIdentifierReference",
+  VariableDeclaration: "visitVariableDeclaration",
   JSXElement: "visitJSXElement",
   JSXAttribute: "visitJSXAttribute",
   JSXExpressionContainer: "visitJSXExpressionContainer",
@@ -206,6 +207,14 @@ const NODE_BUILDERS: Partial<Record<NodeKind, NodeBuilder>> = {
   },
   IdentifierReference: (w, out) => {
     out["name"] = w["name"];
+  },
+  VariableDeclaration: (w, out, _idx, ctx) => {
+    out["declarationKind"] = w["declarationKind"];
+    const decls = (w["declarations"] as { name?: string; initIdx: number }[]) ?? [];
+    out["declarations"] = decls.map((d) => ({
+      name: d.name ?? undefined,
+      init: ctx.get(d.initIdx ?? -1) ?? undefined,
+    }));
   },
   JSXElement: (w, out, _idx, ctx) => {
     out["tagName"] = w["tagName"];

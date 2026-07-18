@@ -40,6 +40,10 @@ fn is_hub_file(path: &Path) -> bool {
         .is_some_and(|n| HUB_BASENAMES.contains(&n))
 }
 
+fn is_node_modules_path(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "node_modules")
+}
+
 const META: CheckMeta = CheckMeta {
     id: "Design.ImportFanOutOutlier",
     category: Category::Design,
@@ -133,6 +137,14 @@ fn compute_outliers(imports: &[ImportRecord], exports: &[ExportRecord]) -> Vec<I
         let Some(resolved) = &imp.resolved else {
             continue; // external package — doesn't count toward either metric
         };
+        // `resolved` is also set for bare specifiers the resolver traced
+        // into node_modules (see graph.rs's module doc, which recommends
+        // exactly this path-prefix filter) — without it a vendor package
+        // with many internal importers shows up as a spurious fan-in
+        // outlier and skews the population's mean/stddev.
+        if is_node_modules_path(resolved) {
+            continue;
+        }
         ensure_entry(&mut by_key, resolved);
         by_key.get_mut(&path_key(&imp.from_file)).unwrap().fan_out += 1;
         by_key.get_mut(&path_key(resolved)).unwrap().fan_in += 1;

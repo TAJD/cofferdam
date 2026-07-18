@@ -1557,6 +1557,25 @@ function total(items) {
         );
     }
 
+    #[test]
+    fn node_modules_resolved_target_is_excluded() {
+        // 14 in-project files all import a bare specifier that the
+        // resolver traced into node_modules — that vendor file must not
+        // be counted toward fan-in, nor enter the population at all.
+        let vendor = PathBuf::from("/p/node_modules/leftpad/index.ts");
+        let imports: Vec<ImportRecord> = (0..14)
+            .map(|i| {
+                let importer = PathBuf::from(format!("/p/importer{i}.ts"));
+                internal_import(&importer, &vendor)
+            })
+            .collect();
+        let issues = run_fan_out_outlier(imports);
+        assert!(
+            issues.iter().all(|i| i.file != vendor),
+            "a node_modules-resolved target must never be flagged; got {issues:?}"
+        );
+    }
+
     // ─── Design.BarrelReexportBloat (CD-131) ────────────────────────────
 
     use barrel_reexport_bloat::BarrelReexportBloat;

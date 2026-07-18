@@ -130,6 +130,12 @@ fn collect_string_leaves(value: &serde_json::Value, out: &mut Vec<String>) {
 /// `/p/index.ts` -> `/p/index`). Used to compare a `package.json`
 /// entry-point candidate (typically `.js`) against a TS source file
 /// (`.ts`) in the same directory without hardcoding an extension map.
+///
+/// Strips only the LAST suffix, so a `types`/`typings` entry pointing
+/// at a `.d.ts` declaration file strips to `foo.d`, not `foo` — it
+/// won't match a source `foo.ts`. Harmless: `types`/`typings` point at
+/// declaration artifacts rather than the analyzed source, so they
+/// weren't expected to match a barrel source file anyway.
 fn strip_extension(path: &Path) -> PathBuf {
     match path.file_stem() {
         Some(stem) => path.with_file_name(stem),
@@ -192,6 +198,14 @@ fn compute_bloated_barrels(exports: &[ExportRecord]) -> Vec<Issue> {
         }
     }
 
+    // Directory scoping below compares raw `PathBuf` parents rather than
+    // `path_key`-normalising them first, unlike `ImportFanOutOutlier`.
+    // This is sound only because every `ExportRecord.file` here is the
+    // single discovery-walk path (`file.path` in the engine's graph
+    // pass) and never a resolver-produced path — one consistent
+    // spelling in, one consistent spelling out. If a future change ever
+    // populates `ExportRecord.file` from a resolved/joined path instead,
+    // this comparison would need `path_key` too.
     let mut entry_point_cache: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     struct Candidate {
         file: PathBuf,
@@ -207,6 +221,13 @@ fn compute_bloated_barrels(exports: &[ExportRecord]) -> Vec<Issue> {
             continue;
         }
         let Some(dir) = file.parent() else { continue };
+        // A directory whose only files are barrels re-exporting entire
+        // subdirectories (no local sibling file with a "real" export)
+        // has `sibling_real == 0` and is skipped here — arguably the
+        // most extreme mega-barrel shape, but the ratio is undefined
+        // without a sibling denominator. Often these are also the
+        // package's own entry point (already excluded above), which
+        // softens the gap; accepted v1 scope otherwise.
         let sibling_real: u32 = by_file
             .iter()
             .filter(|(other, _)| other.as_path() != file.as_path() && other.parent() == Some(dir))

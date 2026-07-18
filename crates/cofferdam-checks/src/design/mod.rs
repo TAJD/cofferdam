@@ -1560,9 +1560,12 @@ function total(items) {
     #[test]
     fn node_modules_resolved_target_is_excluded() {
         // 14 in-project files all import a bare specifier that the
-        // resolver traced into node_modules — that vendor file must not
-        // be counted toward fan-in, nor enter the population at all.
-        let vendor = PathBuf::from("/p/node_modules/leftpad/index.ts");
+        // resolver traced into node_modules — same shape as
+        // `fan_in_outlier_is_flagged` (n=15, one value of 14 rest 0),
+        // which *would* flag if the vendor file weren't excluded. Uses a
+        // non-hub basename so `is_hub_file` can't accidentally account
+        // for the exclusion instead of the node_modules check.
+        let vendor = PathBuf::from("/p/node_modules/leftpad/leftpad.js");
         let imports: Vec<ImportRecord> = (0..14)
             .map(|i| {
                 let importer = PathBuf::from(format!("/p/importer{i}.ts"));
@@ -1571,8 +1574,8 @@ function total(items) {
             .collect();
         let issues = run_fan_out_outlier(imports);
         assert!(
-            issues.iter().all(|i| i.file != vendor),
-            "a node_modules-resolved target must never be flagged; got {issues:?}"
+            issues.is_empty(),
+            "a node_modules-resolved target must not be flagged, nor skew the population; got {issues:?}"
         );
     }
 

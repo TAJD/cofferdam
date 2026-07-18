@@ -151,10 +151,14 @@ fn compute_outliers(imports: &[ImportRecord], exports: &[ExportRecord]) -> Vec<I
     }
 
     // Exclude hub files from the population entirely — their inclusion
-    // would inflate the mean/stddev for every other file.
+    // would inflate the mean/stddev for every other file. Also exclude
+    // node_modules paths defensively at the population level, not just
+    // in the edge-counting loop above: a vendor file could otherwise
+    // still enter `by_key` via the from_file/export-site seeding loops
+    // if it were ever parsed as a source file (e.g. --no-ignore runs).
     let population: Vec<&FileStats> = by_key
         .values()
-        .filter(|s| !is_hub_file(&s.display))
+        .filter(|s| !is_hub_file(&s.display) && !is_node_modules_path(&s.display))
         .collect();
     if population.len() < MIN_FILES {
         return Vec::new();

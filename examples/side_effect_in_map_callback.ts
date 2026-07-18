@@ -42,4 +42,19 @@ items.forEach((item) => {
   seen.push(item);
 });
 
+// Flag — writes into an outer-scope object property, not just an
+// array-mutating method call.
+const state = { count: 0 };
+export const withCount = items.map((item) => {
+  state.count += 1;
+  return item;
+});
+
+// Flag — writes into an outer-scope array by index.
+const acc: number[] = new Array(items.length);
+export const withIndexWrite = items.map((item, i) => {
+  acc[i] = item;
+  return item;
+});
+
 declare function process(_item: number): number;

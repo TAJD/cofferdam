@@ -47,13 +47,17 @@ const ARRAY_MUTATING_METHODS: &[&str] = &[
 ///   descended into, so its mutations don't count against the outer
 ///   callback.
 /// - "Mutates something outside itself" is name-based: an assignment
-///   target, an update-expression target, or the receiver of an
+///   target (a bare identifier, `x.y = ...`, or `x[y] = ...` — only the
+///   root receiver identifier is checked, not further-nested member
+///   chains), an update-expression target, or the receiver of an
 ///   in-place array-mutating method call (`.push`, `.splice`, ...) is
 ///   treated as external unless its name is one of the callback's own
 ///   parameters or a `var`/`let`/`const` declared directly in the
 ///   callback's own body. A local that happens to share a name with
 ///   something outside is indistinguishable from the real thing — an
 ///   accepted false-negative/positive edge case for a fuzzy heuristic.
+///   (A destructured local, e.g. `const { acc } = ctx;`, is also not
+///   recognized as local — another accepted name-based gap.)
 /// - `console.*` is the only side-effecting-call denylist entry beyond
 ///   array mutation (per the ticket's v1 scope) — other known
 ///   side-effecting calls (I/O, DOM mutation, etc.) are not detected.
@@ -170,10 +174,31 @@ impl<'a> SideEffectScanner<'a> {
     }
 }
 
+/// The root object identifier of a `x.y = ...` / `x[y] = ...` target,
+/// if the receiver is a plain identifier (not e.g. `this.x` or a
+/// further-nested member expression).
+fn member_target_root<'a>(target: &AssignmentTarget<'a>) -> Option<&'a str> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(member) => match &member.object {
+            Expression::Identifier(id) => Some(id.name.as_str()),
+            _ => None,
+        },
+        AssignmentTarget::ComputedMemberExpression(member) => match &member.object {
+            Expression::Identifier(id) => Some(id.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 impl<'a> Visit<'a> for SideEffectScanner<'a> {
     fn visit_assignment_expression(&mut self, node: &oxc_ast::ast::AssignmentExpression<'a>) {
-        if let AssignmentTarget::AssignmentTargetIdentifier(id) = &node.left {
-            if !self.is_local(id.name.as_str()) {
+        let external_target = match &node.left {
+            AssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.name.as_str()),
+            target => member_target_root(target),
+        };
+        if let Some(name) = external_target {
+            if !self.is_local(name) {
                 self.found = true;
             }
         }
@@ -194,7 +219,8 @@ impl<'a> Visit<'a> for SideEffectScanner<'a> {
             if let Expression::Identifier(obj) = &member.object {
                 let name = obj.name.as_str();
                 let property = member.property.name.as_str();
-                let is_denylisted_call = SIDE_EFFECTING_OBJECTS.contains(&name);
+                let is_denylisted_call =
+                    !self.is_local(name) && SIDE_EFFECTING_OBJECTS.contains(&name);
                 let is_external_mutation =
                     !self.is_local(name) && ARRAY_MUTATING_METHODS.contains(&property);
                 if is_denylisted_call || is_external_mutation {

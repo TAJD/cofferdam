@@ -36,10 +36,20 @@ const doubled = items.map((item) => {
 });
 ```
 
+Also flagged — writing into an outer-scope object property or array index, not just calling an array-mutating method:
+
+```ts
+const state = { count: 0 };
+const withCount = items.map((item) => {
+  state.count += 1; // writes into outer-scope `state`
+  return item;
+});
+```
+
 Not flagged — a `.map`/`.filter` callback whose return value happens to be discarded, with no other side effect, is a distinct "use `.forEach` instead" concern this check doesn't cover (v1 scope, per the ticket):
 
 ```ts
 items.map((item) => process(item));
 ```
 
-Scope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry.
+Scope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry. Member/index assignment targets (`x.y = ...`, `x[y] = ...`) are only checked at the root receiver — a destructured local (`const { acc } = ctx;`) isn't recognized as local, a known name-based limitation.

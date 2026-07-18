@@ -1067,4 +1067,65 @@ items.forEach((item) => {
              forEach instead\"), not this check's job; got {issues:?}"
         );
     }
+
+    #[test]
+    fn member_assignment_to_outer_object_is_flagged() {
+        let src = "\
+const state = { count: 0 };
+const withCount = items.map((item) => {
+  state.count += 1;
+  return item;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "writing into an outer-scope object property must flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn computed_index_assignment_to_outer_array_is_flagged() {
+        let src = "\
+const acc = [];
+const withIndexWrite = items.map((item, i) => {
+  acc[i] = item;
+  return item;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "writing into an outer-scope array by index must flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn member_assignment_to_own_local_is_not_flagged() {
+        let src = "\
+const result = items.map((item) => {
+  const local = { count: 0 };
+  local.count += 1;
+  return local.count + item;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "writing into the callback's own local object must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn expression_body_arrow_side_effect_is_flagged() {
+        let src = "\
+const seen = [];
+const doubled = items.map((item) => seen.push(item));";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "an expression-body arrow callback must be inspected the same as a block-body one; \
+             got {issues:?}"
+        );
+    }
 }

@@ -1815,6 +1815,101 @@ function total(items) {
         );
     }
 
+    #[test]
+    fn dist_entry_point_is_excluded_via_src_sibling() {
+        // package.json's main points at compiled dist/index.js; the
+        // analyzed source lives in a parallel src/index.ts. Without
+        // CD-134's build-dir-alias swap, src/index.ts's extension-
+        // stripped path never matches "dist/index" and it would be
+        // flagged instead of excluded (same sparse-background shape as
+        // package_entry_point_is_excluded, just with a src/dist split).
+        use std::io::Write;
+        let tmp =
+            std::env::temp_dir().join(format!("cofferdam-test-barrel-dist-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::create_dir_all(tmp.join("dist")).unwrap();
+        let mut pkg = std::fs::File::create(tmp.join("package.json")).unwrap();
+        write!(pkg, r#"{{"main": "./dist/index.js"}}"#).unwrap();
+        drop(pkg);
+
+        let mut exports = Vec::new();
+        for i in 0..14 {
+            let dir = tmp.join(format!("mod{i}"));
+            for j in 0..100u32 {
+                exports.push(barrel_real_export(
+                    &dir.join(format!("f{j}.ts")),
+                    &format!("x{j}"),
+                ));
+            }
+            exports.push(barrel_reexport(&dir.join("index.ts"), "x0"));
+        }
+        let src_dir = tmp.join("src");
+        for j in 0..100u32 {
+            exports.push(barrel_real_export(
+                &src_dir.join(format!("f{j}.ts")),
+                &format!("x{j}"),
+            ));
+        }
+        for j in 0..50u32 {
+            exports.push(barrel_reexport(&src_dir.join("index.ts"), &format!("x{j}")));
+        }
+
+        let issues = run_barrel_reexport_bloat(exports);
+        std::fs::remove_dir_all(&tmp).ok();
+        assert!(
+            issues.is_empty(),
+            "src/index.ts must be excluded as the package's main entry point via the dist->src \
+             alias swap; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn mega_barrel_of_barrels_is_counted_via_subtree_fallback() {
+        // /p/mega/index.ts re-exports from two sub-barrels
+        // (/p/mega/a/index.ts, /p/mega/b/index.ts) and has no
+        // same-directory real sibling of its own (its only same-
+        // directory siblings are the sub-barrels). Before CD-134 this
+        // shape's sibling_real was 0 and the mega barrel was skipped
+        // outright; the subtree-wide fallback now counts the real
+        // exports nested under it instead.
+        let mut exports = Vec::new();
+        for i in 0..14 {
+            let dir = PathBuf::from(format!("/p/sparse{i}"));
+            for j in 0..100u32 {
+                exports.push(barrel_real_export(
+                    &dir.join(format!("f{j}.ts")),
+                    &format!("x{j}"),
+                ));
+            }
+            exports.push(barrel_reexport(&dir.join("index.ts"), "x0"));
+        }
+
+        let mega_dir = PathBuf::from("/p/mega");
+        for sub in ["a", "b"] {
+            let sub_dir = mega_dir.join(sub);
+            for j in 0..10u32 {
+                exports.push(barrel_real_export(
+                    &sub_dir.join(format!("f{j}.ts")),
+                    &format!("y{j}"),
+                ));
+            }
+            exports.push(barrel_reexport(&sub_dir.join("index.ts"), "y0"));
+        }
+        for j in 0..10u32 {
+            exports.push(barrel_reexport(
+                &mega_dir.join("index.ts"),
+                &format!("mega{j}"),
+            ));
+        }
+
+        let issues = run_barrel_reexport_bloat(exports);
+        assert!(
+            issues.iter().any(|i| i.file == mega_dir.join("index.ts")),
+            "the mega barrel-of-barrels must be flagged via the subtree-wide fallback since its \
+             same-directory sibling_real is 0; got {issues:?}"
+        );
+    }
+
     // ─── Design.MissingTestFile (CD-132) ────────────────────────────────
 
     use missing_test_file::compute_missing_test_files;

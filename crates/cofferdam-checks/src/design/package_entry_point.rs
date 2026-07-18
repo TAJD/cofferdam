@@ -65,6 +65,32 @@ fn collect_string_leaves(value: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
+/// Path component names conventionally holding compiled build output,
+/// swapped for `src` to derive an alternate candidate key (CD-134) — a
+/// `package.json` `main`/`exports` field commonly points at a build
+/// artifact (`./dist/index.js`) while the analyzed source lives in a
+/// parallel `src/` tree (`src/index.ts`); without this, that split
+/// layout's real entry point is never recognised and may be flagged.
+const BUILD_DIR_ALIASES: &[&str] = &["dist", "build", "lib", "out", "output"];
+
+/// If `path` contains a path component matching [`BUILD_DIR_ALIASES`],
+/// return `path` with the FIRST such component replaced by `src` — a
+/// component-wise swap, not a substring replace, so a directory that
+/// merely contains "dist" as part of a longer name (`distributed/`)
+/// isn't touched. Returns `None` when no alias component is present, so
+/// callers only insert a genuinely new candidate key.
+fn with_src_sibling(path: &Path) -> Option<PathBuf> {
+    let components: Vec<_> = path.components().collect();
+    let alias_index = components.iter().position(|c| {
+        matches!(c, std::path::Component::Normal(name) if name
+            .to_str()
+            .is_some_and(|s| BUILD_DIR_ALIASES.contains(&s)))
+    })?;
+    let mut swapped = components;
+    swapped[alias_index] = std::path::Component::Normal(std::ffi::OsStr::new("src"));
+    Some(swapped.iter().collect())
+}
+
 /// Path with its final extension removed (single-suffix strip; e.g.
 /// `/p/index.ts` -> `/p/index`). Used to compare a `package.json`
 /// entry-point candidate (typically `.js`) against a TS source file
@@ -113,6 +139,9 @@ fn resolve_entry_point_keys(pkg_json_path: &Path) -> HashSet<String> {
         let trimmed = candidate.trim_start_matches("./");
         let abs = pkg_dir.join(trimmed);
         keys.insert(path_key(&strip_extension(&abs)));
+        if let Some(src_sibling) = with_src_sibling(&abs) {
+            keys.insert(path_key(&strip_extension(&src_sibling)));
+        }
     }
     keys
 }
@@ -215,6 +244,61 @@ mod tests {
         assert!(
             !is_package_entry_point(&file, &mut cache),
             "a cached absence must still resolve to false on a second call"
+        );
+    }
+
+    #[test]
+    fn dist_entry_point_matches_parallel_src_sibling() {
+        // package.json's main points at a compiled dist/ artifact; the
+        // analyzed source lives in a parallel src/ tree. Without the
+        // build-dir-alias swap, src/index.ts's extension-stripped path
+        // never matches "dist/index" and would be flagged instead of
+        // excluded.
+        let project = TempProject::new("dist-src-split");
+        std::fs::create_dir_all(project.root.join("dist")).unwrap();
+        std::fs::create_dir_all(project.root.join("src")).unwrap();
+        let mut pkg = std::fs::File::create(project.root.join("package.json")).unwrap();
+        write!(pkg, r#"{{"main": "./dist/index.js"}}"#).unwrap();
+        drop(pkg);
+
+        let mut cache = EntryPointCache::default();
+        let src_entry = project.root.join("src").join("index.ts");
+        assert!(
+            is_package_entry_point(&src_entry, &mut cache),
+            "src/index.ts must resolve as the entry point via the dist->src alias swap"
+        );
+
+        // A same-named file in an unrelated directory must NOT be swept
+        // in just because its basename matches — the swap is component-
+        // wise on the build-dir alias, not a basename-only match.
+        let unrelated = project.root.join("other").join("index.ts");
+        std::fs::create_dir_all(project.root.join("other")).unwrap();
+        assert!(
+            !is_package_entry_point(&unrelated, &mut cache),
+            "a same-named file outside the src/ sibling path must not match"
+        );
+    }
+
+    #[test]
+    fn distributed_directory_name_is_not_treated_as_a_build_dir_alias() {
+        // "distributed" merely contains "dist" as a substring — the swap
+        // must be component-wise, not a substring replace.
+        let project = TempProject::new("distributed-name");
+        std::fs::create_dir_all(project.root.join("distributed")).unwrap();
+        let mut pkg = std::fs::File::create(project.root.join("package.json")).unwrap();
+        write!(pkg, r#"{{"main": "./distributed/index.js"}}"#).unwrap();
+        drop(pkg);
+
+        let mut cache = EntryPointCache::default();
+        let src_entry = project.root.join("src").join("index.ts");
+        assert!(
+            !is_package_entry_point(&src_entry, &mut cache),
+            "\"distributed\" must not be treated as a build-dir alias for \"dist\""
+        );
+        let real_entry = project.root.join("distributed").join("index.ts");
+        assert!(
+            is_package_entry_point(&real_entry, &mut cache),
+            "the literal distributed/index.ts entry point must still match directly"
         );
     }
 

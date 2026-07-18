@@ -41,17 +41,21 @@ const META: CheckMeta = CheckMeta {
 /// exports, is more than `STDDEV_MULTIPLIER` standard deviations above
 /// the mean ratio of other barrels in the project.
 ///
-/// Scope (v1): a file that resolves as the project's (or a workspace
+/// Scope: a file that resolves as the project's (or a workspace
 /// package's) public entry point — found by walking up from the file
 /// to the nearest `package.json` and checking whether the file matches
 /// any string reachable from its `main`/`module`/`types`/`exports`
 /// fields — is excluded entirely, both from being flagged and from the
 /// statistical population, since a real published entry point's high
 /// re-export ratio is by design. Entry-point matching compares paths
-/// with the file extension stripped, so it only catches package.json
-/// fields that point directly at the source file (or a same-directory
-/// build artifact); a project with a separate `src`/`dist` split whose
-/// `main` points into `dist/` isn't covered and may be flagged.
+/// with the file extension stripped and also tries a build-directory
+/// alias swap (`dist`/`build`/`lib`/`out`/`output` -> `src`, CD-134), so
+/// a project with a separate `src`/`dist` split whose `main` points
+/// into `dist/index.js` still excludes a parallel `src/index.ts`. A
+/// directory whose only files are barrels re-exporting entire
+/// subdirectories (no same-directory sibling with a "real" export) is
+/// no longer skipped outright — it falls back to counting real exports
+/// across the barrel's own subtree (CD-134).
 pub struct BarrelReexportBloat;
 
 impl Check for BarrelReexportBloat {
@@ -122,18 +126,27 @@ fn compute_bloated_barrels(exports: &[ExportRecord]) -> Vec<Issue> {
             continue;
         }
         let Some(dir) = file.parent() else { continue };
-        // A directory whose only files are barrels re-exporting entire
-        // subdirectories (no local sibling file with a "real" export)
-        // has `sibling_real == 0` and is skipped here — arguably the
-        // most extreme mega-barrel shape, but the ratio is undefined
-        // without a sibling denominator. Often these are also the
-        // package's own entry point (already excluded above), which
-        // softens the gap; accepted v1 scope otherwise.
         let sibling_real: u32 = by_file
             .iter()
             .filter(|(other, _)| other.as_path() != file.as_path() && other.parent() == Some(dir))
             .map(|(_, c)| c.real)
             .sum();
+        // A directory whose only files are barrels re-exporting entire
+        // subdirectories has no same-directory sibling with a "real"
+        // export (CD-134's mega-barrel-of-barrels shape) — fall back to
+        // counting real exports anywhere in the barrel's own subtree
+        // instead of skipping outright. Only engaged when the narrow
+        // same-directory count is 0, so an ordinary same-directory
+        // barrel's ratio (already validated) is unaffected.
+        let sibling_real = if sibling_real == 0 {
+            by_file
+                .iter()
+                .filter(|(other, _)| other.as_path() != file.as_path() && other.starts_with(dir))
+                .map(|(_, c)| c.real)
+                .sum()
+        } else {
+            sibling_real
+        };
         if sibling_real == 0 {
             continue;
         }

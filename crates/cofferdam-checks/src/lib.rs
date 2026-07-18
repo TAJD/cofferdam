@@ -73,6 +73,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(design::ScriptedInvariant),
         Box::new(design::UnionExhaustivenessGap),
         Box::new(design::ClassAsDataBag),
+        Box::new(design::ReadonlyArrayParam),
         Box::new(refactor::CyclomaticComplexity::new(10)),
         Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(refactor::LongAndComplex::new(75, 15)),

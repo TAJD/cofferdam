@@ -257,6 +257,21 @@
       ]
     },
     {
+      "id": "Design.ReadonlyArrayParam",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Low",
+      "explanation": "A function parameter typed as a mutable array or object, but never mutated in the body, is a missed `readonly` guarantee — a type-checker-enforced promise to callers that's cheap to add and cheap for them to trust.",
+      "body": "---\nid: Design.ReadonlyArrayParam\ncategory: Design\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\nA function parameter declared with a mutable array (`T[]`, `Array<T>`) or object-literal (`{ x: number }`) type, where nothing in the function body mutates it — a missed opportunity for a `readonly` guarantee the type checker would enforce for free.\n\n```ts\nfunction total(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\n```ts\n// fix — readonly is a compiler-enforced promise, not just a convention\nfunction total(items: readonly number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — the parameter is genuinely mutated in the body:\n\n```ts\nfunction sortInPlace(items: number[]): void {\n  items.sort();\n}\n```\n\nNot flagged — the parameter is passed through to another call, which might mutate it; this check can't see across the call graph, so it conservatively skips rather than risk a false positive:\n\n```ts\nfunction process(items: number[]): void {\n  mutateSomewhere(items);\n}\n```\n\nScope: declared-type syntax only — the parameter's own `TSTypeAnnotation` is read directly from the AST, not resolved through the ts-morph type host, so an untyped or inferred parameter isn't checked. A type already wrapped in `readonly`/`ReadonlyArray<T>`/`Readonly<T>` is never a candidate. Only single-level assignment/index writes and array-mutating method calls (`.push`, `.splice`, ...) on the parameter's own root identifier are recognized as \"mutated\" — a nested function or arrow declared inside the callback is a separate scope and isn't descended into, mirroring `Refactor.MutatedParameter`.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Design.ScriptedInvariant",
       "category": "Design",
       "base_priority": 7,

@@ -11,6 +11,7 @@ mod invariant_violation;
 mod layer_violation;
 mod max_parameters;
 mod orphan_export;
+mod readonly_array_param;
 mod scripted_invariant;
 mod union_exhaustiveness_gap;
 
@@ -22,6 +23,7 @@ pub use invariant_violation::InvariantViolation;
 pub use layer_violation::LayerViolation;
 pub use max_parameters::{max_in_file as max_parameters_in_file, MaxParameters};
 pub use orphan_export::OrphanExport;
+pub use readonly_array_param::ReadonlyArrayParam;
 pub use scripted_invariant::ScriptedInvariant;
 pub use union_exhaustiveness_gap::UnionExhaustivenessGap;
 
@@ -953,5 +955,138 @@ class Wrapper {
         let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
         let issues = UnionExhaustivenessGap.run(&file, &mut ctx);
         assert!(issues.is_empty(), "no oracle → no findings; got {issues:?}");
+    }
+
+    // ─── Design.ReadonlyArrayParam (CD-126) ─────────────────────────────
+
+    use readonly_array_param::ReadonlyArrayParam;
+
+    fn run_readonly_array_param(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        ReadonlyArrayParam.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn unmutated_array_param_is_flagged() {
+        let src = "\
+function total(items: number[]): number {
+  return items.reduce((sum, n) => sum + n, 0);
+}";
+        let issues = run_readonly_array_param(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("items"));
+    }
+
+    #[test]
+    fn unmutated_object_literal_param_is_flagged() {
+        let src = "\
+function describe(point: { x: number; y: number }): string {
+  return `(${point.x}, ${point.y})`;
+}";
+        let issues = run_readonly_array_param(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn array_generic_form_is_flagged() {
+        let src = "\
+function first(items: Array<string>): string | undefined {
+  return items[0];
+}";
+        let issues = run_readonly_array_param(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn already_readonly_is_not_flagged() {
+        let src = "\
+function sum(items: readonly number[]): number {
+  return items.reduce((sum, n) => sum + n, 0);
+}";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "already-readonly param must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn mutated_via_array_method_is_not_flagged() {
+        let src = "\
+function sortInPlace(items: number[]): void {
+  items.sort();
+}";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "a param mutated via an array method must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn mutated_via_index_assignment_is_not_flagged() {
+        let src = "\
+function zeroOut(items: number[]): void {
+  items[0] = 0;
+}";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "a param mutated via index assignment must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn mutated_via_field_write_is_not_flagged() {
+        let src = "\
+function reset(point: { x: number; y: number }): void {
+  point.x = 0;
+}";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "a param mutated via a field write must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn passed_through_to_another_call_is_not_flagged() {
+        let src = "\
+function process(items: number[]): void {
+  mutateSomewhere(items);
+}
+declare function mutateSomewhere(items: number[]): void;";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "a param passed to another call must not flag (can't rule out mutation there); got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn untyped_param_is_not_flagged() {
+        let src = "\
+function total(items) {
+  return items.length;
+}";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "a parameter with no type annotation must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_function_param_is_flagged() {
+        let src = "export const total = (items: number[]): number => items.length;";
+        let issues = run_readonly_array_param(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
     }
 }

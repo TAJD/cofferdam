@@ -16,8 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - A `cofferdam-ignore` comment placed at the *related* (non-primary) occurrence of a paired `Refactor.DuplicateBlock` finding now suppresses it, matching a comment at the primary occurrence — previously only the primary side had any effect (CD-77).
 
+### Fixed
+- `packages/check-sdk/tests/ast-view.test.mjs` was still driving `plugin-host.mjs` with the old one-shot manifest protocol and had silently bit-rotted after the CD-33 streaming NDJSON migration; re-pointed at the header/file/end wire format used by the rest of the test suite (CD-106).
+
 ### Docs
 - The plugin SDK guide's `package.json` example now includes the required `"type": "module"` field; the plugin host also recognizes the classic Node "missing type: module" error shapes and appends a hint pointing at the fix (CD-72).
+
+### CI
+- `plugin-sdk-e2e.yml` now runs `node --test tests/*.test.mjs` for `@cofferdam/check-sdk` after building the package, so a broken unit test (like CD-106) fails CI instead of going unnoticed — previously only `tsc` typechecking ran (CD-106).
 
 ## [0.3.8] - 2026-07-11
 

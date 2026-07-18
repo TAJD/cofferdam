@@ -55,6 +55,7 @@ export const checksItems = [
       { text: 'PreferConstOverLet', link: '/checks/Refactor.PreferConstOverLet' },
       { text: 'PreferNullishCoalescing', link: '/checks/Refactor.PreferNullishCoalescing' },
       { text: 'PreferOptionalChain', link: '/checks/Refactor.PreferOptionalChain' },
+      { text: 'PurityHeuristic', link: '/checks/Refactor.PurityHeuristic' },
       { text: 'UnusedVariable', link: '/checks/Refactor.UnusedVariable' },
     ],
   },

@@ -47,6 +47,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Refactor.PreferConstOverLet`](Refactor.PreferConstOverLet.md) `file` — A `let` binding that's never reassigned should be `const` — it signals the value doesn't change and rules out reassignment bugs at compile time.
 - [`Refactor.PreferNullishCoalescing`](Refactor.PreferNullishCoalescing.md) `file` — `x || default` falls through on every falsy value (`0`, `""`, `false`). Use `??` to fall through only on `null`/`undefined`.
 - [`Refactor.PreferOptionalChain`](Refactor.PreferOptionalChain.md) `file` — `a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.
+- [`Refactor.PurityHeuristic`](Refactor.PurityHeuristic.md) `file` `advisable` — An exported function reads a module-level mutable binding not covered by its own parameter list — a hidden dependency on outside-the-signature state that works against unit-testability.
 - [`Refactor.UnusedVariable`](Refactor.UnusedVariable.md) `file` — Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).
 
 ## Warning

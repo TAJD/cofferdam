@@ -19,6 +19,7 @@ mod prefer_array_method_over_loop;
 mod prefer_const_over_let;
 mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
+mod purity_heuristic;
 mod unused_variable;
 
 pub use cognitive_complexity::{
@@ -35,6 +36,7 @@ pub use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
 pub use prefer_const_over_let::PreferConstOverLet;
 pub use prefer_nullish_coalescing::PreferNullishCoalescing;
 pub use prefer_optional_chain::PreferOptionalChain;
+pub use purity_heuristic::{PurityHeuristic, PURITY_HEURISTIC_OPTIONS};
 pub use unused_variable::UnusedVariable;
 
 #[cfg(test)]
@@ -665,6 +667,111 @@ for (let i = 0; i < nums.length; i++) {
         assert!(
             issues.is_empty(),
             "a loop that never pushes must not flag; got {issues:?}"
+        );
+    }
+
+    // ─── Refactor.PurityHeuristic (CD-123) ──────────────────────────────
+
+    use purity_heuristic::PurityHeuristic;
+
+    fn run_purity_heuristic(src: &str, enabled: bool) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("enabled".to_string(), RawOptionValue::Bool(enabled));
+        let opts =
+            validate_options("Refactor.PurityHeuristic", PURITY_HEURISTIC_OPTIONS, &raw).unwrap();
+        let mut ctx = CheckContext::new(&file)
+            .with_parsed(&parsed)
+            .with_options(&opts);
+        PurityHeuristic.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn disabled_by_default_emits_nothing() {
+        let src = "\
+let requestCount = 0;
+export function logRequest(name: string) {
+  console.log(name, requestCount);
+}
+export function bump() {
+  requestCount += 1;
+}";
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        let issues = PurityHeuristic.run(&file, &mut ctx);
+        assert!(
+            issues.is_empty(),
+            "check must be a no-op without explicit opt-in; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn exported_function_reading_mutated_module_let_is_flagged() {
+        let src = "\
+let requestCount = 0;
+export function logRequest(name: string) {
+  console.log(name, requestCount);
+}
+requestCount = 1;";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn compound_assignment_to_module_state_counts_as_a_read() {
+        // `bump` writes requestCount via `+=`, which reads the prior
+        // value first — a genuine (if self-inflicted) hidden dependency.
+        let src = "\
+let requestCount = 0;
+export function bump() {
+  requestCount += 1;
+}";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn read_only_module_state_is_not_flagged() {
+        let src = "\
+let config = { apiUrl: \"https://api.example.com\" };
+export function fetchData() {
+  return fetch(config.apiUrl);
+}";
+        let issues = run_purity_heuristic(src, true);
+        assert!(
+            issues.is_empty(),
+            "a module-level let that's never reassigned must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn parameter_shadowing_module_name_is_not_flagged() {
+        let src = "\
+let total = 0;
+export function resetTotal() {
+  total = 0;
+}
+export function addToTotal(total: number) {
+  return total + 1;
+}";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(
+            issues.len(),
+            0,
+            "own parameter covers the read even though the module-level name is mutated \
+             elsewhere; got {issues:?}"
         );
     }
 }

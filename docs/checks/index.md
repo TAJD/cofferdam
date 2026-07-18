@@ -49,6 +49,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Refactor.PreferNullishCoalescing`](Refactor.PreferNullishCoalescing.md) `file` — `x || default` falls through on every falsy value (`0`, `""`, `false`). Use `??` to fall through only on `null`/`undefined`.
 - [`Refactor.PreferOptionalChain`](Refactor.PreferOptionalChain.md) `file` — `a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.
 - [`Refactor.PurityHeuristic`](Refactor.PurityHeuristic.md) `file` `advisable` — An exported function reads a module-level mutable binding not covered by its own parameter list — a hidden dependency on outside-the-signature state that works against unit-testability.
+- [`Refactor.SideEffectInMapCallback`](Refactor.SideEffectInMapCallback.md) `file` — A .map/.filter callback that mutates outer-scope state or calls a known side-effecting function isn't purely computing a value — it's a loop wearing a map costume.
 - [`Refactor.UnusedVariable`](Refactor.UnusedVariable.md) `file` — Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).
 
 ## Warning

@@ -86,6 +86,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::PreferArrayMethodOverLoop),
         Box::new(refactor::PurityHeuristic),
         Box::new(refactor::MixedThrowAndReturnError),
+        Box::new(refactor::SideEffectInMapCallback),
         Box::new(warning::TripleEquals),
         Box::new(warning::UnusedImport),
         Box::new(warning::UnusedNullCheck),

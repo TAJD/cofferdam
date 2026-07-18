@@ -21,6 +21,7 @@ mod prefer_const_over_let;
 mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
 mod purity_heuristic;
+mod side_effect_in_map_callback;
 mod unused_variable;
 
 pub use cognitive_complexity::{
@@ -39,6 +40,7 @@ pub use prefer_const_over_let::PreferConstOverLet;
 pub use prefer_nullish_coalescing::PreferNullishCoalescing;
 pub use prefer_optional_chain::PreferOptionalChain;
 pub use purity_heuristic::{PurityHeuristic, PURITY_HEURISTIC_OPTIONS};
+pub use side_effect_in_map_callback::SideEffectInMapCallback;
 pub use unused_variable::UnusedVariable;
 
 #[cfg(test)]
@@ -966,6 +968,103 @@ function parseId(raw: string) {
             issues.len(),
             1,
             "brace-less guard clauses must still be treated as distinct branches; got {issues:?}"
+        );
+    }
+
+    // ─── Refactor.SideEffectInMapCallback (CD-125) ──────────────────────
+
+    use side_effect_in_map_callback::SideEffectInMapCallback;
+
+    fn run_side_effect_in_map_callback(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        SideEffectInMapCallback.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn map_callback_mutating_outer_scope_is_flagged() {
+        let src = "\
+const seen = [];
+const doubled = items.map((item) => {
+  seen.push(item);
+  return item * 2;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn filter_callback_calling_console_is_flagged() {
+        let src = "\
+const positives = items.filter((item) => {
+  console.log(\"checking\", item);
+  return item > 0;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn map_callback_with_only_local_state_is_not_flagged() {
+        let src = "\
+const scaled = items.map((item) => {
+  const local = item * 2;
+  return local;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "mutating only its own locals must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_mutation_does_not_leak_into_outer_callback() {
+        let src = "\
+const wrapped = items.map((item) => {
+  function makeLabel() {
+    let label = \"\";
+    label += String(item);
+    return label;
+  }
+  return makeLabel();
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "a nested function mutating its own local must not flag the outer callback; \
+             got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn foreach_callback_is_never_inspected() {
+        let src = "\
+const seen = [];
+items.forEach((item) => {
+  seen.push(item);
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            ".forEach is exempt — a side effect there is the point; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn discarded_return_with_no_other_side_effect_is_not_flagged() {
+        let src = "items.map((item) => process(item));";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "a discarded-return misuse with no real side effect is a distinct concern (\"use \
+             forEach instead\"), not this check's job; got {issues:?}"
         );
     }
 }

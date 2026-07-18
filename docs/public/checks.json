@@ -593,6 +593,21 @@
       ]
     },
     {
+      "id": "Refactor.SideEffectInMapCallback",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A .map/.filter callback that mutates outer-scope state or calls a known side-effecting function isn't purely computing a value — it's a loop wearing a map costume.",
+      "body": "---\nid: Refactor.SideEffectInMapCallback\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA callback passed to `.map`/`.filter` that mutates something outside itself (an outer-scope variable) or calls a known side-effecting function (`console.*`), instead of purely computing and returning a value — a loop wearing a map costume.\n\n```ts\nconst seen: number[] = [];\nconst doubled = items.map((item) => {\n  seen.push(item); // mutates outer-scope `seen`\n  return item * 2;\n});\n```\n\n```ts\n// fix — separate the accumulation from the transform\nconst doubled = items.map((item) => item * 2);\nitems.forEach((item) => seen.push(item));\n```\n\nNot flagged — the callback only mutates/declares locals of its own:\n\n```ts\nconst doubled = items.map((item) => {\n  const scaled = item * 2;\n  return scaled;\n});\n```\n\nNot flagged — a `.map`/`.filter` callback whose return value happens to be discarded, with no other side effect, is a distinct \"use `.forEach` instead\" concern this check doesn't cover (v1 scope, per the ticket):\n\n```ts\nitems.map((item) => process(item));\n```\n\nScope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Refactor.UnusedVariable",
       "category": "Refactor",
       "base_priority": 10,

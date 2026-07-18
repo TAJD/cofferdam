@@ -57,6 +57,7 @@ export const checksItems = [
       { text: 'PreferNullishCoalescing', link: '/checks/Refactor.PreferNullishCoalescing' },
       { text: 'PreferOptionalChain', link: '/checks/Refactor.PreferOptionalChain' },
       { text: 'PurityHeuristic', link: '/checks/Refactor.PurityHeuristic' },
+      { text: 'SideEffectInMapCallback', link: '/checks/Refactor.SideEffectInMapCallback' },
       { text: 'UnusedVariable', link: '/checks/Refactor.UnusedVariable' },
     ],
   },

@@ -74,7 +74,10 @@ struct Collector<'a> {
     issues: Vec<Issue>,
 }
 
-/// True if `stmt` is exactly `this.<field> = <expr>;`.
+/// True if `stmt` is exactly `this.<field> = <expr>;` — plain `=` only.
+/// A compound operator (`+=`, `??=`, ...) is behavior (it reads before
+/// writing), not initialization, so it must NOT count as a field
+/// assignment even though its target still looks like `this.<field>`.
 fn is_this_field_assignment(stmt: &Statement<'_>) -> bool {
     let Statement::ExpressionStatement(expr_stmt) = stmt else {
         return false;
@@ -82,6 +85,9 @@ fn is_this_field_assignment(stmt: &Statement<'_>) -> bool {
     let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
         return false;
     };
+    if assign.operator != oxc_ast::ast::AssignmentOperator::Assign {
+        return false;
+    }
     let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
         return false;
     };

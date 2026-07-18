@@ -53,6 +53,16 @@ export class Config {
   constructor(public apiUrl: string) {}
 }
 
+// Not flagged — compound assignment reads before writing (behavior),
+// even though the target still looks like `this.<field>`.
+export class Weird {
+  x: number;
+  constructor(x: number) {
+    this.x = 0;
+    this.x += x;
+  }
+}
+
 // Not flagged — constructor does more than assign fields.
 export class Validated {
   x: number;

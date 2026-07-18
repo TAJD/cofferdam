@@ -859,6 +859,75 @@ class Counter {
     }
 
     #[test]
+    fn compound_assignment_in_constructor_is_not_flagged() {
+        // `+=` reads before writing — behavior, not initialization — even
+        // though the target still looks like `this.<field>`.
+        let src = "\
+class Weird {
+  x: number;
+  constructor(x: number) {
+    this.x = 0;
+    this.x += x;
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a compound-assignment statement must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn bare_readonly_parameter_is_not_flagged() {
+        // `readonly` alone (no accessibility keyword) is still a
+        // parameter property.
+        let src = "\
+class Wrapper {
+  constructor(readonly x: number) {}
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a bare `readonly` parameter must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn static_only_class_is_not_flagged() {
+        let src = "\
+class Utils {
+  static VERSION: string = \"1.0\";
+  static parse(s: string): number {
+    return Number(s);
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a static-only utility class must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn getter_setter_class_is_not_flagged() {
+        let src = "\
+class Wrapper {
+  private _x: number;
+  constructor(x: number) {
+    this._x = x;
+  }
+  get x(): number {
+    return this._x;
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a getter/setter means the class has real behavior; got {issues:?}"
+        );
+    }
+
+    #[test]
     fn empty_class_with_no_fields_is_not_flagged() {
         let src = "class Marker {}";
         let issues = run_class_as_data_bag(src);

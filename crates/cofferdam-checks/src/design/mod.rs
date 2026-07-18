@@ -1413,10 +1413,11 @@ function total(items) {
     }
 
     #[test]
-    fn interface_with_extends_is_skipped() {
-        // Inherited fields aren't visible in the body, so an interface
-        // with a non-empty `extends` is skipped entirely, even if its
-        // own body matches another type.
+    fn interface_with_extends_is_not_compared_against_a_non_extending_peer() {
+        // An interface with a non-empty `extends` is only ever comparable
+        // to another interface sharing the exact same base set (CD-135)
+        // — it must not match a peer with no `extends` at all, even if
+        // its own declared body happens to line up.
         let a = PathBuf::from("/p/a.ts");
         let b = PathBuf::from("/p/b.ts");
         let issues = run_duplicate_type_shape(&[
@@ -1432,7 +1433,7 @@ function total(items) {
         ]);
         assert!(
             issues.is_empty(),
-            "an interface with extends must be skipped; got {issues:?}"
+            "an interface with extends must not match a non-extending peer; got {issues:?}"
         );
     }
 
@@ -1449,6 +1450,93 @@ function total(items) {
             1,
             "a duplicate pair within a single file must still be flagged; got {issues:?}"
         );
+    }
+
+    #[test]
+    fn extends_clause_interfaces_sharing_a_base_are_flagged() {
+        // Both interfaces extend the same base and add no fields of
+        // their own — before CD-135 this was invisible (interfaces with
+        // extends were skipped entirely); the shared base alone is now a
+        // full duplication signal even with zero own fields.
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "interface Base { id: string; name: string; email: string; } \
+                 export interface User extends Base {}",
+            ),
+            (&b, "export interface Customer extends Base {}"),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "two interfaces extending the same base with no own fields must be flagged; got {issues:?}"
+        );
+        assert!(issues[0].message.contains("User"));
+        assert!(issues[0].message.contains("Customer"));
+    }
+
+    #[test]
+    fn extends_clause_interfaces_with_different_bases_are_not_flagged() {
+        // Different bases mean the effective (inherited) shape differs
+        // even though the declared bodies happen to match — must not be
+        // flagged just because both declare the same two own fields.
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "interface BaseA { id: string; } \
+                 export interface User extends BaseA { name: string; email: string; }",
+            ),
+            (
+                &b,
+                "interface BaseB { id: string; } \
+                 export interface Customer extends BaseB { name: string; email: string; }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "interfaces extending different bases must not be flagged even with matching own fields; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn three_mutually_similar_shapes_are_clustered_into_one_finding() {
+        // Three independently declared interfaces with the same shape
+        // must produce ONE finding grouping all three, not three
+        // separate pairwise findings (CD-135).
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let c = PathBuf::from("/p/c.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "export interface User { id: string; name: string; email: string; }",
+            ),
+            (
+                &b,
+                "export interface Customer { id: string; name: string; email: string; }",
+            ),
+            (
+                &c,
+                "export interface Contact { id: string; name: string; email: string; }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "three mutually-similar shapes must be clustered into one finding; got {issues:?}"
+        );
+        assert_eq!(
+            issues[0].related.len(),
+            2,
+            "the one finding must reference both other members of the cluster; got {issues:?}"
+        );
+        assert!(issues[0].message.contains("User"));
+        assert!(issues[0].message.contains("Customer"));
+        assert!(issues[0].message.contains("Contact"));
     }
 
     // ─── Design.ImportFanOutOutlier (CD-130) ────────────────────────────

@@ -26,13 +26,24 @@ const SIMILARITY_THRESHOLD: f64 = 0.8;
 /// per-file pass. `fields` maps property name to its type annotation's
 /// raw source text (trimmed) — deliberately textual rather than
 /// semantic, since resolving type equivalence would need the ts-morph
-/// type host this check doesn't require.
+/// type host this check doesn't require. `extends` holds the sorted,
+/// raw-text names of an interface's heritage clauses (empty for a type
+/// alias, or an interface with no `extends`).
 #[derive(Clone)]
 struct TypeShape {
     name: String,
     file: PathBuf,
     span: Span,
     fields: BTreeMap<String, String>,
+    extends: Vec<String>,
+}
+
+/// A shape with no own fields is only a comparison candidate when it has
+/// a non-empty `extends` — a shared base is itself a duplication signal
+/// (CD-135) even with zero additional fields, whereas an empty type
+/// alias/interface with no base is not comparable to anything.
+fn is_eligible(shape: &TypeShape) -> bool {
+    !shape.extends.is_empty() || shape.fields.len() >= MIN_FIELDS
 }
 
 static TYPE_SHAPES: CorpusKey<Vec<TypeShape>> = CorpusKey::new("Design.DuplicateTypeShape.shapes");
@@ -58,20 +69,25 @@ const META: CheckMeta = CheckMeta {
 };
 
 /// `Design.DuplicateTypeShape` — cross-file check (CD-128) that flags
-/// pairs of interfaces/type-literal aliases with sufficiently similar
+/// groups of interfaces/type-literal aliases with sufficiently similar
 /// field shapes.
 ///
-/// Scope (v1): only `interface Foo { ... }` and `type Foo = { ... }`
+/// Scope: only `interface Foo { ... }` and `type Foo = { ... }`
 /// declarations are considered — mapped types, unions, and other TSType
-/// forms are not. An interface with a non-empty `extends` clause is
-/// skipped, since its effective shape includes inherited fields this
-/// check doesn't resolve, and comparing only the declared body would
-/// risk false positives/negatives. Only plain identifier property keys
-/// are counted; computed/private keys are ignored, so a shape with only
-/// such keys will never reach `MIN_FIELDS`. Comparison is pairwise
-/// (O(n^2) over collected shapes) and not transitively clustered — three
-/// mutually-similar types produce three separate findings rather than
-/// one group.
+/// forms are not. An interface with a non-empty `extends` clause is only
+/// ever compared against another interface with the exact same
+/// (sorted) set of heritage names (CD-135) — its effective shape
+/// includes inherited fields this check doesn't resolve, so comparing
+/// declared bodies across different bases would risk false
+/// positives/negatives; when both sides share a base, that shared base
+/// is itself a duplication signal even if neither side adds its own
+/// fields. Only plain identifier property keys are counted;
+/// computed/private keys are ignored, so a shape with only such keys
+/// will never reach `MIN_FIELDS` (unless it has a non-empty `extends`).
+/// Comparison is pairwise (O(n^2) over collected shapes) but mutually-
+/// similar shapes are transitively clustered via union-find: three
+/// mutually-similar types produce one finding naming all three, not
+/// three separate pairwise findings.
 pub struct DuplicateTypeShape;
 
 impl Check for DuplicateTypeShape {
@@ -109,10 +125,20 @@ impl Check for DuplicateTypeShape {
     }
 }
 
+/// `a`/`b` are only comparable when they share the exact same (sorted)
+/// `extends` set — a differing base means the effective (inherited)
+/// shape differs even if the declared bodies happen to match.
 fn similarity(a: &TypeShape, b: &TypeShape) -> f64 {
+    if a.extends != b.extends {
+        return 0.0;
+    }
     let names: HashSet<&String> = a.fields.keys().chain(b.fields.keys()).collect();
     if names.is_empty() {
-        return 0.0;
+        // Both sides declare no fields of their own. If they also share
+        // a non-empty extends clause, that shared base alone is a full
+        // duplication signal (CD-135); otherwise there's nothing to
+        // compare.
+        return if a.extends.is_empty() { 0.0 } else { 1.0 };
     }
     let matching = names
         .iter()
@@ -126,42 +152,99 @@ fn similarity(a: &TypeShape, b: &TypeShape) -> f64 {
     matching as f64 / names.len() as f64
 }
 
+/// Minimal union-find over shape indices, used to transitively cluster
+/// mutually-similar shapes (CD-135) instead of reporting one finding per
+/// pairwise match.
+struct Dsu {
+    parent: Vec<usize>,
+}
+
+impl Dsu {
+    fn new(n: usize) -> Self {
+        Dsu {
+            parent: (0..n).collect(),
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra != rb {
+            self.parent[ra] = rb;
+        }
+    }
+}
+
+// `j` indexes both `shapes` and `dsu`, so `enumerate()` (which only
+// tracks one of the two) doesn't simplify this inner loop.
+#[allow(clippy::needless_range_loop)]
 fn compute_duplicates(shapes: &[TypeShape]) -> Vec<Issue> {
-    let mut issues = Vec::new();
-    for i in 0..shapes.len() {
-        if shapes[i].fields.len() < MIN_FIELDS {
+    let n = shapes.len();
+    let mut dsu = Dsu::new(n);
+    for (i, shape_i) in shapes.iter().enumerate() {
+        if !is_eligible(shape_i) {
             continue;
         }
-        for j in (i + 1)..shapes.len() {
-            if shapes[j].fields.len() < MIN_FIELDS {
+        for j in (i + 1)..n {
+            if !is_eligible(&shapes[j]) {
                 continue;
             }
-            let score = similarity(&shapes[i], &shapes[j]);
-            if score < SIMILARITY_THRESHOLD {
-                continue;
+            if similarity(shape_i, &shapes[j]) >= SIMILARITY_THRESHOLD {
+                dsu.union(i, j);
             }
-            let a = &shapes[i];
-            let b = &shapes[j];
-            issues.push(Issue {
-                check_id: META.id.to_string(),
-                message: format!(
-                    "`{}` ({} fields) is {}% structurally similar to `{}` in {} — consider a shared type",
-                    a.name,
-                    a.fields.len(),
-                    (score * 100.0).round() as i64,
-                    b.name,
-                    b.file.display()
-                ),
-                file: a.file.clone(),
-                location: Location::from_span(&a.file, a.span),
-                priority: Priority(META.base_priority),
-                severity: Severity::Medium,
-                related: vec![RelatedSpan {
-                    file: b.file.clone(),
-                    location: Location::from_span(&b.file, b.span),
-                }],
-            });
         }
+    }
+
+    // Group eligible indices by DSU root; `shapes` is already sorted by
+    // (file, span), so each group's members come out in that order and
+    // the first member is a stable, deterministic anchor.
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, shape) in shapes.iter().enumerate() {
+        if is_eligible(shape) {
+            groups.entry(dsu.find(i)).or_default().push(i);
+        }
+    }
+
+    let mut issues = Vec::new();
+    for members in groups.into_values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let anchor = &shapes[members[0]];
+        let others: Vec<&TypeShape> = members[1..].iter().map(|&idx| &shapes[idx]).collect();
+        let other_names = others
+            .iter()
+            .map(|s| format!("`{}` in {}", s.name, s.file.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        issues.push(Issue {
+            check_id: META.id.to_string(),
+            message: format!(
+                "`{}` ({} fields) shares a near-identical field shape with {} other type{}: {} — consider a shared type",
+                anchor.name,
+                anchor.fields.len(),
+                others.len(),
+                if others.len() == 1 { "" } else { "s" },
+                other_names
+            ),
+            file: anchor.file.clone(),
+            location: Location::from_span(&anchor.file, anchor.span),
+            priority: Priority(META.base_priority),
+            severity: Severity::Medium,
+            related: others
+                .iter()
+                .map(|s| RelatedSpan {
+                    file: s.file.clone(),
+                    location: Location::from_span(&s.file, s.span),
+                })
+                .collect(),
+        });
     }
     issues
 }
@@ -212,16 +295,34 @@ impl<'a> Visit<'a> for ShapeCollector<'a> {
     }
 }
 
+/// Raw source text of each heritage clause's expression (e.g. `Base` in
+/// `extends Base`), sorted for order-independent comparison.
+fn extends_names(file: &SourceFile, decl: &TSInterfaceDeclaration<'_>) -> Vec<String> {
+    let mut names: Vec<String> = decl
+        .extends
+        .iter()
+        .map(|heritage| {
+            let span = heritage.expression.span();
+            file.text
+                .get(span.start as usize..span.end as usize)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 impl<'a> ShapeCollector<'a> {
     fn record_interface(&mut self, decl: &TSInterfaceDeclaration<'a>) {
         // Inherited fields from `extends` aren't visible in the body, so
-        // comparing only the declared members here would risk false
-        // positives/negatives against the interface's real shape — skip.
-        if !decl.extends.is_empty() {
-            return;
-        }
+        // an interface's own declared field count alone doesn't
+        // determine eligibility here — a non-empty extends is itself a
+        // duplication signal (CD-135), gated instead in `is_eligible`.
+        let extends = extends_names(self.file, decl);
         let fields = collect_fields(self.file, &decl.body.body);
-        if fields.len() < MIN_FIELDS {
+        if extends.is_empty() && fields.len() < MIN_FIELDS {
             return;
         }
         self.shapes.push(TypeShape {
@@ -229,6 +330,7 @@ impl<'a> ShapeCollector<'a> {
             file: self.file.path.clone(),
             span: span_from_bytes(&self.file.text, decl.id.span.start, decl.id.span.end),
             fields,
+            extends,
         });
     }
 
@@ -245,6 +347,7 @@ impl<'a> ShapeCollector<'a> {
             file: self.file.path.clone(),
             span: span_from_bytes(&self.file.text, decl.id.span.start, decl.id.span.end),
             fields,
+            extends: Vec::new(),
         });
     }
 }

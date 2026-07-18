@@ -1,0 +1,262 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use cofferdam_core::graph::{ExportKind, ExportRecord, EXPORTS as GRAPH_EXPORTS};
+use cofferdam_core::path_key;
+use cofferdam_core::{
+    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, Priority, Severity,
+    SourceFile, Span,
+};
+
+/// Below this many eligible barrel candidates in the project, a
+/// mean/stddev over their re-export ratios is statistically
+/// meaningless — skip entirely. Barrels are rarer than files overall,
+/// so this floor is lower than `Design.ImportFanOutOutlier`'s.
+const MIN_BARRELS: usize = 5;
+
+/// A barrel's re-export ratio must exceed `mean + STDDEV_MULTIPLIER *
+/// stddev` (over other barrels in the project) to count as bloated.
+const STDDEV_MULTIPLIER: f64 = 3.0;
+
+const META: CheckMeta = CheckMeta {
+    id: "Design.BarrelReexportBloat",
+    category: Category::Design,
+    base_priority: 5,
+    default_severity: Severity::Medium,
+    explanation: "A barrel file re-exports an unusually large fraction of its directory's \
+        exports versus other barrels in the project — the module's real public surface \
+        becomes unclear and tree-shaking is defeated.",
+    body: include_str!("../../docs/Design.BarrelReexportBloat.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+    autofix: false,
+    pure_run: true,
+};
+
+/// `Design.BarrelReexportBloat` — finalize-stage check (CD-131) that
+/// flags a file whose `export * from`/`export { x } from` re-export
+/// count, as a fraction of its sibling files' real (non-re-export)
+/// exports, is more than `STDDEV_MULTIPLIER` standard deviations above
+/// the mean ratio of other barrels in the project.
+///
+/// Scope (v1): a file that resolves as the project's (or a workspace
+/// package's) public entry point — found by walking up from the file
+/// to the nearest `package.json` and checking whether the file matches
+/// any string reachable from its `main`/`module`/`types`/`exports`
+/// fields — is excluded entirely, both from being flagged and from the
+/// statistical population, since a real published entry point's high
+/// re-export ratio is by design. Entry-point matching compares paths
+/// with the file extension stripped, so it only catches package.json
+/// fields that point directly at the source file (or a same-directory
+/// build artifact); a project with a separate `src`/`dist` split whose
+/// `main` points into `dist/` isn't covered and may be flagged.
+pub struct BarrelReexportBloat;
+
+impl Check for BarrelReexportBloat {
+    fn meta(&self) -> &'static CheckMeta {
+        &META
+    }
+
+    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
+        compute_bloated_barrels(&exports)
+    }
+}
+
+#[derive(Default)]
+struct FileExportCounts {
+    real: u32,
+    reexport: u32,
+}
+
+fn mean_stddev(values: &[f64]) -> (f64, f64) {
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let variance = values
+        .iter()
+        .map(|&v| {
+            let d = v - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / (n - 1.0);
+    (mean, variance.sqrt())
+}
+
+/// Walk up from `file`'s directory looking for the nearest
+/// `package.json`. Mirrors `cofferdam-cli`'s `find_npm_package_json`
+/// walk-up pattern (doctor.rs), scoped to an arbitrary source file
+/// instead of the running executable.
+fn find_nearest_package_json(file: &Path) -> Option<PathBuf> {
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        let candidate = d.join("package.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// Recursively collect every string leaf under `value` into `out`.
+/// Used against the `exports` field, whose shape ranges from a plain
+/// string to nested subpath/condition objects — over-collecting is
+/// safe here since any extra candidate only makes entry-point exclusion
+/// more permissive, never less.
+fn collect_string_leaves(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Object(map) => {
+            for v in map.values() {
+                collect_string_leaves(v, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                collect_string_leaves(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Path with its final extension removed (single-suffix strip; e.g.
+/// `/p/index.ts` -> `/p/index`). Used to compare a `package.json`
+/// entry-point candidate (typically `.js`) against a TS source file
+/// (`.ts`) in the same directory without hardcoding an extension map.
+fn strip_extension(path: &Path) -> PathBuf {
+    match path.file_stem() {
+        Some(stem) => path.with_file_name(stem),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Resolve `pkg_json_path`'s `main`/`module`/`types`/`typings`/
+/// `exports` fields into a set of extension-stripped, normalised path
+/// keys. Returns an empty set on any read/parse failure — a
+/// non-existent or malformed `package.json` excludes nothing rather
+/// than aborting the check.
+fn resolve_entry_point_keys(pkg_json_path: &Path) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    let Ok(text) = std::fs::read_to_string(pkg_json_path) else {
+        return keys;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return keys;
+    };
+    let Some(pkg_dir) = pkg_json_path.parent() else {
+        return keys;
+    };
+
+    let mut candidates = Vec::new();
+    for field in ["main", "module", "types", "typings"] {
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            candidates.push(s.to_string());
+        }
+    }
+    if let Some(exports) = json.get("exports") {
+        collect_string_leaves(exports, &mut candidates);
+    }
+
+    for candidate in candidates {
+        let trimmed = candidate.trim_start_matches("./");
+        let abs = pkg_dir.join(trimmed);
+        keys.insert(path_key(&strip_extension(&abs)));
+    }
+    keys
+}
+
+fn is_package_entry_point(file: &Path, cache: &mut HashMap<PathBuf, HashSet<String>>) -> bool {
+    let Some(pkg_json_path) = find_nearest_package_json(file) else {
+        return false;
+    };
+    let keys = cache
+        .entry(pkg_json_path.clone())
+        .or_insert_with(|| resolve_entry_point_keys(&pkg_json_path));
+    keys.contains(&path_key(&strip_extension(file)))
+}
+
+fn compute_bloated_barrels(exports: &[ExportRecord]) -> Vec<Issue> {
+    let mut by_file: HashMap<PathBuf, FileExportCounts> = HashMap::new();
+    for exp in exports {
+        let counts = by_file.entry(exp.file.clone()).or_default();
+        match exp.kind {
+            ExportKind::ReExport => counts.reexport += 1,
+            ExportKind::Named | ExportKind::Default => counts.real += 1,
+        }
+    }
+
+    let mut entry_point_cache: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    struct Candidate {
+        file: PathBuf,
+        ratio: f64,
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+
+    for (file, counts) in &by_file {
+        if counts.reexport == 0 {
+            continue;
+        }
+        if is_package_entry_point(file, &mut entry_point_cache) {
+            continue;
+        }
+        let Some(dir) = file.parent() else { continue };
+        let sibling_real: u32 = by_file
+            .iter()
+            .filter(|(other, _)| other.as_path() != file.as_path() && other.parent() == Some(dir))
+            .map(|(_, c)| c.real)
+            .sum();
+        if sibling_real == 0 {
+            continue;
+        }
+        candidates.push(Candidate {
+            file: file.clone(),
+            ratio: counts.reexport as f64 / sibling_real as f64,
+        });
+    }
+
+    if candidates.len() < MIN_BARRELS {
+        return Vec::new();
+    }
+
+    let ratios: Vec<f64> = candidates.iter().map(|c| c.ratio).collect();
+    let (mean, stddev) = mean_stddev(&ratios);
+    if stddev <= 0.0 {
+        return Vec::new();
+    }
+    let threshold = mean + STDDEV_MULTIPLIER * stddev;
+
+    let mut sorted = candidates;
+    sorted.sort_by(|a, b| a.file.cmp(&b.file));
+
+    let zero_span = Span {
+        start_byte: 0,
+        end_byte: 0,
+        line: 1,
+        column: 1,
+    };
+    sorted
+        .into_iter()
+        .filter(|c| c.ratio > threshold)
+        .map(|c| Issue {
+            check_id: META.id.to_string(),
+            message: format!(
+                "this barrel re-exports a much larger share of its directory's exports ({:.0}%) than other barrels in the project (mean {:.0}%, stddev {:.0}%) \u{2014} its real public surface is unclear and tree-shaking is defeated",
+                c.ratio * 100.0,
+                mean * 100.0,
+                stddev * 100.0
+            ),
+            file: c.file.clone(),
+            location: Location::from_span(&c.file, zero_span),
+            priority: Priority(META.base_priority),
+            severity: Severity::Medium,
+            related: Vec::new(),
+        })
+        .collect()
+}

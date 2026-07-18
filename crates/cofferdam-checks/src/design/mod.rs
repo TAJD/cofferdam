@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+mod barrel_reexport_bloat;
 mod boundary_frozen;
 mod class_as_data_bag;
 mod duplicate_export_name;
@@ -18,6 +19,7 @@ mod readonly_array_param;
 mod scripted_invariant;
 mod union_exhaustiveness_gap;
 
+pub use barrel_reexport_bloat::BarrelReexportBloat;
 pub use boundary_frozen::BoundaryFrozen;
 pub use class_as_data_bag::ClassAsDataBag;
 pub use duplicate_export_name::DuplicateExportName;
@@ -1125,6 +1127,7 @@ function total(items) {
 
     // ─── Design.EffectLeakage (CD-127) ──────────────────────────────────
 
+    use cofferdam_core::graph::EXPORTS as GRAPH_EXPORTS;
     use cofferdam_core::graph::IMPORTS as GRAPH_IMPORTS;
     use cofferdam_core::{CorpusIndex, FinalizeContext};
     use effect_leakage::EffectLeakage;
@@ -1549,6 +1552,169 @@ function total(items) {
         assert!(
             issues.is_empty(),
             "uniform fan-out/fan-in (stddev 0) must not flag anything; got {issues:?}"
+        );
+    }
+
+    // ─── Design.BarrelReexportBloat (CD-131) ────────────────────────────
+
+    use barrel_reexport_bloat::BarrelReexportBloat;
+
+    fn run_barrel_reexport_bloat(exports: Vec<ExportRecord>) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::new();
+        corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.extend(exports));
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        BarrelReexportBloat.finalize(&mut finalize_ctx)
+    }
+
+    fn barrel_reexport(file: &Path, name: &str) -> ExportRecord {
+        ExportRecord {
+            file: file.to_path_buf(),
+            name: name.to_string(),
+            kind: ExportKind::ReExport,
+            type_only: false,
+            span: Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+            source_specifier: None,
+            resolved_source: None,
+        }
+    }
+
+    fn barrel_real_export(file: &Path, name: &str) -> ExportRecord {
+        ExportRecord {
+            file: file.to_path_buf(),
+            name: name.to_string(),
+            kind: ExportKind::Named,
+            type_only: false,
+            span: Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+            source_specifier: None,
+            resolved_source: None,
+        }
+    }
+
+    /// `sparse_count` barrels, each re-exporting 1 of `sibling_real`
+    /// sibling exports, plus one bloated barrel re-exporting
+    /// `bloated_ratio_num` of the same `sibling_real` siblings, each
+    /// barrel in its own directory. Mirrors
+    /// `ImportFanOutOutlier`'s hand-verified n>=11 3-sigma shape: with
+    /// (n-1) near-zero background ratios and one outlier v, flagging
+    /// requires `1 > 1/n + 3/sqrt(n)`, so `sparse_count` must be at
+    /// least 10 for the outlier to actually breach the threshold.
+    fn barrel_fixture(
+        bloated_ratio_num: u32,
+        sibling_real: u32,
+        sparse_count: usize,
+    ) -> Vec<ExportRecord> {
+        let mut exports = Vec::new();
+        for i in 0..sparse_count {
+            let dir = PathBuf::from(format!("/p/mod{i}"));
+            for j in 0..sibling_real {
+                exports.push(barrel_real_export(
+                    &dir.join(format!("f{j}.ts")),
+                    &format!("x{j}"),
+                ));
+            }
+            exports.push(barrel_reexport(&dir.join("index.ts"), "x0"));
+        }
+        let bloated_dir = PathBuf::from("/p/bloated");
+        for j in 0..sibling_real {
+            exports.push(barrel_real_export(
+                &bloated_dir.join(format!("f{j}.ts")),
+                &format!("x{j}"),
+            ));
+        }
+        for j in 0..bloated_ratio_num {
+            exports.push(barrel_reexport(
+                &bloated_dir.join("index.ts"),
+                &format!("x{j}"),
+            ));
+        }
+        exports
+    }
+
+    #[test]
+    fn bloated_barrel_is_flagged() {
+        let exports = barrel_fixture(50, 100, 14);
+        let issues = run_barrel_reexport_bloat(exports);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected one bloat finding for the outlier barrel; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("/p/bloated/index.ts"));
+    }
+
+    #[test]
+    fn below_min_barrels_emits_nothing() {
+        // Only 2 barrel candidates total, under MIN_BARRELS (5).
+        let exports = barrel_fixture(50, 100, 1);
+        let issues = run_barrel_reexport_bloat(exports);
+        assert!(
+            issues.is_empty(),
+            "too few barrel candidates must not flag anything; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn uniform_ratios_emit_nothing() {
+        // Every barrel has the same 1/100 ratio — stddev is 0.
+        let exports = barrel_fixture(1, 100, 5);
+        let issues = run_barrel_reexport_bloat(exports);
+        assert!(
+            issues.is_empty(),
+            "uniform re-export ratios (stddev 0) must not flag anything; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn package_entry_point_is_excluded() {
+        use std::io::Write;
+        let tmp =
+            std::env::temp_dir().join(format!("cofferdam-test-barrel-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("bloated")).unwrap();
+        let mut pkg = std::fs::File::create(tmp.join("package.json")).unwrap();
+        write!(pkg, r#"{{"main": "./bloated/index.ts"}}"#).unwrap();
+        drop(pkg);
+
+        let mut exports = Vec::new();
+        for i in 0..14 {
+            let dir = tmp.join(format!("mod{i}"));
+            for j in 0..100u32 {
+                exports.push(barrel_real_export(
+                    &dir.join(format!("f{j}.ts")),
+                    &format!("x{j}"),
+                ));
+            }
+            exports.push(barrel_reexport(&dir.join("index.ts"), "x0"));
+        }
+        let bloated_dir = tmp.join("bloated");
+        for j in 0..100u32 {
+            exports.push(barrel_real_export(
+                &bloated_dir.join(format!("f{j}.ts")),
+                &format!("x{j}"),
+            ));
+        }
+        for j in 0..50u32 {
+            exports.push(barrel_reexport(
+                &bloated_dir.join("index.ts"),
+                &format!("x{j}"),
+            ));
+        }
+
+        let issues = run_barrel_reexport_bloat(exports);
+        std::fs::remove_dir_all(&tmp).ok();
+        assert!(
+            issues.is_empty(),
+            "a file resolved as the package's main entry point must be excluded, and the \
+             remaining sparse barrels have identical ratios (stddev 0); got {issues:?}"
         );
     }
 }

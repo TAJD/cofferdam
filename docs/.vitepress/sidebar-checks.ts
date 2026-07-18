@@ -21,6 +21,7 @@ export const checksItems = [
     text: 'Design',
     collapsed: true,
     items: [
+      { text: 'BarrelReexportBloat', link: '/checks/Design.BarrelReexportBloat' },
       { text: 'BoundaryFrozen', link: '/checks/Design.BoundaryFrozen' },
       { text: 'ClassAsDataBag', link: '/checks/Design.ClassAsDataBag' },
       { text: 'DuplicateExportName', link: '/checks/Design.DuplicateExportName' },

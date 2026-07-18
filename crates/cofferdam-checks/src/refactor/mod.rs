@@ -15,6 +15,7 @@ mod dead_export;
 mod duplicate_block;
 mod long_and_complex;
 mod mutated_parameter;
+mod prefer_const_over_let;
 mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
 mod unused_variable;
@@ -29,6 +30,7 @@ pub use dead_export::DeadExport;
 pub use duplicate_block::DuplicateBlock;
 pub use long_and_complex::LongAndComplex;
 pub use mutated_parameter::MutatedParameter;
+pub use prefer_const_over_let::PreferConstOverLet;
 pub use prefer_nullish_coalescing::PreferNullishCoalescing;
 pub use prefer_optional_chain::PreferOptionalChain;
 pub use unused_variable::UnusedVariable;
@@ -415,6 +417,78 @@ class B {
             1,
             "exactly one `ctx` (class B's) should flag; got: {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // ─── Refactor.PreferConstOverLet (CD-119) ──────────────────────────
+
+    use prefer_const_over_let::PreferConstOverLet;
+
+    fn run_prefer_const_over_let(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        PreferConstOverLet.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn never_reassigned_let_is_flagged() {
+        let issues = run_prefer_const_over_let("let total = 1 + 2;\nreturn total;");
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("total"));
+    }
+
+    #[test]
+    fn directly_reassigned_let_is_not_flagged() {
+        let issues = run_prefer_const_over_let("let price = 1;\nprice = price - 1;\nreturn price;");
+        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
+    }
+
+    #[test]
+    fn incremented_let_is_not_flagged() {
+        let issues = run_prefer_const_over_let(
+            "let count = 0;\nwhile (count < 5) { count++; }\nreturn count;",
+        );
+        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
+    }
+
+    #[test]
+    fn let_reassigned_in_nested_closure_is_not_flagged() {
+        let src = "\
+function makeCounter() {
+  let count = 0;
+  return function increment() {
+    count += 1;
+    return count;
+  };
+}";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "closure reassignment of a captured outer let must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn const_binding_is_never_flagged() {
+        let issues = run_prefer_const_over_let("const total = 1 + 2;\nreturn total;");
+        assert!(
+            issues.is_empty(),
+            "const bindings are out of scope; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn destructured_let_binding_is_skipped() {
+        let issues = run_prefer_const_over_let("let { a, b } = obj;\nreturn a + b;");
+        assert!(
+            issues.is_empty(),
+            "destructured bindings are MVP-skipped; got {issues:?}"
         );
     }
 }

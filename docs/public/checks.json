@@ -480,6 +480,21 @@
       ]
     },
     {
+      "id": "Refactor.PreferConstOverLet",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A `let` binding that's never reassigned should be `const` — it signals the value doesn't change and rules out reassignment bugs at compile time.",
+      "body": "---\nid: Refactor.PreferConstOverLet\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `let` binding that's never reassigned anywhere in the file should be `const` — it signals to a reader that the value doesn't change, and rules out an entire class of reassignment bugs at compile time.\n\n```ts\nlet total = price + tax; // flagged — never reassigned\nreturn total;\n```\n\n```ts\n// fix\nconst total = price + tax;\nreturn total;\n```\n\nReassignment is tracked by name across the whole file, including inside nested closures — a closure that captures and reassigns an outer `let` still counts, so the outer binding is correctly left alone:\n\n```ts\nlet count = 0;\nfunction increment() {\n  count += 1; // reassignment, found even though it's in a nested function\n}\n```\n\nScoped to simple-identifier bindings only in this version — destructured bindings (`let { a, b } = obj`) are skipped. Tracking is name-based rather than true lexical scope: a shadowed `let` that shares a name with a reassigned variable in a different scope won't be flagged even if that specific binding is itself never reassigned. This is a deliberate false-negative, not a false-positive — the safer direction for a \"should be const\" suggestion.\n\nOverlap with ESLint's `prefer-const` rule is expected and acceptable.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferConstOverLet\"]\nseverity = \"medium\"   # raise if your project treats this as more than a style nit\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Refactor.PreferNullishCoalescing",
       "category": "Refactor",
       "base_priority": 3,

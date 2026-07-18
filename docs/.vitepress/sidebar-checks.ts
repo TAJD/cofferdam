@@ -50,6 +50,7 @@ export const checksItems = [
       { text: 'DuplicateBlock', link: '/checks/Refactor.DuplicateBlock' },
       { text: 'LongAndComplex', link: '/checks/Refactor.LongAndComplex' },
       { text: 'MutatedParameter', link: '/checks/Refactor.MutatedParameter' },
+      { text: 'PreferConstOverLet', link: '/checks/Refactor.PreferConstOverLet' },
       { text: 'PreferNullishCoalescing', link: '/checks/Refactor.PreferNullishCoalescing' },
       { text: 'PreferOptionalChain', link: '/checks/Refactor.PreferOptionalChain' },
       { text: 'UnusedVariable', link: '/checks/Refactor.UnusedVariable' },

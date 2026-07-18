@@ -694,6 +694,223 @@ fn find_next_non_blank(from_idx: usize, lines: &[&str]) -> Option<u32> {
     None
 }
 
+// ─── Consistency.ErrorHandlingIdiom ────────────────────────────────────────
+
+/// Field names that make an object-literal return count as "returning an
+/// error" — mirrors `Refactor.MixedThrowAndReturnError`'s heuristic
+/// deliberately, so the two checks agree on what counts as an
+/// error-shaped return.
+const EHI_ERROR_SHAPE_FIELDS: &[&str] = &["error", "ok", "success"];
+
+/// Below this many total occurrences (throws + error-shaped returns)
+/// project-wide, "dominant idiom" is statistically meaningless — skip
+/// emitting anything.
+const MIN_TOTAL_OCCURRENCES: usize = 4;
+
+/// Per-file occurrence spans collected during pass 1.
+#[derive(Default, Clone)]
+struct FileErrorIdiomStats {
+    throw_spans: Vec<Span>,
+    error_return_spans: Vec<Span>,
+}
+
+static ERROR_IDIOM_STATS: CorpusKey<HashMap<PathBuf, FileErrorIdiomStats>> =
+    CorpusKey::new("Consistency.ErrorHandlingIdiom.stats");
+
+/// `Consistency.ErrorHandlingIdiom` — two-pass check (CD-129) that
+/// learns the project-wide dominant error-handling idiom (throwing vs.
+/// returning an error-shaped object) in pass 1, then flags every
+/// occurrence of the minority idiom in pass 2.
+///
+/// v1 deliberately does NOT attempt to group occurrences by "same kind
+/// of failure" (e.g. by directory, domain, or error class/name) — the
+/// ticket flagged that grouping heuristic as the main open design
+/// question, and the chosen v1 scope is to learn one idiom for the
+/// whole project rather than try to resolve it. This means the check
+/// is a project-wide idiom-consistency signal, not a same-failure-class
+/// comparison; a project that legitimately mixes idioms across
+/// unrelated domains (e.g. throwing for programmer errors, returning
+/// `Result`-shaped values for expected validation failures) will see
+/// this as noise. It overlaps somewhat with the per-function
+/// `Refactor.MixedThrowAndReturnError` (CD-124) — that check flags a
+/// single function mixing both idioms; this one flags idiom
+/// inconsistency across the whole project.
+pub struct ErrorHandlingIdiom;
+
+const EHI_META: CheckMeta = CheckMeta {
+    id: "Consistency.ErrorHandlingIdiom",
+    category: Category::Consistency,
+    base_priority: -5,
+    default_severity: Severity::Info,
+    explanation: "The project predominantly uses one error-handling idiom (throwing, or \
+        returning an error-shaped value) — this file deviates from it, hurting consistency of \
+        error paths for callers.",
+    body: include_str!("../docs/Consistency.ErrorHandlingIdiom.md"),
+    requires_types: false,
+    consistency: true,
+    options: &[],
+    autofix: false,
+    pure_run: false,
+};
+
+impl Check for ErrorHandlingIdiom {
+    fn meta(&self) -> &'static CheckMeta {
+        &EHI_META
+    }
+
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&ERROR_IDIOM_STATS, |slot, path| {
+            slot.remove(path);
+        });
+    }
+
+    /// Pass 1: walk the whole file (any nesting depth — unlike CD-124,
+    /// this check doesn't need per-function scoping) and record every
+    /// throw statement and every error-shaped return statement.
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+        let mut collector = ErrorIdiomCollector {
+            file,
+            stats: FileErrorIdiomStats::default(),
+        };
+        collector.visit_program(parsed.program);
+        let stats = collector.stats;
+
+        ctx.corpus.with_slot(&ERROR_IDIOM_STATS, |slot| {
+            slot.insert(file.path.clone(), stats);
+        });
+
+        Vec::new()
+    }
+
+    /// Pass 2: sum occurrences across every file in the corpus to learn
+    /// the project-wide dominant idiom, then flag this file's
+    /// occurrences of the minority idiom.
+    fn pass2(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let all_stats: HashMap<PathBuf, FileErrorIdiomStats> = ctx
+            .corpus
+            .with_slot(&ERROR_IDIOM_STATS, |slot| slot.clone());
+
+        let total_throw: usize = all_stats.values().map(|s| s.throw_spans.len()).sum();
+        let total_return: usize = all_stats.values().map(|s| s.error_return_spans.len()).sum();
+        let total = total_throw + total_return;
+        if total < MIN_TOTAL_OCCURRENCES {
+            return Vec::new();
+        }
+
+        // Strict majority required, mirroring Consistency.QuoteStyle: a
+        // 50/50 split (or anything short of a true majority) means
+        // there's no dominant idiom to deviate from.
+        let dominant_is_throw = if total_throw > total / 2 && total_throw > total_return {
+            true
+        } else if total_return > total / 2 && total_return > total_throw {
+            false
+        } else {
+            return Vec::new();
+        };
+
+        let Some(this_file) = all_stats.get(&file.path) else {
+            return Vec::new();
+        };
+
+        let mut issues = Vec::new();
+        if dominant_is_throw {
+            for span in &this_file.error_return_spans {
+                issues.push(ehi_issue(
+                    file,
+                    *span,
+                    "this file returns an error-shaped value, but the project predominantly \
+                     throws for errors — consider throwing instead for consistency",
+                ));
+            }
+        } else {
+            for span in &this_file.throw_spans {
+                issues.push(ehi_issue(
+                    file,
+                    *span,
+                    "this file throws, but the project predominantly returns an error-shaped \
+                     value for errors — consider returning one instead for consistency",
+                ));
+            }
+        }
+        issues
+    }
+}
+
+fn ehi_issue(file: &SourceFile, span: Span, message: &str) -> Issue {
+    Issue {
+        check_id: EHI_META.id.to_string(),
+        message: message.to_string(),
+        file: file.path.clone(),
+        location: Location::from_span(&file.path, span),
+        priority: Priority(EHI_META.base_priority),
+        severity: Severity::Info,
+        related: Vec::new(),
+    }
+}
+
+/// A field named `error`/`ok`/`success` signals *failure* only for
+/// certain values — see `Refactor.MixedThrowAndReturnError`'s
+/// `signals_failure` for the identical reasoning (`{ error: null }` /
+/// `{ ok: true }` are a Result-shaped success arm, not a competing
+/// error idiom).
+fn ehi_signals_failure(field_name: &str, value: &oxc_ast::ast::Expression<'_>) -> bool {
+    use oxc_ast::ast::Expression;
+    match field_name {
+        "error" => {
+            !matches!(value, Expression::NullLiteral(_))
+                && !matches!(value, Expression::Identifier(id) if id.name.as_str() == "undefined")
+        }
+        "ok" | "success" => !matches!(value, Expression::BooleanLiteral(lit) if lit.value),
+        _ => true,
+    }
+}
+
+fn ehi_is_error_shaped(expr: &oxc_ast::ast::Expression<'_>) -> bool {
+    use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
+    let Expression::ObjectExpression(obj) = expr else {
+        return false;
+    };
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(prop) = prop else {
+            return false;
+        };
+        let name: Option<&str> = match &prop.key {
+            PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+            PropertyKey::StringLiteral(lit) => Some(lit.value.as_str()),
+            _ => None,
+        };
+        name.is_some_and(|n| {
+            EHI_ERROR_SHAPE_FIELDS.contains(&n) && ehi_signals_failure(n, &prop.value)
+        })
+    })
+}
+
+struct ErrorIdiomCollector<'a> {
+    file: &'a SourceFile,
+    stats: FileErrorIdiomStats,
+}
+
+impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
+    fn visit_throw_statement(&mut self, node: &oxc_ast::ast::ThrowStatement<'a>) {
+        let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+        self.stats.throw_spans.push(span);
+        oxc_ast_visit::walk::walk_throw_statement(self, node);
+    }
+
+    fn visit_return_statement(&mut self, node: &oxc_ast::ast::ReturnStatement<'a>) {
+        if let Some(arg) = &node.argument {
+            if ehi_is_error_shaped(arg) {
+                let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+                self.stats.error_return_spans.push(span);
+            }
+        }
+        oxc_ast_visit::walk::walk_return_statement(self, node);
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1093,5 +1310,123 @@ const el = <Foo className="ignored" />;
         assert!(!looks_like_check_id("please"));
         assert!(!looks_like_check_id(""));
         assert!(!looks_like_check_id("123.bad"));
+    }
+
+    // ── ErrorHandlingIdiom tests ─────────────────────────────────────────────
+
+    /// Runs `ErrorHandlingIdiom`'s full two-pass cycle over each
+    /// `(path, source)` fixture and returns every issue from every
+    /// file's pass 2, mirroring `run_effect_leakage`'s multi-file
+    /// harness in `design/mod.rs`.
+    fn run_error_handling_idiom(fixtures: &[(&str, &str)]) -> Vec<Issue> {
+        let corpus = CorpusIndex::new();
+        let check = ErrorHandlingIdiom;
+        let files: Vec<SourceFile> = fixtures
+            .iter()
+            .map(|(path, src)| SourceFile::new(PathBuf::from(path), *src))
+            .collect();
+
+        // Pass 1 for every file before any pass 2, matching the engine's
+        // real two-pass ordering.
+        for file in &files {
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            check.run(file, &mut ctx);
+        }
+
+        let mut issues = Vec::new();
+        for file in &files {
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            issues.extend(check.pass2(file, &mut ctx));
+        }
+        issues
+    }
+
+    #[test]
+    fn minority_return_idiom_is_flagged_when_throw_dominates() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "function f() { return { error: 'e' }; }"),
+        ]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn minority_throw_idiom_is_flagged_when_return_dominates() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            ("d.ts", "function f() { return { error: 'd' }; }"),
+            ("e.ts", "function f() { throw new Error('e'); }"),
+        ]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn tie_emits_no_findings() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            ("d.ts", "function f() { return { error: 'd' }; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a 50/50 split must not flag either idiom; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn below_min_total_emits_no_findings() {
+        // Only 3 total occurrences, below MIN_TOTAL_OCCURRENCES (4).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "too few total occurrences must not flag anything; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn success_shaped_return_is_not_counted_either_way() {
+        // `{ error: null }` is a Result-shaped success arm, not a
+        // competing error idiom — it must not count toward the return
+        // tally, so the project below is still throw-dominant and the
+        // success-shaped return itself is never flagged.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "function f() { return { error: null, value: 1 }; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a success-shaped `{{ error: null }}` return must not be flagged; got {issues:?}"
+        );
     }
 }

@@ -13,6 +13,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 ## Consistency
 
 - [`Consistency.BroadSuppression`](Consistency.BroadSuppression.md) `file` — Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to a scoped form so suppression intent is auditable: `// cofferdam-ignore: <CheckId>: <reason>` (colon-separator) or `// cofferdam-ignore <CheckId> — <reason>` (space-separator, em-dash or hyphen reason).
+- [`Consistency.ErrorHandlingIdiom`](Consistency.ErrorHandlingIdiom.md) `file` — The project predominantly uses one error-handling idiom (throwing, or returning an error-shaped value) — this file deviates from it, hurting consistency of error paths for callers.
 - [`Consistency.QuoteStyle`](Consistency.QuoteStyle.md) `file` — Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.
 - [`Consistency.UnusedSuppression`](Consistency.UnusedSuppression.md) `file` — A `cofferdam-ignore` directive (next-line, range, or file-wide) targets a check ID that has no current finding in scope. The underlying issue was likely fixed or the code was deleted — the directive is now dead weight.
 

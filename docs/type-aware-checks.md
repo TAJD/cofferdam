@@ -26,6 +26,31 @@ its literal value. See the [Author guide](/plugin-sdk-guide#_7-type-aware-checks
 for the plugin-side API and [SEO-grade checking](/seo-checking#_4-type-aware-description-resolved-across-an-import)
 for a worked example.
 
+## When the type host runs
+
+cofferdam spawns the type host only when it has to, and skips type-aware
+checks — rather than failing — whenever the machinery is absent. The whole
+decision is one path:
+
+```mermaid
+flowchart TB
+    A["cofferdam check"] --> B{"any registered check<br/>requires_types?"}
+    B -->|no| Z["no type host spawned —<br/>zero added cost"]
+    B -->|yes| C{"[engine] type_aware<br/>= false?"}
+    C -->|yes| Z2["type-aware checks<br/>skipped silently"]
+    C -->|no| D{"tsconfig + ts-morph<br/>+ Node all present?"}
+    D -->|yes| R["type host starts —<br/>type-aware checks run"]
+    D -->|no| W["type-aware checks skipped,<br/>one warning<br/>(exit 2 with --fail-on-type-unavailable)"]
+
+    style R fill:#16a34a,color:#fff,stroke:#15803d
+    style B fill:#6366f1,color:#fff,stroke:#4338ca
+    style C fill:#6366f1,color:#fff,stroke:#4338ca
+    style D fill:#6366f1,color:#fff,stroke:#4338ca
+```
+
+The rest of this page walks each branch: what the host needs, what it
+costs, how to turn it off, and how to make a missing host a hard CI error.
+
 ## What a type-aware check needs
 
 A type-aware check only runs when cofferdam can reach a type host. That

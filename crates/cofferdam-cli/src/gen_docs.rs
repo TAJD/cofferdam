@@ -638,6 +638,17 @@ fn run_check_mode<C: clap::CommandFactory>(artifacts: &[Artifact], base: &Path) 
         any_stale = true;
     }
 
+    // Nav-completeness gate (CD-111): a real doc page nobody links to is
+    // invisible on the deployed site. Six pages went unlinked for months
+    // before CD-109 caught it by hand (CD-113).
+    for (path, reason) in find_orphaned_nav_pages(base) {
+        eprintln!(
+            "orphaned page: {} — {reason}. Add it to the sidebar in docs/.vitepress/config.ts (or NAV_ORPHAN_ALLOWLIST if intentional).",
+            path.display()
+        );
+        any_stale = true;
+    }
+
     if any_stale {
         ExitCode::FAILURE
     } else {
@@ -715,6 +726,89 @@ fn find_stale_claims(base: &Path) -> Vec<(PathBuf, &'static str)> {
     hits
 }
 
+/// Pages intentionally absent from the site nav. `README.md` is VitePress
+/// build instructions for contributors, not a published page.
+const NAV_ORPHAN_ALLOWLIST: &[&str] = &["/README"];
+
+/// Every hand-authored `docs/**/*.md` page must be reachable from the
+/// VitePress nav. Walk the tree (same skip-list as `find_stale_claims`),
+/// resolve each file to the site link VitePress serves it at, and flag any
+/// link absent from `config.ts` (plus the generated `sidebar-checks.ts`,
+/// which `config.ts` imports). Returns one `(path, reason)` per orphan.
+fn find_orphaned_nav_pages(base: &Path) -> Vec<(PathBuf, String)> {
+    let vp = base.join(".vitepress");
+    let mut nav_src = std::fs::read_to_string(vp.join("config.ts")).unwrap_or_default();
+    if let Ok(sidebar) = std::fs::read_to_string(vp.join("sidebar-checks.ts")) {
+        nav_src.push_str(&sidebar);
+    }
+    if nav_src.is_empty() {
+        return Vec::new();
+    }
+
+    let mut orphans = Vec::new();
+    let mut stack = vec![base.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if matches!(
+                    name,
+                    ".vitepress" | "node_modules" | "dist" | "public" | "superpowers"
+                ) {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let link = site_link(base, &path);
+            if NAV_ORPHAN_ALLOWLIST.contains(&link.as_str()) {
+                continue;
+            }
+            if !link_in_config(&nav_src, &link) {
+                orphans.push((path.clone(), format!("no nav entry for {link}")));
+            }
+        }
+    }
+    orphans
+}
+
+/// Resolve a `docs/**/*.md` path to the site-relative link VitePress serves
+/// it at: strip the `base` prefix and `.md` suffix, and collapse `index` to
+/// a trailing slash (`checks/index.md` → `/checks/`, root → `/`).
+fn site_link(base: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(base).unwrap_or(path);
+    let s = rel.to_string_lossy().replace('\\', "/");
+    let s = s.strip_suffix(".md").unwrap_or(&s);
+    if s == "index" {
+        return "/".to_string();
+    }
+    if let Some(dir) = s.strip_suffix("/index") {
+        return format!("/{dir}/");
+    }
+    format!("/{s}")
+}
+
+/// True if `link` (or a trailing-slash variant) appears as a quoted value in
+/// the raw nav source. Tolerant of `'…'` vs `"…"` and a trailing slash.
+fn link_in_config(nav_src: &str, link: &str) -> bool {
+    let mut variants = vec![link.to_string()];
+    if link != "/" {
+        let trimmed = link.trim_end_matches('/');
+        variants.push(trimmed.to_string());
+        variants.push(format!("{trimmed}/"));
+    }
+    variants
+        .iter()
+        .any(|v| nav_src.contains(&format!("'{v}'")) || nav_src.contains(&format!("\"{v}\"")))
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -771,5 +865,31 @@ fn severity_pascal(sev: Severity) -> String {
         Severity::Medium => "Medium".to_string(),
         Severity::High => "High".to_string(),
         Severity::Critical => "Critical".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_orphaned_nav_pages;
+
+    #[test]
+    fn flags_orphan_but_not_wired_or_allowlisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        std::fs::create_dir_all(base.join(".vitepress")).unwrap();
+        std::fs::write(
+            base.join(".vitepress").join("config.ts"),
+            "sidebar: [{ text: 'X', link: '/wired' }]",
+        )
+        .unwrap();
+        std::fs::write(base.join("wired.md"), "# wired").unwrap();
+        std::fs::write(base.join("orphan.md"), "# orphan").unwrap();
+        std::fs::write(base.join("README.md"), "# build steps").unwrap();
+
+        let names: Vec<String> = find_orphaned_nav_pages(base)
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["orphan.md".to_string()]);
     }
 }

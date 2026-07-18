@@ -55,6 +55,7 @@ export default withMermaid(defineConfig({
           { text: 'CI recipes', link: '/ci-recipes' },
           { text: 'Doctor', link: '/doctor' },
           { text: 'Agent advisory (advise)', link: '/reference/advise' },
+          { text: 'CLI reference', link: '/reference/cli' },
         ],
       },
       {
@@ -71,6 +72,18 @@ export default withMermaid(defineConfig({
         items: [
           { text: 'Author guide', link: '/plugin-sdk-guide' },
           { text: 'End-to-end fixture contract', link: '/plugin-sdk-e2e' },
+        ],
+      },
+      {
+        text: 'Architecture',
+        collapsed: true,
+        items: [
+          { text: 'Design principles', link: '/design-principles' },
+          { text: 'Canonical graph', link: '/canonical-graph' },
+          { text: 'Adapter contract', link: '/adapter-contract' },
+          { text: 'Predicate DSL', link: '/dsl-grammar' },
+          { text: 'Schema versioning', link: '/schema-versioning' },
+          { text: 'ADR 0001: canonical graph', link: '/decisions/0001-canonical-graph-schema' },
         ],
       },
       {

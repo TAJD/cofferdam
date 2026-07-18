@@ -107,7 +107,7 @@ fn compute_bloated_barrels(exports: &[ExportRecord]) -> Vec<Issue> {
     // spelling in, one consistent spelling out. If a future change ever
     // populates `ExportRecord.file` from a resolved/joined path instead,
     // this comparison would need `path_key` too.
-    let mut entry_point_cache: EntryPointCache = HashMap::new();
+    let mut entry_point_cache = EntryPointCache::default();
     struct Candidate {
         file: PathBuf,
         ratio: f64,

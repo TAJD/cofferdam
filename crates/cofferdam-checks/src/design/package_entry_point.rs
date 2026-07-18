@@ -12,16 +12,35 @@ use cofferdam_core::path_key;
 /// `package.json`. Mirrors `cofferdam-cli`'s `find_npm_package_json`
 /// walk-up pattern (doctor.rs), scoped to an arbitrary source file
 /// instead of the running executable.
-fn find_nearest_package_json(file: &Path) -> Option<PathBuf> {
+///
+/// `dir_cache` memoises the resolved `package.json` path (or its
+/// absence) per directory visited, and every directory walked through
+/// on the way to an answer is backfilled with that same answer before
+/// returning — so a project with many files sharing an ancestor chain
+/// only walks each unique directory once, rather than re-stat-ing every
+/// ancestor for every file in `finalize()`.
+fn find_nearest_package_json(
+    file: &Path,
+    dir_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Option<PathBuf> {
+    let mut visited = Vec::new();
     let mut dir = file.parent();
-    while let Some(d) = dir {
+    let result = loop {
+        let Some(d) = dir else { break None };
+        if let Some(cached) = dir_cache.get(d) {
+            break cached.clone();
+        }
+        visited.push(d.to_path_buf());
         let candidate = d.join("package.json");
         if candidate.is_file() {
-            return Some(candidate);
+            break Some(candidate);
         }
         dir = d.parent();
+    };
+    for d in visited {
+        dir_cache.insert(d, result.clone());
     }
-    None
+    result
 }
 
 /// Recursively collect every string leaf under `value` into `out`.
@@ -98,20 +117,119 @@ fn resolve_entry_point_keys(pkg_json_path: &Path) -> HashSet<String> {
     keys
 }
 
-/// Per-`package.json` resolved entry-point key cache, shared across
-/// calls to [`is_package_entry_point`] within one `finalize()` pass.
-pub type EntryPointCache = HashMap<PathBuf, HashSet<String>>;
+/// Memoization shared across calls to [`is_package_entry_point`] within
+/// one `finalize()` pass: which directory resolves to which (if any)
+/// `package.json`, and each `package.json`'s resolved entry-point keys.
+#[derive(Default)]
+pub struct EntryPointCache {
+    package_json_by_dir: HashMap<PathBuf, Option<PathBuf>>,
+    keys_by_package_json: HashMap<PathBuf, HashSet<String>>,
+}
 
 /// True when `file` resolves as the nearest ancestor `package.json`'s
 /// declared entry point (`main`/`module`/`types`/`typings`/`exports`).
-/// `cache` memoises each `package.json`'s resolved key set so a
-/// directory with many candidate files only reads/parses it once.
 pub fn is_package_entry_point(file: &Path, cache: &mut EntryPointCache) -> bool {
-    let Some(pkg_json_path) = find_nearest_package_json(file) else {
+    let Some(pkg_json_path) = find_nearest_package_json(file, &mut cache.package_json_by_dir)
+    else {
         return false;
     };
     let keys = cache
+        .keys_by_package_json
         .entry(pkg_json_path.clone())
         .or_insert_with(|| resolve_entry_point_keys(&pkg_json_path));
     keys.contains(&path_key(&strip_extension(file)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    struct TempProject {
+        root: PathBuf,
+    }
+
+    impl TempProject {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "cofferdam-test-{name}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            TempProject { root }
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).ok();
+        }
+    }
+
+    #[test]
+    fn nested_files_under_one_package_json_resolve_through_the_cache() {
+        // Two files at different depths below the same package.json.
+        // The directory cache backfills every directory visited on the
+        // way to an answer — this must not corrupt the answer for a
+        // shallower or deeper sibling that shares part of the walk.
+        let project = TempProject::new("nested-entry");
+        let nested_dir = project.root.join("src").join("deep");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        let mut pkg = std::fs::File::create(project.root.join("package.json")).unwrap();
+        write!(pkg, r#"{{"main": "./src/deep/entry.ts"}}"#).unwrap();
+        drop(pkg);
+
+        let mut cache = EntryPointCache::default();
+        let entry = nested_dir.join("entry.ts");
+        let sibling = nested_dir.join("sibling.ts");
+        let shallow = project.root.join("src").join("other.ts");
+
+        assert!(
+            is_package_entry_point(&entry, &mut cache),
+            "entry.ts must resolve as the declared main entry point"
+        );
+        assert!(
+            !is_package_entry_point(&sibling, &mut cache),
+            "a non-entry file in the same directory must not be swept in by the cache"
+        );
+        assert!(
+            !is_package_entry_point(&shallow, &mut cache),
+            "a non-entry file in a shallower directory sharing the walk-up path must not be \
+             swept in by the cache"
+        );
+    }
+
+    #[test]
+    fn directory_with_no_package_json_resolves_to_none_and_stays_none() {
+        // No package.json anywhere in this tree — every call must return
+        // false, and repeated calls (exercising the cached `None` path)
+        // must keep returning false rather than panicking or flipping.
+        let project = TempProject::new("no-entry");
+        let nested_dir = project.root.join("a").join("b");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+
+        let mut cache = EntryPointCache::default();
+        let file = nested_dir.join("f.ts");
+        assert!(!is_package_entry_point(&file, &mut cache));
+        assert!(
+            !is_package_entry_point(&file, &mut cache),
+            "a cached absence must still resolve to false on a second call"
+        );
+    }
+
+    #[test]
+    fn malformed_package_json_excludes_nothing() {
+        let project = TempProject::new("malformed-entry");
+        let mut pkg = std::fs::File::create(project.root.join("package.json")).unwrap();
+        write!(pkg, "not valid json").unwrap();
+        drop(pkg);
+
+        let mut cache = EntryPointCache::default();
+        let file = project.root.join("index.ts");
+        assert!(
+            !is_package_entry_point(&file, &mut cache),
+            "a malformed package.json must exclude nothing rather than panicking"
+        );
+    }
 }

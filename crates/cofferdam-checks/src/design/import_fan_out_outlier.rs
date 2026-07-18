@@ -192,7 +192,7 @@ fn compute_outliers(
     // a vendor file could otherwise still enter `by_key` via the
     // from_file/export-site seeding loops if it were ever parsed as a
     // source file (e.g. --no-ignore runs).
-    let mut entry_point_cache: EntryPointCache = HashMap::new();
+    let mut entry_point_cache = EntryPointCache::default();
     let population: Vec<&FileStats> = by_key
         .values()
         .filter(|s| {

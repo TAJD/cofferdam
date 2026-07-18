@@ -25,6 +25,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.DuplicateTypeShape`](Design.DuplicateTypeShape.md) `file` — Two independently declared interfaces/type literals share (near-)identical field shapes under different names — likely should be a single shared type.
 - [`Design.EffectLeakage`](Design.EffectLeakage.md) `file` — A module opted into a `@pure` contract, but transitively imports a known side-effecting module (filesystem, network, a database client) somewhere down its import chain — the annotation is making a promise the code doesn't keep.
 - [`Design.ImportCycle`](Design.ImportCycle.md) `graph` `advisable` — Files in this group import each other in a cycle. Cycles cause initialization-order surprises and obscure module boundaries.
+- [`Design.ImportFanOutOutlier`](Design.ImportFanOutOutlier.md) `file` — A file's import fan-in or fan-out is a statistical outlier versus the rest of the project — a likely "god module" (doing too much) or over-centralized dependency (too many things depend on one module).
 - [`Design.InvariantViolation`](Design.InvariantViolation.md) `graph` `advisable` — An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.
 - [`Design.LayerViolation`](Design.LayerViolation.md) `graph` `advisable` — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
 - [`Design.MaxParameters`](Design.MaxParameters.md) `file` `advisable` — Functions with too many parameters are hard to call correctly. Pass an options object instead.

@@ -9,6 +9,7 @@ mod duplicate_export_name;
 mod duplicate_type_shape;
 mod effect_leakage;
 mod import_cycle;
+mod import_fan_out_outlier;
 mod invariant_violation;
 mod layer_violation;
 mod max_parameters;
@@ -23,6 +24,7 @@ pub use duplicate_export_name::DuplicateExportName;
 pub use duplicate_type_shape::DuplicateTypeShape;
 pub use effect_leakage::EffectLeakage;
 pub use import_cycle::ImportCycle;
+pub use import_fan_out_outlier::ImportFanOutOutlier;
 pub use invariant_violation::InvariantViolation;
 pub use layer_violation::LayerViolation;
 pub use max_parameters::{max_in_file as max_parameters_in_file, MaxParameters};
@@ -1440,6 +1442,113 @@ function total(items) {
             issues.len(),
             1,
             "a duplicate pair within a single file must still be flagged; got {issues:?}"
+        );
+    }
+
+    // ─── Design.ImportFanOutOutlier (CD-130) ────────────────────────────
+
+    use import_fan_out_outlier::ImportFanOutOutlier;
+
+    /// Runs `ImportFanOutOutlier.finalize()` over a corpus seeded with
+    /// `imports` as the shared import graph.
+    fn run_fan_out_outlier(imports: Vec<ImportRecord>) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::new();
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(imports));
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        ImportFanOutOutlier.finalize(&mut finalize_ctx)
+    }
+
+    /// 14 zero-fan-out/zero-fan-in leaves plus one file that imports all
+    /// of them — comfortably past the 3-sigma threshold (verified by
+    /// hand: for n=15 total with 14 zeros and one outlier v, the ratio
+    /// mean/stddev shrinks the threshold below v for n >= 11).
+    fn god_and_leaves_imports(god: &Path, leaf_prefix: &str, count: usize) -> Vec<ImportRecord> {
+        (0..count)
+            .map(|i| {
+                let leaf = PathBuf::from(format!("/p/{leaf_prefix}{i}.ts"));
+                internal_import(god, &leaf)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fan_out_outlier_is_flagged() {
+        let god = PathBuf::from("/p/god.ts");
+        let imports = god_and_leaves_imports(&god, "leaf", 14);
+        let issues = run_fan_out_outlier(imports);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected one fan-out finding for the god file; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, god);
+        assert!(issues[0].message.contains("fan-out"));
+    }
+
+    #[test]
+    fn fan_in_outlier_is_flagged() {
+        // 14 files that each import a single shared `utils.ts` — utils
+        // has fan-in 14 against a background of zero, the fan-in mirror
+        // of `fan_out_outlier_is_flagged`.
+        let utils = PathBuf::from("/p/utils.ts");
+        let imports: Vec<ImportRecord> = (0..14)
+            .map(|i| {
+                let importer = PathBuf::from(format!("/p/importer{i}.ts"));
+                internal_import(&importer, &utils)
+            })
+            .collect();
+        let issues = run_fan_out_outlier(imports);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected one fan-in finding for utils.ts; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, utils);
+        assert!(issues[0].message.contains("fan-in"));
+    }
+
+    #[test]
+    fn below_min_files_emits_nothing() {
+        // Only 3 files total, well under MIN_FILES (8).
+        let god = PathBuf::from("/p/god.ts");
+        let imports = god_and_leaves_imports(&god, "leaf", 2);
+        let issues = run_fan_out_outlier(imports);
+        assert!(
+            issues.is_empty(),
+            "too few files must not flag anything; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn hub_index_file_is_excluded_from_population_and_flagging() {
+        // Same shape as fan_out_outlier_is_flagged, but the "god" file is
+        // named index.ts — it must be excluded entirely, not just from
+        // flagging, so the leaves' fan-in (from index.ts) shouldn't
+        // count either.
+        let god = PathBuf::from("/p/index.ts");
+        let imports = god_and_leaves_imports(&god, "leaf", 14);
+        let issues = run_fan_out_outlier(imports);
+        assert!(
+            issues.is_empty(),
+            "an index.ts hub must be excluded entirely; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn uniform_counts_emit_nothing() {
+        // Every file has the same fan-out (1) — stddev is 0, so nothing
+        // can be an outlier.
+        let imports: Vec<ImportRecord> = (0..8)
+            .map(|i| {
+                let from = PathBuf::from(format!("/p/f{i}.ts"));
+                let to = PathBuf::from(format!("/p/f{}.ts", (i + 1) % 8));
+                internal_import(&from, &to)
+            })
+            .collect();
+        let issues = run_fan_out_outlier(imports);
+        assert!(
+            issues.is_empty(),
+            "uniform fan-out/fan-in (stddev 0) must not flag anything; got {issues:?}"
         );
     }
 }

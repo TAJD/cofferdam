@@ -27,6 +27,7 @@ export const checksItems = [
       { text: 'DuplicateTypeShape', link: '/checks/Design.DuplicateTypeShape' },
       { text: 'EffectLeakage', link: '/checks/Design.EffectLeakage' },
       { text: 'ImportCycle', link: '/checks/Design.ImportCycle' },
+      { text: 'ImportFanOutOutlier', link: '/checks/Design.ImportFanOutOutlier' },
       { text: 'InvariantViolation', link: '/checks/Design.InvariantViolation' },
       { text: 'LayerViolation', link: '/checks/Design.LayerViolation' },
       { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },

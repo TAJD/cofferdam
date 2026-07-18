@@ -2,36 +2,79 @@
 // reconstructed by the plugin host's `buildAstView` produces a typed
 // AstView matching the `@cofferdam/check-sdk` interface.
 //
-// We exercise the host directly via a hand-built manifest rather than
+// We exercise the host directly via hand-built NDJSON records rather than
 // going through the Rust binary — this isolates the AST reconstruction
 // logic from the parser and lets the test run cheaply on Node alone.
 //
 // The host script lives in `crates/cofferdam-cli/scripts/plugin-host.mjs`
 // and is `include_str!`-bundled into the cofferdam binary; this test
-// imports it directly to exercise its AST view code path.
+// spawns it directly (CD-33 streaming NDJSON protocol — header/file/end
+// records in, report/error/done records out; see `design/sdk-ast-wire.md`)
+// to exercise its AST view code path. `runHost` mirrors the helper in
+// `plugin-host-types.test.mjs`.
 
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
-const HOST_PATH = new URL(
-  "../../../crates/cofferdam-cli/scripts/plugin-host.mjs",
-  import.meta.url,
-).pathname.replace(/^\/([A-Z]:)/, "$1");
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const HOST_PATH = resolve(ROOT, "..", "..", "..", "crates", "cofferdam-cli", "scripts", "plugin-host.mjs");
 
-function runHost(manifest) {
-  const result = spawnSync("node", [HOST_PATH], {
-    input: JSON.stringify(manifest),
-    encoding: "utf8",
+/** Drive the host script over stdin/stdout with the given NDJSON records. */
+function runHost(records) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [HOST_PATH], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", reject);
+    child.on("close", () => {
+      const lines = stdout
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => JSON.parse(l));
+      resolvePromise({ lines, stderr });
+    });
+    for (const rec of records) {
+      child.stdin.write(JSON.stringify(rec) + "\n");
+    }
+    child.stdin.end();
   });
-  if (result.status !== 0) {
-    throw new Error(`host exited ${result.status}: ${result.stderr}`);
-  }
-  return JSON.parse(result.stdout);
+}
+
+/** Drive the host with a header (one plugin dir, no options) + a single
+ * file record carrying `ast`, then `end` — the shape every test below
+ * needs. Returns `{reports, errors}` collected from the streamed lines. */
+async function runAstFixture(pluginDir, cwd, filePath, text, ast) {
+  const { lines } = await runHost([
+    {
+      type: "header",
+      wireVersion: 2,
+      cwd: cwd.replace(/\\/g, "/"),
+      plugins: [pluginDir.replace(/\\/g, "/")],
+      options: {},
+    },
+    {
+      type: "file",
+      path: filePath.replace(/\\/g, "/"),
+      text,
+      lineViews: [],
+      layer: null,
+      ast,
+    },
+    { type: "end" },
+  ]);
+  return {
+    reports: lines.filter((l) => l.type === "report"),
+    errors: lines.filter((l) => l.type === "error"),
+  };
 }
 
 // Build a minimal plugin module on disk that exercises ast.findAll +
@@ -91,7 +134,7 @@ export default defineCheck({
   return pluginDir;
 }
 
-test("findAll + walk round-trip through wire format", () => {
+test("findAll + walk round-trip through wire format", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "cofferdam-ast-test-"));
   try {
     const pluginDir = makeAstSmokePlugin(tmp);
@@ -100,63 +143,51 @@ test("findAll + walk round-trip through wire format", () => {
     //   import { foo } from "axios";
     //   axios.get("/api");
     const text = 'import { foo } from "axios";\naxios.get("/api");\n';
-    const manifest = {
-      cwd: tmp,
-      plugins: [pluginDir],
-      files: [
+    const ast = {
+      rootIdx: 0,
+      nodes: [
         {
-          path: join(tmp, "smoke.ts"),
-          text,
-          lineViews: [],
-          ast: {
-            rootIdx: 0,
-            nodes: [
-              {
-                kind: "Program",
-                span: { line: 1, column: 1, start_byte: 0, end_byte: text.length },
-                firstChild: 1,
-                nextSibling: -1,
-              },
-              {
-                kind: "ImportDeclaration",
-                span: { line: 1, column: 1, start_byte: 0, end_byte: 28 },
-                firstChild: -1,
-                nextSibling: 2,
-                source: "axios",
-                specifiers: [{ localName: "foo", imported: "foo" }],
-              },
-              {
-                kind: "CallExpression",
-                span: { line: 2, column: 1, start_byte: 29, end_byte: 46 },
-                firstChild: 3,
-                nextSibling: -1,
-                calleeIdx: 3,
-                argumentIdxs: [],
-              },
-              {
-                kind: "MemberExpression",
-                span: { line: 2, column: 1, start_byte: 29, end_byte: 38 },
-                firstChild: 4,
-                nextSibling: -1,
-                objectIdx: 4,
-                property: "get",
-                computed: false,
-              },
-              {
-                kind: "IdentifierReference",
-                span: { line: 2, column: 1, start_byte: 29, end_byte: 34 },
-                firstChild: -1,
-                nextSibling: -1,
-                name: "axios",
-              },
-            ],
-          },
+          kind: "Program",
+          span: { line: 1, column: 1, start_byte: 0, end_byte: text.length },
+          firstChild: 1,
+          nextSibling: -1,
+        },
+        {
+          kind: "ImportDeclaration",
+          span: { line: 1, column: 1, start_byte: 0, end_byte: 28 },
+          firstChild: -1,
+          nextSibling: 2,
+          source: "axios",
+          specifiers: [{ localName: "foo", imported: "foo" }],
+        },
+        {
+          kind: "CallExpression",
+          span: { line: 2, column: 1, start_byte: 29, end_byte: 46 },
+          firstChild: 3,
+          nextSibling: -1,
+          calleeIdx: 3,
+          argumentIdxs: [],
+        },
+        {
+          kind: "MemberExpression",
+          span: { line: 2, column: 1, start_byte: 29, end_byte: 38 },
+          firstChild: 4,
+          nextSibling: -1,
+          objectIdx: 4,
+          property: "get",
+          computed: false,
+        },
+        {
+          kind: "IdentifierReference",
+          span: { line: 2, column: 1, start_byte: 29, end_byte: 34 },
+          firstChild: -1,
+          nextSibling: -1,
+          name: "axios",
         },
       ],
-      options: {},
     };
 
-    const { reports, errors } = runHost(manifest);
+    const { reports, errors } = await runAstFixture(pluginDir, tmp, join(tmp, "smoke.ts"), text, ast);
     assert.equal(errors.length, 0, `expected no host errors, got: ${JSON.stringify(errors)}`);
 
     const messages = reports.map((r) => r.message).sort();
@@ -185,7 +216,7 @@ test("findAll + walk round-trip through wire format", () => {
 // is a StringLiteral; dynamic expressions stay undefined. StaticMember
 // (dot-form) always resolves. This test exercises the hand-built wire
 // format directly so it runs without the Rust binary.
-test("MemberExpression.computed coverage — static, string-literal, chained, dynamic", () => {
+test("MemberExpression.computed coverage — static, string-literal, chained, dynamic", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "cofferdam-member-test-"));
   try {
     const sdkUrl = new URL("../dist/index.js", import.meta.url).href;
@@ -233,85 +264,73 @@ export default defineCheck({
     // Spans are placeholders (line 1, col 1, byte 0–1) — the test only
     // inspects the member-shape extras, not the span coordinates.
     const S = { line: 1, column: 1, start_byte: 0, end_byte: 1 };
-    const manifest = {
-      cwd: tmp,
-      plugins: [pluginDir],
-      files: [
+    const ast = {
+      rootIdx: 0,
+      nodes: [
+        // 0: Program
+        { kind: "Program", span: S, firstChild: 1, nextSibling: -1 },
+        // 1: Math.random — static (computed=false, property="random")
         {
-          path: join(tmp, "member.ts"),
-          text: "x",
-          lineViews: [],
-          ast: {
-            rootIdx: 0,
-            nodes: [
-              // 0: Program
-              { kind: "Program", span: S, firstChild: 1, nextSibling: -1 },
-              // 1: Math.random — static (computed=false, property="random")
-              {
-                kind: "MemberExpression",
-                span: S,
-                firstChild: 6,
-                nextSibling: 2,
-                objectIdx: 6,
-                property: "random",
-                computed: false,
-              },
-              // 2: Math["random"] — computed, string literal (computed=true, property="random")
-              {
-                kind: "MemberExpression",
-                span: S,
-                firstChild: 7,
-                nextSibling: 3,
-                objectIdx: 7,
-                property: "random",
-                computed: true,
-              },
-              // 3: process["env"]["FOO"] outer — (computed=true, property="FOO")
-              {
-                kind: "MemberExpression",
-                span: S,
-                firstChild: 4,
-                nextSibling: 5,
-                objectIdx: 4,
-                property: "FOO",
-                computed: true,
-              },
-              // 4: process["env"] inner — (computed=true, property="env")
-              {
-                kind: "MemberExpression",
-                span: S,
-                firstChild: 8,
-                nextSibling: -1,
-                objectIdx: 8,
-                property: "env",
-                computed: true,
-              },
-              // 5: Math[k] — computed, dynamic (computed=true, property=undefined→null on wire)
-              {
-                kind: "MemberExpression",
-                span: S,
-                firstChild: 9,
-                nextSibling: -1,
-                objectIdx: 9,
-                property: null,
-                computed: true,
-              },
-              // 6: IdentifierReference "Math" (object of node 1)
-              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
-              // 7: IdentifierReference "Math" (object of node 2)
-              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
-              // 8: IdentifierReference "process" (object of node 4)
-              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "process" },
-              // 9: IdentifierReference "Math" (object of node 5)
-              { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
-            ],
-          },
+          kind: "MemberExpression",
+          span: S,
+          firstChild: 6,
+          nextSibling: 2,
+          objectIdx: 6,
+          property: "random",
+          computed: false,
         },
+        // 2: Math["random"] — computed, string literal (computed=true, property="random")
+        {
+          kind: "MemberExpression",
+          span: S,
+          firstChild: 7,
+          nextSibling: 3,
+          objectIdx: 7,
+          property: "random",
+          computed: true,
+        },
+        // 3: process["env"]["FOO"] outer — (computed=true, property="FOO")
+        {
+          kind: "MemberExpression",
+          span: S,
+          firstChild: 4,
+          nextSibling: 5,
+          objectIdx: 4,
+          property: "FOO",
+          computed: true,
+        },
+        // 4: process["env"] inner — (computed=true, property="env")
+        {
+          kind: "MemberExpression",
+          span: S,
+          firstChild: 8,
+          nextSibling: -1,
+          objectIdx: 8,
+          property: "env",
+          computed: true,
+        },
+        // 5: Math[k] — computed, dynamic (computed=true, property=undefined→null on wire)
+        {
+          kind: "MemberExpression",
+          span: S,
+          firstChild: 9,
+          nextSibling: -1,
+          objectIdx: 9,
+          property: null,
+          computed: true,
+        },
+        // 6: IdentifierReference "Math" (object of node 1)
+        { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
+        // 7: IdentifierReference "Math" (object of node 2)
+        { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
+        // 8: IdentifierReference "process" (object of node 4)
+        { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "process" },
+        // 9: IdentifierReference "Math" (object of node 5)
+        { kind: "IdentifierReference", span: S, firstChild: -1, nextSibling: -1, name: "Math" },
       ],
-      options: {},
     };
 
-    const { reports, errors } = runHost(manifest);
+    const { reports, errors } = await runAstFixture(pluginDir, tmp, join(tmp, "member.ts"), "x", ast);
     assert.equal(errors.length, 0, `expected no host errors, got: ${JSON.stringify(errors)}`);
 
     // Parse the reported tuples (reported in document order = node index order).
@@ -356,7 +375,7 @@ export default defineCheck({
   }
 });
 
-test("walk honours Walk.Skip", () => {
+test("walk honours Walk.Skip", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "cofferdam-walk-test-"));
   try {
     const pluginDir = makeAstSmokePlugin(tmp);
@@ -366,63 +385,51 @@ test("walk honours Walk.Skip", () => {
     // inside the method body should NOT trigger findAll-equivalent
     // reports via walk. (findAll is unaffected by Skip.)
     const text = 'class C { greet() { return frobnicate(); } }\n';
-    const manifest = {
-      cwd: tmp,
-      plugins: [pluginDir],
-      files: [
+    const ast = {
+      rootIdx: 0,
+      nodes: [
         {
-          path: join(tmp, "skip.ts"),
-          text,
-          lineViews: [],
-          ast: {
-            rootIdx: 0,
-            nodes: [
-              {
-                kind: "Program",
-                span: { line: 1, column: 1, start_byte: 0, end_byte: text.length },
-                firstChild: 1,
-                nextSibling: -1,
-              },
-              {
-                kind: "Class",
-                span: { line: 1, column: 1, start_byte: 0, end_byte: 44 },
-                firstChild: 2,
-                nextSibling: -1,
-                name: "C",
-              },
-              {
-                kind: "Function",
-                span: { line: 1, column: 11, start_byte: 10, end_byte: 42 },
-                firstChild: 3,
-                nextSibling: -1,
-                name: "greet",
-                paramIdxs: [],
-                async: false,
-                generator: false,
-              },
-              {
-                kind: "CallExpression",
-                span: { line: 1, column: 28, start_byte: 27, end_byte: 39 },
-                firstChild: 4,
-                nextSibling: -1,
-                calleeIdx: 4,
-                argumentIdxs: [],
-              },
-              {
-                kind: "IdentifierReference",
-                span: { line: 1, column: 28, start_byte: 27, end_byte: 38 },
-                firstChild: -1,
-                nextSibling: -1,
-                name: "frobnicate",
-              },
-            ],
-          },
+          kind: "Program",
+          span: { line: 1, column: 1, start_byte: 0, end_byte: text.length },
+          firstChild: 1,
+          nextSibling: -1,
+        },
+        {
+          kind: "Class",
+          span: { line: 1, column: 1, start_byte: 0, end_byte: 44 },
+          firstChild: 2,
+          nextSibling: -1,
+          name: "C",
+        },
+        {
+          kind: "Function",
+          span: { line: 1, column: 11, start_byte: 10, end_byte: 42 },
+          firstChild: 3,
+          nextSibling: -1,
+          name: "greet",
+          paramIdxs: [],
+          async: false,
+          generator: false,
+        },
+        {
+          kind: "CallExpression",
+          span: { line: 1, column: 28, start_byte: 27, end_byte: 39 },
+          firstChild: 4,
+          nextSibling: -1,
+          calleeIdx: 4,
+          argumentIdxs: [],
+        },
+        {
+          kind: "IdentifierReference",
+          span: { line: 1, column: 28, start_byte: 27, end_byte: 38 },
+          firstChild: -1,
+          nextSibling: -1,
+          name: "frobnicate",
         },
       ],
-      options: {},
     };
 
-    const { reports } = runHost(manifest);
+    const { reports } = await runAstFixture(pluginDir, tmp, join(tmp, "skip.ts"), text, ast);
     // walk emitted "funcs:greet" because visitFunction matched once.
     // Skip means we never descended into the method body — but findAll
     // still finds the inner CallExpression because findAll uses the

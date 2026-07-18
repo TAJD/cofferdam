@@ -46,6 +46,13 @@ jobs:
           pnpm install --frozen-lockfile=false --ignore-scripts
           pnpm build
 
+      - name: check-sdk unit tests (node --test)
+        # CD-106: these hit plugin-host.mjs's streaming NDJSON wire protocol
+        # directly. tsc-only CI let them silently bit-rot after the CD-33
+        # protocol migration — run them for real so that regresses loudly.
+        working-directory: packages/check-sdk
+        run: node --test tests/*.test.mjs
+
       - name: Build every example plugin (TS → dist)
         # The plugins declare `@cofferdam/check-sdk: "*"` but the SDK
         # isn't published to npm yet; the script bundles the built dist

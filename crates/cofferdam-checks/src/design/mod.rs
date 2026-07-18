@@ -1071,6 +1071,33 @@ declare function mutateSomewhere(items: number[]): void;";
     }
 
     #[test]
+    fn passed_through_to_a_constructor_is_not_flagged() {
+        let src = "\
+function process(items: number[]): void {
+  new Wrapper(items);
+}
+declare class Wrapper { constructor(items: number[]); }";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "a param passed to a constructor must not flag (can't rule out mutation there); got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn readonly_array_generic_form_is_not_flagged() {
+        let src = "\
+function sum(items: ReadonlyArray<number>): number {
+  return items.reduce((sum, n) => sum + n, 0);
+}";
+        let issues = run_readonly_array_param(src);
+        assert!(
+            issues.is_empty(),
+            "ReadonlyArray<T> must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
     fn untyped_param_is_not_flagged() {
         let src = "\
 function total(items) {

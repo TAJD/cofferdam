@@ -41,4 +41,12 @@ export function process(items: number[]): void {
   mutateSomewhere(items);
 }
 
+// Not flagged — passed to a constructor; same reasoning as a call.
+export function wrap(items: number[]): void {
+  new Wrapper(items);
+}
+
 declare function mutateSomewhere(items: number[]): void;
+declare class Wrapper {
+  constructor(items: number[]);
+}

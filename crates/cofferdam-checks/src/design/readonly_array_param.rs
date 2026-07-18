@@ -34,12 +34,19 @@ const ARRAY_MUTATING_METHODS: &[&str] = &[
 /// is needed to read it back.
 ///
 /// Conservative by design (per the ticket): a parameter that is ever
-/// passed as an argument to another call is skipped entirely, since a
-/// callee might mutate it and this check can't see across the call graph.
-/// Only single-level assignment/index writes and array-mutating method
-/// calls on the parameter's own root identifier are checked — an
-/// assignment via a nested/destructured alias is not tracked, mirroring
-/// `Refactor.MutatedParameter`'s scope.
+/// passed as a bare argument to another call or constructor (`f(items)`,
+/// `new Wrapper(items)`) is skipped entirely, since the callee might
+/// mutate it and this check can't see across the call graph. Only
+/// single-level assignment/index writes and array-mutating method calls
+/// on the parameter's own root identifier are checked — an assignment
+/// via a nested/destructured alias (`const x = items; x.push(1)`) is not
+/// tracked, mirroring `Refactor.MutatedParameter`'s scope. Two related
+/// gaps, both accepted for v1: a mutation inside a nested closure
+/// (`items.forEach(() => outer.push(1))`) isn't seen, since nested
+/// function/arrow scopes aren't descended into; and an escape wrapped in
+/// another expression (`f({ items })`, `f([items])`, a ternary arm) isn't
+/// recognized as a hand-off, since only bare-identifier/spread arguments
+/// are checked.
 pub struct ReadonlyArrayParam;
 
 const META: CheckMeta = CheckMeta {
@@ -91,9 +98,14 @@ impl CandidateKind {
     }
 }
 
-/// Whether `ty` is a candidate mutable array/object type — and not
-/// already wrapped in a `readonly` modifier or `Readonly<T>`/
-/// `ReadonlyArray<T>` reference.
+/// Whether `ty` is a candidate mutable array/object type.
+///
+/// Only `T[]`, `Array<T>`, and object-literal types match at all — a
+/// `Readonly<T>`/`ReadonlyArray<T>` reference falls through to `None`
+/// exactly like any other unrecognized `TSTypeReference` name, without
+/// needing its own case. `readonly T[]` is excluded explicitly, since
+/// that's a `TSTypeOperatorType` wrapping an otherwise-matching
+/// `TSArrayType`.
 fn candidate_kind(ty: &TSType<'_>) -> Option<CandidateKind> {
     match ty {
         TSType::TSArrayType(_) => Some(CandidateKind::Array),
@@ -152,6 +164,17 @@ impl<'a> ParamUsageScanner<'a> {
     fn is_target(&self, expr: &Expression<'_>) -> bool {
         matches!(expr, Expression::Identifier(id) if id.name.as_str() == self.name)
     }
+
+    /// True if any argument in `args` is a bare reference to the target
+    /// param (directly or spread) — used for both `f(...)` and `new
+    /// F(...)`, since either hand-off can let a callee mutate the array.
+    fn args_pass_target(&self, args: &[Argument<'_>]) -> bool {
+        args.iter().any(|arg| match arg {
+            Argument::SpreadElement(spread) => self.is_target(&spread.argument),
+            Argument::Identifier(id) => id.name.as_str() == self.name,
+            _ => false,
+        })
+    }
 }
 
 impl<'a> Visit<'a> for ParamUsageScanner<'a> {
@@ -193,17 +216,19 @@ impl<'a> Visit<'a> for ParamUsageScanner<'a> {
                 }
             }
         }
-        for arg in &node.arguments {
-            let is_target = match arg {
-                Argument::SpreadElement(spread) => self.is_target(&spread.argument),
-                Argument::Identifier(id) => id.name.as_str() == self.name,
-                _ => false,
-            };
-            if is_target {
-                self.passed_as_arg = true;
-            }
+        if self.args_pass_target(&node.arguments) {
+            self.passed_as_arg = true;
         }
         oxc_ast_visit::walk::walk_call_expression(self, node);
+    }
+
+    fn visit_new_expression(&mut self, node: &oxc_ast::ast::NewExpression<'a>) {
+        // A constructor can retain and later mutate its arguments just
+        // like an ordinary function call — same bail-out logic.
+        if self.args_pass_target(&node.arguments) {
+            self.passed_as_arg = true;
+        }
+        oxc_ast_visit::walk::walk_new_expression(self, node);
     }
 
     fn visit_function(&mut self, _node: &Function<'a>, _flags: oxc_syntax::scope::ScopeFlags) {

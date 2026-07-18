@@ -28,14 +28,29 @@ use std::collections::HashSet;
 /// counts as the "outside state" this check cares about.
 ///
 /// Name-based, not binding-based (mirrors `Refactor.PreferConstOverLet`
-/// and `Refactor.MutatedParameter`'s documented trade-offs): a function
-/// parameter or local variable that shadows a flagged module-level name
-/// is indistinguishable from it by this check's own parameter-name
-/// exclusion, but a *nested local* declared inside the function body
-/// (not a parameter) sharing that name is NOT distinguished — reading
-/// such a shadowing local would still flag. This is a known,
-/// deliberately-accepted false-positive edge case, consistent with the
-/// check's opt-in-only status.
+/// and `Refactor.MutatedParameter`'s documented trade-offs). Two
+/// consequences worth knowing before enabling this check:
+///
+/// - A function parameter or local variable that shadows a flagged
+///   module-level name is indistinguishable from it by this check's own
+///   parameter-name exclusion, but a *nested local* declared inside the
+///   function body (not a parameter) sharing that name is NOT
+///   distinguished — reading such a shadowing local would still flag.
+/// - "Written to somewhere in the file" is also name-based, not
+///   scope-based: an unrelated local variable that happens to share a
+///   module-level `let`'s name (in a different function, different
+///   scope) still counts as a "write" to that name, which can pull a
+///   genuinely read-only module binding (a config object, a logger)
+///   into `mutable_module_state` and cause the false positive this
+///   check is explicitly supposed to avoid.
+///
+/// Both are known, deliberately-accepted false-positive edge cases,
+/// consistent with the check's opt-in-only status.
+///
+/// Scope of what's inspected: only inline `export function foo() {}`
+/// declarations are analyzed. `export default function foo() {}` and a
+/// separate `function foo() {} ... export { foo };` are NOT inspected —
+/// a false-negative gap, not a correctness bug.
 pub struct PurityHeuristic;
 
 pub const PURITY_HEURISTIC_OPTIONS: &[OptionSpec] = &[OptionSpec {
@@ -102,16 +117,25 @@ impl Check for PurityHeuristic {
 }
 
 /// Module-level (top of `Program.body`, not nested in any function or
-/// block) `let`-declared simple-identifier names.
+/// block) `let`-declared simple-identifier names — both bare (`let x`)
+/// and inline-exported (`export let x`, which oxc represents as an
+/// `ExportNamedDeclaration` wrapping the `VariableDeclaration`).
 fn top_level_let_names(program: &Program<'_>) -> HashSet<String> {
     let mut names = HashSet::new();
     for stmt in &program.body {
-        if let Statement::VariableDeclaration(decl) = stmt {
-            if decl.kind == VariableDeclarationKind::Let {
-                for d in &decl.declarations {
-                    if let BindingPattern::BindingIdentifier(id) = &d.id {
-                        names.insert(id.name.as_str().to_string());
-                    }
+        let decl = match stmt {
+            Statement::VariableDeclaration(decl) => Some(decl.as_ref()),
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::VariableDeclaration(decl)) => Some(decl.as_ref()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(decl) = decl else { continue };
+        if decl.kind == VariableDeclarationKind::Let {
+            for d in &decl.declarations {
+                if let BindingPattern::BindingIdentifier(id) = &d.id {
+                    names.insert(id.name.as_str().to_string());
                 }
             }
         }

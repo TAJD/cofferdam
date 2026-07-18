@@ -44,7 +44,7 @@ export function fetchData() {
 }
 ```
 
-This is a fuzzy, name-based heuristic (not full scope resolution) with a real false-positive risk, so it ships **disabled by default**:
+This is a fuzzy, name-based heuristic (not full scope resolution) with a real false-positive risk, so it ships **disabled by default**. Known limitations: only inline `export function foo() {}` declarations are inspected (not `export default function` or a separate `export { foo }`); and "written to somewhere in the file" is tracked by name, not by scope, so an unrelated local variable sharing a module-level `let`'s name can still (rarely) pull an otherwise read-only binding into the flagged set.
 
 ```toml
 # cofferdam.toml

@@ -1,8 +1,10 @@
 // Fixture for Refactor.PurityHeuristic.
 // This check ships opt-in (disabled by default) — see cofferdam.toml.
 
-// Flag — reads module-level `requestCount`, which IS reassigned
-// elsewhere in this file, and `name` doesn't cover it.
+// Flag — both functions read module-level `requestCount` (which IS
+// reassigned in this file) without it being covered by their own
+// parameters: `logRequest` reads it directly, and `bumpRequestCount`
+// reads it implicitly via the compound `+=` (read-then-write).
 let requestCount = 0;
 
 export function logRequest(name: string) {

@@ -774,4 +774,19 @@ export function addToTotal(total: number) {
              elsewhere; got {issues:?}"
         );
     }
+
+    #[test]
+    fn exported_let_module_state_is_still_detected() {
+        // `export let` wraps the VariableDeclaration in an
+        // ExportNamedDeclaration — must still be picked up as
+        // module-level mutable state.
+        let src = "\
+export let requestCount = 0;
+export function logRequest(name: string) {
+  console.log(name, requestCount);
+}
+requestCount = 1;";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
 }

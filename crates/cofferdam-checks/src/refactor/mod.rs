@@ -15,6 +15,7 @@ mod dead_export;
 mod duplicate_block;
 mod long_and_complex;
 mod mutated_parameter;
+mod prefer_array_method_over_loop;
 mod prefer_const_over_let;
 mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
@@ -30,6 +31,7 @@ pub use dead_export::DeadExport;
 pub use duplicate_block::DuplicateBlock;
 pub use long_and_complex::LongAndComplex;
 pub use mutated_parameter::MutatedParameter;
+pub use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
 pub use prefer_const_over_let::PreferConstOverLet;
 pub use prefer_nullish_coalescing::PreferNullishCoalescing;
 pub use prefer_optional_chain::PreferOptionalChain;
@@ -504,6 +506,128 @@ export function b() { let total = 2; return total; }";
         assert!(
             issues.is_empty(),
             "destructured bindings are MVP-skipped; got {issues:?}"
+        );
+    }
+
+    // ─── Refactor.PreferArrayMethodOverLoop (CD-120) ───────────────────
+
+    use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
+
+    fn run_prefer_array_method_over_loop(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        PreferArrayMethodOverLoop.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn inline_push_loop_is_flagged_as_map() {
+        let src = "\
+const doubled: number[] = [];
+for (const n of nums) {
+  doubled.push(n * 2);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains(".map()"));
+    }
+
+    #[test]
+    fn computed_then_push_loop_is_flagged_as_map() {
+        let src = "\
+const labels: string[] = [];
+for (const n of nums) {
+  const label = String(n);
+  labels.push(label);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains(".map()"));
+    }
+
+    #[test]
+    fn if_gated_push_loop_is_flagged_as_filter() {
+        let src = "\
+const evens: number[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    evens.push(n);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains(".filter()"));
+    }
+
+    #[test]
+    fn loop_with_break_is_not_flagged() {
+        let src = "\
+const evens: number[] = [];
+for (const n of nums) {
+  if (evens.length >= limit) {
+    break;
+  }
+  if (n % 2 === 0) {
+    evens.push(n);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "early break must disqualify the match; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_with_two_accumulators_is_not_flagged() {
+        let src = "\
+const evens: number[] = [];
+const odds: number[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    evens.push(n);
+  } else {
+    odds.push(n);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "if/else with two accumulators must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_with_extra_side_effect_is_not_flagged() {
+        let src = "\
+const copy: number[] = [];
+for (const n of nums) {
+  console.log(n);
+  copy.push(n);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "a side effect beyond the single push must disqualify the match; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_without_push_is_not_flagged() {
+        let src = "\
+let total = 0;
+for (let i = 0; i < nums.length; i++) {
+  total += nums[i];
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "a loop that never pushes must not flag; got {issues:?}"
         );
     }
 }

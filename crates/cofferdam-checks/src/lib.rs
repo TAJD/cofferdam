@@ -82,6 +82,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::UnusedVariable),
         Box::new(refactor::MutatedParameter),
         Box::new(refactor::PreferConstOverLet),
+        Box::new(refactor::PreferArrayMethodOverLoop),
         Box::new(warning::TripleEquals),
         Box::new(warning::UnusedImport),
         Box::new(warning::UnusedNullCheck),

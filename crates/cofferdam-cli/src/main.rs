@@ -504,8 +504,9 @@ enum Cmd {
     /// init. Used to verify the wire and to capture the cold-start
     /// numbers documented in `design/type-host-wire.md`.
     ///
-    /// Hidden from `--help` until cp4 ships user-facing type-aware
-    /// checks; meanwhile it's the only way to exercise the worker.
+    /// Hidden from `--help`: this only pings the worker for cold-start
+    /// timings — a maintainer diagnostic, not an end-user feature.
+    /// Type-aware checks themselves run through `check`.
     #[command(hide = true)]
     TypeHost {
         /// Ping the worker (the only mode in cp1). Defaults to true.

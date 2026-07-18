@@ -36,7 +36,7 @@ But the load-bearing layer is the third one — the project-wide spec. Everythin
 
 Most linters configure each rule independently. ESLint has a hundred config keys; you tune each rule with its own option bag; if two rules both care about your layering scheme, you encode it twice.
 
-Cofferdam isn't a linter, it's a code management tool. Cofferdam takes a different stance: **architecture is one thing, declared once.** A single file at the repo root says what your codebase is supposed to be:
+Cofferdam isn't a linter; it's a code-management tool that takes a different stance: **architecture is one thing, declared once.** A single file at the repo root says what your codebase is supposed to be:
 
 ```toml
 [layers]

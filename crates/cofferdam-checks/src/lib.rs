@@ -79,6 +79,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::DeadExport),
         Box::new(refactor::PreferNullishCoalescing),
         Box::new(refactor::UnusedVariable),
+        Box::new(refactor::MutatedParameter),
         Box::new(warning::TripleEquals),
         Box::new(warning::UnusedImport),
         Box::new(warning::UnusedNullCheck),

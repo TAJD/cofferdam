@@ -14,6 +14,7 @@ mod cyclomatic_complexity;
 mod dead_export;
 mod duplicate_block;
 mod long_and_complex;
+mod mutated_parameter;
 mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
 mod unused_variable;
@@ -27,6 +28,7 @@ pub use cyclomatic_complexity::{
 pub use dead_export::DeadExport;
 pub use duplicate_block::DuplicateBlock;
 pub use long_and_complex::LongAndComplex;
+pub use mutated_parameter::MutatedParameter;
 pub use prefer_nullish_coalescing::PreferNullishCoalescing;
 pub use prefer_optional_chain::PreferOptionalChain;
 pub use unused_variable::UnusedVariable;

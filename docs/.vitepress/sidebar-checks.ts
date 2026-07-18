@@ -23,6 +23,7 @@ export const checksItems = [
       { text: 'BoundaryFrozen', link: '/checks/Design.BoundaryFrozen' },
       { text: 'ClassAsDataBag', link: '/checks/Design.ClassAsDataBag' },
       { text: 'DuplicateExportName', link: '/checks/Design.DuplicateExportName' },
+      { text: 'DuplicateTypeShape', link: '/checks/Design.DuplicateTypeShape' },
       { text: 'EffectLeakage', link: '/checks/Design.EffectLeakage' },
       { text: 'ImportCycle', link: '/checks/Design.ImportCycle' },
       { text: 'InvariantViolation', link: '/checks/Design.InvariantViolation' },

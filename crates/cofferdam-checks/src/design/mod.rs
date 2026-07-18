@@ -6,6 +6,7 @@ use std::path::Path;
 mod boundary_frozen;
 mod class_as_data_bag;
 mod duplicate_export_name;
+mod duplicate_type_shape;
 mod effect_leakage;
 mod import_cycle;
 mod invariant_violation;
@@ -19,6 +20,7 @@ mod union_exhaustiveness_gap;
 pub use boundary_frozen::BoundaryFrozen;
 pub use class_as_data_bag::ClassAsDataBag;
 pub use duplicate_export_name::DuplicateExportName;
+pub use duplicate_type_shape::DuplicateTypeShape;
 pub use effect_leakage::EffectLeakage;
 pub use import_cycle::ImportCycle;
 pub use invariant_violation::InvariantViolation;
@@ -1303,6 +1305,141 @@ function total(items) {
             issues.len(),
             1,
             "a @pure tag inside a multi-line JSDoc block comment must be recognized; got {issues:?}"
+        );
+    }
+
+    // ─── Design.DuplicateTypeShape (CD-128) ─────────────────────────────
+
+    use duplicate_type_shape::DuplicateTypeShape;
+
+    /// Runs `DuplicateTypeShape.run()` over each `(path, source)` fixture,
+    /// then `.finalize()`, mirroring `run_effect_leakage`'s single-corpus
+    /// harness.
+    fn run_duplicate_type_shape(fixtures: &[(&Path, &str)]) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::new();
+        for (path, src) in fixtures {
+            let file = SourceFile::new(path.to_path_buf(), src.to_string());
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, &file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(&file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            DuplicateTypeShape.run(&file, &mut ctx);
+        }
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        DuplicateTypeShape.finalize(&mut finalize_ctx)
+    }
+
+    #[test]
+    fn identical_interfaces_across_files_are_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "export interface User { id: string; name: string; email: string; }",
+            ),
+            (
+                &b,
+                "export interface Customer { id: string; name: string; email: string; }",
+            ),
+        ]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("User"));
+        assert!(issues[0].message.contains("Customer"));
+    }
+
+    #[test]
+    fn identical_type_literal_aliases_are_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "export type A = { id: string; name: string; email: string; };",
+            ),
+            (
+                &b,
+                "export type B = { id: string; name: string; email: string; };",
+            ),
+        ]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn below_min_fields_is_not_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (&a, "export interface Point { x: number; y: number; }"),
+            (&b, "export interface Size { x: number; y: number; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a 2-field shape must not be flagged even if identical; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn divergent_shapes_are_not_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "export interface Draft { id: string; title: string; body: string; }",
+            ),
+            (
+                &b,
+                "export interface Published { id: string; title: string; publishedAt: string; }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "shapes below the similarity threshold must not be flagged; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn interface_with_extends_is_skipped() {
+        // Inherited fields aren't visible in the body, so an interface
+        // with a non-empty `extends` is skipped entirely, even if its
+        // own body matches another type.
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_duplicate_type_shape(&[
+            (
+                &a,
+                "interface Base { id: string; } \
+                 export interface User extends Base { name: string; email: string; }",
+            ),
+            (
+                &b,
+                "export interface Customer { id: string; name: string; email: string; }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "an interface with extends must be skipped; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn single_file_pair_is_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_duplicate_type_shape(&[(
+            &a,
+            "export interface User { id: string; name: string; email: string; } \
+             export interface Customer { id: string; name: string; email: string; }",
+        )]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a duplicate pair within a single file must still be flagged; got {issues:?}"
         );
     }
 }

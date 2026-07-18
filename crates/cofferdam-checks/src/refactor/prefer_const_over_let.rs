@@ -7,7 +7,7 @@ use oxc_ast::ast::{
     VariableDeclarationKind,
 };
 use oxc_ast_visit::Visit;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// `Refactor.PreferConstOverLet` — flag a `let` binding that is never
 /// reassigned anywhere in the file.
@@ -28,6 +28,13 @@ use std::collections::{HashMap, HashSet};
 /// it, and won't be flagged even if that specific binding is never
 /// itself reassigned. This is a false-negative, not a false-positive —
 /// the safer direction for a "should be const" suggestion.
+///
+/// Every `let` declaration site is recorded independently (not
+/// deduplicated by name), so two unrelated, never-reassigned `let`s
+/// that happen to share a name (e.g. the same local name in two
+/// different functions) are both flagged — only an actual reassignment
+/// of that name suppresses the finding, and it suppresses it for every
+/// site sharing the name, per the trade-off above.
 pub struct PreferConstOverLet;
 
 const META: CheckMeta = CheckMeta {
@@ -56,7 +63,7 @@ impl Check for PreferConstOverLet {
         };
         let mut visitor = Collector {
             file,
-            let_decls: HashMap::new(),
+            let_decls: Vec::new(),
             reassigned: HashSet::new(),
         };
         visitor.visit_program(parsed.program);
@@ -66,9 +73,10 @@ impl Check for PreferConstOverLet {
 
 struct Collector<'a> {
     file: &'a SourceFile,
-    /// name -> first-seen declarator span. A `HashMap` (not `Vec`) so a
-    /// re-declaration of the same name only reports once.
-    let_decls: HashMap<String, (u32, u32)>,
+    /// Every `let` declarator site: (name, span start, span end). Not
+    /// deduplicated by name — two unrelated `let`s sharing a name (e.g.
+    /// in different functions) are independent findings.
+    let_decls: Vec<(String, u32, u32)>,
     reassigned: HashSet<String>,
 }
 
@@ -77,8 +85,8 @@ impl<'a> Collector<'a> {
         let mut issues: Vec<Issue> = self
             .let_decls
             .into_iter()
-            .filter(|(name, _)| !self.reassigned.contains(name))
-            .map(|(name, (start, end))| {
+            .filter(|(name, _, _)| !self.reassigned.contains(name))
+            .map(|(name, start, end)| {
                 let span = span_from_bytes(&self.file.text, start, end);
                 Issue {
                     check_id: META.id.to_string(),
@@ -103,9 +111,11 @@ impl<'a> Visit<'a> for Collector<'a> {
         if node.kind == VariableDeclarationKind::Let {
             for decl in &node.declarations {
                 if let BindingPattern::BindingIdentifier(id) = &decl.id {
-                    self.let_decls
-                        .entry(id.name.as_str().to_string())
-                        .or_insert((decl.span.start, decl.span.end));
+                    self.let_decls.push((
+                        id.name.as_str().to_string(),
+                        decl.span.start,
+                        decl.span.end,
+                    ));
                 }
             }
         }

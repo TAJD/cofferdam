@@ -484,6 +484,21 @@ function makeCounter() {
     }
 
     #[test]
+    fn non_overlapping_same_named_lets_both_flagged() {
+        // Two unrelated `let total`s in different functions, neither ever
+        // reassigned — both must flag independently, not just the first.
+        let src = "\
+export function a() { let total = 1; return total; }
+export function b() { let total = 2; return total; }";
+        let issues = run_prefer_const_over_let(src);
+        assert_eq!(
+            issues.len(),
+            2,
+            "expected both unrelated `total` lets to flag; got {issues:?}"
+        );
+    }
+
+    #[test]
     fn destructured_let_binding_is_skipped() {
         let issues = run_prefer_const_over_let("let { a, b } = obj;\nreturn a + b;");
         assert!(

@@ -55,4 +55,25 @@ function overlapping(x: number) {
 }
 ```
 
+Not flagged — `{ error: null }` and `{ ok: true }` / `{ success: true }` are the SUCCESS arm of a Result-shaped return, not a competing error idiom, even alongside an unrelated throw:
+
+```ts
+function divide(a: number, b: number) {
+  if (b === 0) {
+    throw new Error("division by zero is a programmer error");
+  }
+  return { error: null, value: a / b };
+}
+```
+
+Brace-less guard clauses (`if (c) throw x;`, no `{}`) are still treated as their own branch, so this flags the same way with or without braces:
+
+```ts
+function parseId(raw: string) {
+  if (!raw) throw new Error("id required");
+  if (raw.length > 64) return { error: "id too long" };
+  return raw;
+}
+```
+
 Scope: only inspects a function's own statements — nested functions (declarations, expressions, arrow functions) are separate scopes and are analyzed independently, not folded into the outer function's throw/return count. Arrow functions themselves aren't currently inspected as the outer subject of this check, only `function` declarations/expressions and class methods.

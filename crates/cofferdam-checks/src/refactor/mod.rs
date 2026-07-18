@@ -897,4 +897,75 @@ function outer(x: number) {
         // The nested function itself has neither an error-shaped return nor
         // a second throw, so it isn't independently flagged either.
     }
+
+    #[test]
+    fn result_shape_success_return_is_not_flagged() {
+        // `{ error: null }` is the SUCCESS arm of a Result-shaped return,
+        // not a competing error idiom, even though a throw exists nearby
+        // for an unrelated invariant.
+        let src = "\
+function divide(a: number, b: number) {
+  if (b === 0) {
+    throw new Error(\"division by zero\");
+  }
+  return { error: null, value: a / b };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "`error: null` signals success, not failure; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn ok_true_success_return_is_not_flagged() {
+        let src = "\
+function f(x: number) {
+  if (x < 0) {
+    throw new Error(\"bad\");
+  }
+  return { ok: true, value: x };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "`ok: true` signals success, not failure; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn ok_false_failure_return_is_flagged() {
+        let src = "\
+function f(x: number) {
+  if (x < 0) {
+    throw new Error(\"bad\");
+  }
+  if (x > 100) {
+    return { ok: false };
+  }
+  return { ok: true, value: x };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "`ok: false` genuinely signals failure, alongside a throw; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn brace_less_guard_clauses_in_distinct_branches_are_flagged() {
+        let src = "\
+function parseId(raw: string) {
+  if (!raw) throw new Error(\"id required\");
+  if (raw.length > 64) return { error: \"id too long\" };
+  return raw;
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "brace-less guard clauses must still be treated as distinct branches; got {issues:?}"
+        );
+    }
 }

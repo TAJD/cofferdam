@@ -29,4 +29,22 @@ export function overlapping(x: number) {
   return x * 2;
 }
 
+// Not flagged — the object return is a Result-shaped SUCCESS value
+// (`error: null`), not a competing error idiom; the throw guards an
+// invariant that's unrelated to the success/failure result shape.
+export function divide(a: number, b: number) {
+  if (b === 0) {
+    throw new Error("division by zero is a programmer error");
+  }
+  return { error: null, value: a / b };
+}
+
+// Flag — brace-less guard clauses on both sides still count as
+// distinct branches even without `{}`.
+export function parseId(raw: string) {
+  if (!raw) throw new Error("id required");
+  if (raw.length > 64) return { error: "id too long" };
+  return raw;
+}
+
 declare function tryParse(_input: string): { value: string } | null;

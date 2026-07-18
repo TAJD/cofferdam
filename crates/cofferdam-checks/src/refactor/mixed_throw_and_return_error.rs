@@ -3,7 +3,8 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, Issue, Location, Priority, Severity, SourceFile,
 };
 use oxc_ast::ast::{
-    Expression, Function, ObjectPropertyKind, PropertyKey, ReturnStatement, ThrowStatement,
+    Expression, Function, IfStatement, ObjectPropertyKind, PropertyKey, ReturnStatement,
+    ThrowStatement,
 };
 use oxc_ast_visit::Visit;
 
@@ -23,15 +24,17 @@ const ERROR_SHAPE_FIELDS: &[&str] = &["error", "ok", "success"];
 ///   (declarations, expressions, arrow functions) are separate scopes
 ///   and are not descended into; each is analyzed independently when
 ///   the outer walk reaches it.
-/// - "Distinct branches" is approximated by comparing the innermost
-///   enclosing `BlockStatement` of each throw/return site (function-body
-///   statements that aren't inside any nested block share one id). A
-///   throw and a qualifying return in the exact same block are NOT
-///   flagged — that's usually dead code (the second is unreachable),
-///   not two competing error idioms.
-/// - A brace-less `if` consequent (`if (c) throw x;`) is not its own
-///   `BlockStatement`, so it's treated as sharing the surrounding
-///   block's id — a known precision gap, not a correctness bug.
+/// - "Distinct branches" is approximated by assigning each `if`
+///   consequent/alternate its own id (regardless of whether it's
+///   braced) and each nested `BlockStatement` its own id. A throw and a
+///   qualifying return that land in the exact same block/branch are
+///   NOT flagged — that's usually dead code (the second is
+///   unreachable), not two competing error idioms.
+/// - A field named `error`/`ok`/`success` only counts as
+///   "error-shaped" for values that actually signal failure:
+///   `{ error: null }` / `{ error: undefined }` and `{ ok: true }` /
+///   `{ success: true }` are the success arm of a Result-shaped return,
+///   not a competing error idiom, and are excluded.
 pub struct MixedThrowAndReturnError;
 
 const META: CheckMeta = CheckMeta {
@@ -68,6 +71,21 @@ impl Check for MixedThrowAndReturnError {
     }
 }
 
+/// A field named `error`/`ok`/`success` signals *failure* only for
+/// certain values — `{ error: null }` and `{ ok: true }` are the
+/// SUCCESS arm of a Result-shaped return, not a competing error idiom,
+/// so they're explicitly excluded even though the field name matches.
+fn signals_failure(field_name: &str, value: &Expression<'_>) -> bool {
+    match field_name {
+        "error" => {
+            !matches!(value, Expression::NullLiteral(_))
+                && !matches!(value, Expression::Identifier(id) if id.name.as_str() == "undefined")
+        }
+        "ok" | "success" => !matches!(value, Expression::BooleanLiteral(lit) if lit.value),
+        _ => true,
+    }
+}
+
 fn is_error_shaped(expr: &Expression<'_>) -> bool {
     let Expression::ObjectExpression(obj) = expr else {
         return false;
@@ -81,7 +99,7 @@ fn is_error_shaped(expr: &Expression<'_>) -> bool {
             PropertyKey::StringLiteral(lit) => Some(lit.value.as_str()),
             _ => None,
         };
-        name.is_some_and(|n| ERROR_SHAPE_FIELDS.contains(&n))
+        name.is_some_and(|n| ERROR_SHAPE_FIELDS.contains(&n) && signals_failure(n, &prop.value))
     })
 }
 
@@ -150,13 +168,31 @@ impl FnScanner {
     }
 }
 
-impl<'a> Visit<'a> for FnScanner {
-    fn visit_block_statement(&mut self, node: &oxc_ast::ast::BlockStatement<'a>) {
+impl FnScanner {
+    fn with_new_block<F: FnOnce(&mut Self)>(&mut self, f: F) {
         let id = self.next_block_id;
         self.next_block_id += 1;
         self.block_stack.push(id);
-        oxc_ast_visit::walk::walk_block_statement(self, node);
+        f(self);
         self.block_stack.pop();
+    }
+}
+
+impl<'a> Visit<'a> for FnScanner {
+    fn visit_block_statement(&mut self, node: &oxc_ast::ast::BlockStatement<'a>) {
+        self.with_new_block(|this| oxc_ast_visit::walk::walk_block_statement(this, node));
+    }
+
+    /// A brace-less `if` consequent/alternate (`if (c) throw x;`) is not
+    /// its own `BlockStatement` — assign each branch its own block id
+    /// here regardless of braces, so branch divergence is detected the
+    /// same way whether or not the arms use `{}`.
+    fn visit_if_statement(&mut self, node: &IfStatement<'a>) {
+        self.visit_expression(&node.test);
+        self.with_new_block(|this| this.visit_statement(&node.consequent));
+        if let Some(alternate) = &node.alternate {
+            self.with_new_block(|this| this.visit_statement(alternate));
+        }
     }
 
     fn visit_throw_statement(&mut self, node: &ThrowStatement<'a>) {

@@ -65,6 +65,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(consistency::UnusedSuppression),
         Box::new(design::MaxParameters::new(5)),
         Box::new(design::DuplicateExportName),
+        Box::new(design::EffectLeakage),
         Box::new(design::OrphanExport),
         Box::new(design::ImportCycle),
         Box::new(design::LayerViolation),

@@ -6,6 +6,7 @@ use std::path::Path;
 mod boundary_frozen;
 mod class_as_data_bag;
 mod duplicate_export_name;
+mod effect_leakage;
 mod import_cycle;
 mod invariant_violation;
 mod layer_violation;
@@ -18,6 +19,7 @@ mod union_exhaustiveness_gap;
 pub use boundary_frozen::BoundaryFrozen;
 pub use class_as_data_bag::ClassAsDataBag;
 pub use duplicate_export_name::DuplicateExportName;
+pub use effect_leakage::EffectLeakage;
 pub use import_cycle::ImportCycle;
 pub use invariant_violation::InvariantViolation;
 pub use layer_violation::LayerViolation;
@@ -1115,5 +1117,150 @@ function total(items) {
         let src = "export const total = (items: number[]): number => items.length;";
         let issues = run_readonly_array_param(src);
         assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    // ─── Design.EffectLeakage (CD-127) ──────────────────────────────────
+
+    use cofferdam_core::graph::IMPORTS as GRAPH_IMPORTS;
+    use cofferdam_core::{CorpusIndex, FinalizeContext};
+    use effect_leakage::EffectLeakage;
+
+    fn external_import(from: &Path, specifier: &str) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: specifier.to_string(),
+            resolved: None,
+            names: Vec::new(),
+            type_only: false,
+            span: span(),
+        }
+    }
+
+    fn internal_import(from: &Path, resolved: &Path) -> ImportRecord {
+        named_import(from, resolved, "x", "x")
+    }
+
+    /// Runs `EffectLeakage.run()` over each `(path, source)` fixture,
+    /// seeds the corpus's shared import graph with `extra_imports`
+    /// (standing in for the engine's own graph-builder pass, which
+    /// doesn't run in this unit test), then calls `.finalize()`.
+    fn run_effect_leakage(
+        fixtures: &[(&Path, &str)],
+        extra_imports: Vec<ImportRecord>,
+    ) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::new();
+        for (path, src) in fixtures {
+            let file = SourceFile::new(path.to_path_buf(), src.to_string());
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, &file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(&file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            EffectLeakage.run(&file, &mut ctx);
+        }
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(extra_imports));
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        EffectLeakage.finalize(&mut finalize_ctx)
+    }
+
+    #[test]
+    fn direct_import_of_side_effecting_module_is_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(&a, "// @pure\nexport function f() {}")],
+            vec![external_import(&a, "fs")],
+        );
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("fs"));
+    }
+
+    #[test]
+    fn transitive_import_of_side_effecting_module_is_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_effect_leakage(
+            &[
+                (&a, "// @pure\nexport function f() {}"),
+                (&b, "export function g() {}"),
+            ],
+            vec![internal_import(&a, &b), external_import(&b, "fs")],
+        );
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].file == a);
+    }
+
+    #[test]
+    fn genuinely_pure_chain_is_not_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_effect_leakage(
+            &[
+                (&a, "// @pure\nexport function f() {}"),
+                (&b, "export function g() {}"),
+            ],
+            vec![internal_import(&a, &b)],
+        );
+        assert!(
+            issues.is_empty(),
+            "a chain with no side-effecting module must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn no_pure_tag_is_not_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(&a, "export function f() {}")],
+            vec![external_import(&a, "fs")],
+        );
+        assert!(
+            issues.is_empty(),
+            "a file with no @pure tag must not flag, even with a direct fs import; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn prose_mentioning_pure_is_not_mistaken_for_the_tag() {
+        // A comment that merely mentions "@pure" in prose (not as its own
+        // JSDoc-style tag line) must not opt the file in.
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(
+                &a,
+                "// TODO: consider marking this @pure eventually\nexport function f() {}",
+            )],
+            vec![external_import(&a, "fs")],
+        );
+        assert!(
+            issues.is_empty(),
+            "prose mentioning @pure must not opt the file in; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn node_prefixed_specifier_is_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(&a, "// @pure\nexport function f() {}")],
+            vec![external_import(&a, "node:fs")],
+        );
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn non_denylisted_external_module_is_not_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(&a, "// @pure\nexport function f() {}")],
+            vec![external_import(&a, "lodash")],
+        );
+        assert!(
+            issues.is_empty(),
+            "an external module not on the denylist must not flag; got {issues:?}"
+        );
     }
 }

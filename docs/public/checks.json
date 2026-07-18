@@ -95,6 +95,21 @@
       ]
     },
     {
+      "id": "Design.EffectLeakage",
+      "category": "Design",
+      "base_priority": 8,
+      "default_severity": "Medium",
+      "explanation": "A module opted into a `@pure` contract, but transitively imports a known side-effecting module (filesystem, network, a database client) somewhere down its import chain — the annotation is making a promise the code doesn't keep.",
+      "body": "---\nid: Design.EffectLeakage\ncategory: Design\nbase_priority: 8\ndefault_severity: Medium\noptions: []\n---\n\nA file annotated `@pure` whose transitive import chain reaches a known side-effecting module (filesystem, network, a database client) — the annotation makes a promise the code doesn't keep.\n\n```ts\n// @pure\nimport { readFile } from \"./disk-cache\";\n// disk-cache.ts does `import * as fs from \"fs\";` internally — the\n// side effect is one hop away, not in this file's own imports.\n\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\n```ts\n// fix — drop the tag, or remove the dependency on the side-effecting module\nimport { readFile } from \"./disk-cache\";\n\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — no `@pure` tag, so no contract is being made:\n\n```ts\nimport * as fs from \"fs\";\n\nexport function loadConfig(): string {\n  return fs.readFileSync(\"config.json\", \"utf8\");\n}\n```\n\nNot flagged — `@pure`, and the import chain never reaches a side-effecting module:\n\n```ts\n// @pure\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nScope: `@pure` is read as a whole-file contract — any comment anywhere in the file containing the literal text `@pure` opts the file in; there's no per-function granularity, since the transitive walk operates on the engine's file-level import graph. The side-effecting module list (Node built-ins like `fs`/`net`/`http`/`child_process`, and common database/queue clients like `pg`, `mongodb`, `redis`, `prisma`) is a fixed denylist, not user-configurable in v1. Only imports that resolve internally are followed transitively; an unresolved (external) specifier is checked against the denylist and ends that branch of the walk either way — so a side-effecting package reached through several internal re-exports is still caught, but a side-effecting package not on the denylist is not.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Design.ImportCycle",
       "category": "Design",
       "base_priority": 8,

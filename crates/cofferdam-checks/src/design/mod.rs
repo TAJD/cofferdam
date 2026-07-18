@@ -14,6 +14,7 @@ mod import_fan_out_outlier;
 mod invariant_violation;
 mod layer_violation;
 mod max_parameters;
+mod missing_test_file;
 mod orphan_export;
 mod readonly_array_param;
 mod scripted_invariant;
@@ -30,6 +31,7 @@ pub use import_fan_out_outlier::ImportFanOutOutlier;
 pub use invariant_violation::InvariantViolation;
 pub use layer_violation::LayerViolation;
 pub use max_parameters::{max_in_file as max_parameters_in_file, MaxParameters};
+pub use missing_test_file::MissingTestFile;
 pub use orphan_export::OrphanExport;
 pub use readonly_array_param::ReadonlyArrayParam;
 pub use scripted_invariant::ScriptedInvariant;
@@ -1715,6 +1717,131 @@ function total(items) {
             issues.is_empty(),
             "a file resolved as the package's main entry point must be excluded, and the \
              remaining sparse barrels have identical ratios (stddev 0); got {issues:?}"
+        );
+    }
+
+    // ─── Design.MissingTestFile (CD-132) ────────────────────────────────
+
+    use missing_test_file::compute_missing_test_files;
+
+    const MTF_TEST_MATCH_PATTERNS: &[&str] = &["{name}.test.ts", "__tests__/{name}.test.ts"];
+    const MTF_TEST_FILE_PATTERNS: &[&str] = &[".test.", "/__tests__/"];
+    const MTF_FRAMEWORK_PATTERNS: &[&str] = &["/page."];
+
+    fn owned(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn run_missing_test_file(
+        imports: Vec<ImportRecord>,
+        exports: Vec<ExportRecord>,
+    ) -> Vec<CoreIssue> {
+        compute_missing_test_files(
+            &imports,
+            &exports,
+            &owned(MTF_TEST_MATCH_PATTERNS),
+            &owned(MTF_TEST_FILE_PATTERNS),
+            &owned(MTF_FRAMEWORK_PATTERNS),
+        )
+    }
+
+    #[test]
+    fn real_export_with_no_test_file_is_flagged() {
+        let file = PathBuf::from("/p/format.ts");
+        let exports = vec![barrel_real_export(&file, "formatCurrency")];
+        let issues = run_missing_test_file(vec![], exports);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected one finding for a file with no test file; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, file);
+    }
+
+    #[test]
+    fn same_directory_test_file_suppresses_finding() {
+        let file = PathBuf::from("/p/format.ts");
+        let test_file = PathBuf::from("/p/format.test.ts");
+        let exports = vec![barrel_real_export(&file, "formatCurrency")];
+        // The test file must appear in the known-files universe (built
+        // from imports/exports) for the match to succeed — a bare
+        // internal_import stands in for it importing the module under
+        // test.
+        let imports = vec![internal_import(&test_file, &file)];
+        let issues = run_missing_test_file(imports, exports);
+        assert!(
+            issues.is_empty(),
+            "a same-directory {{name}}.test.ts must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn sibling_tests_dir_test_file_suppresses_finding() {
+        let file = PathBuf::from("/p/format.ts");
+        let test_file = PathBuf::from("/p/__tests__/format.test.ts");
+        let exports = vec![barrel_real_export(&file, "formatCurrency")];
+        let imports = vec![internal_import(&test_file, &file)];
+        let issues = run_missing_test_file(imports, exports);
+        assert!(
+            issues.is_empty(),
+            "a sibling __tests__/{{name}}.test.ts must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn barrel_only_file_is_not_flagged() {
+        let file = PathBuf::from("/p/index.ts");
+        let exports = vec![barrel_reexport(&file, "x")];
+        let issues = run_missing_test_file(vec![], exports);
+        assert!(
+            issues.is_empty(),
+            "a pure re-export barrel has no behavior of its own to test; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn type_only_export_is_not_flagged() {
+        let file = PathBuf::from("/p/types.ts");
+        let exports = vec![ExportRecord {
+            file: file.clone(),
+            name: "Options".to_string(),
+            kind: ExportKind::Named,
+            type_only: true,
+            span: Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+            source_specifier: None,
+            resolved_source: None,
+        }];
+        let issues = run_missing_test_file(vec![], exports);
+        assert!(
+            issues.is_empty(),
+            "a type-only export has no runtime behavior to test; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn test_file_itself_is_exempt() {
+        let file = PathBuf::from("/p/format.test.ts");
+        let exports = vec![barrel_real_export(&file, "helper")];
+        let issues = run_missing_test_file(vec![], exports);
+        assert!(
+            issues.is_empty(),
+            "a test file itself must not be flagged for missing its own test; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn framework_entry_point_is_exempt() {
+        let file = PathBuf::from("/p/app/page.tsx");
+        let exports = vec![barrel_real_export(&file, "default")];
+        let issues = run_missing_test_file(vec![], exports);
+        assert!(
+            issues.is_empty(),
+            "a framework entry point must be exempt; got {issues:?}"
         );
     }
 }

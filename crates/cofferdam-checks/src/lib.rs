@@ -70,6 +70,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(design::DuplicateTypeShape),
         Box::new(design::EffectLeakage),
         Box::new(design::OrphanExport),
+        Box::new(design::MissingTestFile),
         Box::new(design::ImportCycle),
         Box::new(design::ImportFanOutOutlier),
         Box::new(design::LayerViolation),

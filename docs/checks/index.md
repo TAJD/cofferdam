@@ -30,6 +30,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.InvariantViolation`](Design.InvariantViolation.md) `graph` `advisable` — An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.
 - [`Design.LayerViolation`](Design.LayerViolation.md) `graph` `advisable` — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
 - [`Design.MaxParameters`](Design.MaxParameters.md) `file` `advisable` — Functions with too many parameters are hard to call correctly. Pass an options object instead.
+- [`Design.MissingTestFile`](Design.MissingTestFile.md) `file` `advisable` — A file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.
 - [`Design.OrphanExport`](Design.OrphanExport.md) `graph` `advisable` — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
 - [`Design.ReadonlyArrayParam`](Design.ReadonlyArrayParam.md) `file` — A function parameter typed as a mutable array or object, but never mutated in the body, is a missed `readonly` guarantee — a type-checker-enforced promise to callers that's cheap to add and cheap for them to trust.
 - [`Design.ScriptedInvariant`](Design.ScriptedInvariant.md) `graph` — A scripted invariant declared in cofferdam.invariants.toml under [invariants.scripted] is violated for this file.

@@ -8,11 +8,32 @@
       "message": "invariant `no-direct-db-access` violated: forbidden import `../infra/db/connection` (matches prefix `src/infra/db`)"
     },
     {
+      "id": "Design.MissingTestFile",
+      "file": "src/domain/user.ts",
+      "line": 5,
+      "column": 23,
+      "message": "`fetchUser` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/infra/db/connection.ts",
+      "line": 1,
+      "column": 17,
+      "message": "`fetchFromDb` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.BoundaryFrozen",
       "file": "src/legacy/old-helper.ts",
       "line": 1,
       "column": 1,
       "message": "file is in frozen boundary `src/legacy/**`: see ADR-0007"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/legacy/old-helper.ts",
+      "line": 2,
+      "column": 17,
+      "message": "`helper` is exported here but no matching test file was found in the project"
     },
     {
       "id": "Design.OrphanExport",

@@ -1,11 +1,39 @@
 {
   "findings": [
     {
+      "id": "Design.MissingTestFile",
+      "file": "src/controllers/users.ts",
+      "line": 2,
+      "column": 17,
+      "message": "`listUsers` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.ScriptedInvariant",
       "file": "src/controllers/widgets.ts",
       "line": 1,
       "column": 1,
       "message": "scripted invariant `controller-test-pair` failed: Every controller needs a test file under tests/"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/controllers/widgets.ts",
+      "line": 3,
+      "column": 17,
+      "message": "`listWidgets` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/services/helpers.ts",
+      "line": 3,
+      "column": 17,
+      "message": "`helper` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "tests/users.ts",
+      "line": 3,
+      "column": 14,
+      "message": "`ok` is exported here but no matching test file was found in the project"
     }
   ]
 }

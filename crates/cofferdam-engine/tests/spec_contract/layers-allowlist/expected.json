@@ -1,11 +1,32 @@
 {
   "findings": [
     {
+      "id": "Design.MissingTestFile",
+      "file": "src/domain/user.ts",
+      "line": 8,
+      "column": 17,
+      "message": "`newUser` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/infra/connection.ts",
+      "line": 1,
+      "column": 17,
+      "message": "`connect` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.LayerViolation",
       "file": "src/infra/db.ts",
       "line": 2,
       "column": 1,
       "message": "layer `infra` may not import from layer `domain`"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/infra/db.ts",
+      "line": 4,
+      "column": 17,
+      "message": "`persist` is exported here but no matching test file was found in the project"
     }
   ]
 }

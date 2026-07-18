@@ -1,3 +1,11 @@
 {
-  "findings": []
+  "findings": [
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/widgets.ts",
+      "line": 7,
+      "column": 14,
+      "message": "`Widget` is exported here but no matching test file was found in the project"
+    }
+  ]
 }

@@ -1,6 +1,13 @@
 {
   "findings": [
     {
+      "id": "Design.MissingTestFile",
+      "file": "src/lib.ts",
+      "line": 10,
+      "column": 14,
+      "message": "`alpha` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.OrphanExport",
       "file": "src/lib.ts",
       "line": 13,

@@ -1263,4 +1263,46 @@ function total(items) {
             "an external module not on the denylist must not flag; got {issues:?}"
         );
     }
+
+    #[test]
+    fn import_cycle_does_not_hang_the_bfs() {
+        // a -> b -> a, with b also reaching fs. The cycle must not cause
+        // an infinite loop, and the reachable side effect must still be
+        // found.
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let issues = run_effect_leakage(
+            &[
+                (&a, "// @pure\nexport function f() {}"),
+                (&b, "export function g() {}"),
+            ],
+            vec![
+                internal_import(&a, &b),
+                internal_import(&b, &a),
+                external_import(&b, "fs"),
+            ],
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "an import cycle must not hang the BFS and the reachable side effect must still be found; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn block_comment_pure_tag_is_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(
+                &a,
+                "/**\n * A helper.\n * @pure\n * @param x\n */\nexport function f() {}",
+            )],
+            vec![external_import(&a, "fs")],
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "a @pure tag inside a multi-line JSDoc block comment must be recognized; got {issues:?}"
+        );
+    }
 }

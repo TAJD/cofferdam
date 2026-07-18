@@ -28,6 +28,7 @@ const SIDE_EFFECTING_MODULES: &[&str] = &[
     "mysql",
     "mysql2",
     "mongodb",
+    "mongoose",
     "sqlite3",
     "better-sqlite3",
     "redis",

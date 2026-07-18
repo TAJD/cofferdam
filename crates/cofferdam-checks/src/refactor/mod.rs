@@ -565,6 +565,43 @@ for (const n of nums) {
     }
 
     #[test]
+    fn if_gated_computed_push_loop_is_flagged_as_filter_map() {
+        // The if's consequent pushes a separately computed transform, not
+        // the raw loop variable — the suggestion must be `.filter().map()`,
+        // not a plain `.filter()`, since the loop does both.
+        let src = "\
+const labels: string[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    const label = `even:${n}`;
+    labels.push(label);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(
+            issues[0].message.contains(".filter().map()"),
+            "expected a filter+map suggestion, not a plain filter; got: {}",
+            issues[0].message
+        );
+    }
+
+    #[test]
+    fn multi_arg_push_is_not_flagged() {
+        // arr.push(a, b) pushes two items per call — not map/filter-shaped.
+        let src = "\
+const flat: number[] = [];
+for (const n of nums) {
+  flat.push(n, n + 1);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "multi-arg push must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
     fn loop_with_break_is_not_flagged() {
         let src = "\
 const evens: number[] = [];

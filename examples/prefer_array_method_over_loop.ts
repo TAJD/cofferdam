@@ -30,6 +30,19 @@ export function evensOnly(nums: number[]) {
   return evens;
 }
 
+// Flag — if-gated computed push, could be `.filter().map()` (not a
+// plain `.filter()`, since the pushed value is a transform).
+export function evenLabels(nums: number[]) {
+  const labels: string[] = [];
+  for (const n of nums) {
+    if (n % 2 === 0) {
+      const label = `even:${n}`;
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
 // Not flagged — early break disqualifies the shape.
 export function firstFewEvens(nums: number[], limit: number) {
   const evens: number[] = [];

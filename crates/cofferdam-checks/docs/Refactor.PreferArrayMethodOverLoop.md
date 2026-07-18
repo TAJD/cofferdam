@@ -34,6 +34,18 @@ for (const n of nums) {
 const evens = nums.filter((n) => n % 2 === 0);
 ```
 
+When the `if`'s consequent pushes a separately computed value rather than the raw iterated element, the suggestion is `.filter().map()` (a filter, then a transform) rather than a plain `.filter()`, since the loop is doing both:
+
+```ts
+const labels: string[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    const label = `even:${n}`; // flagged — `.filter().map()`, not just `.filter()`
+    labels.push(label);
+  }
+}
+```
+
 Deliberately narrow to avoid false positives: the loop body (or the `if`'s consequent, for the filter shape) must match one of exactly two shapes and nothing else —
 
 1. a single `arr.push(<expr>)` statement, or

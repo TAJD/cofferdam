@@ -98,13 +98,25 @@ fn extract_push<'a, 'b>(
     Some((obj.name.as_str(), &call.arguments[0]))
 }
 
+/// Which of the two "push-only" shapes matched — used to decide whether
+/// an `if`-gated match is a pure `.filter()` or a `.filter()` + `.map()`
+/// combination (the pushed value is a separately computed variable, not
+/// the raw thing being iterated).
+enum PushShape {
+    /// `arr.push(<expr>)` directly.
+    Direct,
+    /// `const x = <expr>; arr.push(x);` — a transform, not a raw push.
+    Computed,
+}
+
 /// Match a statement list against the two allowed "push-only" shapes
-/// (see the check's doc comment). Returns the accumulator array's name.
-fn match_push_only<'a>(stmts: &[&Statement<'a>]) -> Option<String> {
+/// (see the check's doc comment). Returns the accumulator array's name
+/// and which shape matched.
+fn match_push_only<'a>(stmts: &[&Statement<'a>]) -> Option<(String, PushShape)> {
     match stmts {
         [Statement::ExpressionStatement(expr_stmt)] => {
             let (target, _arg) = extract_push(expr_stmt)?;
-            Some(target.to_string())
+            Some((target.to_string(), PushShape::Direct))
         }
         [Statement::VariableDeclaration(decl), Statement::ExpressionStatement(expr_stmt)] => {
             if decl.declarations.len() != 1 {
@@ -124,7 +136,7 @@ fn match_push_only<'a>(stmts: &[&Statement<'a>]) -> Option<String> {
             let (target, arg) = extract_push(expr_stmt)?;
             match arg {
                 Argument::Identifier(arg_id) if arg_id.name.as_str() == id.name.as_str() => {
-                    Some(target.to_string())
+                    Some((target.to_string(), PushShape::Computed))
                 }
                 _ => None,
             }
@@ -137,7 +149,7 @@ impl<'a> Collector<'a> {
     fn check_loop_body(&mut self, body: &Statement<'a>, loop_span: Span) {
         let stmts = body_statements(body);
 
-        if let Some(target) = match_push_only(&stmts) {
+        if let Some((target, _shape)) = match_push_only(&stmts) {
             self.flag(loop_span, &target, "map");
             return;
         }
@@ -147,8 +159,15 @@ impl<'a> Collector<'a> {
                 return; // an else branch isn't a plain filter
             }
             let inner = body_statements(&if_stmt.consequent);
-            if let Some(target) = match_push_only(&inner) {
-                self.flag(loop_span, &target, "filter");
+            if let Some((target, shape)) = match_push_only(&inner) {
+                let method = match shape {
+                    PushShape::Direct => "filter",
+                    // The pushed value is a separately computed
+                    // transform, not the raw iterated element — flag
+                    // the combination rather than implying a pure filter.
+                    PushShape::Computed => "filter().map",
+                };
+                self.flag(loop_span, &target, method);
             }
         }
     }

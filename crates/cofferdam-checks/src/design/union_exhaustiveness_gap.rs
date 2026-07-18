@@ -28,6 +28,12 @@ use std::collections::HashSet;
 /// `if`/`else if` chains over a discriminant are a known gap, deferred
 /// until there's a cheap way to recognise the pattern without excessive
 /// false positives on unrelated `if`-chains.
+///
+/// Case tests are matched against string, numeric, and boolean literals,
+/// same as the type-host's `unionMembers` reports member values (each
+/// stringified via `String(value)`). A case test that isn't a literal at
+/// all (e.g. a computed expression) can't be attributed to a member and
+/// is silently ignored rather than treated as covering anything.
 pub struct UnionExhaustivenessGap;
 
 const META: CheckMeta = CheckMeta {
@@ -94,6 +100,14 @@ impl<'a> Collector<'a> {
                 None => return, // explicit `default` — intentional catch-all
                 Some(Expression::StringLiteral(lit)) => {
                     handled.insert(lit.value.as_str().to_string());
+                }
+                // `unionMembers` stringifies numeric/boolean literal members
+                // the same way (`String(value)`), so match that here.
+                Some(Expression::NumericLiteral(lit)) => {
+                    handled.insert(lit.value.to_string());
+                }
+                Some(Expression::BooleanLiteral(lit)) => {
+                    handled.insert(lit.value.to_string());
                 }
                 Some(_) => {} // non-literal case test — can't attribute to a member
             }

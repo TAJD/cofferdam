@@ -672,6 +672,35 @@ mod tests {
     }
 
     #[test]
+    fn numeric_discriminant_missing_variant_is_flagged() {
+        let src = r#"
+            function area(shape: Shape) {
+              switch (shape.kind) {
+                case 0: return 1;
+                case 1: return 2;
+              }
+            }
+        "#;
+        let issues = run_union_exhaustiveness(src, Some(union_facts(&["0", "1", "2"])));
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains('2'));
+    }
+
+    #[test]
+    fn boolean_discriminant_all_variants_handled_is_not_flagged() {
+        let src = r#"
+            function f(shape: Shape) {
+              switch (shape.flag) {
+                case true: return 1;
+                case false: return 2;
+              }
+            }
+        "#;
+        let issues = run_union_exhaustiveness(src, Some(union_facts(&["true", "false"])));
+        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
+    }
+
+    #[test]
     fn non_literal_union_discriminant_is_not_flagged() {
         // Oracle returns None — the discriminant isn't a literal-only
         // union (e.g. a plain `string`, or a union with a non-literal

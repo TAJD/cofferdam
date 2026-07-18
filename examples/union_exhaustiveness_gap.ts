@@ -56,3 +56,16 @@ export function describe(kind: string) {
       return "round";
   }
 }
+
+// --- flagged: numeric discriminant, missing variant --------------------
+
+type Code = { kind: 0; label: string } | { kind: 1; label: string } | { kind: 2; label: string };
+
+export function codeLabel(c: Code) {
+  switch (c.kind) {
+    case 0:
+      return "a";
+    case 1:
+      return "b";
+  }
+}

@@ -42,7 +42,7 @@ function area(shape: Shape) {
 
 A `default` case of any content is treated as an intentional catch-all and suppresses the finding — this doesn't require the `const _exhaustive: never = shape` idiom (which `tsc` itself already flags in strict mode where applicable); requiring it here would double-report what the compiler already catches.
 
-Scoped to `switch` statements only in this version — exhaustive `if`/`else if` chains over a discriminant are a known gap, not yet detected.
+Scoped to `switch` statements only in this version — exhaustive `if`/`else if` chains over a discriminant are a known gap, not yet detected. Case labels are matched against string, numeric, and boolean literals; a case test that isn't a literal at all (e.g. a computed expression) can't be attributed to a member and is ignored rather than treated as covering anything.
 
 ```toml
 # cofferdam.toml

@@ -11,6 +11,7 @@ mod layer_violation;
 mod max_parameters;
 mod orphan_export;
 mod scripted_invariant;
+mod union_exhaustiveness_gap;
 
 pub use boundary_frozen::BoundaryFrozen;
 pub use duplicate_export_name::DuplicateExportName;
@@ -20,6 +21,7 @@ pub use layer_violation::LayerViolation;
 pub use max_parameters::{max_in_file as max_parameters_in_file, MaxParameters};
 pub use orphan_export::OrphanExport;
 pub use scripted_invariant::ScriptedInvariant;
+pub use union_exhaustiveness_gap::UnionExhaustivenessGap;
 
 /// Normalise a path relative to the project root into forward-slash
 /// separated form suitable for glob matching. Strip leading `./ ` and `/`
@@ -571,5 +573,138 @@ mod tests {
             orphan_export::compute_orphans(&[], &exports, &opts_default(), &PublicApi::default());
         assert_eq!(issues.len(), 1, "expected one orphan, got: {:?}", issues);
         assert!(issues[0].message.contains("Forgotten"));
+    }
+
+    // ── Design.UnionExhaustivenessGap (CD-118) ─────────────────────────
+    //
+    // The decision logic is type-driven, so a stub oracle stands in for
+    // the ts-morph host: it returns the same UnionFacts for every query,
+    // which is enough because each test source has one switch statement.
+    // The real worker path (`unionMembers` RPC) is a gated end-to-end
+    // test in cofferdam-cli, same pattern as `worker_oracle_resolves_*`
+    // in type_host.rs.
+
+    use cofferdam_core::parser::{parse_into, ParsedView};
+    use cofferdam_core::{
+        Allocator, Check, CheckContext, Issue as CoreIssue, SourceFile, TypeOracle, UnionFacts,
+    };
+    use union_exhaustiveness_gap::UnionExhaustivenessGap;
+
+    struct FixedUnionOracle(Option<UnionFacts>);
+    impl TypeOracle for FixedUnionOracle {
+        fn type_at(&self, _f: &Path, _s: u32, _e: u32) -> Option<cofferdam_core::TypeFacts> {
+            None
+        }
+        fn union_members_at(&self, _f: &Path, _s: u32, _e: u32) -> Option<UnionFacts> {
+            self.0.clone()
+        }
+    }
+
+    fn union_facts(members: &[&str]) -> UnionFacts {
+        UnionFacts {
+            members: members.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn run_union_exhaustiveness(src: &str, oracle_result: Option<UnionFacts>) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let oracle = FixedUnionOracle(oracle_result);
+        let mut ctx = CheckContext::new(&file)
+            .with_parsed(&parsed)
+            .with_types(&oracle);
+        UnionExhaustivenessGap.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn missing_variant_no_default_is_flagged() {
+        let src = r#"
+            function area(shape: Shape) {
+              switch (shape.kind) {
+                case "circle": return 1;
+                case "square": return 2;
+              }
+            }
+        "#;
+        let issues =
+            run_union_exhaustiveness(src, Some(union_facts(&["circle", "square", "triangle"])));
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("triangle"));
+    }
+
+    #[test]
+    fn all_variants_handled_is_not_flagged() {
+        let src = r#"
+            function area(shape: Shape) {
+              switch (shape.kind) {
+                case "circle": return 1;
+                case "square": return 2;
+                case "triangle": return 3;
+              }
+            }
+        "#;
+        let issues =
+            run_union_exhaustiveness(src, Some(union_facts(&["circle", "square", "triangle"])));
+        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
+    }
+
+    #[test]
+    fn default_case_suppresses_finding_even_with_missing_variant() {
+        let src = r#"
+            function area(shape: Shape) {
+              switch (shape.kind) {
+                case "circle": return 1;
+                default: return 0;
+              }
+            }
+        "#;
+        let issues =
+            run_union_exhaustiveness(src, Some(union_facts(&["circle", "square", "triangle"])));
+        assert!(
+            issues.is_empty(),
+            "default case should suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn non_literal_union_discriminant_is_not_flagged() {
+        // Oracle returns None — the discriminant isn't a literal-only
+        // union (e.g. a plain `string`, or a union with a non-literal
+        // member) — the check must bail entirely.
+        let src = r#"
+            function f(x: string) {
+              switch (x) {
+                case "a": return 1;
+              }
+            }
+        "#;
+        let issues = run_union_exhaustiveness(src, None);
+        assert!(
+            issues.is_empty(),
+            "non-literal-union discriminant must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn skipped_entirely_without_an_oracle() {
+        let file = SourceFile::new(
+            PathBuf::from("test.ts"),
+            "function f(shape: Shape) { switch (shape.kind) { case \"circle\": return 1; } }"
+                .to_string(),
+        );
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        let issues = UnionExhaustivenessGap.run(&file, &mut ctx);
+        assert!(issues.is_empty(), "no oracle → no findings; got {issues:?}");
     }
 }

@@ -50,7 +50,7 @@ pub use options::{
 pub use parser::{parse_into, source_type_for, ParsedView};
 pub use source::{Language, SourceFile};
 pub use span_util::span_from_bytes;
-pub use types::{LiteralFacts, TypeFacts, TypeOracle};
+pub use types::{LiteralFacts, TypeFacts, TypeOracle, UnionFacts};
 pub use util::{looks_like_check_id, path_key};
 
 // Re-export the oxc bits checks will commonly reach for, so plugin and

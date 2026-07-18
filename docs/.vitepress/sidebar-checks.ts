@@ -28,6 +28,7 @@ export const checksItems = [
       { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },
       { text: 'OrphanExport', link: '/checks/Design.OrphanExport' },
       { text: 'ScriptedInvariant', link: '/checks/Design.ScriptedInvariant' },
+      { text: 'UnionExhaustivenessGap', link: '/checks/Design.UnionExhaustivenessGap' },
       { text: 'MissingPubDoc', link: '/checks/Rust.MissingPubDoc' },
     ],
   },

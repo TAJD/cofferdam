@@ -25,6 +25,7 @@ import {
   getOrCreateProject,
   typeAt as coreTypeAt,
   resolveLiteral as coreResolveLiteral,
+  unionMembers as coreUnionMembers,
 } from "./type-host-core.mjs";
 
 // State persisted across requests in this worker's lifetime. The
@@ -67,6 +68,9 @@ rl.on("line", async (line) => {
       writeResponse({ id, ok: true, result });
     } else if (method === "resolveLiteral") {
       const result = await handleResolveLiteral(params);
+      writeResponse({ id, ok: true, result });
+    } else if (method === "unionMembers") {
+      const result = await handleUnionMembers(params);
       writeResponse({ id, ok: true, result });
     } else {
       writeResponse({
@@ -216,6 +220,23 @@ async function handleResolveLiteral(params) {
   const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
   await ensureTsMorphLoaded(state, projectRoot);
   return coreResolveLiteral(state, tsconfigPath, file, startByte, endByte);
+}
+
+// Resolve the literal members of the union type at a byte span (CD-118).
+// params: { tsconfigPath, file, startByte, endByte }
+// result: { members: string[] } | null — see coreUnionMembers.
+async function handleUnionMembers(params) {
+  const { tsconfigPath, file, startByte, endByte } = params;
+  if (typeof tsconfigPath !== "string" || typeof file !== "string") {
+    const err = new Error("unionMembers requires tsconfigPath and file");
+    err.code = "internal";
+    throw err;
+  }
+  // See handleTypeAt — ensure ts-morph is loaded against this worker's
+  // configured project root before delegating.
+  const projectRoot = process.env.COFFERDAM_TYPE_HOST_PROJECT_ROOT ?? process.cwd();
+  await ensureTsMorphLoaded(state, projectRoot);
+  return coreUnionMembers(state, tsconfigPath, file, startByte, endByte);
 }
 
 // --- helpers ----------------------------------------------------------

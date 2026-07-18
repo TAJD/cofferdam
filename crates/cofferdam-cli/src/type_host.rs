@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle};
+use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle, UnionFacts};
 use serde::{Deserialize, Serialize};
 
 const HOST_SCRIPT: &str = include_str!("../scripts/type-host.mjs");
@@ -239,6 +239,30 @@ impl From<LiteralFactsWire> for LiteralFacts {
             is_nullable: w.is_nullable,
             is_empty_object: w.is_empty_object,
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnionMembersRpcParams<'a> {
+    tsconfig_path: &'a str,
+    file: &'a str,
+    start_byte: u32,
+    end_byte: u32,
+}
+
+/// Worker-side projection of `UnionFacts` (CD-118). Mapped into the core
+/// type by the oracle. A `null` JSON response (not a literal-only union)
+/// deserialises to `None` at the call site, not here.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnionFactsWire {
+    members: Vec<String>,
+}
+
+impl From<UnionFactsWire> for UnionFacts {
+    fn from(w: UnionFactsWire) -> Self {
+        UnionFacts { members: w.members }
     }
 }
 
@@ -513,6 +537,21 @@ impl TypeOracle for WorkerTypeOracle {
         let wire: Option<LiteralFactsWire> = worker
             .request_nullable(&id, "resolveLiteral", &params)
             .ok()?;
+        wire.map(Into::into)
+    }
+
+    fn union_members_at(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<UnionFacts> {
+        let file_fwd = file.to_string_lossy().replace('\\', "/");
+        let params = UnionMembersRpcParams {
+            tsconfig_path: &self.tsconfig_path,
+            file: &file_fwd,
+            start_byte,
+            end_byte,
+        };
+        let id = self.next_id();
+        let mut worker = self.next_worker().lock().ok()?;
+        let wire: Option<UnionFactsWire> =
+            worker.request_nullable(&id, "unionMembers", &params).ok()?;
         wire.map(Into::into)
     }
 }

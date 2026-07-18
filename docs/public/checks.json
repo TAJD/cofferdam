@@ -257,6 +257,22 @@
       ]
     },
     {
+      "id": "Design.UnionExhaustivenessGap",
+      "category": "Design",
+      "base_priority": 8,
+      "default_severity": "Medium",
+      "explanation": "A switch over a discriminated union's tag doesn't handle every variant and has no default case — adding a new variant later can silently fall through unhandled.",
+      "body": "---\nid: Design.UnionExhaustivenessGap\ncategory: Design\nbase_priority: 8\ndefault_severity: Medium\noptions: []\n---\n\nA `switch` dispatches over a discriminated union's tag (a literal-typed property like `shape.kind`) but doesn't handle every variant, and has no `default` case. Adding a new variant to the union later silently falls through unhandled instead of failing loudly — the whole point of a discriminated union is that the compiler (and a reader) can trust every case is covered.\n\nType-aware: resolves the discriminant's type through the ts-morph type host. Only fires when the discriminant's type is a literal-only union (every member is a string/number/boolean literal) — a plain `string` discriminant, or a union that includes non-literal members, is skipped entirely rather than guessed at.\n\n```ts\ntype Shape =\n  | { kind: \"circle\"; radius: number }\n  | { kind: \"square\"; side: number }\n  | { kind: \"triangle\"; base: number; height: number };\n\nfunction area(shape: Shape) {\n  switch (shape.kind) {          // flagged — \"triangle\" isn't handled, no default\n    case \"circle\":\n      return Math.PI * shape.radius ** 2;\n    case \"square\":\n      return shape.side ** 2;\n  }\n}\n```\n\n```ts\n// fix: handle every variant, or add an explicit default\nfunction area(shape: Shape) {\n  switch (shape.kind) {\n    case \"circle\":\n      return Math.PI * shape.radius ** 2;\n    case \"square\":\n      return shape.side ** 2;\n    case \"triangle\":\n      return (shape.base * shape.height) / 2;\n  }\n}\n```\n\nA `default` case of any content is treated as an intentional catch-all and suppresses the finding — this doesn't require the `const _exhaustive: never = shape` idiom (which `tsc` itself already flags in strict mode where applicable); requiring it here would double-report what the compiler already catches.\n\nScoped to `switch` statements only in this version — exhaustive `if`/`else if` chains over a discriminant are a known gap, not yet detected.\n\n```toml\n# cofferdam.toml\n[checks.\"Design.UnionExhaustivenessGap\"]\nseverity = \"low\"   # demote if your project relies heavily on partial handling by convention\n```\n",
+      "requires_types": true,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file",
+        "type-aware"
+      ]
+    },
+    {
       "id": "Html.MissingLangAttribute",
       "category": "Warning",
       "base_priority": 12,

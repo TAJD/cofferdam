@@ -26,6 +26,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.MaxParameters`](Design.MaxParameters.md) `file` `advisable` — Functions with too many parameters are hard to call correctly. Pass an options object instead.
 - [`Design.OrphanExport`](Design.OrphanExport.md) `graph` `advisable` — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
 - [`Design.ScriptedInvariant`](Design.ScriptedInvariant.md) `graph` — A scripted invariant declared in cofferdam.invariants.toml under [invariants.scripted] is violated for this file.
+- [`Design.UnionExhaustivenessGap`](Design.UnionExhaustivenessGap.md) `file` `type-aware` — A switch over a discriminated union's tag doesn't handle every variant and has no default case — adding a new variant later can silently fall through unhandled.
 - [`Rust.MissingPubDoc`](Rust.MissingPubDoc.md) `file` — Public items in a library crate compose the published API surface. Document each `pub fn` / `pub struct` / `pub enum` / `pub trait` with a `///` doc comment so consumers can understand what to call.
 
 ## Readability

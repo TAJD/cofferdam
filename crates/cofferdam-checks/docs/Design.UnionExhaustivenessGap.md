@@ -1,0 +1,51 @@
+---
+id: Design.UnionExhaustivenessGap
+category: Design
+base_priority: 8
+default_severity: Medium
+options: []
+---
+
+A `switch` dispatches over a discriminated union's tag (a literal-typed property like `shape.kind`) but doesn't handle every variant, and has no `default` case. Adding a new variant to the union later silently falls through unhandled instead of failing loudly — the whole point of a discriminated union is that the compiler (and a reader) can trust every case is covered.
+
+Type-aware: resolves the discriminant's type through the ts-morph type host. Only fires when the discriminant's type is a literal-only union (every member is a string/number/boolean literal) — a plain `string` discriminant, or a union that includes non-literal members, is skipped entirely rather than guessed at.
+
+```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(shape: Shape) {
+  switch (shape.kind) {          // flagged — "triangle" isn't handled, no default
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.side ** 2;
+  }
+}
+```
+
+```ts
+// fix: handle every variant, or add an explicit default
+function area(shape: Shape) {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.side ** 2;
+    case "triangle":
+      return (shape.base * shape.height) / 2;
+  }
+}
+```
+
+A `default` case of any content is treated as an intentional catch-all and suppresses the finding — this doesn't require the `const _exhaustive: never = shape` idiom (which `tsc` itself already flags in strict mode where applicable); requiring it here would double-report what the compiler already catches.
+
+Scoped to `switch` statements only in this version — exhaustive `if`/`else if` chains over a discriminant are a known gap, not yet detected.
+
+```toml
+# cofferdam.toml
+[checks."Design.UnionExhaustivenessGap"]
+severity = "low"   # demote if your project relies heavily on partial handling by convention
+```

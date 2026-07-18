@@ -16,6 +16,26 @@ plugin `AstView`/`LineView` surface is the same shape used for TypeScript —
 [Author guide](/plugin-sdk-guide#html-findall-—-flag-img-with-no-alt-cd-84)
 and demonstrated end-to-end in [SEO-grade checking](/seo-checking).
 
+## Markdown / MDX (plugin surface, opt-in)
+
+`.md`/`.mdx` files aren't discovered by default — walking every README and
+changelog in a repo on every run would inflate the file walk for projects
+that never asked for it. A project that wants plugin checks over text
+content (blog posts, docs) opts in per-project:
+
+```toml
+# cofferdam.toml
+[engine]
+extra_extensions = ["md", "mdx"]
+```
+
+Markdown files get no whole-file parse (`file.ast` is `null` on the plugin
+surface, matching Astro's non-goal), but `file.text` and line-scan
+`LineView`s are populated, so Pattern-A regex/line-based plugin checks
+(frontmatter length, heading structure, link density) work the same way
+they do for `.astro`. No built-in check targets Markdown — this is a
+plugin-only surface.
+
 ## Rust (second language, dogfood)
 
 A Rust adapter ships under `crates/cofferdam-rust`, exercising the engine's per-language dispatch (cd-91zc). Three checks today:

@@ -1378,11 +1378,24 @@ fn run_check(args: CheckArgs) -> ExitCode {
         resolve_baseline_path(baseline_path.as_deref())
     };
 
-    let opts = DiscoveryOptions {
+    // Loaded before discovery (rather than after, as in earlier
+    // revisions of this function) so `[engine] extra_extensions`
+    // (CD-68) can widen `opts.extensions` before the walk runs.
+    let (project_config, resolved_config_path) =
+        match resolve_and_load_config(config_path.as_deref(), no_config) {
+            Ok(pair) => pair,
+            Err(()) => return ExitCode::from(2),
+        };
+
+    let mut opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
         include_hidden: hidden,
         ..DiscoveryOptions::default()
     };
+    if let Some(cfg) = project_config.as_ref() {
+        opts.extensions
+            .extend(cfg.engine_extra_extensions.iter().cloned());
+    }
     let timing = time_checks.then(TimingCollector::new);
     let discover_start = std::time::Instant::now();
     let files = match discover(&roots, &opts) {
@@ -1478,12 +1491,6 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // never trigger the gate regardless of severity, so the new-only
     // semantic is implicit. Keep the flag for explicitness in CI scripts.
     let _ = fail_on_new;
-
-    let (project_config, resolved_config_path) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
-            Ok(pair) => pair,
-            Err(()) => return ExitCode::from(2),
-        };
 
     let registered: Vec<&str> = all_builtins().iter().map(|c| c.meta().id).collect();
     if let Some(cfg) = project_config.as_ref() {
@@ -2404,11 +2411,15 @@ fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
             Err(()) => return ExitCode::from(2),
         };
 
-    let opts = DiscoveryOptions {
+    let mut opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
         include_hidden: hidden,
         ..DiscoveryOptions::default()
     };
+    if let Some(cfg) = project_config.as_ref() {
+        opts.extensions
+            .extend(cfg.engine_extra_extensions.iter().cloned());
+    }
     let files = match discover(&roots, &opts) {
         Ok(f) => f,
         Err(e) => {
@@ -2616,11 +2627,15 @@ fn run_baseline_prune(args: BaselinePruneArgs) -> ExitCode {
             Ok(pair) => pair,
             Err(()) => return ExitCode::from(2),
         };
-    let opts = DiscoveryOptions {
+    let mut opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
         include_hidden: hidden,
         ..DiscoveryOptions::default()
     };
+    if let Some(cfg) = project_config.as_ref() {
+        opts.extensions
+            .extend(cfg.engine_extra_extensions.iter().cloned());
+    }
     let files = match discover(&roots, &opts) {
         Ok(f) => f,
         Err(e) => {
@@ -2801,11 +2816,13 @@ fn run_baseline_ratchet(args: BaselineRatchetArgs) -> ExitCode {
     } else {
         paths
     };
-    let opts = DiscoveryOptions {
+    let mut opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
         include_hidden: hidden,
         ..DiscoveryOptions::default()
     };
+    opts.extensions
+        .extend(project_config.engine_extra_extensions.iter().cloned());
     let files = match discover(&roots, &opts) {
         Ok(f) => f,
         Err(e) => {

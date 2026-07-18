@@ -223,16 +223,34 @@ fn compute_duplicates(shapes: &[TypeShape]) -> Vec<Issue> {
             .map(|s| format!("`{}` in {}", s.name, s.file.display()))
             .collect::<Vec<_>>()
             .join(", ");
-        issues.push(Issue {
-            check_id: META.id.to_string(),
-            message: format!(
+        let plural = if others.len() == 1 { "" } else { "s" };
+        // A group can only reach here with zero declared fields via the
+        // shared-extends-only signal (similarity() only returns 1.0 for
+        // an empty-fields pair when both share a non-empty extends) — so
+        // an empty-fields anchor means every member here shares a base,
+        // not a field shape, and the message should say so.
+        let message = if anchor.fields.is_empty() {
+            format!(
+                "`{}` extends the same base (`{}`) as {} other type{}: {} — consider a shared type",
+                anchor.name,
+                anchor.extends.join(", "),
+                others.len(),
+                plural,
+                other_names
+            )
+        } else {
+            format!(
                 "`{}` ({} fields) shares a near-identical field shape with {} other type{}: {} — consider a shared type",
                 anchor.name,
                 anchor.fields.len(),
                 others.len(),
-                if others.len() == 1 { "" } else { "s" },
+                plural,
                 other_names
-            ),
+            )
+        };
+        issues.push(Issue {
+            check_id: META.id.to_string(),
+            message,
             file: anchor.file.clone(),
             location: Location::from_span(&anchor.file, anchor.span),
             priority: Priority(META.base_priority),
@@ -296,7 +314,13 @@ impl<'a> Visit<'a> for ShapeCollector<'a> {
 }
 
 /// Raw source text of each heritage clause's expression (e.g. `Base` in
-/// `extends Base`), sorted for order-independent comparison.
+/// `extends Base`), sorted for order-independent comparison. Only the
+/// callee expression is sliced, not `heritage.type_arguments` — so
+/// `extends Base<string>` and `extends Base<number>` (or plain `Base`)
+/// compare as the same base. Harmless for the field-ratio path (the
+/// generic's own fields still have to match), but a zero-field extender
+/// of `Base<string>` and one of `Base<number>` would be treated as
+/// sharing a base when they may not.
 fn extends_names(file: &SourceFile, decl: &TSInterfaceDeclaration<'_>) -> Vec<String> {
     let mut names: Vec<String> = decl
         .extends

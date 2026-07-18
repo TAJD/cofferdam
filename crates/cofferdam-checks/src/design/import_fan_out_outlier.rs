@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use cofferdam_core::graph::{
@@ -6,9 +6,11 @@ use cofferdam_core::graph::{
 };
 use cofferdam_core::path_key;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, Priority, Severity,
-    SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
+    Priority, Severity, SourceFile, Span,
 };
+
+use super::package_entry_point::{is_package_entry_point, EntryPointCache};
 
 /// Below this many non-excluded files in the project, mean/stddev are
 /// statistically meaningless — skip entirely.
@@ -44,6 +46,15 @@ fn is_node_modules_path(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "node_modules")
 }
 
+/// Every analyzed file's path, recorded during `run()`. The import/export
+/// graph alone only surfaces files that appear as an import source, an
+/// export site, or a resolved import target — a file with neither (a
+/// side-effect-only script, `export {}`) would otherwise never enter the
+/// statistical population even though its fan-in/fan-out of 0 is a
+/// legitimate data point.
+static ALL_FILES: CorpusKey<HashSet<PathBuf>> =
+    CorpusKey::new("Design.ImportFanOutOutlier.all_files");
+
 const META: CheckMeta = CheckMeta {
     id: "Design.ImportFanOutOutlier",
     category: Category::Design,
@@ -57,7 +68,10 @@ const META: CheckMeta = CheckMeta {
     consistency: false,
     options: &[],
     autofix: false,
-    pure_run: true,
+    // Writes every analyzed file's path into ALL_FILES during run(); a
+    // cache-hit skip of run() would drop that file from the population
+    // (CD-133), mirroring Design.DuplicateTypeShape's pure_run rationale.
+    pure_run: false,
 };
 
 /// `Design.ImportFanOutOutlier` — finalize-stage check (CD-130) that
@@ -67,14 +81,17 @@ const META: CheckMeta = CheckMeta {
 /// in-project (resolved) import edges only — external package imports
 /// don't count toward either metric.
 ///
-/// Scope (v1): files matching `HUB_BASENAMES` (barrel `index.*`,
-/// `types.*`) are excluded entirely, both from being flagged and from
-/// the statistical population, since a real aggregator's legitimately
+/// Scope: files matching `HUB_BASENAMES` (barrel `index.*`, `types.*`)
+/// or resolving as the nearest `package.json`'s declared entry point
+/// (CD-133, same resolution `Design.BarrelReexportBloat` uses) are
+/// excluded entirely, both from being flagged and from the statistical
+/// population, since a real aggregator's/entry-point's legitimately
 /// high count would otherwise inflate the mean/stddev for every other
-/// file. A project with a differently-named central hub (e.g.
-/// `container.ts`) isn't covered by this exclusion and may be flagged.
-/// Below `MIN_FILES` non-hub files, or when a metric's stddev is 0
-/// (every file has the same count), nothing is flagged for that metric.
+/// file. A differently-named central hub not covered by either
+/// exclusion (e.g. an internal `container.ts` never referenced from
+/// `package.json`) may still be flagged. Below `MIN_FILES` non-excluded
+/// files, or when a metric's stddev is 0 (every file has the same
+/// count), nothing is flagged for that metric.
 pub struct ImportFanOutOutlier;
 
 impl Check for ImportFanOutOutlier {
@@ -82,14 +99,24 @@ impl Check for ImportFanOutOutlier {
         &META
     }
 
-    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&ALL_FILES, |slot, path| {
+            slot.remove(path);
+        });
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        ctx.corpus.with_slot(&ALL_FILES, |slot| {
+            slot.insert(file.path.clone());
+        });
         Vec::new()
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
-        compute_outliers(&imports, &exports)
+        let all_files: HashSet<PathBuf> = ctx.corpus.with_slot(&ALL_FILES, |slot| slot.clone());
+        compute_outliers(&imports, &exports, &all_files)
     }
 }
 
@@ -121,12 +148,20 @@ fn mean_stddev(values: &[u32]) -> (f64, f64) {
     (mean, variance.sqrt())
 }
 
-fn compute_outliers(imports: &[ImportRecord], exports: &[ExportRecord]) -> Vec<Issue> {
+fn compute_outliers(
+    imports: &[ImportRecord],
+    exports: &[ExportRecord],
+    all_files: &HashSet<PathBuf>,
+) -> Vec<Issue> {
     // Universe: any in-project file (mirrors Design.ImportCycle's
-    // construction) — every file that either made an import or exports
-    // something. Files with zero fan-in and zero fan-out are still part
-    // of the population (their count is legitimately 0).
+    // construction), plus every file recorded via ALL_FILES (CD-133) so a
+    // file with neither an import nor an export of its own — invisible to
+    // both graph slots — still enters the population with fan-in/fan-out
+    // of 0, a legitimate data point rather than an absence.
     let mut by_key: HashMap<String, FileStats> = HashMap::new();
+    for path in all_files {
+        ensure_entry(&mut by_key, path);
+    }
     for imp in imports {
         ensure_entry(&mut by_key, &imp.from_file);
     }
@@ -150,15 +185,21 @@ fn compute_outliers(imports: &[ImportRecord], exports: &[ExportRecord]) -> Vec<I
         by_key.get_mut(&path_key(resolved)).unwrap().fan_in += 1;
     }
 
-    // Exclude hub files from the population entirely — their inclusion
-    // would inflate the mean/stddev for every other file. Also exclude
-    // node_modules paths defensively at the population level, not just
-    // in the edge-counting loop above: a vendor file could otherwise
-    // still enter `by_key` via the from_file/export-site seeding loops
-    // if it were ever parsed as a source file (e.g. --no-ignore runs).
+    // Exclude hub files and package.json-declared entry points from the
+    // population entirely — their inclusion would inflate the mean/stddev
+    // for every other file. Also exclude node_modules paths defensively
+    // at the population level, not just in the edge-counting loop above:
+    // a vendor file could otherwise still enter `by_key` via the
+    // from_file/export-site seeding loops if it were ever parsed as a
+    // source file (e.g. --no-ignore runs).
+    let mut entry_point_cache: EntryPointCache = HashMap::new();
     let population: Vec<&FileStats> = by_key
         .values()
-        .filter(|s| !is_hub_file(&s.display) && !is_node_modules_path(&s.display))
+        .filter(|s| {
+            !is_hub_file(&s.display)
+                && !is_node_modules_path(&s.display)
+                && !is_package_entry_point(&s.display, &mut entry_point_cache)
+        })
         .collect();
     if population.len() < MIN_FILES {
         return Vec::new();

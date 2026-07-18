@@ -16,6 +16,7 @@ mod layer_violation;
 mod max_parameters;
 mod missing_test_file;
 mod orphan_export;
+mod package_entry_point;
 mod readonly_array_param;
 mod scripted_invariant;
 mod union_exhaustiveness_gap;
@@ -1576,6 +1577,78 @@ function total(items) {
         assert!(
             issues.is_empty(),
             "a node_modules-resolved target must not be flagged, nor skew the population; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn differently_named_entry_point_is_excluded_via_package_json() {
+        // Same god+14-leaves shape as `fan_out_outlier_is_flagged` (which
+        // *is* flagged), but the "god" file is named `container.ts` — not
+        // in HUB_BASENAMES — and resolves as the nearest package.json's
+        // `main` entry point (CD-133). Must be excluded entirely, the
+        // same as an index.ts hub.
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join(format!(
+            "cofferdam-test-fanout-entry-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut pkg = std::fs::File::create(tmp.join("package.json")).unwrap();
+        write!(pkg, r#"{{"main": "./container.ts"}}"#).unwrap();
+        drop(pkg);
+
+        let container = tmp.join("container.ts");
+        let imports = god_and_leaves_imports(&container, "leaf", 14);
+        let issues = run_fan_out_outlier(imports);
+        std::fs::remove_dir_all(&tmp).ok();
+        assert!(
+            issues.is_empty(),
+            "a differently-named file resolved as package.json's main entry point must be \
+             excluded entirely, same as an index.ts hub; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn isolated_file_with_no_edges_still_enters_population() {
+        // Same god+14-leaves shape as `fan_out_outlier_is_flagged` (n=15,
+        // mean 14/15 ~= 0.9), plus 5 additional files with neither an
+        // import nor an export of their own — invisible to
+        // GRAPH_IMPORTS/GRAPH_EXPORTS, so only run()'s ALL_FILES corpus
+        // write (CD-133) can surface them. If they enter the population,
+        // the reported mean must shift to reflect n=20 (14/20 = 0.7)
+        // rather than n=15.
+        let god = PathBuf::from("/p/god.ts");
+        let imports = god_and_leaves_imports(&god, "leaf", 14);
+
+        let corpus = CorpusIndex::new();
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(imports));
+        for i in 0..5 {
+            let path = PathBuf::from(format!("/p/isolated{i}.ts"));
+            let file = SourceFile::new(path, String::new());
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, &file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(&file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            ImportFanOutOutlier.run(&file, &mut ctx);
+        }
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let issues = ImportFanOutOutlier.finalize(&mut finalize_ctx);
+
+        assert_eq!(
+            issues.len(),
+            1,
+            "god file must still be flagged for fan-out; got {issues:?}"
+        );
+        assert!(
+            issues[0].message.contains("mean 0.7"),
+            "population must include the 5 isolated files (n=20, mean 14/20=0.7), not just the \
+             15 graph-derived files (n=15, mean 14/15=0.9); got: {}",
+            issues[0].message
         );
     }
 

@@ -14,6 +14,7 @@ mod cyclomatic_complexity;
 mod dead_export;
 mod duplicate_block;
 mod long_and_complex;
+mod mixed_throw_and_return_error;
 mod mutated_parameter;
 mod prefer_array_method_over_loop;
 mod prefer_const_over_let;
@@ -31,6 +32,7 @@ pub use cyclomatic_complexity::{
 pub use dead_export::DeadExport;
 pub use duplicate_block::DuplicateBlock;
 pub use long_and_complex::LongAndComplex;
+pub use mixed_throw_and_return_error::MixedThrowAndReturnError;
 pub use mutated_parameter::MutatedParameter;
 pub use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
 pub use prefer_const_over_let::PreferConstOverLet;
@@ -788,5 +790,111 @@ export function logRequest(name: string) {
 requestCount = 1;";
         let issues = run_purity_heuristic(src, true);
         assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    // ─── Refactor.MixedThrowAndReturnError (CD-124) ─────────────────────
+
+    use mixed_throw_and_return_error::MixedThrowAndReturnError;
+
+    fn run_mixed_throw_and_return_error(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        MixedThrowAndReturnError.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn throw_and_error_return_in_distinct_branches_is_flagged() {
+        let src = "\
+function parseConfig(input: string) {
+  if (!input) {
+    throw new Error(\"input required\");
+  }
+  if (!input.length) {
+    return { error: \"invalid config\" };
+  }
+  return input;
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn error_return_only_no_throw_is_not_flagged() {
+        let src = "function loadResult() { return { error: null, value: 42 }; }";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "no throw anywhere must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn throw_only_no_error_return_is_not_flagged() {
+        let src = "function f(x: number) { if (x < 0) { throw new Error(\"bad\"); } return x; }";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "no error-shaped return anywhere must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn throw_and_error_return_in_same_block_is_not_flagged() {
+        let src = "\
+function overlapping(x: number) {
+  if (x < 0) {
+    throw new Error(\"negative\");
+    return { error: \"unreachable\" };
+  }
+  return x * 2;
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "throw and the only error-shaped return sharing a block is dead code, not a \
+             competing idiom; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn unrelated_object_shape_is_not_flagged() {
+        let src = "\
+function f(x: number) {
+  if (x < 0) {
+    throw new Error(\"bad\");
+  }
+  return { total: x };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "an object return without an error/ok/success field must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_throw_does_not_leak_into_outer_function() {
+        let src = "\
+function outer(x: number) {
+  function inner() {
+    throw new Error(\"inner failure\");
+  }
+  inner();
+  return { error: \"outer failure\" };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "a throw inside a nested function is that function's own scope, not outer's; \
+             got {issues:?}"
+        );
+        // The nested function itself has neither an error-shaped return nor
+        // a second throw, so it isn't independently flagged either.
     }
 }

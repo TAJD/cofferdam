@@ -50,6 +50,7 @@ export const checksItems = [
       { text: 'DeadExport', link: '/checks/Refactor.DeadExport' },
       { text: 'DuplicateBlock', link: '/checks/Refactor.DuplicateBlock' },
       { text: 'LongAndComplex', link: '/checks/Refactor.LongAndComplex' },
+      { text: 'MixedThrowAndReturnError', link: '/checks/Refactor.MixedThrowAndReturnError' },
       { text: 'MutatedParameter', link: '/checks/Refactor.MutatedParameter' },
       { text: 'PreferArrayMethodOverLoop', link: '/checks/Refactor.PreferArrayMethodOverLoop' },
       { text: 'PreferConstOverLet', link: '/checks/Refactor.PreferConstOverLet' },

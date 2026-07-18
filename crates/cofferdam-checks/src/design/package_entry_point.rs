@@ -248,6 +248,15 @@ mod tests {
     }
 
     #[test]
+    fn with_src_sibling_swaps_only_the_first_alias_component() {
+        // "dist/dist/index.js" contains two alias components — only the
+        // FIRST is swapped, matching the doc comment's guarantee.
+        let path = Path::new("/p/dist/dist/index.js");
+        let swapped = with_src_sibling(path).expect("path contains a build-dir alias component");
+        assert_eq!(swapped, PathBuf::from("/p/src/dist/index.js"));
+    }
+
+    #[test]
     fn dist_entry_point_matches_parallel_src_sibling() {
         // package.json's main points at a compiled dist/ artifact; the
         // analyzed source lives in a parallel src/ tree. Without the

@@ -137,7 +137,15 @@ fn compute_bloated_barrels(exports: &[ExportRecord]) -> Vec<Issue> {
         // counting real exports anywhere in the barrel's own subtree
         // instead of skipping outright. Only engaged when the narrow
         // same-directory count is 0, so an ordinary same-directory
-        // barrel's ratio (already validated) is unaffected.
+        // barrel's ratio (already validated) is unaffected. This pools a
+        // second, wider-denominator ratio into the same mean/stddev as
+        // the narrow same-directory ratios above; the wider denominator
+        // only ever shrinks the resulting ratio, so it biases toward
+        // false negatives (a real mega-barrel going unflagged), never
+        // false positives. A root-level barrel with no same-directory
+        // siblings falls all the way back to the whole project's real
+        // export count as its denominator, diluting the ratio further —
+        // conservative for the same reason.
         let sibling_real = if sibling_real == 0 {
             by_file
                 .iter()

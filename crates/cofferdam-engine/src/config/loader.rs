@@ -67,6 +67,14 @@ pub struct EngineSection {
     /// means enabled (the default).
     #[serde(default)]
     pub type_aware: Option<bool>,
+    /// `extra_extensions = ["md", "mdx"]` widens file discovery beyond
+    /// `DEFAULT_EXTENSIONS` (CD-68). Opt-in per project so a text
+    /// corpus (blog content, docs) that wants plugin checks over
+    /// `.md`/`.mdx` files doesn't inflate every other repo's walk by
+    /// default. Leading dots are stripped if present; empty entries are
+    /// ignored.
+    #[serde(default)]
+    pub extra_extensions: Vec<String>,
 }
 
 /// Walk up from `start` looking for `cofferdam.toml`. Stops at the
@@ -183,6 +191,15 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
 
     let overrides = compile_overrides(path, doc.overrides)?;
 
+    let engine_extra_extensions = doc
+        .engine
+        .extra_extensions
+        .iter()
+        .map(|e| e.trim_start_matches('.'))
+        .filter(|e| !e.is_empty())
+        .map(str::to_string)
+        .collect();
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
@@ -193,6 +210,7 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         engine_type_aware: doc.engine.type_aware,
         overrides,
         budgets: doc.budgets,
+        engine_extra_extensions,
     })
 }
 

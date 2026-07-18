@@ -748,6 +748,28 @@ pub fn run_plugins_with_sources(
                             .collect();
                         (line_views, None)
                     }
+                    // Markdown/MDX (CD-68): same shape as Astro — no
+                    // whole-file parse, but Pattern-A line-scan plugin
+                    // checks (frontmatter length, heading structure,
+                    // link density) still need real line text/spans.
+                    Language::Markdown => {
+                        let line_views = cofferdam_core::Lines::plain(text)
+                            .map(|lv| ManifestLineView {
+                                line_no: lv.line_no,
+                                text: lv.text.to_string(),
+                                is_comment: false,
+                                is_doc_comment: false,
+                                is_string_literal: false,
+                                string_literal_ranges: Vec::new(),
+                                is_jsx_text: false,
+                                is_pragma: false,
+                                is_tag: false,
+                                is_text: false,
+                                line_start: lv.line_start,
+                            })
+                            .collect();
+                        (line_views, None)
+                    }
                     // Rust, unrecognised: no whole-file parse for
                     // plugins today (matches the engine's catch-all —
                     // no built-in check declares Rust for the plugin

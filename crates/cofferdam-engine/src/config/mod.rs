@@ -90,6 +90,11 @@ pub struct ProjectConfig {
     /// when no `requires_types` check is registered. Read via
     /// [`ProjectConfig::type_aware_enabled`].
     pub engine_type_aware: Option<bool>,
+    /// `[engine] extra_extensions` — extra file extensions (without
+    /// leading dot) discovery should walk beyond `DEFAULT_EXTENSIONS`
+    /// (CD-68). Empty when not set. The CLI merges these into
+    /// `DiscoveryOptions::extensions` before walking.
+    pub engine_extra_extensions: Vec<String>,
     /// `[[overrides]]` blocks — per-path-glob check config (cd-m5tu).
     /// Each block scopes `limit`/`severity`/`disabled` (and any other
     /// per-check option) to files matching its `paths` globs, while
@@ -301,6 +306,22 @@ type_aware = true
     }
 
     #[test]
+    fn engine_extra_extensions_defaults_to_empty() {
+        let cfg = loader::parse(Path::new("test.toml"), "").expect("parse");
+        assert!(cfg.engine_extra_extensions.is_empty());
+    }
+
+    #[test]
+    fn engine_extra_extensions_parses_and_strips_leading_dots() {
+        let raw = r#"
+[engine]
+extra_extensions = ["md", ".mdx", ""]
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        assert_eq!(cfg.engine_extra_extensions, vec!["md", "mdx"]);
+    }
+
+    #[test]
     fn engine_unknown_keys_are_ignored() {
         // Forward-compat: an unrecognised [engine] key must not fail the
         // parse (the table grows additively).
@@ -492,6 +513,7 @@ severity = 5
             engine_type_aware: None,
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
+            engine_extra_extensions: Vec::new(),
         };
 
         let opts = options_for(
@@ -528,6 +550,7 @@ severity = 5
             engine_type_aware: None,
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
+            engine_extra_extensions: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -549,6 +572,7 @@ severity = 5
             engine_type_aware: None,
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
+            engine_extra_extensions: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -627,6 +651,7 @@ severity = 5
             engine_type_aware: None,
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
+            engine_extra_extensions: Vec::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

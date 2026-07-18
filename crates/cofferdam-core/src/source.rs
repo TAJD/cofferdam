@@ -25,6 +25,13 @@ pub enum Language {
     Astro,
     /// HTML — handled by tree-sitter-html via `cofferdam-html` (CD-83).
     Html,
+    /// Markdown / MDX — not parsed as a whole file (CD-68). Text-corpus
+    /// content (blog posts, docs) reaches plugin checks as raw
+    /// `file.text` + `LineView`s with no AST (`ast: null` on the wire);
+    /// no built-in check declares this language. Discovery only walks
+    /// `.md`/`.mdx` files when a project opts in via `cofferdam.toml`
+    /// `[engine] extra_extensions`.
+    Markdown,
 }
 
 impl Language {
@@ -37,6 +44,7 @@ impl Language {
                 "rs" => Language::Rust,
                 "astro" => Language::Astro,
                 "html" | "htm" => Language::Html,
+                "md" | "mdx" => Language::Markdown,
                 "ts" | "tsx" | "js" | "jsx" | "cjs" | "mjs" | "mts" | "cts" => Language::TypeScript,
                 _ => Language::TypeScript,
             },
@@ -82,5 +90,25 @@ impl SourceFile {
             .split('\n')
             .enumerate()
             .map(|(i, l)| (i as u32 + 1, l.trim_end_matches('\r')))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_path_maps_markdown_extensions() {
+        assert_eq!(Language::from_path(Path::new("a.md")), Language::Markdown);
+        assert_eq!(Language::from_path(Path::new("a.mdx")), Language::Markdown);
+        assert_eq!(Language::from_path(Path::new("a.MD")), Language::Markdown);
+    }
+
+    #[test]
+    fn from_path_other_extensions_unaffected() {
+        assert_eq!(Language::from_path(Path::new("a.ts")), Language::TypeScript);
+        assert_eq!(Language::from_path(Path::new("a.rs")), Language::Rust);
+        assert_eq!(Language::from_path(Path::new("a.astro")), Language::Astro);
+        assert_eq!(Language::from_path(Path::new("a.html")), Language::Html);
     }
 }

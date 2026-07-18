@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `VariableDeclaration` AST node kind in the check-sdk plugin surface — plugins can now `findAll("VariableDeclaration")` to see `const`/`let`/`var`-bound identifiers and their init expressions, not just `function` declarations. New example plugin `examples-plugins/no-banned-const` demonstrates flagging a `const`-bound banned identifier (CD-78).
+- `.md`/`.mdx` files can now reach plugin checks: opt in with `[engine] extra_extensions = ["md", "mdx"]` in `cofferdam.toml` to widen discovery beyond the default extension list. Markdown gets no whole-file parse (`file.ast` is `null`, mirroring Astro), but `file.text` and line-scan `LineView`s are populated for Pattern-A regex/line-based plugin checks. No built-in check targets Markdown (CD-68).
 
 ### Fixed
 - A `cofferdam-ignore` comment placed at the *related* (non-primary) occurrence of a paired `Refactor.DuplicateBlock` finding now suppresses it, matching a comment at the primary occurrence — previously only the primary side had any effect (CD-77).

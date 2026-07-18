@@ -90,6 +90,7 @@ export default withMermaid(defineConfig({
         text: 'Use cases',
         items: [
           { text: 'SEO-grade checking', link: '/seo-checking' },
+          { text: 'Cross-file checks', link: '/cross-file-checks' },
         ],
       },
       {

@@ -4,6 +4,7 @@
 use std::path::Path;
 
 mod boundary_frozen;
+mod class_as_data_bag;
 mod duplicate_export_name;
 mod import_cycle;
 mod invariant_violation;
@@ -14,6 +15,7 @@ mod scripted_invariant;
 mod union_exhaustiveness_gap;
 
 pub use boundary_frozen::BoundaryFrozen;
+pub use class_as_data_bag::ClassAsDataBag;
 pub use duplicate_export_name::DuplicateExportName;
 pub use import_cycle::ImportCycle;
 pub use invariant_violation::InvariantViolation;
@@ -716,6 +718,153 @@ mod tests {
         assert!(
             issues.is_empty(),
             "non-literal-union discriminant must not flag; got {issues:?}"
+        );
+    }
+
+    // ─── Design.ClassAsDataBag (CD-121) ─────────────────────────────────
+
+    use class_as_data_bag::ClassAsDataBag;
+
+    fn run_class_as_data_bag(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        ClassAsDataBag.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn field_only_constructor_is_flagged() {
+        let src = "\
+class Point {
+  x: number;
+  y: number;
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("Point"));
+    }
+
+    #[test]
+    fn no_constructor_plain_fields_is_flagged() {
+        let src = "\
+class Bare {
+  a: number = 0;
+  b: string = \"\";
+}";
+        let issues = run_class_as_data_bag(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn parameter_properties_are_not_flagged() {
+        let src = "\
+class ConfigService {
+  constructor(private readonly apiUrl: string) {}
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "parameter properties must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn implements_clause_is_not_flagged() {
+        let src = "\
+interface Shape { area(): number; }
+class Square implements Shape {
+  constructor(public side: number) {}
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "implements clause must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn extends_builtin_is_not_flagged() {
+        let src = "\
+class NotFoundError extends Error {
+  constructor(public id: string) {
+    super(`not found: ${id}`);
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a superclass (even a built-in) must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn decorated_class_is_not_flagged() {
+        let src = "\
+@Injectable()
+class Config {
+  constructor(public apiUrl: string) {}
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a class decorator must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn constructor_with_validation_is_not_flagged() {
+        let src = "\
+class Validated {
+  x: number;
+  constructor(x: number) {
+    if (x < 0) {
+      throw new Error(\"x must be non-negative\");
+    }
+    this.x = x;
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "constructor logic beyond field assignment must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn class_with_real_method_is_not_flagged() {
+        let src = "\
+class Counter {
+  count: number;
+  constructor() {
+    this.count = 0;
+  }
+  increment(): void {
+    this.count += 1;
+  }
+}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a real method beyond the constructor must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn empty_class_with_no_fields_is_not_flagged() {
+        let src = "class Marker {}";
+        let issues = run_class_as_data_bag(src);
+        assert!(
+            issues.is_empty(),
+            "a genuinely empty class must not flag (marker-type pattern); got {issues:?}"
         );
     }
 

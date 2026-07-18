@@ -19,6 +19,7 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 ## Design
 
 - [`Design.BoundaryFrozen`](Design.BoundaryFrozen.md) `file` `advisable` — File lives inside an architectural boundary marked frozen=true in cofferdam.invariants.toml. New code in this area should be reviewed against the boundary's stated reason.
+- [`Design.ClassAsDataBag`](Design.ClassAsDataBag.md) `file` — A class with no behavior beyond storing fields — no methods, no inheritance, no implements clause — is a candidate for a plain type/interface instead.
 - [`Design.DuplicateExportName`](Design.DuplicateExportName.md) `graph` — The same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got.
 - [`Design.ImportCycle`](Design.ImportCycle.md) `graph` `advisable` — Files in this group import each other in a cycle. Cycles cause initialization-order surprises and obscure module boundaries.
 - [`Design.InvariantViolation`](Design.InvariantViolation.md) `graph` `advisable` — An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.

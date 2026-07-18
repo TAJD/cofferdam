@@ -65,6 +65,21 @@
       ]
     },
     {
+      "id": "Design.ClassAsDataBag",
+      "category": "Design",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A class with no behavior beyond storing fields — no methods, no inheritance, no implements clause — is a candidate for a plain type/interface instead.",
+      "body": "---\nid: Design.ClassAsDataBag\ncategory: Design\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA class with no behavior beyond storing fields — no methods other than a constructor that only assigns fields, no inheritance, no `implements` clause, no decorators — is a candidate for a plain type/interface instead of a class.\n\n```ts\nclass Point {\n  x: number;\n  y: number;\n  constructor(x: number, y: number) {\n    this.x = x;\n    this.y = y;\n  }\n}\n```\n\n```ts\n// fix\ntype Point = { x: number; y: number };\n```\n\nEscape hatches — none of these are flagged, even though they might otherwise look like a data bag:\n\n```ts\n// Parameter properties: the standard DI pattern without decorators.\nclass Point {\n  constructor(private readonly x: number, private readonly y: number) {}\n}\n\n// implements clause: a structural contract, not just storage.\nclass Point implements Shape {\n  constructor(public x: number, public y: number) {}\n}\n\n// Inheritance (including built-ins like Error): legitimate non-FP use.\nclass NotFoundError extends Error {\n  constructor(public id: string) {\n    super(`not found: ${id}`);\n  }\n}\n\n// A decorator.\n@Injectable()\nclass Config {\n  constructor(public apiUrl: string) {}\n}\n\n// Constructor does more than assign fields — that's behavior.\nclass Point {\n  x: number;\n  constructor(x: number) {\n    if (x < 0) throw new Error(\"x must be non-negative\");\n    this.x = x;\n  }\n}\n```\n\nScope note: a class with no constructor at all is only flagged if it declares at least one plain field — a genuinely empty class (`class Marker {}`) is a nominal-type marker pattern, a different concern this check doesn't address.\n\n```toml\n# cofferdam.toml\n[checks.\"Design.ClassAsDataBag\"]\nseverity = \"medium\"   # raise if your project leans heavily on plain types over classes\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Design.DuplicateExportName",
       "category": "Design",
       "base_priority": 6,

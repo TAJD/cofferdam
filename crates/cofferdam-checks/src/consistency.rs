@@ -12,6 +12,7 @@ use cofferdam_core::{
 };
 use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use oxc_ast_visit::Visit;
+use oxc_span::GetSpan;
 
 // ─── Consistency.QuoteStyle ─────────────────────────────────────────────────
 
@@ -735,6 +736,16 @@ static ERROR_IDIOM_STATS: CorpusKey<HashMap<PathBuf, FileErrorIdiomStats>> =
 /// `Refactor.MixedThrowAndReturnError` (CD-124) — that check flags a
 /// single function mixing both idioms; this one flags idiom
 /// inconsistency across the whole project.
+///
+/// The "throw" tally also counts `Promise.reject(...)` calls (the
+/// async-idiom equivalent of a throw), and the "return" tally also
+/// counts a concise arrow-function body evaluating to an error-shaped
+/// object (`const parse = (s) => ({ error: "bad" })`), not just block-
+/// bodied `return` statements (CD-136). A `catch (e) { throw e; }`
+/// re-throw of the caught parameter is excluded from the throw tally
+/// entirely — it's propagation, not a deliberate idiom choice, so
+/// counting it would overstate how dominant "throw" is in a codebase
+/// that mostly re-throws errors originated elsewhere.
 pub struct ErrorHandlingIdiom;
 
 const EHI_META: CheckMeta = CheckMeta {
@@ -774,6 +785,7 @@ impl Check for ErrorHandlingIdiom {
         let mut collector = ErrorIdiomCollector {
             file,
             stats: FileErrorIdiomStats::default(),
+            catch_param_stack: Vec::new(),
         };
         collector.visit_program(parsed.program);
         let stats = collector.stats;
@@ -868,9 +880,24 @@ fn ehi_signals_failure(field_name: &str, value: &oxc_ast::ast::Expression<'_>) -
     }
 }
 
+/// Peel any wrapping `ParenthesizedExpression` nodes — `oxc_parser`
+/// preserves parens by default (needed for e.g. `(s) => ({ error })`,
+/// an arrow whose concise body would otherwise be parsed as a block),
+/// so a parenthesized object literal like `return ({ error: 'x' })` or
+/// an arrow's parenthesized concise body must be unwrapped before
+/// matching on `Expression::ObjectExpression` (CD-136).
+fn ehi_unwrap_parens<'a, 'b>(
+    mut expr: &'b oxc_ast::ast::Expression<'a>,
+) -> &'b oxc_ast::ast::Expression<'a> {
+    while let oxc_ast::ast::Expression::ParenthesizedExpression(inner) = expr {
+        expr = &inner.expression;
+    }
+    expr
+}
+
 fn ehi_is_error_shaped(expr: &oxc_ast::ast::Expression<'_>) -> bool {
     use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
-    let Expression::ObjectExpression(obj) = expr else {
+    let Expression::ObjectExpression(obj) = ehi_unwrap_parens(expr) else {
         return false;
     };
     obj.properties.iter().any(|prop| {
@@ -888,15 +915,60 @@ fn ehi_is_error_shaped(expr: &oxc_ast::ast::Expression<'_>) -> bool {
     })
 }
 
+/// True when `callee` is exactly `Promise.reject` — the async-idiom
+/// equivalent of a `throw` (CD-136).
+fn ehi_is_promise_reject_callee(callee: &oxc_ast::ast::Expression<'_>) -> bool {
+    let oxc_ast::ast::Expression::StaticMemberExpression(member) = callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "reject" {
+        return false;
+    }
+    matches!(&member.object, oxc_ast::ast::Expression::Identifier(id) if id.name.as_str() == "Promise")
+}
+
+/// The catch parameter's binding name, if it's a simple identifier
+/// (`catch (e)`) rather than a destructuring pattern or no parameter at
+/// all — only the simple-identifier case can be a re-throw target.
+fn ehi_catch_param_name(param: &oxc_ast::ast::CatchParameter<'_>) -> Option<String> {
+    match &param.pattern {
+        oxc_ast::ast::BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+        _ => None,
+    }
+}
+
 struct ErrorIdiomCollector<'a> {
     file: &'a SourceFile,
     stats: FileErrorIdiomStats,
+    /// Innermost enclosing catch clauses' bound parameter names, pushed
+    /// on entry and popped on exit — `None` for a catch with no simple-
+    /// identifier parameter (destructured, or omitted entirely).
+    catch_param_stack: Vec<Option<String>>,
 }
 
 impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
+    fn visit_catch_clause(&mut self, node: &oxc_ast::ast::CatchClause<'a>) {
+        self.catch_param_stack
+            .push(node.param.as_ref().and_then(ehi_catch_param_name));
+        oxc_ast_visit::walk::walk_catch_clause(self, node);
+        self.catch_param_stack.pop();
+    }
+
     fn visit_throw_statement(&mut self, node: &oxc_ast::ast::ThrowStatement<'a>) {
-        let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
-        self.stats.throw_spans.push(span);
+        // A bare re-throw of the innermost enclosing catch's own bound
+        // parameter (`catch (e) { throw e; }`) is propagation, not a
+        // deliberate idiom choice — exclude it from the tally entirely
+        // rather than counting it as a "throw" (CD-136).
+        let is_rethrow = matches!(&node.argument, oxc_ast::ast::Expression::Identifier(id)
+            if self
+                .catch_param_stack
+                .last()
+                .and_then(|name| name.as_deref())
+                == Some(id.name.as_str()));
+        if !is_rethrow {
+            let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+            self.stats.throw_spans.push(span);
+        }
         oxc_ast_visit::walk::walk_throw_statement(self, node);
     }
 
@@ -908,6 +980,30 @@ impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
             }
         }
         oxc_ast_visit::walk::walk_return_statement(self, node);
+    }
+
+    fn visit_arrow_function_expression(
+        &mut self,
+        node: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
+        // A concise arrow body (`() => ({ error: ... })`) is a `return`
+        // equivalent invisible to `visit_return_statement` — there's no
+        // `ReturnStatement` node for it at all (CD-136).
+        if let Some(expr) = node.get_expression() {
+            if ehi_is_error_shaped(expr) {
+                let span = span_from_bytes(&self.file.text, expr.span().start, expr.span().end);
+                self.stats.error_return_spans.push(span);
+            }
+        }
+        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+    }
+
+    fn visit_call_expression(&mut self, node: &oxc_ast::ast::CallExpression<'a>) {
+        if ehi_is_promise_reject_callee(&node.callee) {
+            let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+            self.stats.throw_spans.push(span);
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, node);
     }
 }
 
@@ -1428,5 +1524,90 @@ const el = <Foo className="ignored" />;
             issues.is_empty(),
             "a success-shaped `{{ error: null }}` return must not be flagged; got {issues:?}"
         );
+    }
+
+    #[test]
+    fn arrow_body_error_return_is_counted() {
+        // A concise arrow-function body (`() => ({ error: ... })`) has no
+        // `ReturnStatement` node at all — before CD-136 it was invisible
+        // to the collector entirely.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "const parse = (s) => ({ error: 'e' });"),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected the arrow-body return to be flagged as the minority idiom; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn promise_reject_call_is_counted_as_throw_idiom() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            ("d.ts", "function f() { return { error: 'd' }; }"),
+            (
+                "e.ts",
+                "function f() { return Promise.reject(new Error('e')); }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected the Promise.reject call to be flagged as the minority throw idiom; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn rethrow_of_caught_param_is_excluded_from_tally() {
+        // Excluding the re-throw drops total occurrences to 3 (below
+        // MIN_TOTAL_OCCURRENCES = 4); before CD-136 this re-throw would
+        // have been miscounted as a genuine throw, reaching exactly 4
+        // total occurrences and triggering a flag on d.ts as the
+        // minority idiom.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            (
+                "d.ts",
+                "function f() { try { risky(); } catch (e) { throw e; } }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a bare re-throw of the caught parameter must not count toward the throw tally; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn throw_of_new_error_inside_catch_is_still_counted() {
+        // A throw inside a catch block that does NOT re-throw the caught
+        // parameter (a wrapped/replaced error) is a genuine idiom choice
+        // and must still count normally.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            (
+                "d.ts",
+                "function f() { try { risky(); } catch (e) { throw new Error('wrapped'); } }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a throw of a new error inside catch (not a bare re-throw) must still count toward \
+             the throw tally and be flagged; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("d.ts"));
     }
 }

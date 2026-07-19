@@ -740,7 +740,7 @@ impl Engine {
         }
 
         let suppressions_by_file: HashMap<PathBuf, suppress::Suppressions> = texts
-            .iter()
+            .par_iter()
             .map(|(path, text)| (path.clone(), suppress::Suppressions::parse(text)))
             .collect();
         let issues = self.finalize_and_filter(
@@ -1538,7 +1538,7 @@ impl Engine {
     /// Used by the CLI to thread the cd-9hp.4 cp4 disk-backed cache
     /// into a one-shot `cofferdam check` without duplicating the file-
     /// reading prelude.
-    pub fn analyze_with_text_full<P: AsRef<Path>>(
+    pub fn analyze_with_text_full<P: AsRef<Path> + Sync>(
         &self,
         paths: &[P],
         parse_cache: Option<&cache::ParseCache>,
@@ -1550,7 +1550,7 @@ impl Engine {
     }
 
     /// Timed variant of [`Engine::analyze_with_text_full`] (CD-34).
-    pub fn analyze_with_text_full_timed<P: AsRef<Path>>(
+    pub fn analyze_with_text_full_timed<P: AsRef<Path> + Sync>(
         &self,
         paths: &[P],
         parse_cache: Option<&cache::ParseCache>,
@@ -1568,24 +1568,28 @@ impl Engine {
         ))
     }
 
-    fn read_sources<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<(PathBuf, String)>, EngineError> {
-        let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(paths.len());
-        for path in paths {
-            let path = path.as_ref();
-            let text = std::fs::read_to_string(path).map_err(|source| EngineError::ReadFile {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            sources.push((path.to_path_buf(), text));
-        }
-        Ok(sources)
+    fn read_sources<P: AsRef<Path> + Sync>(
+        paths: &[P],
+    ) -> Result<Vec<(PathBuf, String)>, EngineError> {
+        paths
+            .par_iter()
+            .map(|path| {
+                let path = path.as_ref();
+                let text =
+                    std::fs::read_to_string(path).map_err(|source| EngineError::ReadFile {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
+                Ok((path.to_path_buf(), text))
+            })
+            .collect()
     }
 
     /// Cache-aware variant of [`Engine::analyze_with_signatures`].
     /// Mirrors the baseline-signature post-pass on top of
     /// [`Engine::analyze_with_text_full`] so callers that need both
     /// caching and baseline signatures get a single call.
-    pub fn analyze_with_signatures_full<P: AsRef<Path>>(
+    pub fn analyze_with_signatures_full<P: AsRef<Path> + Sync>(
         &self,
         paths: &[P],
         parse_cache: Option<&cache::ParseCache>,
@@ -1599,7 +1603,7 @@ impl Engine {
 
     /// Timed variant of [`Engine::analyze_with_signatures_full`] (CD-34).
     /// Used by `cofferdam check --time-checks`.
-    pub fn analyze_with_signatures_full_timed<P: AsRef<Path>>(
+    pub fn analyze_with_signatures_full_timed<P: AsRef<Path> + Sync>(
         &self,
         paths: &[P],
         parse_cache: Option<&cache::ParseCache>,

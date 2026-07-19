@@ -104,11 +104,10 @@ pub fn discover<P: AsRef<Path>>(
                     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                         continue;
                     };
-                    if !opts
-                        .extensions
-                        .iter()
-                        .any(|ext| name.ends_with(&format!(".{ext}")))
-                    {
+                    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                        continue;
+                    };
+                    if !opts.extensions.iter().any(|e| e == ext) {
                         continue;
                     }
                     // Skip declaration files if requested

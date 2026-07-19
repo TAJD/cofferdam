@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-07-19
+
+### Changed
+- `Engine::analyze_incremental` re-analyzes single-file edits faster (CD-40, levers 1-3 of the CD-28/CD-32 tail): a `SourceFile` cache in `AnalysisState` avoids rebuilding one for every known file on each call's consistency sweep, one-time engine-config setup no longer re-runs every call, and the canonical import/export graph is now maintained incrementally instead of rebuilt from scratch each call. Measured ~13-17% faster on a real-world corpus (4.05x -> 4.75x vs. a cold full run); CD-40 stays open for the remaining, higher-effort levers needed to reach the ticket's >=10x target.
+
 ## [0.3.9] - 2026-07-19
 
 ### Added

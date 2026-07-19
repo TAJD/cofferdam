@@ -15,6 +15,11 @@
 //!
 //! Single shared `Resolver` per analysis run. Its options:
 //! * Extensions: `.ts .tsx .d.ts .mts .cts .js .jsx .mjs .cjs .json`.
+//! * `extension_alias` (CD-139): a `.js`/`.jsx`/`.mjs`/`.cjs` specifier
+//!   also tries the matching TS source extension first (`.js` ->
+//!   `.ts`/`.tsx`/`.js`) — required for the ESM-standard
+//!   `import "./f.js"` pointing at `f.ts` source, or every such import
+//!   silently fails to resolve.
 //! * tsconfig discovery: `Auto` — walks up from the importing file's
 //!   directory looking for `tsconfig.json`, honors `paths`/`baseUrl`.
 //!
@@ -68,6 +73,20 @@ impl GraphBuilder {
     /// discovery. The latter walks up from each importing file's
     /// directory looking for `tsconfig.json` — so `paths`/`baseUrl`
     /// aliases resolve correctly without us threading the project root.
+    ///
+    /// `extension_alias` (CD-139) mirrors TypeScript's `moduleResolution:
+    /// "bundler"`/`"node16"`/`"nodenext"` behavior: a specifier ending in
+    /// `.js` (the required ESM extension at the compiled-output layer)
+    /// must resolve against a sibling `.ts`/`.tsx` *source* file when one
+    /// exists — `import { f } from "./f.js"` resolving to `f.ts`. Without
+    /// this, `oxc_resolver`'s plain extension list only ever matches a
+    /// literal `.js` file, so every relative import written in this
+    /// (extremely common, ESM-project-standard) style silently fails to
+    /// resolve — cascading into mass `Design.OrphanExport` false
+    /// positives, since the resolver records no edge at all rather than a
+    /// wrong one. The literal extension is kept last in each alias list
+    /// so a genuine compiled/plain-JS sibling (no `.ts` source) still
+    /// resolves exactly as before.
     pub fn new() -> Self {
         let opts = ResolveOptions {
             extensions: vec![
@@ -81,6 +100,15 @@ impl GraphBuilder {
                 ".mjs".into(),
                 ".cjs".into(),
                 ".json".into(),
+            ],
+            extension_alias: vec![
+                (
+                    ".js".into(),
+                    vec![".ts".into(), ".tsx".into(), ".js".into()],
+                ),
+                (".jsx".into(), vec![".tsx".into(), ".jsx".into()]),
+                (".mjs".into(), vec![".mts".into(), ".mjs".into()]),
+                (".cjs".into(), vec![".cts".into(), ".cjs".into()]),
             ],
             tsconfig: Some(TsconfigDiscovery::Auto),
             ..ResolveOptions::default()
@@ -655,6 +683,111 @@ fn handle_export_all(
         type_only,
         span: span_from_bytes(&file.text, decl.span.start, decl.span.end),
     });
+}
+
+#[cfg(test)]
+mod extension_alias_tests {
+    use super::*;
+    use cofferdam_core::CorpusIndex;
+
+    /// Writes `importer` (given a `SourceFile` name) importing `specifier`,
+    /// plus every file in `siblings` (name -> content) into a fresh
+    /// tempdir, runs `GraphBuilder::collect` on the importer, and returns
+    /// the single recorded import's `resolved` path (relative to the
+    /// tempdir, for assertion stability).
+    fn resolve_specifier(
+        importer_content: &str,
+        siblings: &[(&str, &str)],
+    ) -> (tempfile::TempDir, Option<PathBuf>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (name, content) in siblings {
+            std::fs::write(dir.path().join(name), content).expect("write sibling");
+        }
+        let importer_path = dir.path().join("importer.ts");
+        std::fs::write(&importer_path, importer_content).expect("write importer");
+
+        let file = SourceFile::new(
+            importer_path.clone(),
+            std::fs::read_to_string(&importer_path).unwrap(),
+        );
+        let allocator = Allocator::default();
+        let parsed_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parsed_return.program,
+            diagnostics: &parsed_return.errors,
+        };
+        let corpus = CorpusIndex::new();
+        let builder = GraphBuilder::new();
+        builder.collect(&file, &parsed, &corpus);
+
+        let imports = corpus.with_slot(&IMPORTS, |slot| slot.clone());
+        assert_eq!(imports.len(), 1, "expected exactly one import: {imports:?}");
+        (dir, imports[0].resolved.clone())
+    }
+
+    #[test]
+    fn js_specifier_resolves_to_sibling_ts_source() {
+        let (dir, resolved) = resolve_specifier(
+            "import { f } from \"./f.js\";\nf();\n",
+            &[("f.ts", "export function f(): void {}\n")],
+        );
+        assert_eq!(resolved, Some(dir.path().join("f.ts")));
+    }
+
+    #[test]
+    fn jsx_specifier_resolves_to_sibling_tsx_source() {
+        let (dir, resolved) = resolve_specifier(
+            "import { C } from \"./C.jsx\";\nC;\n",
+            &[("C.tsx", "export const C = () => null;\n")],
+        );
+        assert_eq!(resolved, Some(dir.path().join("C.tsx")));
+    }
+
+    #[test]
+    fn mjs_specifier_resolves_to_sibling_mts_source() {
+        let (dir, resolved) = resolve_specifier(
+            "import { g } from \"./g.mjs\";\ng();\n",
+            &[("g.mts", "export function g(): void {}\n")],
+        );
+        assert_eq!(resolved, Some(dir.path().join("g.mts")));
+    }
+
+    #[test]
+    fn cjs_specifier_resolves_to_sibling_cts_source() {
+        let (dir, resolved) = resolve_specifier(
+            "import { h } from \"./h.cjs\";\nh();\n",
+            &[("h.cts", "export function h(): void {}\n")],
+        );
+        assert_eq!(resolved, Some(dir.path().join("h.cts")));
+    }
+
+    /// A `.ts` sibling wins over a same-named literal `.js` file when
+    /// both exist (matches `tsc`'s own resolution order: source before
+    /// compiled output).
+    #[test]
+    fn js_specifier_prefers_ts_sibling_over_literal_js_sibling() {
+        let (dir, resolved) = resolve_specifier(
+            "import { f } from \"./f.js\";\nf();\n",
+            &[
+                ("f.ts", "export function f(): void {}\n"),
+                ("f.js", "export function f() {}\n"),
+            ],
+        );
+        assert_eq!(resolved, Some(dir.path().join("f.ts")));
+    }
+
+    /// Plain-JS projects (no `.ts` source anywhere) must keep resolving a
+    /// literal `.js` specifier to its literal `.js` file — the alias list
+    /// keeps `.js` itself as a fallback precisely so this doesn't
+    /// regress.
+    #[test]
+    fn js_specifier_falls_back_to_literal_js_file_when_no_ts_sibling() {
+        let (dir, resolved) = resolve_specifier(
+            "import { f } from \"./f.js\";\nf();\n",
+            &[("f.js", "export function f() {}\n")],
+        );
+        assert_eq!(resolved, Some(dir.path().join("f.js")));
+    }
 }
 
 #[cfg(test)]

@@ -2122,4 +2122,60 @@ function total(items) {
             "a framework entry point must be exempt; got {issues:?}"
         );
     }
+
+    fn run_missing_test_file_with_default_patterns(
+        imports: Vec<ImportRecord>,
+        exports: Vec<ExportRecord>,
+    ) -> Vec<CoreIssue> {
+        compute_missing_test_files(
+            &imports,
+            &exports,
+            &owned(missing_test_file::DEFAULT_TEST_MATCH_PATTERNS),
+            &owned(MTF_TEST_FILE_PATTERNS),
+            &owned(MTF_FRAMEWORK_PATTERNS),
+        )
+    }
+
+    #[test]
+    fn default_patterns_cover_js_jsx_mjs_mts_cts_same_directory_test_files() {
+        for ext in ["js", "jsx", "mjs", "mts", "cts"] {
+            let file = PathBuf::from(format!("/p/format.{ext}"));
+            let test_file = PathBuf::from(format!("/p/format.test.{ext}"));
+            let exports = vec![barrel_real_export(&file, "formatCurrency")];
+            let imports = vec![internal_import(&test_file, &file)];
+            let issues = run_missing_test_file_with_default_patterns(imports, exports);
+            assert!(
+                issues.is_empty(),
+                "a same-directory format.test.{ext} must suppress the finding by default; got {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_patterns_cover_js_jsx_mjs_mts_cts_tests_dir_test_files() {
+        for ext in ["js", "jsx", "mjs", "mts", "cts"] {
+            let file = PathBuf::from(format!("/p/format.{ext}"));
+            let test_file = PathBuf::from(format!("/p/__tests__/format.spec.{ext}"));
+            let exports = vec![barrel_real_export(&file, "formatCurrency")];
+            let imports = vec![internal_import(&test_file, &file)];
+            let issues = run_missing_test_file_with_default_patterns(imports, exports);
+            assert!(
+                issues.is_empty(),
+                "a __tests__/format.spec.{ext} must suppress the finding by default; got {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn js_source_with_no_matching_test_file_is_still_flagged_by_default() {
+        let file = PathBuf::from("/p/uncovered.mjs");
+        let exports = vec![barrel_real_export(&file, "uncovered")];
+        let issues = run_missing_test_file_with_default_patterns(vec![], exports);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a .mjs source with no matching test file must still be flagged by default; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, file);
+    }
 }

@@ -14,15 +14,41 @@ use cofferdam_core::{
 /// `{name}` template patterns checked (relative to the source file's own
 /// directory) for a corresponding test file. `{name}` substitutes the
 /// source file's stem (filename without extension).
-const DEFAULT_TEST_MATCH_PATTERNS: &[&str] = &[
+///
+/// Covers `.ts`/`.tsx` as well as `.js`/`.jsx`/`.mjs`/`.mts`/`.cts` sources
+/// (CD-137) — patterns aren't matched against the source file's own
+/// extension, so a `.ts` source with only a stray `.test.js` sibling would
+/// technically also suppress a finding, but that cross-extension case is
+/// vanishingly rare in practice.
+pub(crate) const DEFAULT_TEST_MATCH_PATTERNS: &[&str] = &[
     "{name}.test.ts",
     "{name}.test.tsx",
+    "{name}.test.js",
+    "{name}.test.jsx",
+    "{name}.test.mjs",
+    "{name}.test.mts",
+    "{name}.test.cts",
     "{name}.spec.ts",
     "{name}.spec.tsx",
+    "{name}.spec.js",
+    "{name}.spec.jsx",
+    "{name}.spec.mjs",
+    "{name}.spec.mts",
+    "{name}.spec.cts",
     "__tests__/{name}.test.ts",
     "__tests__/{name}.test.tsx",
+    "__tests__/{name}.test.js",
+    "__tests__/{name}.test.jsx",
+    "__tests__/{name}.test.mjs",
+    "__tests__/{name}.test.mts",
+    "__tests__/{name}.test.cts",
     "__tests__/{name}.spec.ts",
     "__tests__/{name}.spec.tsx",
+    "__tests__/{name}.spec.js",
+    "__tests__/{name}.spec.jsx",
+    "__tests__/{name}.spec.mjs",
+    "__tests__/{name}.spec.mts",
+    "__tests__/{name}.spec.cts",
 ];
 
 /// Filename substrings that mark a file as itself a test/mock — mirrors

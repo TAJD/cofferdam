@@ -995,7 +995,26 @@ impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
                 self.stats.error_return_spans.push(span);
             }
         }
+        // A nested function scope can bind its own parameter with the same
+        // name as an enclosing catch's (`catch (e) { xs.forEach((e) => {
+        // throw e; }); }`) — that `e` refers to the callback's own
+        // parameter, not the catch's. Push a boundary so the re-throw check
+        // never treats it as the outer catch's parameter (CD-136).
+        self.catch_param_stack.push(None);
         oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        self.catch_param_stack.pop();
+    }
+
+    fn visit_function(
+        &mut self,
+        node: &oxc_ast::ast::Function<'a>,
+        flags: oxc_syntax::scope::ScopeFlags,
+    ) {
+        // Same shadowing boundary as `visit_arrow_function_expression`, for
+        // regular function declarations/expressions (CD-136).
+        self.catch_param_stack.push(None);
+        oxc_ast_visit::walk::walk_function(self, node, flags);
+        self.catch_param_stack.pop();
     }
 
     fn visit_call_expression(&mut self, node: &oxc_ast::ast::CallExpression<'a>) {
@@ -1607,6 +1626,30 @@ const el = <Foo className="ignored" />;
             1,
             "a throw of a new error inside catch (not a bare re-throw) must still count toward \
              the throw tally and be flagged; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("d.ts"));
+    }
+
+    #[test]
+    fn throw_of_shadowing_param_inside_nested_callback_is_still_counted() {
+        // A nested callback's own parameter can share a name with an
+        // enclosing catch's bound parameter without referring to it —
+        // `throw e` here re-throws the callback's own `e`, not the outer
+        // catch's, and must still count toward the throw tally (CD-136).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            (
+                "d.ts",
+                "function f() { try { risky(); } catch (e) { xs.forEach((e) => { throw e; }); } }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a throw of a nested callback's own shadowing parameter must not be mistaken for a \
+             re-throw of the outer catch's parameter; got {issues:?}"
         );
         assert_eq!(issues[0].file, PathBuf::from("d.ts"));
     }

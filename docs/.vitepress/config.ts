@@ -91,6 +91,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: 'SEO-grade checking', link: '/seo-checking' },
           { text: 'Cross-file checks', link: '/cross-file-checks' },
+          { text: 'Purity checking', link: '/purity-checking' },
         ],
       },
       {

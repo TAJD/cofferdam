@@ -758,7 +758,7 @@ const EHI_META: CheckMeta = CheckMeta {
         error paths for callers.",
     body: include_str!("../docs/Consistency.ErrorHandlingIdiom.md"),
     requires_types: false,
-    consistency: true,
+    consistency: false,
     options: &[],
     autofix: false,
     pure_run: false,
@@ -797,10 +797,22 @@ impl Check for ErrorHandlingIdiom {
         Vec::new()
     }
 
-    /// Pass 2: sum occurrences across every file in the corpus to learn
-    /// the project-wide dominant idiom, then flag this file's
-    /// occurrences of the minority idiom.
-    fn pass2(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    /// Finalize (CD-139 perf fix): sum occurrences across every file in
+    /// the corpus ONCE to learn the project-wide dominant idiom, then
+    /// emit findings for every file's minority-idiom occurrences in one
+    /// pass. This check was originally written as `pass2` (per-file
+    /// second pass), which the engine invokes once PER FILE — since this
+    /// check's aggregation is project-wide rather than per-file (unlike
+    /// `Consistency.QuoteStyle`, which pass2 suits fine), that meant
+    /// cloning the entire cross-file corpus slot once per file: O(files)
+    /// work repeated O(files) times. `finalize` runs exactly once, so
+    /// the same aggregation now costs O(files) total, matching the
+    /// pattern used by `Design.DuplicateExportName` and friends.
+    ///
+    /// Read-only (cd-32): a draining read would empty the slot as a side
+    /// effect of finalize, corrupting `Engine::analyze_incremental`'s
+    /// persistent `AnalysisState` for the next incremental call.
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         let all_stats: HashMap<PathBuf, FileErrorIdiomStats> = ctx
             .corpus
             .with_slot(&ERROR_IDIOM_STATS, |slot| slot.clone());
@@ -823,40 +835,38 @@ impl Check for ErrorHandlingIdiom {
             return Vec::new();
         };
 
-        let Some(this_file) = all_stats.get(&file.path) else {
-            return Vec::new();
-        };
-
         let mut issues = Vec::new();
-        if dominant_is_throw {
-            for span in &this_file.error_return_spans {
-                issues.push(ehi_issue(
-                    file,
-                    *span,
-                    "this file returns an error-shaped value, but the project predominantly \
-                     throws for errors — consider throwing instead for consistency",
-                ));
-            }
-        } else {
-            for span in &this_file.throw_spans {
-                issues.push(ehi_issue(
-                    file,
-                    *span,
-                    "this file throws, but the project predominantly returns an error-shaped \
-                     value for errors — consider returning one instead for consistency",
-                ));
+        for (path, stats) in &all_stats {
+            if dominant_is_throw {
+                for span in &stats.error_return_spans {
+                    issues.push(ehi_issue(
+                        path,
+                        *span,
+                        "this file returns an error-shaped value, but the project predominantly \
+                         throws for errors — consider throwing instead for consistency",
+                    ));
+                }
+            } else {
+                for span in &stats.throw_spans {
+                    issues.push(ehi_issue(
+                        path,
+                        *span,
+                        "this file throws, but the project predominantly returns an error-shaped \
+                         value for errors — consider returning one instead for consistency",
+                    ));
+                }
             }
         }
         issues
     }
 }
 
-fn ehi_issue(file: &SourceFile, span: Span, message: &str) -> Issue {
+fn ehi_issue(path: &std::path::Path, span: Span, message: &str) -> Issue {
     Issue {
         check_id: EHI_META.id.to_string(),
         message: message.to_string(),
-        file: file.path.clone(),
-        location: Location::from_span(&file.path, span),
+        file: path.to_path_buf(),
+        location: Location::from_span(path, span),
         priority: Priority(EHI_META.base_priority),
         severity: Severity::Info,
         related: Vec::new(),
@@ -1429,10 +1439,10 @@ const el = <Foo className="ignored" />;
 
     // ── ErrorHandlingIdiom tests ─────────────────────────────────────────────
 
-    /// Runs `ErrorHandlingIdiom`'s full two-pass cycle over each
-    /// `(path, source)` fixture and returns every issue from every
-    /// file's pass 2, mirroring `run_effect_leakage`'s multi-file
-    /// harness in `design/mod.rs`.
+    /// Runs `ErrorHandlingIdiom`'s run+finalize cycle over each
+    /// `(path, source)` fixture and returns every issue from `finalize`,
+    /// sorted for deterministic assertions (finalize iterates a
+    /// `HashMap`, so raw order isn't stable).
     fn run_error_handling_idiom(fixtures: &[(&str, &str)]) -> Vec<Issue> {
         let corpus = CorpusIndex::new();
         let check = ErrorHandlingIdiom;
@@ -1441,8 +1451,6 @@ const el = <Foo className="ignored" />;
             .map(|(path, src)| SourceFile::new(PathBuf::from(path), *src))
             .collect();
 
-        // Pass 1 for every file before any pass 2, matching the engine's
-        // real two-pass ordering.
         for file in &files {
             let allocator = Allocator::default();
             let parser_return = parse_into(&allocator, file);
@@ -1456,19 +1464,9 @@ const el = <Foo className="ignored" />;
             check.run(file, &mut ctx);
         }
 
-        let mut issues = Vec::new();
-        for file in &files {
-            let allocator = Allocator::default();
-            let parser_return = parse_into(&allocator, file);
-            let parsed = ParsedView {
-                program: &parser_return.program,
-                diagnostics: &parser_return.errors,
-            };
-            let mut ctx = CheckContext::new(file)
-                .with_parsed(&parsed)
-                .with_corpus(&corpus);
-            issues.extend(check.pass2(file, &mut ctx));
-        }
+        let mut finalize_ctx = cofferdam_core::FinalizeContext::new(&corpus);
+        let mut issues = check.finalize(&mut finalize_ctx);
+        issues.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.message.cmp(&b.message)));
         issues
     }
 

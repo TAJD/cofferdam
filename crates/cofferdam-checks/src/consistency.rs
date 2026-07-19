@@ -23,9 +23,12 @@ struct FileQuoteStats {
     single: u32,
     /// Count of double-quoted string literals in this file.
     double: u32,
-    /// Spans of ALL observed string literals, tagged with their quote char.
-    /// Pass 2 picks the dominant style and re-filters.
-    spans: Vec<(Span, u8)>, // (span, quote_byte: b'\'' or b'"')
+    /// Byte range of ALL observed string literals, tagged with their quote
+    /// char. Pass 2 picks the dominant style and re-filters. Kept as raw
+    /// byte offsets (not resolved `Span`s) so the O(start_byte) cost of
+    /// `span_from_bytes` is only paid for the minority spans pass 2 flags,
+    /// not every literal in the file.
+    spans: Vec<(u32, u32, u8)>, // (start_byte, end_byte, quote_byte: b'\'' or b'"')
 }
 
 /// Corpus slot: keyed by canonical file path.
@@ -120,15 +123,19 @@ impl Check for QuoteStyle {
         };
 
         let mut issues = Vec::new();
-        for (span, quote) in &stats.spans {
+        let mut line_index = None;
+        for (start_byte, end_byte, quote) in &stats.spans {
             if *quote != dominant {
+                let line_index =
+                    line_index.get_or_insert_with(|| cofferdam_core::LineIndex::new(&file.text));
+                let span = line_index.span_from_bytes(*start_byte, *end_byte);
                 issues.push(Issue {
                     check_id: META.id.to_string(),
                     message: format!(
                         "use {dominant_name} quotes consistently (dominant style in this file)",
                     ),
                     file: file.path.clone(),
-                    location: Location::from_span(&file.path, *span),
+                    location: Location::from_span(&file.path, span),
                     priority: Priority(META.base_priority),
                     severity: Severity::Info,
                     related: Vec::new(),
@@ -189,13 +196,12 @@ impl<'a> QuoteCollector<'a> {
             return;
         }
 
-        let span = span_from_bytes(&self.file.text, lit.span.start, lit.span.end);
         match quote {
             b'\'' => self.stats.single += 1,
             b'"' => self.stats.double += 1,
             _ => {}
         }
-        self.stats.spans.push((span, quote));
+        self.stats.spans.push((lit.span.start, lit.span.end, quote));
     }
 }
 

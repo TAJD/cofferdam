@@ -1,7 +1,6 @@
-use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, Location, OptionDefault, OptionKind,
-    OptionSpec, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, Issue, LineIndex, Location, OptionDefault,
+    OptionKind, OptionSpec, Priority, Severity, SourceFile,
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, ConditionalExpression, DoWhileStatement, ForInStatement,
@@ -89,11 +88,13 @@ impl Check for LongAndComplex {
             .unwrap_or(self.cyclomatic_limit);
         let line_views: Vec<cofferdam_core::LineView<'_>> =
             cofferdam_core::Lines::build(&file.text, parsed.program).collect();
+        let line_index = LineIndex::new(&file.text);
         let mut visitor = LACVisitor {
             file,
             length_limit,
             cyclomatic_limit,
             line_views: &line_views,
+            line_index: &line_index,
             issues: Vec::new(),
             stack: Vec::new(),
         };
@@ -118,6 +119,7 @@ struct LACVisitor<'a> {
     length_limit: u32,
     cyclomatic_limit: u32,
     line_views: &'a [cofferdam_core::LineView<'a>],
+    line_index: &'a LineIndex,
     issues: Vec<Issue>,
     stack: Vec<LACFrame>,
 }
@@ -151,14 +153,14 @@ impl<'a> LACVisitor<'a> {
             return;
         }
 
-        let start_line = span_from_bytes(
-            &self.file.text,
-            frame.body_span_start,
-            frame.body_span_start,
-        )
-        .line;
-        let end_line =
-            span_from_bytes(&self.file.text, frame.body_span_end, frame.body_span_end).line;
+        let start_line = self
+            .line_index
+            .span_from_bytes(frame.body_span_start, frame.body_span_start)
+            .line;
+        let end_line = self
+            .line_index
+            .span_from_bytes(frame.body_span_end, frame.body_span_end)
+            .line;
         let raw = end_line.saturating_sub(start_line);
         let inner_lo = start_line.saturating_add(1);
         let inner_hi = end_line.saturating_sub(1);
@@ -166,7 +168,9 @@ impl<'a> LACVisitor<'a> {
         let length = raw.saturating_sub(skipped);
 
         if length > self.length_limit && frame.cyc > self.cyclomatic_limit {
-            let span = span_from_bytes(&self.file.text, frame.body_span_start, frame.body_span_end);
+            let span = self
+                .line_index
+                .span_from_bytes(frame.body_span_start, frame.body_span_end);
             self.issues.push(Issue {
                 check_id: LAC_META.id.to_string(),
                 message: format!(

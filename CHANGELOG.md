@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `cofferdam-ignore` suppression comments work again for plugin-check findings when the project is analyzed with a relative discovery path (e.g. `cofferdam check .`, the common case). CD-99 (0.3.8) made the file path sent to the plugin host absolute so a plugin's echoed `report.file` could be matched back to the analyzed file set, but the resulting `Issue.file` was then stamped with that absolutized path instead of the original discovery path — an absolute path never equals the relative path the suppression map is keyed by, so every plugin-check suppression comment silently stopped applying. Built-in checks were unaffected (CD-140).
 
+### Changed
+- Cold-run performance: discovery no longer allocates a `format!(".{ext}")` string per walked file, suppression-comment parsing and source-file reads now run in parallel via rayon, and `Refactor.DuplicateBlock` / `Consistency.QuoteStyle` / `Readability.MaxFunctionLength` / `Refactor.LongAndComplex` resolve byte offsets to line/column via a per-file binary-searched `LineIndex` instead of `span_from_bytes`'s O(start_byte) linear scan (`QuoteStyle` additionally defers resolution to only the minority spans it actually flags). Measured on a real ~325-file corpus: `Consistency.QuoteStyle` -92% (42ms -> 3ms), `run_loop` -30% (37ms -> 26ms), `Refactor.DuplicateBlock` -9%, `Readability.MaxFunctionLength` -17%; total finding count unchanged (664 -> 664), confirming no accuracy regression. Identified via an Opus audit of the engine's parse/discovery/corpus path and a Fable audit of the built-in checks layer.
+
 ## [0.3.10] - 2026-07-19
 
 ### Changed

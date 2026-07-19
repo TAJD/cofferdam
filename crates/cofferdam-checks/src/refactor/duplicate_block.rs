@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
-    OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, LineIndex,
+    Location, OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile,
+    Span,
 };
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
@@ -209,10 +209,18 @@ impl Check for DuplicateBlock {
         let include_ast = self.include_ast && ctx.options.get_bool("include_ast").unwrap_or(true);
 
         let mut collected = Vec::new();
+        // Built once per file: `span_from_bytes` is O(start_byte), and a
+        // file can produce dozens of candidate windows, nearly all of
+        // which are discarded before ever becoming a finding (CD-140-perf
+        // audit finding #1 — this was the single largest per-check cost
+        // in a real-corpus profile). A shared line-start table turns each
+        // resolution into O(log n) instead.
+        let line_index = LineIndex::new(&file.text);
 
         if include_ast {
             let mut visitor = DupCollector {
                 file,
+                line_index: &line_index,
                 min_statements,
                 min_chars,
                 collected: Vec::new(),
@@ -222,7 +230,13 @@ impl Check for DuplicateBlock {
         }
 
         if include_tokens {
-            collect_token_fingerprints(file, self.min_tokens, min_chars, &mut collected);
+            collect_token_fingerprints(
+                file,
+                &line_index,
+                self.min_tokens,
+                min_chars,
+                &mut collected,
+            );
         }
 
         ctx.corpus.with_slot(&DUPLICATE_BLOCKS, |slot| {
@@ -338,6 +352,7 @@ impl Check for DuplicateBlock {
 
 struct DupCollector<'a> {
     file: &'a SourceFile,
+    line_index: &'a LineIndex,
     min_statements: usize,
     min_chars: usize,
     collected: Vec<Fingerprint>,
@@ -363,7 +378,7 @@ impl<'a> DupCollector<'a> {
             }
             let window = &stmts[i..i + self.min_statements];
             let hash = hash_ast_window(window);
-            let span = span_from_bytes(&self.file.text, start as u32, end as u32);
+            let span = self.line_index.span_from_bytes(start as u32, end as u32);
             self.collected.push(Fingerprint {
                 hash,
                 kind: FingerprintKind::Ast,
@@ -963,6 +978,7 @@ pub fn hash_token_window(window: &[TokenInfo]) -> u64 {
 
 fn collect_token_fingerprints(
     file: &SourceFile,
+    line_index: &LineIndex,
     min_tokens: usize,
     min_chars: usize,
     out: &mut Vec<Fingerprint>,
@@ -979,7 +995,7 @@ fn collect_token_fingerprints(
             continue;
         }
         let hash = hash_token_window(window);
-        let span = span_from_bytes(&file.text, start, end);
+        let span = line_index.span_from_bytes(start, end);
         out.push(Fingerprint {
             hash,
             kind: FingerprintKind::Token,

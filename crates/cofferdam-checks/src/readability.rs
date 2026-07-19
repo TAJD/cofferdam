@@ -1,9 +1,8 @@
 //! Readability checks.
 
-use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, Issue, LineView, Lines, Location, OptionDefault,
-    OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, Issue, LineIndex, LineView, Lines, Location,
+    OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Program, Statement};
 use oxc_ast_visit::Visit;
@@ -186,10 +185,12 @@ impl Check for MaxFunctionLength {
             .map(|v| v as u32)
             .unwrap_or(self.limit);
         let line_views: Vec<LineView<'_>> = Lines::build(&file.text, parsed.program).collect();
+        let line_index = LineIndex::new(&file.text);
         let mut visitor = MFLCollector {
             file,
             limit,
             line_views: &line_views,
+            line_index: &line_index,
             issues: Vec::new(),
             max: 0,
         };
@@ -204,10 +205,12 @@ impl Check for MaxFunctionLength {
 /// functions.
 pub fn max_function_length_in_file(file: &SourceFile, program: &Program<'_>) -> u32 {
     let line_views: Vec<LineView<'_>> = Lines::build(&file.text, program).collect();
+    let line_index = LineIndex::new(&file.text);
     let mut visitor = MFLCollector {
         file,
         limit: u32::MAX,
         line_views: &line_views,
+        line_index: &line_index,
         issues: Vec::new(),
         max: 0,
     };
@@ -219,6 +222,7 @@ struct MFLCollector<'a> {
     file: &'a SourceFile,
     limit: u32,
     line_views: &'a [LineView<'a>],
+    line_index: &'a LineIndex,
     issues: Vec<Issue>,
     /// Longest effective length seen across any function so far, tracked
     /// regardless of `limit` so [`max_function_length_in_file`] can reuse
@@ -235,8 +239,12 @@ impl<'a> MFLCollector<'a> {
     /// which baseline signature computation relies on to find the
     /// function's header (cd-9, "rulesig").
     fn measure(&mut self, body: &FunctionBody<'_>, node_start: u32, node_end: u32, name: &str) {
-        let start_span = span_from_bytes(&self.file.text, body.span.start, body.span.start);
-        let end_span = span_from_bytes(&self.file.text, body.span.end, body.span.end);
+        let start_span = self
+            .line_index
+            .span_from_bytes(body.span.start, body.span.start);
+        let end_span = self
+            .line_index
+            .span_from_bytes(body.span.end, body.span.end);
         let raw = end_span.line.saturating_sub(start_span.line);
         // Discount blank + pure-comment lines strictly between the braces
         // — `start_line + 1 ..= end_line - 1`. The brace lines themselves
@@ -248,7 +256,7 @@ impl<'a> MFLCollector<'a> {
         let length = raw.saturating_sub(skipped);
         self.max = self.max.max(length);
         if length > self.limit {
-            let span = span_from_bytes(&self.file.text, node_start, node_end);
+            let span = self.line_index.span_from_bytes(node_start, node_end);
             self.issues.push(Issue {
                 check_id: MFL_META.id.to_string(),
                 message: format!(

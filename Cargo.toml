@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/TAJD/cofferdam"
@@ -24,15 +24,15 @@ authors = ["cofferdam contributors"]
 rust-version = "1.93"
 
 [workspace.dependencies]
-cofferdam-cli = { path = "crates/cofferdam-cli", version = "0.3.8" }
-cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.8" }
-cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.8" }
-cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.8" }
-cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.8" }
-cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.8" }
-cofferdam-html = { path = "crates/cofferdam-html", version = "0.3.8" }
-cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.8" }
-cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.3.8" }
+cofferdam-cli = { path = "crates/cofferdam-cli", version = "0.3.9" }
+cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.9" }
+cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.9" }
+cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.9" }
+cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.9" }
+cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.9" }
+cofferdam-html = { path = "crates/cofferdam-html", version = "0.3.9" }
+cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.9" }
+cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.3.9" }
 
 # Third-party (kept narrow at phase 0; expanded as phases land)
 clap = { version = "4", features = ["derive"] }

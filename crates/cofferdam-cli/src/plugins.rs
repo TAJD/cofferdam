@@ -898,10 +898,15 @@ pub fn run_plugins_with_sources(
     // that same absolutized, forward-slashed string round-tripped through
     // the host — looks itself up successfully instead of appearing
     // "outside the analyzed file set" whenever the original discovery
-    // path was relative.
-    let text_index: BTreeMap<PathBuf, &str> = sources
+    // path was relative. The value carries the ORIGINAL (pre-absolutize)
+    // path alongside the text: CD-140 found that stamping issues with the
+    // absolutized key instead of this original path broke suppression
+    // lookups, which are keyed by the engine's native (possibly relative)
+    // discovery paths — an absolute path never equals a relative one, so
+    // every plugin-check suppression comment silently stopped working.
+    let text_index: BTreeMap<PathBuf, (&Path, &str)> = sources
         .iter()
-        .map(|(p, t)| (absolutize(p).into_owned(), t.as_str()))
+        .map(|(p, t)| (absolutize(p).into_owned(), (p.as_path(), t.as_str())))
         .collect();
 
     // Reject reports whose path is outside the scoped source set (cd-neav).
@@ -926,11 +931,12 @@ pub fn run_plugins_with_sources(
     };
 
     for r in reports {
-        let file = PathBuf::from(&r.file);
-        let Some(text) = text_index.get(file.as_path()).copied() else {
+        let wire_file = PathBuf::from(&r.file);
+        let Some((orig_file, text)) = text_index.get(wire_file.as_path()).copied() else {
             record_out_of_scope(&r.check_id, r.file);
             continue;
         };
+        let file = orig_file.to_path_buf();
         let span = cofferdam_core::span_from_bytes(text, r.start_byte, r.end_byte);
         let severity = parse_severity(&r.severity).unwrap_or(Severity::Medium);
         // Prefix bare plugin IDs with their declared category so the
@@ -949,11 +955,13 @@ pub fn run_plugins_with_sources(
         // aggregated warning.
         let mut related = Vec::with_capacity(r.related.len());
         for rel in r.related {
-            let rel_file = PathBuf::from(&rel.file);
-            let Some(rel_text) = text_index.get(rel_file.as_path()).copied() else {
+            let rel_wire_file = PathBuf::from(&rel.file);
+            let Some((rel_orig_file, rel_text)) = text_index.get(rel_wire_file.as_path()).copied()
+            else {
                 record_out_of_scope(&check_id, rel.file);
                 continue;
             };
+            let rel_file = rel_orig_file.to_path_buf();
             let rel_span =
                 cofferdam_core::span_from_bytes(rel_text, rel.span.start_byte, rel.span.end_byte);
             let rel_location = Location::from_span(&rel_file, rel_span);

@@ -62,12 +62,51 @@
       "start_byte": 91,
       "end_byte": 95,
       "message": "`deep` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/plugin-scope-glob/fixture/other/skip.ts",
+      "line": 2,
+      "column": 14,
+      "start_byte": 84,
+      "end_byte": 88,
+      "message": "`skip` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/plugin-scope-glob/fixture/widgets/direct.ts",
+      "line": 2,
+      "column": 14,
+      "start_byte": 91,
+      "end_byte": 97,
+      "message": "`direct` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/plugin-scope-glob/fixture/widgets/nested/deep.ts",
+      "line": 2,
+      "column": 14,
+      "start_byte": 91,
+      "end_byte": 95,
+      "message": "`deep` is exported here but no matching test file was found in the project"
     }
   ],
   "summary": {
-    "total": 5,
+    "total": 8,
     "by_category": {
-      "design": 3,
+      "design": 6,
       "warning": 2
     }
   }

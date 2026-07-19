@@ -8,11 +8,25 @@
       "message": "file is in frozen boundary `src/legacy/**`: see ADR-0007"
     },
     {
+      "id": "Design.MissingTestFile",
+      "file": "src/legacy/helper.ts",
+      "line": 2,
+      "column": 14,
+      "message": "`Y` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.BoundaryFrozen",
       "file": "src/legacy/old.ts",
       "line": 1,
       "column": 1,
       "message": "file is in frozen boundary `src/legacy/**`: see ADR-0007"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/legacy/old.ts",
+      "line": 2,
+      "column": 14,
+      "message": "`X` is exported here but no matching test file was found in the project"
     }
   ]
 }

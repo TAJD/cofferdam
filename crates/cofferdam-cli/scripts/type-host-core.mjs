@@ -269,6 +269,63 @@ function literalFactsFromDeclaration(declNode, Node, SyntaxKind) {
   return { literalString, isNullable, isEmptyObject };
 }
 
+// Resolve the literal members of the union type at a byte span (CD-118).
+// Returns { members: string[] } when every member of the resolved type's
+// union is itself a string/number/boolean literal type, or `null` when
+// the type isn't a literal-only union (including the non-union case) —
+// see the doc comment on `UnionFacts` in cofferdam-core::types for why a
+// partial/mixed union deliberately returns `null` rather than a partial
+// list.
+export async function unionMembers(state, tsconfigPath, file, startByte, endByte) {
+  const { project } = await getOrCreateProject(state, tsconfigPath);
+
+  const sourceFile = resolveSourceFile(project, file);
+  if (!sourceFile) return null;
+
+  const fullText = sourceFile.getFullText();
+  const startU16 = utf16PosFromByteOffset(fullText, startByte | 0);
+  const endU16 = utf16PosFromByteOffset(fullText, endByte | 0);
+
+  let node = null;
+  const width = endU16 - startU16;
+  try {
+    if (width > 0) {
+      node = sourceFile.getDescendantAtStartWithWidth(startU16, width) ?? null;
+    }
+  } catch {
+    node = null;
+  }
+  if (!node) {
+    try {
+      node = sourceFile.getDescendantAtPos(startU16) ?? null;
+    } catch {
+      node = null;
+    }
+  }
+  if (!node) return null;
+
+  let type;
+  try {
+    type = node.getType();
+  } catch {
+    return null;
+  }
+  if (!type) return null;
+
+  const unionParts = safeCall(() => type.getUnionTypes(), []) ?? [];
+  if (unionParts.length < 2) return null; // not a union at all
+
+  const members = [];
+  for (const part of unionParts) {
+    const isLiteral = safeCall(() => part.isLiteral(), false);
+    if (!isLiteral) return null; // mixed/non-literal member — bail entirely
+    const literalValue = safeCall(() => part.getLiteralValue(), undefined);
+    if (literalValue === undefined) return null;
+    members.push(String(literalValue));
+  }
+  return { members };
+}
+
 // Build the compact TypeFacts wire object from a ts-morph Type.
 export function typeFacts(type, node) {
   const unionParts = safeCall(() => type.getUnionTypes(), []) ?? [];

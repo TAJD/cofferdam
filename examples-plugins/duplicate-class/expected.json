@@ -81,12 +81,38 @@
       "start_byte": 157,
       "end_byte": 163,
       "message": "`Widget` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/duplicate-class/fixture/a.ts",
+      "line": 5,
+      "column": 14,
+      "start_byte": 205,
+      "end_byte": 211,
+      "message": "`Widget` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/duplicate-class/fixture/b.ts",
+      "line": 4,
+      "column": 14,
+      "start_byte": 157,
+      "end_byte": 163,
+      "message": "`Widget` is exported here but no matching test file was found in the project"
     }
   ],
   "summary": {
-    "total": 5,
+    "total": 7,
     "by_category": {
-      "design": 5
+      "design": 7
     }
   }
 }

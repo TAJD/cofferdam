@@ -1,11 +1,32 @@
 {
   "findings": [
     {
+      "id": "Design.MissingTestFile",
+      "file": "services/storage.ts",
+      "line": 5,
+      "column": 17,
+      "message": "`loadKey` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.ScriptedInvariant",
       "file": "ui/Dashboard.tsx",
       "line": 1,
       "column": 1,
       "message": "scripted invariant `ui-no-localstorage` failed: UI files must not touch localStorage directly"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "ui/Dashboard.tsx",
+      "line": 5,
+      "column": 17,
+      "message": "`Dashboard` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "ui/Settings.tsx",
+      "line": 4,
+      "column": 17,
+      "message": "`Settings` is exported here but no matching test file was found in the project"
     }
   ]
 }

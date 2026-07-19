@@ -14,8 +14,14 @@ mod cyclomatic_complexity;
 mod dead_export;
 mod duplicate_block;
 mod long_and_complex;
+mod mixed_throw_and_return_error;
+mod mutated_parameter;
+mod prefer_array_method_over_loop;
+mod prefer_const_over_let;
 mod prefer_nullish_coalescing;
 mod prefer_optional_chain;
+mod purity_heuristic;
+mod side_effect_in_map_callback;
 mod unused_variable;
 
 pub use cognitive_complexity::{
@@ -27,8 +33,14 @@ pub use cyclomatic_complexity::{
 pub use dead_export::DeadExport;
 pub use duplicate_block::DuplicateBlock;
 pub use long_and_complex::LongAndComplex;
+pub use mixed_throw_and_return_error::MixedThrowAndReturnError;
+pub use mutated_parameter::MutatedParameter;
+pub use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
+pub use prefer_const_over_let::PreferConstOverLet;
 pub use prefer_nullish_coalescing::PreferNullishCoalescing;
 pub use prefer_optional_chain::PreferOptionalChain;
+pub use purity_heuristic::{PurityHeuristic, PURITY_HEURISTIC_OPTIONS};
+pub use side_effect_in_map_callback::SideEffectInMapCallback;
 pub use unused_variable::UnusedVariable;
 
 #[cfg(test)]
@@ -413,6 +425,707 @@ class B {
             1,
             "exactly one `ctx` (class B's) should flag; got: {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // ─── Refactor.PreferConstOverLet (CD-119) ──────────────────────────
+
+    use prefer_const_over_let::PreferConstOverLet;
+
+    fn run_prefer_const_over_let(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        PreferConstOverLet.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn never_reassigned_let_is_flagged() {
+        let issues = run_prefer_const_over_let("let total = 1 + 2;\nreturn total;");
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains("total"));
+    }
+
+    #[test]
+    fn directly_reassigned_let_is_not_flagged() {
+        let issues = run_prefer_const_over_let("let price = 1;\nprice = price - 1;\nreturn price;");
+        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
+    }
+
+    #[test]
+    fn incremented_let_is_not_flagged() {
+        let issues = run_prefer_const_over_let(
+            "let count = 0;\nwhile (count < 5) { count++; }\nreturn count;",
+        );
+        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
+    }
+
+    #[test]
+    fn let_reassigned_in_nested_closure_is_not_flagged() {
+        let src = "\
+function makeCounter() {
+  let count = 0;
+  return function increment() {
+    count += 1;
+    return count;
+  };
+}";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "closure reassignment of a captured outer let must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn const_binding_is_never_flagged() {
+        let issues = run_prefer_const_over_let("const total = 1 + 2;\nreturn total;");
+        assert!(
+            issues.is_empty(),
+            "const bindings are out of scope; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn non_overlapping_same_named_lets_both_flagged() {
+        // Two unrelated `let total`s in different functions, neither ever
+        // reassigned — both must flag independently, not just the first.
+        let src = "\
+export function a() { let total = 1; return total; }
+export function b() { let total = 2; return total; }";
+        let issues = run_prefer_const_over_let(src);
+        assert_eq!(
+            issues.len(),
+            2,
+            "expected both unrelated `total` lets to flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn destructured_let_binding_is_skipped() {
+        let issues = run_prefer_const_over_let("let { a, b } = obj;\nreturn a + b;");
+        assert!(
+            issues.is_empty(),
+            "destructured bindings are MVP-skipped; got {issues:?}"
+        );
+    }
+
+    // ─── Refactor.PreferArrayMethodOverLoop (CD-120) ───────────────────
+
+    use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
+
+    fn run_prefer_array_method_over_loop(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        PreferArrayMethodOverLoop.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn inline_push_loop_is_flagged_as_map() {
+        let src = "\
+const doubled: number[] = [];
+for (const n of nums) {
+  doubled.push(n * 2);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains(".map()"));
+    }
+
+    #[test]
+    fn computed_then_push_loop_is_flagged_as_map() {
+        let src = "\
+const labels: string[] = [];
+for (const n of nums) {
+  const label = String(n);
+  labels.push(label);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains(".map()"));
+    }
+
+    #[test]
+    fn if_gated_push_loop_is_flagged_as_filter() {
+        let src = "\
+const evens: number[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    evens.push(n);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(issues[0].message.contains(".filter()"));
+    }
+
+    #[test]
+    fn if_gated_computed_push_loop_is_flagged_as_filter_map() {
+        // The if's consequent pushes a separately computed transform, not
+        // the raw loop variable — the suggestion must be `.filter().map()`,
+        // not a plain `.filter()`, since the loop does both.
+        let src = "\
+const labels: string[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    const label = `even:${n}`;
+    labels.push(label);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert!(
+            issues[0].message.contains(".filter().map()"),
+            "expected a filter+map suggestion, not a plain filter; got: {}",
+            issues[0].message
+        );
+    }
+
+    #[test]
+    fn multi_arg_push_is_not_flagged() {
+        // arr.push(a, b) pushes two items per call — not map/filter-shaped.
+        let src = "\
+const flat: number[] = [];
+for (const n of nums) {
+  flat.push(n, n + 1);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "multi-arg push must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_with_break_is_not_flagged() {
+        let src = "\
+const evens: number[] = [];
+for (const n of nums) {
+  if (evens.length >= limit) {
+    break;
+  }
+  if (n % 2 === 0) {
+    evens.push(n);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "early break must disqualify the match; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_with_two_accumulators_is_not_flagged() {
+        let src = "\
+const evens: number[] = [];
+const odds: number[] = [];
+for (const n of nums) {
+  if (n % 2 === 0) {
+    evens.push(n);
+  } else {
+    odds.push(n);
+  }
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "if/else with two accumulators must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_with_extra_side_effect_is_not_flagged() {
+        let src = "\
+const copy: number[] = [];
+for (const n of nums) {
+  console.log(n);
+  copy.push(n);
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "a side effect beyond the single push must disqualify the match; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn loop_without_push_is_not_flagged() {
+        let src = "\
+let total = 0;
+for (let i = 0; i < nums.length; i++) {
+  total += nums[i];
+}";
+        let issues = run_prefer_array_method_over_loop(src);
+        assert!(
+            issues.is_empty(),
+            "a loop that never pushes must not flag; got {issues:?}"
+        );
+    }
+
+    // ─── Refactor.PurityHeuristic (CD-123) ──────────────────────────────
+
+    use purity_heuristic::PurityHeuristic;
+
+    fn run_purity_heuristic(src: &str, enabled: bool) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("enabled".to_string(), RawOptionValue::Bool(enabled));
+        let opts =
+            validate_options("Refactor.PurityHeuristic", PURITY_HEURISTIC_OPTIONS, &raw).unwrap();
+        let mut ctx = CheckContext::new(&file)
+            .with_parsed(&parsed)
+            .with_options(&opts);
+        PurityHeuristic.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn disabled_by_default_emits_nothing() {
+        let src = "\
+let requestCount = 0;
+export function logRequest(name: string) {
+  console.log(name, requestCount);
+}
+export function bump() {
+  requestCount += 1;
+}";
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        let issues = PurityHeuristic.run(&file, &mut ctx);
+        assert!(
+            issues.is_empty(),
+            "check must be a no-op without explicit opt-in; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn exported_function_reading_mutated_module_let_is_flagged() {
+        let src = "\
+let requestCount = 0;
+export function logRequest(name: string) {
+  console.log(name, requestCount);
+}
+requestCount = 1;";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn compound_assignment_to_module_state_counts_as_a_read() {
+        // `bump` writes requestCount via `+=`, which reads the prior
+        // value first — a genuine (if self-inflicted) hidden dependency.
+        let src = "\
+let requestCount = 0;
+export function bump() {
+  requestCount += 1;
+}";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn read_only_module_state_is_not_flagged() {
+        let src = "\
+let config = { apiUrl: \"https://api.example.com\" };
+export function fetchData() {
+  return fetch(config.apiUrl);
+}";
+        let issues = run_purity_heuristic(src, true);
+        assert!(
+            issues.is_empty(),
+            "a module-level let that's never reassigned must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn parameter_shadowing_module_name_is_not_flagged() {
+        let src = "\
+let total = 0;
+export function resetTotal() {
+  total = 0;
+}
+export function addToTotal(total: number) {
+  return total + 1;
+}";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(
+            issues.len(),
+            0,
+            "own parameter covers the read even though the module-level name is mutated \
+             elsewhere; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn exported_let_module_state_is_still_detected() {
+        // `export let` wraps the VariableDeclaration in an
+        // ExportNamedDeclaration — must still be picked up as
+        // module-level mutable state.
+        let src = "\
+export let requestCount = 0;
+export function logRequest(name: string) {
+  console.log(name, requestCount);
+}
+requestCount = 1;";
+        let issues = run_purity_heuristic(src, true);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    // ─── Refactor.MixedThrowAndReturnError (CD-124) ─────────────────────
+
+    use mixed_throw_and_return_error::MixedThrowAndReturnError;
+
+    fn run_mixed_throw_and_return_error(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        MixedThrowAndReturnError.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn throw_and_error_return_in_distinct_branches_is_flagged() {
+        let src = "\
+function parseConfig(input: string) {
+  if (!input) {
+    throw new Error(\"input required\");
+  }
+  if (!input.length) {
+    return { error: \"invalid config\" };
+  }
+  return input;
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn error_return_only_no_throw_is_not_flagged() {
+        let src = "function loadResult() { return { error: null, value: 42 }; }";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "no throw anywhere must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn throw_only_no_error_return_is_not_flagged() {
+        let src = "function f(x: number) { if (x < 0) { throw new Error(\"bad\"); } return x; }";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "no error-shaped return anywhere must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn throw_and_error_return_in_same_block_is_not_flagged() {
+        let src = "\
+function overlapping(x: number) {
+  if (x < 0) {
+    throw new Error(\"negative\");
+    return { error: \"unreachable\" };
+  }
+  return x * 2;
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "throw and the only error-shaped return sharing a block is dead code, not a \
+             competing idiom; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn unrelated_object_shape_is_not_flagged() {
+        let src = "\
+function f(x: number) {
+  if (x < 0) {
+    throw new Error(\"bad\");
+  }
+  return { total: x };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "an object return without an error/ok/success field must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_throw_does_not_leak_into_outer_function() {
+        let src = "\
+function outer(x: number) {
+  function inner() {
+    throw new Error(\"inner failure\");
+  }
+  inner();
+  return { error: \"outer failure\" };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "a throw inside a nested function is that function's own scope, not outer's; \
+             got {issues:?}"
+        );
+        // The nested function itself has neither an error-shaped return nor
+        // a second throw, so it isn't independently flagged either.
+    }
+
+    #[test]
+    fn result_shape_success_return_is_not_flagged() {
+        // `{ error: null }` is the SUCCESS arm of a Result-shaped return,
+        // not a competing error idiom, even though a throw exists nearby
+        // for an unrelated invariant.
+        let src = "\
+function divide(a: number, b: number) {
+  if (b === 0) {
+    throw new Error(\"division by zero\");
+  }
+  return { error: null, value: a / b };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "`error: null` signals success, not failure; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn ok_true_success_return_is_not_flagged() {
+        let src = "\
+function f(x: number) {
+  if (x < 0) {
+    throw new Error(\"bad\");
+  }
+  return { ok: true, value: x };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert!(
+            issues.is_empty(),
+            "`ok: true` signals success, not failure; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn ok_false_failure_return_is_flagged() {
+        let src = "\
+function f(x: number) {
+  if (x < 0) {
+    throw new Error(\"bad\");
+  }
+  if (x > 100) {
+    return { ok: false };
+  }
+  return { ok: true, value: x };
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "`ok: false` genuinely signals failure, alongside a throw; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn brace_less_guard_clauses_in_distinct_branches_are_flagged() {
+        let src = "\
+function parseId(raw: string) {
+  if (!raw) throw new Error(\"id required\");
+  if (raw.length > 64) return { error: \"id too long\" };
+  return raw;
+}";
+        let issues = run_mixed_throw_and_return_error(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "brace-less guard clauses must still be treated as distinct branches; got {issues:?}"
+        );
+    }
+
+    // ─── Refactor.SideEffectInMapCallback (CD-125) ──────────────────────
+
+    use side_effect_in_map_callback::SideEffectInMapCallback;
+
+    fn run_side_effect_in_map_callback(src: &str) -> Vec<CoreIssue> {
+        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
+        SideEffectInMapCallback.run(&file, &mut ctx)
+    }
+
+    #[test]
+    fn map_callback_mutating_outer_scope_is_flagged() {
+        let src = "\
+const seen = [];
+const doubled = items.map((item) => {
+  seen.push(item);
+  return item * 2;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn filter_callback_calling_console_is_flagged() {
+        let src = "\
+const positives = items.filter((item) => {
+  console.log(\"checking\", item);
+  return item > 0;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn map_callback_with_only_local_state_is_not_flagged() {
+        let src = "\
+const scaled = items.map((item) => {
+  const local = item * 2;
+  return local;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "mutating only its own locals must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_mutation_does_not_leak_into_outer_callback() {
+        let src = "\
+const wrapped = items.map((item) => {
+  function makeLabel() {
+    let label = \"\";
+    label += String(item);
+    return label;
+  }
+  return makeLabel();
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "a nested function mutating its own local must not flag the outer callback; \
+             got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn foreach_callback_is_never_inspected() {
+        let src = "\
+const seen = [];
+items.forEach((item) => {
+  seen.push(item);
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            ".forEach is exempt — a side effect there is the point; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn discarded_return_with_no_other_side_effect_is_not_flagged() {
+        let src = "items.map((item) => process(item));";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "a discarded-return misuse with no real side effect is a distinct concern (\"use \
+             forEach instead\"), not this check's job; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn member_assignment_to_outer_object_is_flagged() {
+        let src = "\
+const state = { count: 0 };
+const withCount = items.map((item) => {
+  state.count += 1;
+  return item;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "writing into an outer-scope object property must flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn computed_index_assignment_to_outer_array_is_flagged() {
+        let src = "\
+const acc = [];
+const withIndexWrite = items.map((item, i) => {
+  acc[i] = item;
+  return item;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "writing into an outer-scope array by index must flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn member_assignment_to_own_local_is_not_flagged() {
+        let src = "\
+const result = items.map((item) => {
+  const local = { count: 0 };
+  local.count += 1;
+  return local.count + item;
+});";
+        let issues = run_side_effect_in_map_callback(src);
+        assert!(
+            issues.is_empty(),
+            "writing into the callback's own local object must not flag; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn expression_body_arrow_side_effect_is_flagged() {
+        let src = "\
+const seen = [];
+const doubled = items.map((item) => seen.push(item));";
+        let issues = run_side_effect_in_map_callback(src);
+        assert_eq!(
+            issues.len(),
+            1,
+            "an expression-body arrow callback must be inspected the same as a block-body one; \
+             got {issues:?}"
         );
     }
 }

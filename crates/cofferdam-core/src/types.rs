@@ -63,6 +63,24 @@ pub struct LiteralFacts {
     pub is_empty_object: bool,
 }
 
+/// Literal members of a discriminant union (CD-118's
+/// `Design.UnionExhaustivenessGap`), as reported by the type host's
+/// `unionMembers` query.
+///
+/// Populated only when EVERY member of the resolved union type is itself
+/// a string/number/boolean literal type — i.e. the query targets a
+/// discriminant expression (`shape.kind`), not an arbitrary union. A
+/// query against a non-literal-only union (`string | number`, or a union
+/// of object types queried directly rather than via its tag property)
+/// returns `None` from [`TypeOracle::union_members_at`] so callers don't
+/// mistake "couldn't determine a literal set" for "empty union".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnionFacts {
+    /// Each literal member's printed value, e.g. `"circle"`, `"square"`,
+    /// or `"0"` for a numeric literal. Order matches declaration order.
+    pub members: Vec<String>,
+}
+
 /// Read-only handle a type-aware check uses to ask the type host about
 /// nodes in the file currently being analyzed.
 ///
@@ -103,6 +121,26 @@ pub trait TypeOracle: Send + Sync {
     /// implementors (test stubs, `FixedOracle`) don't need updating
     /// until they have a reason to support literal resolution.
     fn resolve_literal(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<LiteralFacts> {
+        let _ = (file, start_byte, end_byte);
+        None
+    }
+
+    /// Resolve the literal members of the union type at
+    /// `[start_byte, end_byte)` in `file` (CD-118) — used to check
+    /// whether a `switch`/`if`-chain over a discriminant covers every
+    /// variant.
+    ///
+    /// Returns `None` when the node's type isn't a union where every
+    /// member is a literal (string/number/boolean) type — including the
+    /// non-union case (a plain `string` discriminant, say) and the case
+    /// where the query targets the wrong expression (an object union
+    /// rather than its literal-typed tag property). Callers treat `None`
+    /// as "can't conclude a literal set" and emit no finding.
+    ///
+    /// Default implementation returns `None` so existing [`TypeOracle`]
+    /// implementors don't need updating until they have a reason to
+    /// support union-member resolution.
+    fn union_members_at(&self, file: &Path, start_byte: u32, end_byte: u32) -> Option<UnionFacts> {
         let _ = (file, start_byte, end_byte);
         None
     }

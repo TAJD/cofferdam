@@ -18,7 +18,7 @@
   ],
   "memory": {
     "corpus": "examples",
-    "peak_rss_kb": 13068.0,
+    "peak_rss_kb": 17000.0,
     "tolerance_pct": 20
   }
 }

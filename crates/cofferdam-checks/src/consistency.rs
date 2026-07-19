@@ -12,6 +12,7 @@ use cofferdam_core::{
 };
 use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use oxc_ast_visit::Visit;
+use oxc_span::GetSpan;
 
 // ─── Consistency.QuoteStyle ─────────────────────────────────────────────────
 
@@ -694,6 +695,347 @@ fn find_next_non_blank(from_idx: usize, lines: &[&str]) -> Option<u32> {
     None
 }
 
+// ─── Consistency.ErrorHandlingIdiom ────────────────────────────────────────
+
+/// Field names that make an object-literal return count as "returning an
+/// error" — mirrors `Refactor.MixedThrowAndReturnError`'s heuristic
+/// deliberately, so the two checks agree on what counts as an
+/// error-shaped return.
+const EHI_ERROR_SHAPE_FIELDS: &[&str] = &["error", "ok", "success"];
+
+/// Below this many total occurrences (throws + error-shaped returns)
+/// project-wide, "dominant idiom" is statistically meaningless — skip
+/// emitting anything.
+const MIN_TOTAL_OCCURRENCES: usize = 4;
+
+/// Per-file occurrence spans collected during pass 1.
+#[derive(Default, Clone)]
+struct FileErrorIdiomStats {
+    throw_spans: Vec<Span>,
+    error_return_spans: Vec<Span>,
+}
+
+static ERROR_IDIOM_STATS: CorpusKey<HashMap<PathBuf, FileErrorIdiomStats>> =
+    CorpusKey::new("Consistency.ErrorHandlingIdiom.stats");
+
+/// `Consistency.ErrorHandlingIdiom` — two-pass check (CD-129) that
+/// learns the project-wide dominant error-handling idiom (throwing vs.
+/// returning an error-shaped object) in pass 1, then flags every
+/// occurrence of the minority idiom in pass 2.
+///
+/// v1 deliberately does NOT attempt to group occurrences by "same kind
+/// of failure" (e.g. by directory, domain, or error class/name) — the
+/// ticket flagged that grouping heuristic as the main open design
+/// question, and the chosen v1 scope is to learn one idiom for the
+/// whole project rather than try to resolve it. This means the check
+/// is a project-wide idiom-consistency signal, not a same-failure-class
+/// comparison; a project that legitimately mixes idioms across
+/// unrelated domains (e.g. throwing for programmer errors, returning
+/// `Result`-shaped values for expected validation failures) will see
+/// this as noise. It overlaps somewhat with the per-function
+/// `Refactor.MixedThrowAndReturnError` (CD-124) — that check flags a
+/// single function mixing both idioms; this one flags idiom
+/// inconsistency across the whole project.
+///
+/// The "throw" tally also counts `Promise.reject(...)` calls (the
+/// async-idiom equivalent of a throw), and the "return" tally also
+/// counts a concise arrow-function body evaluating to an error-shaped
+/// object (`const parse = (s) => ({ error: "bad" })`), not just block-
+/// bodied `return` statements (CD-136). A `catch (e) { throw e; }`
+/// re-throw of the caught parameter is excluded from the throw tally
+/// entirely — it's propagation, not a deliberate idiom choice, so
+/// counting it would overstate how dominant "throw" is in a codebase
+/// that mostly re-throws errors originated elsewhere.
+pub struct ErrorHandlingIdiom;
+
+const EHI_META: CheckMeta = CheckMeta {
+    id: "Consistency.ErrorHandlingIdiom",
+    category: Category::Consistency,
+    base_priority: -5,
+    default_severity: Severity::Info,
+    explanation: "The project predominantly uses one error-handling idiom (throwing, or \
+        returning an error-shaped value) — this file deviates from it, hurting consistency of \
+        error paths for callers.",
+    body: include_str!("../docs/Consistency.ErrorHandlingIdiom.md"),
+    requires_types: false,
+    consistency: false,
+    options: &[],
+    autofix: false,
+    pure_run: false,
+};
+
+impl Check for ErrorHandlingIdiom {
+    fn meta(&self) -> &'static CheckMeta {
+        &EHI_META
+    }
+
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&ERROR_IDIOM_STATS, |slot, path| {
+            slot.remove(path);
+        });
+    }
+
+    /// Pass 1: walk the whole file (any nesting depth — unlike CD-124,
+    /// this check doesn't need per-function scoping) and record every
+    /// throw statement and every error-shaped return statement.
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+        let mut collector = ErrorIdiomCollector {
+            file,
+            stats: FileErrorIdiomStats::default(),
+            catch_param_stack: Vec::new(),
+        };
+        collector.visit_program(parsed.program);
+        let stats = collector.stats;
+
+        ctx.corpus.with_slot(&ERROR_IDIOM_STATS, |slot| {
+            slot.insert(file.path.clone(), stats);
+        });
+
+        Vec::new()
+    }
+
+    /// Finalize (CD-139 perf fix): sum occurrences across every file in
+    /// the corpus ONCE to learn the project-wide dominant idiom, then
+    /// emit findings for every file's minority-idiom occurrences in one
+    /// pass. This check was originally written as `pass2` (per-file
+    /// second pass), which the engine invokes once PER FILE — since this
+    /// check's aggregation is project-wide rather than per-file (unlike
+    /// `Consistency.QuoteStyle`, which pass2 suits fine), that meant
+    /// cloning the entire cross-file corpus slot once per file: O(files)
+    /// work repeated O(files) times. `finalize` runs exactly once, so
+    /// the same aggregation now costs O(files) total, matching the
+    /// pattern used by `Design.DuplicateExportName` and friends.
+    ///
+    /// Read-only (cd-32): a draining read would empty the slot as a side
+    /// effect of finalize, corrupting `Engine::analyze_incremental`'s
+    /// persistent `AnalysisState` for the next incremental call.
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        let all_stats: HashMap<PathBuf, FileErrorIdiomStats> = ctx
+            .corpus
+            .with_slot(&ERROR_IDIOM_STATS, |slot| slot.clone());
+
+        let total_throw: usize = all_stats.values().map(|s| s.throw_spans.len()).sum();
+        let total_return: usize = all_stats.values().map(|s| s.error_return_spans.len()).sum();
+        let total = total_throw + total_return;
+        if total < MIN_TOTAL_OCCURRENCES {
+            return Vec::new();
+        }
+
+        // Strict majority required, mirroring Consistency.QuoteStyle: a
+        // 50/50 split (or anything short of a true majority) means
+        // there's no dominant idiom to deviate from.
+        let dominant_is_throw = if total_throw > total / 2 && total_throw > total_return {
+            true
+        } else if total_return > total / 2 && total_return > total_throw {
+            false
+        } else {
+            return Vec::new();
+        };
+
+        let mut issues = Vec::new();
+        for (path, stats) in &all_stats {
+            if dominant_is_throw {
+                for span in &stats.error_return_spans {
+                    issues.push(ehi_issue(
+                        path,
+                        *span,
+                        "this file returns an error-shaped value, but the project predominantly \
+                         throws for errors — consider throwing instead for consistency",
+                    ));
+                }
+            } else {
+                for span in &stats.throw_spans {
+                    issues.push(ehi_issue(
+                        path,
+                        *span,
+                        "this file throws, but the project predominantly returns an error-shaped \
+                         value for errors — consider returning one instead for consistency",
+                    ));
+                }
+            }
+        }
+        issues
+    }
+}
+
+fn ehi_issue(path: &std::path::Path, span: Span, message: &str) -> Issue {
+    Issue {
+        check_id: EHI_META.id.to_string(),
+        message: message.to_string(),
+        file: path.to_path_buf(),
+        location: Location::from_span(path, span),
+        priority: Priority(EHI_META.base_priority),
+        severity: Severity::Info,
+        related: Vec::new(),
+    }
+}
+
+/// A field named `error`/`ok`/`success` signals *failure* only for
+/// certain values — see `Refactor.MixedThrowAndReturnError`'s
+/// `signals_failure` for the identical reasoning (`{ error: null }` /
+/// `{ ok: true }` are a Result-shaped success arm, not a competing
+/// error idiom).
+fn ehi_signals_failure(field_name: &str, value: &oxc_ast::ast::Expression<'_>) -> bool {
+    use oxc_ast::ast::Expression;
+    match field_name {
+        "error" => {
+            !matches!(value, Expression::NullLiteral(_))
+                && !matches!(value, Expression::Identifier(id) if id.name.as_str() == "undefined")
+        }
+        "ok" | "success" => !matches!(value, Expression::BooleanLiteral(lit) if lit.value),
+        _ => true,
+    }
+}
+
+/// Peel any wrapping `ParenthesizedExpression` nodes — `oxc_parser`
+/// preserves parens by default (needed for e.g. `(s) => ({ error })`,
+/// an arrow whose concise body would otherwise be parsed as a block),
+/// so a parenthesized object literal like `return ({ error: 'x' })` or
+/// an arrow's parenthesized concise body must be unwrapped before
+/// matching on `Expression::ObjectExpression` (CD-136).
+fn ehi_unwrap_parens<'a, 'b>(
+    mut expr: &'b oxc_ast::ast::Expression<'a>,
+) -> &'b oxc_ast::ast::Expression<'a> {
+    while let oxc_ast::ast::Expression::ParenthesizedExpression(inner) = expr {
+        expr = &inner.expression;
+    }
+    expr
+}
+
+fn ehi_is_error_shaped(expr: &oxc_ast::ast::Expression<'_>) -> bool {
+    use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
+    let Expression::ObjectExpression(obj) = ehi_unwrap_parens(expr) else {
+        return false;
+    };
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(prop) = prop else {
+            return false;
+        };
+        let name: Option<&str> = match &prop.key {
+            PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+            PropertyKey::StringLiteral(lit) => Some(lit.value.as_str()),
+            _ => None,
+        };
+        name.is_some_and(|n| {
+            EHI_ERROR_SHAPE_FIELDS.contains(&n) && ehi_signals_failure(n, &prop.value)
+        })
+    })
+}
+
+/// True when `callee` is exactly `Promise.reject` — the async-idiom
+/// equivalent of a `throw` (CD-136).
+fn ehi_is_promise_reject_callee(callee: &oxc_ast::ast::Expression<'_>) -> bool {
+    let oxc_ast::ast::Expression::StaticMemberExpression(member) = callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "reject" {
+        return false;
+    }
+    matches!(&member.object, oxc_ast::ast::Expression::Identifier(id) if id.name.as_str() == "Promise")
+}
+
+/// The catch parameter's binding name, if it's a simple identifier
+/// (`catch (e)`) rather than a destructuring pattern or no parameter at
+/// all — only the simple-identifier case can be a re-throw target.
+fn ehi_catch_param_name(param: &oxc_ast::ast::CatchParameter<'_>) -> Option<String> {
+    match &param.pattern {
+        oxc_ast::ast::BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+        _ => None,
+    }
+}
+
+struct ErrorIdiomCollector<'a> {
+    file: &'a SourceFile,
+    stats: FileErrorIdiomStats,
+    /// Innermost enclosing catch clauses' bound parameter names, pushed
+    /// on entry and popped on exit — `None` for a catch with no simple-
+    /// identifier parameter (destructured, or omitted entirely).
+    catch_param_stack: Vec<Option<String>>,
+}
+
+impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
+    fn visit_catch_clause(&mut self, node: &oxc_ast::ast::CatchClause<'a>) {
+        self.catch_param_stack
+            .push(node.param.as_ref().and_then(ehi_catch_param_name));
+        oxc_ast_visit::walk::walk_catch_clause(self, node);
+        self.catch_param_stack.pop();
+    }
+
+    fn visit_throw_statement(&mut self, node: &oxc_ast::ast::ThrowStatement<'a>) {
+        // A bare re-throw of the innermost enclosing catch's own bound
+        // parameter (`catch (e) { throw e; }`) is propagation, not a
+        // deliberate idiom choice — exclude it from the tally entirely
+        // rather than counting it as a "throw" (CD-136).
+        let is_rethrow = matches!(&node.argument, oxc_ast::ast::Expression::Identifier(id)
+            if self
+                .catch_param_stack
+                .last()
+                .and_then(|name| name.as_deref())
+                == Some(id.name.as_str()));
+        if !is_rethrow {
+            let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+            self.stats.throw_spans.push(span);
+        }
+        oxc_ast_visit::walk::walk_throw_statement(self, node);
+    }
+
+    fn visit_return_statement(&mut self, node: &oxc_ast::ast::ReturnStatement<'a>) {
+        if let Some(arg) = &node.argument {
+            if ehi_is_error_shaped(arg) {
+                let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+                self.stats.error_return_spans.push(span);
+            }
+        }
+        oxc_ast_visit::walk::walk_return_statement(self, node);
+    }
+
+    fn visit_arrow_function_expression(
+        &mut self,
+        node: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
+        // A concise arrow body (`() => ({ error: ... })`) is a `return`
+        // equivalent invisible to `visit_return_statement` — there's no
+        // `ReturnStatement` node for it at all (CD-136).
+        if let Some(expr) = node.get_expression() {
+            if ehi_is_error_shaped(expr) {
+                let span = span_from_bytes(&self.file.text, expr.span().start, expr.span().end);
+                self.stats.error_return_spans.push(span);
+            }
+        }
+        // A nested function scope can bind its own parameter with the same
+        // name as an enclosing catch's (`catch (e) { xs.forEach((e) => {
+        // throw e; }); }`) — that `e` refers to the callback's own
+        // parameter, not the catch's. Push a boundary so the re-throw check
+        // never treats it as the outer catch's parameter (CD-136).
+        self.catch_param_stack.push(None);
+        oxc_ast_visit::walk::walk_arrow_function_expression(self, node);
+        self.catch_param_stack.pop();
+    }
+
+    fn visit_function(
+        &mut self,
+        node: &oxc_ast::ast::Function<'a>,
+        flags: oxc_syntax::scope::ScopeFlags,
+    ) {
+        // Same shadowing boundary as `visit_arrow_function_expression`, for
+        // regular function declarations/expressions (CD-136).
+        self.catch_param_stack.push(None);
+        oxc_ast_visit::walk::walk_function(self, node, flags);
+        self.catch_param_stack.pop();
+    }
+
+    fn visit_call_expression(&mut self, node: &oxc_ast::ast::CallExpression<'a>) {
+        if ehi_is_promise_reject_callee(&node.callee) {
+            let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
+            self.stats.throw_spans.push(span);
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, node);
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1093,5 +1435,220 @@ const el = <Foo className="ignored" />;
         assert!(!looks_like_check_id("please"));
         assert!(!looks_like_check_id(""));
         assert!(!looks_like_check_id("123.bad"));
+    }
+
+    // ── ErrorHandlingIdiom tests ─────────────────────────────────────────────
+
+    /// Runs `ErrorHandlingIdiom`'s run+finalize cycle over each
+    /// `(path, source)` fixture and returns every issue from `finalize`,
+    /// sorted for deterministic assertions (finalize iterates a
+    /// `HashMap`, so raw order isn't stable).
+    fn run_error_handling_idiom(fixtures: &[(&str, &str)]) -> Vec<Issue> {
+        let corpus = CorpusIndex::new();
+        let check = ErrorHandlingIdiom;
+        let files: Vec<SourceFile> = fixtures
+            .iter()
+            .map(|(path, src)| SourceFile::new(PathBuf::from(path), *src))
+            .collect();
+
+        for file in &files {
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            check.run(file, &mut ctx);
+        }
+
+        let mut finalize_ctx = cofferdam_core::FinalizeContext::new(&corpus);
+        let mut issues = check.finalize(&mut finalize_ctx);
+        issues.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.message.cmp(&b.message)));
+        issues
+    }
+
+    #[test]
+    fn minority_return_idiom_is_flagged_when_throw_dominates() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "function f() { return { error: 'e' }; }"),
+        ]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn minority_throw_idiom_is_flagged_when_return_dominates() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            ("d.ts", "function f() { return { error: 'd' }; }"),
+            ("e.ts", "function f() { throw new Error('e'); }"),
+        ]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn tie_emits_no_findings() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            ("d.ts", "function f() { return { error: 'd' }; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a 50/50 split must not flag either idiom; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn below_min_total_emits_no_findings() {
+        // Only 3 total occurrences, below MIN_TOTAL_OCCURRENCES (4).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "too few total occurrences must not flag anything; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn success_shaped_return_is_not_counted_either_way() {
+        // `{ error: null }` is a Result-shaped success arm, not a
+        // competing error idiom — it must not count toward the return
+        // tally, so the project below is still throw-dominant and the
+        // success-shaped return itself is never flagged.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "function f() { return { error: null, value: 1 }; }"),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a success-shaped `{{ error: null }}` return must not be flagged; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn arrow_body_error_return_is_counted() {
+        // A concise arrow-function body (`() => ({ error: ... })`) has no
+        // `ReturnStatement` node at all — before CD-136 it was invisible
+        // to the collector entirely.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "const parse = (s) => ({ error: 'e' });"),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected the arrow-body return to be flagged as the minority idiom; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn promise_reject_call_is_counted_as_throw_idiom() {
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            ("d.ts", "function f() { return { error: 'd' }; }"),
+            (
+                "e.ts",
+                "function f() { return Promise.reject(new Error('e')); }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected the Promise.reject call to be flagged as the minority throw idiom; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn rethrow_of_caught_param_is_excluded_from_tally() {
+        // Excluding the re-throw drops total occurrences to 3 (below
+        // MIN_TOTAL_OCCURRENCES = 4); before CD-136 this re-throw would
+        // have been miscounted as a genuine throw, reaching exactly 4
+        // total occurrences and triggering a flag on d.ts as the
+        // minority idiom.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            (
+                "d.ts",
+                "function f() { try { risky(); } catch (e) { throw e; } }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a bare re-throw of the caught parameter must not count toward the throw tally; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn throw_of_new_error_inside_catch_is_still_counted() {
+        // A throw inside a catch block that does NOT re-throw the caught
+        // parameter (a wrapped/replaced error) is a genuine idiom choice
+        // and must still count normally.
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            (
+                "d.ts",
+                "function f() { try { risky(); } catch (e) { throw new Error('wrapped'); } }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a throw of a new error inside catch (not a bare re-throw) must still count toward \
+             the throw tally and be flagged; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("d.ts"));
+    }
+
+    #[test]
+    fn throw_of_shadowing_param_inside_nested_callback_is_still_counted() {
+        // A nested callback's own parameter can share a name with an
+        // enclosing catch's bound parameter without referring to it —
+        // `throw e` here re-throws the callback's own `e`, not the outer
+        // catch's, and must still count toward the throw tally (CD-136).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { return { error: 'a' }; }"),
+            ("b.ts", "function f() { return { error: 'b' }; }"),
+            ("c.ts", "function f() { return { error: 'c' }; }"),
+            (
+                "d.ts",
+                "function f() { try { risky(); } catch (e) { xs.forEach((e) => { throw e; }); } }",
+            ),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a throw of a nested callback's own shadowing parameter must not be mistaken for a \
+             re-throw of the outer catch's parameter; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("d.ts"));
     }
 }

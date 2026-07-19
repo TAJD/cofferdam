@@ -1,6 +1,13 @@
 {
   "findings": [
     {
+      "id": "Design.MissingTestFile",
+      "file": "src/polyfill.ts",
+      "line": 8,
+      "column": 14,
+      "message": "`extraneous` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.OrphanExport",
       "file": "src/polyfill.ts",
       "line": 8,

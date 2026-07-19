@@ -1,6 +1,27 @@
 {
   "findings": [
     {
+      "id": "Design.MissingTestFile",
+      "file": "components/ui/button.tsx",
+      "line": 3,
+      "column": 17,
+      "message": "`Button` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/index.ts",
+      "line": 3,
+      "column": 14,
+      "message": "`PUBLIC` is exported here but no matching test file was found in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "file": "src/util.ts",
+      "line": 3,
+      "column": 14,
+      "message": "`PRIVATE` is exported here but no matching test file was found in the project"
+    },
+    {
       "id": "Design.OrphanExport",
       "file": "src/util.ts",
       "line": 3,

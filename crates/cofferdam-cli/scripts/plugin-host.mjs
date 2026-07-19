@@ -128,6 +128,32 @@ function writeRecord(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+// Write a record and resolve only once the stream has handed its bytes off
+// to the OS (the write callback fired). Used for the terminal records — the
+// streaming `done` handshake and the one-shot metadata response — because
+// on POSIX a pipe write from `process.stdout` is asynchronous (Node docs:
+// "Pipes (and sockets): asynchronous on POSIX"). Relying on natural
+// event-loop drain to flush that final write before exit is only
+// incidentally safe: the record-processing promise chain is floating (see
+// the `rl.on("line")` block), so nothing structurally anchors the loop to
+// the moment `done` is actually out. Under heavy load an interleaving
+// exists where the loop reaches its exit check with the chain suspended and
+// no live libuv handle keeping it alive, so the process exits 0 with `done`
+// still buffered — the Rust reader then sees EOF without the completion
+// marker and raises a spurious Warning.PluginHostFailed (the CD-41
+// "completion marker" race). Awaiting the write callback makes the pending
+// write itself the anchor: the chain cannot complete — and the process
+// cannot go idle — until the bytes are confirmed flushed. Stdout preserves
+// write order, so every report queued before it has flushed by then too.
+function writeRecordFlushed(obj) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(JSON.stringify(obj) + "\n", (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
 // cd-9hp.6: per-plugin corpus stores survive every per-file `run` and
 // are reused by the optional `finalize` hook. Storage is plugin-private
 // — two plugins picking the same slot key cannot see each other's data.
@@ -333,7 +359,19 @@ async function finalizeAndEmit() {
   // ts-morph availability when nothing needed it.
   const done = { type: "done" };
   if (anyCheckRequiresTypes) done.typeHostUnavailable = typeHostUnavailableReason;
-  writeRecord(done);
+  await writeRecordFlushed(done);
+}
+
+// Idempotent finalize gate. `finalizeAndEmit` must run exactly once even
+// though it can be reached from two places: the terminal `end` record and
+// the stdin `close` safety net (below). The flag is set synchronously on
+// entry, before any await, so a second concurrent-looking call on the same
+// promise chain is a guaranteed no-op.
+let finalized = false;
+async function finalizeOnce() {
+  if (finalized) return;
+  finalized = true;
+  await finalizeAndEmit();
 }
 
 // Record the type-host-unavailable reason once (module state) and emit
@@ -382,9 +420,15 @@ async function runMetadataMode(rec) {
         }))
       : [],
   }));
-  process.stdout.write(JSON.stringify({ checks, errors }) + "\n");
-  // cd-41: don't force-exit right after the write. On Windows, writes to
-  // a piped stdout are asynchronous — process.exit() can outrun the OS
+  // Await the flush (see `writeRecordFlushed`) rather than fire-and-forget:
+  // the metadata response is this mode's entire output and its last write,
+  // so the same "process goes idle before the async pipe write drains"
+  // window that bites the streaming `done` record applies here too. The
+  // Rust metadata reader parses the whole stdout as one JSON object, so a
+  // truncated response is an unconditional parse failure.
+  await writeRecordFlushed({ checks, errors });
+  // cd-41: don't force-exit right after the write. Writes to a piped
+  // stdout are asynchronous on POSIX — process.exit() can outrun the OS
   // flush and truncate the very output we just wrote, especially under
   // the CPU contention of several concurrent hosts. Setting exitCode and
   // letting the event loop drain naturally means the process only exits
@@ -399,6 +443,7 @@ async function handleRecord(rec) {
   }
   switch (rec.type) {
     case "header": {
+      sawHeader = true;
       cwd = rec.cwd;
       optionsCfg = rec.options ?? {};
       tsconfigPath = typeof rec.tsconfigPath === "string" ? rec.tsconfigPath : null;
@@ -423,7 +468,7 @@ async function handleRecord(rec) {
       await processFile(rec);
       break;
     case "end":
-      await finalizeAndEmit();
+      await finalizeOnce();
       // cd-41: see the comment in runMetadataMode — avoid forcing exit
       // right after finalizeAndEmit's final `done` write so it can't be
       // truncated by an async pipe flush racing process.exit().
@@ -439,6 +484,7 @@ async function handleRecord(rec) {
 // finish before the next line is handled, or a "file" record could run
 // against a not-yet-loaded plugin list.
 let chain = Promise.resolve();
+let sawHeader = false;
 const rl = createInterface({ input: process.stdin, terminal: false });
 rl.on("line", (line) => {
   const trimmed = line.trim();
@@ -457,6 +503,30 @@ rl.on("line", (line) => {
     process.stderr.write(`plugin-host: internal error: ${e instanceof Error ? e.stack : e}\n`);
     process.exitCode = 1;
   });
+});
+
+// Stdin fully consumed. Chain a final `finalizeOnce` after every queued
+// record handler so a streaming run always emits (and flushes) its closing
+// `done` handshake before the process is allowed to go idle — even if the
+// terminal `end` record never arrived (a manifest cut short by a write
+// error on the Rust side). The `finalized` guard makes this a no-op when
+// `end` already triggered finalize, and `sawHeader` keeps it from firing in
+// metadata mode (which has no `header`/`end` protocol and whose extra
+// `done` line would corrupt the single-object response the Rust side
+// parses). Because `finalizeAndEmit` awaits its `done` write via
+// `writeRecordFlushed`, the pending write anchors the event loop through
+// completion — this is the structural guarantee the previously-floating
+// chain lacked.
+rl.on("close", () => {
+  if (!sawHeader) return;
+  chain = chain
+    .then(() => finalizeOnce())
+    .catch((e) => {
+      process.stderr.write(
+        `plugin-host: finalize on close failed: ${e instanceof Error ? e.stack : e}\n`,
+      );
+      process.exitCode = 1;
+    });
 });
 
 // ---- helpers --------------------------------------------------------

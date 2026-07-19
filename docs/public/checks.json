@@ -19,6 +19,21 @@
       ]
     },
     {
+      "id": "Consistency.ErrorHandlingIdiom",
+      "category": "Consistency",
+      "base_priority": -5,
+      "default_severity": "Info",
+      "explanation": "The project predominantly uses one error-handling idiom (throwing, or returning an error-shaped value) — this file deviates from it, hurting consistency of error paths for callers.",
+      "body": "---\nid: Consistency.ErrorHandlingIdiom\ncategory: Consistency\nbase_priority: -5\ndefault_severity: Info\noptions: []\n---\n\nThe project predominantly uses one error-handling idiom — throwing, or returning an error-shaped value (`{ error: ... }`, `{ ok: false }`, `{ success: false }`) — and this file deviates from it.\n\n```ts\n// most of the project throws for errors...\nexport function parseConfig(raw: string) {\n  if (!raw) {\n    throw new Error(\"config is empty\");\n  }\n  return JSON.parse(raw);\n}\n```\n\n```ts\n// ...but this file returns an error-shaped value instead — flagged\nexport function parseUser(raw: string) {\n  if (!raw) {\n    return { error: \"user payload is empty\" };\n  }\n  return { error: null, value: JSON.parse(raw) };\n}\n```\n\n```ts\n// fix — throw, matching the project's dominant idiom\nexport function parseUser(raw: string) {\n  if (!raw) {\n    throw new Error(\"user payload is empty\");\n  }\n  return JSON.parse(raw);\n}\n```\n\nNot flagged — the success arm of a Result-shaped return (`{ error: null }`, `{ ok: true }`, `{ success: true }`) isn't a competing error idiom, so it's excluded from the tally either way.\n\nTwo-pass, project-wide: pass 1 counts every \"throw\" occurrence — `throw` statements and `Promise.reject(...)` calls (the async-idiom equivalent of a throw) — and every \"return\" occurrence — error-shaped `return` statements and a concise arrow body evaluating to an error-shaped object (`const f = () => ({ error: \"x\" })`) — across the whole project; pass 2 requires a strict majority (over 50%, and not a tie) before it considers either idiom \"dominant\" — a 50/50 split, or fewer than 4 total occurrences project-wide, emits nothing. Every occurrence of the minority idiom is then flagged, in whichever file it appears.\n\nScope: v1 deliberately does not try to group occurrences by \"the same kind of failure\" (e.g. by directory, domain, or error class/name) — this is a whole-project idiom-consistency signal, not a same-failure-class comparison. A project that legitimately mixes idioms across unrelated domains (e.g. throwing for programmer errors, returning a `Result`-shaped value for expected validation failures) will see this as noise. It overlaps somewhat with `Refactor.MixedThrowAndReturnError`, which flags a single function mixing both idioms internally — this check instead flags idiom inconsistency across the whole project.\n\nA `catch (e) { throw e; }` re-throw of the caught parameter is excluded from the throw tally entirely — it's propagation, not a deliberate idiom choice, and counting it would overstate how dominant \"throw\" is in a codebase that mostly re-throws errors originated elsewhere. A throw of anything else inside a `catch` block (a new error, a wrapped error) still counts normally. Only the innermost enclosing `catch`'s parameter is considered: a re-throw of an *outer* catch's parameter from within a nested `try`/`catch` (`catch (e) { try { ... } catch (inner) { throw e; } }`) is still counted rather than excluded. A nested function or callback's own parameter never shadows an enclosing catch's for this purpose — `catch (e) { xs.forEach((e) => { throw e; }); }` counts the inner throw normally, since it re-throws the callback's own `e`, not the caught error.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Consistency.QuoteStyle",
       "category": "Consistency",
       "base_priority": -5,
@@ -49,6 +64,21 @@
       ]
     },
     {
+      "id": "Design.BarrelReexportBloat",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Medium",
+      "explanation": "A barrel file re-exports an unusually large fraction of its directory's exports versus other barrels in the project — the module's real public surface becomes unclear and tree-shaking is defeated.",
+      "body": "---\nid: Design.BarrelReexportBloat\ncategory: Design\nbase_priority: 5\ndefault_severity: Medium\noptions: []\n---\n\nA barrel file (`export * from \"./x\"` / `export { a, b } from \"./x\"`) re-exports an unusually large fraction of its directory's exports versus other barrels in the project — the module's real public surface becomes unclear and tree-shaking is defeated, found without a hardcoded threshold.\n\n```ts\n// mega-barrel/index.ts — re-exports nearly everything in the directory\nexport * from \"./a\";\nexport * from \"./b\";\nexport * from \"./c\";\n// ...ten more, while other barrels in the project re-export a handful\n```\n\nNot flagged — a barrel that resolves to the project's (or a workspace package's) published entry point:\n\n```json\n// package.json\n{ \"main\": \"./index.ts\" }\n```\n\n```ts\n// index.ts — high re-export ratio is intentional here, it's the public API\nexport * from \"./a\";\nexport * from \"./b\";\n```\n\nStatistics: for every file with at least one re-export, the check computes its re-export count as a fraction of its sibling files' real (non-re-export) exports in the same directory, then flags a barrel whose ratio is more than 3 standard deviations above the mean ratio of all other barrels in the project. Below 5 barrel candidates in the project, or when the ratios' standard deviation is 0 (every barrel has the same ratio), nothing is flagged — there isn't enough variation to call anything an outlier.\n\nEntry-point exclusion: a barrel is excluded entirely (from both flagging and the statistical population) when it resolves as a `package.json`'s published entry point. The check walks up from the barrel file to the nearest `package.json` and reads `main`, `module`, `types`/`typings`, and every string reachable inside `exports`, resolving each relative to the `package.json`'s directory and comparing with file extensions stripped (so `\"main\": \"./index.js\"` matches a same-directory `index.ts`).\n\nScope: entry-point matching catches `package.json` fields that point directly at the source file, a same-directory build artifact, or a compiled output path under a conventional build-directory name (`dist`, `build`, `lib`, `out`, `output`) — a project with a separate `src`/`dist` split whose `main` points into `dist/index.js` still correctly excludes a parallel `src/index.ts` via a component-wise swap of the build-directory name to `src`. A `types`/`typings` field pointing at a `.d.ts` declaration file won't match a barrel's `.ts` source either way, since only the last extension is stripped for comparison — a non-issue since that field wasn't expected to match the analyzed source regardless. A directory whose only files are barrels re-exporting entire subdirectories (no local sibling file with a \"real\" export of its own) falls back to counting real exports anywhere in the barrel's own subtree instead of being skipped outright, so this mega-barrel-of-barrels shape is still measured against the rest of the project.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Design.BoundaryFrozen",
       "category": "Design",
       "base_priority": 0,
@@ -65,6 +95,21 @@
       ]
     },
     {
+      "id": "Design.ClassAsDataBag",
+      "category": "Design",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A class with no behavior beyond storing fields — no methods, no inheritance, no implements clause — is a candidate for a plain type/interface instead.",
+      "body": "---\nid: Design.ClassAsDataBag\ncategory: Design\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA class with no behavior beyond storing fields — no methods other than a constructor that only assigns fields, no inheritance, no `implements` clause, no decorators — is a candidate for a plain type/interface instead of a class.\n\n```ts\nclass Point {\n  x: number;\n  y: number;\n  constructor(x: number, y: number) {\n    this.x = x;\n    this.y = y;\n  }\n}\n```\n\n```ts\n// fix\ntype Point = { x: number; y: number };\n```\n\nEscape hatches — none of these are flagged, even though they might otherwise look like a data bag:\n\n```ts\n// Parameter properties: the standard DI pattern without decorators.\nclass Point {\n  constructor(private readonly x: number, private readonly y: number) {}\n}\n\n// implements clause: a structural contract, not just storage.\nclass Point implements Shape {\n  constructor(public x: number, public y: number) {}\n}\n\n// Inheritance (including built-ins like Error): legitimate non-FP use.\nclass NotFoundError extends Error {\n  constructor(public id: string) {\n    super(`not found: ${id}`);\n  }\n}\n\n// A decorator.\n@Injectable()\nclass Config {\n  constructor(public apiUrl: string) {}\n}\n\n// Constructor does more than assign fields — that's behavior.\nclass Point {\n  x: number;\n  constructor(x: number) {\n    if (x < 0) throw new Error(\"x must be non-negative\");\n    this.x = x;\n  }\n}\n```\n\nScope note: a class with no constructor at all is only flagged if it declares at least one plain field — a genuinely empty class (`class Marker {}`) is a nominal-type marker pattern, a different concern this check doesn't address.\n\n```toml\n# cofferdam.toml\n[checks.\"Design.ClassAsDataBag\"]\nseverity = \"medium\"   # raise if your project leans heavily on plain types over classes\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Design.DuplicateExportName",
       "category": "Design",
       "base_priority": 6,
@@ -77,6 +122,44 @@
       "options": [],
       "badges": [
         "graph"
+      ]
+    },
+    {
+      "id": "Design.DuplicateTypeShape",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Medium",
+      "explanation": "Two independently declared interfaces/type literals share (near-)identical field shapes under different names — likely should be a single shared type.",
+      "body": "---\nid: Design.DuplicateTypeShape\ncategory: Design\nbase_priority: 5\ndefault_severity: Medium\noptions: []\n---\n\nTwo files independently declare interfaces (or object-literal type aliases) with near-identical field shapes under different names — likely should be a single shared type.\n\n```ts\n// user.ts\ninterface User {\n  id: string;\n  name: string;\n  email: string;\n}\n```\n\n```ts\n// customer.ts\ninterface Customer {\n  id: string;\n  name: string;\n  email: string;\n}\n```\n\n```ts\n// fix — one shared type, imported where needed\ninterface Contact {\n  id: string;\n  name: string;\n  email: string;\n}\n```\n\nNot flagged — too few fields to distinguish real duplication from coincidence:\n\n```ts\ninterface Point {\n  x: number;\n  y: number;\n}\n\ninterface Size {\n  x: number;\n  y: number;\n}\n```\n\nNot flagged — shapes diverge enough to be different types:\n\n```ts\ninterface Draft {\n  id: string;\n  title: string;\n  body: string;\n}\n\ninterface Published {\n  id: string;\n  title: string;\n  publishedAt: string;\n}\n```\n\nMatching is structural and textual: two types are compared field-by-field on name and the type annotation's raw source text, scored as the fraction of the union of both types' field names that match on both. A pair scoring 80% or higher is flagged; below 3 fields, a shape is never compared at all (too easy to coincidentally overlap) — unless it has a non-empty `extends` clause (see below). Only `interface` declarations and `type X = { ... }` object-literal aliases are considered — mapped types, unions, and other type-alias forms are not. Only plain property signatures with an identifier key count — method signatures, index signatures, call/construct signatures, and computed/private keys are all ignored, so two interfaces differing only in their methods can still score a match, and a signature-heavy, property-light interface can silently drop below the 3-field floor. The `optional`/`readonly` modifiers aren't part of the comparison either: `id?: string` and `id: string` are treated as the same field. The type-text comparison is textual, not semantic: `string` and an aliased `type Str = string` used as a field's annotation would not be considered equal, and whitespace differences (`string | null` vs `string|null`) also compare unequal.\n\n`extends` clauses: an interface's inherited fields aren't visible in its body, so it's only ever compared against another interface sharing the exact same (sorted) set of heritage names — comparing declared bodies across different bases would risk false positives/negatives against the interface's real (inherited) shape. When both sides share a base, that shared base is itself a duplication signal even if neither side declares any fields of its own, so an `extends`-clause interface bypasses the 3-field floor entirely. Heritage names are compared by the base identifier's text alone, not its generic type arguments — `extends Base<string>` and `extends Base<number>` are treated as the same base.\n\nClustering: matches are transitively grouped, not just pairwise — three (or more) mutually-similar types produce one finding naming every member of the group, rather than one finding per pair.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
+      "id": "Design.EffectLeakage",
+      "category": "Design",
+      "base_priority": 8,
+      "default_severity": "Medium",
+      "explanation": "A module (or a specific function within one) opted into a `@pure` contract, but transitively imports a known side-effecting module (filesystem, network, a database client) somewhere down its import chain — the annotation is making a promise the code doesn't keep.",
+      "body": "---\nid: Design.EffectLeakage\ncategory: Design\nbase_priority: 8\ndefault_severity: Medium\noptions:\n  - name: extra_side_effect_modules\n    kind: string_list\n    default: []\n---\n\nA file (or a specific function within one) annotated `@pure` whose transitive import chain reaches a known side-effecting module (filesystem, network, a database client) — the annotation makes a promise the code doesn't keep.\n\n```ts\n// @pure\nimport { readFile } from \"./disk-cache\";\n// disk-cache.ts does `import * as fs from \"fs\";` internally — the\n// side effect is one hop away, not in this file's own imports.\n\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\n```ts\n// fix — drop the tag, or remove the dependency on the side-effecting module\nimport { readFile } from \"./disk-cache\";\n\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — no `@pure` tag, so no contract is being made:\n\n```ts\nimport * as fs from \"fs\";\n\nexport function loadConfig(): string {\n  return fs.readFileSync(\"config.json\", \"utf8\");\n}\n```\n\nNot flagged — `@pure`, and the import chain never reaches a side-effecting module:\n\n```ts\n// @pure\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — the `@pure` tag documents `computeTotal` specifically; `fs` is only referenced inside the unrelated `loadConfig`, so it isn't attributed to `computeTotal`'s own contract:\n\n```ts\nimport * as fs from \"fs\";\n\nexport function loadConfig(): string {\n  return fs.readFileSync(\"config.json\", \"utf8\");\n}\n\n// @pure\nexport function computeTotal(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nScope: a `@pure` tag is read as a whole-file contract only when the comment is attached to the file's very first statement (a genuine file-header comment, as in every example above except the last) — in that case every import anywhere in the file feeds the transitive walk, same as before CD-138. A `@pure` tag attached instead to a specific, later function declaration or `const`/`let` single-declarator arrow/function assignment scopes the check to that function alone: only import specifiers actually referenced by an identifier inside that function's own body seed the walk. Once the walk crosses into another file, that downstream file's own imports are followed as a whole — usage isn't tracked past the first hop. A `@pure` tag that's neither a file header nor attached to a function-like declaration (e.g. attached to a class, or to a multi-declarator `const` statement) has no effect at all — an accepted no-op rather than a guess. The tag must be on its own line; `@pure` sharing a line with other prose (`/** Does foo. @pure */`) isn't recognized.\n\nThe side-effecting module list (Node built-ins like `fs`/`net`/`http`/`child_process`, and common database/queue clients like `pg`, `mongodb`, `mongoose`, `redis`, `prisma`) is a fixed denylist, extendable via `extra_side_effect_modules`. Matching (for both the built-in list and `extra_side_effect_modules`) allows a subpath of a listed module — `mysql2/promise` matches the listed `mysql2` — as well as a `node:`-prefixed specifier. Only imports that resolve internally are followed transitively; an unresolved (external) specifier is checked against the denylist and ends that branch of the walk either way — so a side-effecting package reached through several internal re-exports is still caught, but a side-effecting package not on the denylist (built-in or user-supplied) is not. The BFS reports only the first side-effecting module it reaches (nearest by import distance), not every reachable one, if a file (or function) has more than one path to a side effect.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [
+        {
+          "id": "extra_side_effect_modules",
+          "kind": "string[]",
+          "doc": "Additional module specifiers (beyond the built-in Node/database/queue denylist) treated as side-effecting. Matched the same way as the built-in list: exact specifier, `node:`-prefix-stripped, or a subpath of a listed module.",
+          "default": []
+        }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {
@@ -100,6 +183,21 @@
       "badges": [
         "graph",
         "advisable"
+      ]
+    },
+    {
+      "id": "Design.ImportFanOutOutlier",
+      "category": "Design",
+      "base_priority": 6,
+      "default_severity": "Medium",
+      "explanation": "A file's import fan-in or fan-out is a statistical outlier versus the rest of the project — a likely \"god module\" (doing too much) or over-centralized dependency (too many things depend on one module).",
+      "body": "---\nid: Design.ImportFanOutOutlier\ncategory: Design\nbase_priority: 6\ndefault_severity: Medium\noptions: []\n---\n\nA file's import fan-in (files that import it) or fan-out (files it imports) is a statistical outlier versus the rest of the project — a likely \"god module\" (doing too much) or over-centralized dependency (too many things depend on one module), found without a hardcoded threshold.\n\n```ts\n// god.ts — imports a dozen unrelated modules; flagged for fan-out\nimport { a } from \"./a\";\nimport { b } from \"./b\";\nimport { c } from \"./c\";\n// ...ten more...\n```\n\n```ts\n// utils.ts — imported by nearly every other file; flagged for fan-in\nexport function formatDate() { /* ... */ }\n```\n\nNot flagged — `index.ts` and `types.ts` barrels are excluded entirely, since a real aggregator's high fan-in/fan-out is by design, not a smell:\n\n```ts\n// index.ts\nexport * from \"./a\";\nexport * from \"./b\";\nexport * from \"./c\";\n```\n\nStatistics: computed only over in-project (resolved) import edges — an external package import (`react`, `lodash`) doesn't count toward either metric, including a bare specifier the resolver traced into `node_modules` (a vendor package's own internal import graph never counts toward fan-in/fan-out, and vendor files never enter the population). `index.*`/`types.*` basenames are excluded from the statistical population entirely (not just from being flagged), since including their legitimately extreme counts would inflate the mean/stddev for every other file. Below 8 non-excluded files in the project, or when a metric's standard deviation is 0 (every file has the same count), nothing is flagged for that metric — there isn't enough variation to call anything an outlier. A file's fan-in (or fan-out) must exceed the project mean plus 3 standard deviations to be flagged; a file can be flagged for both metrics independently.\n\nScope: the hub exclusion is a fixed basename list (`index.ts`/`index.tsx`/`index.js`/`index.jsx`/`index.mjs`/`index.cjs`/`types.ts`/`types.tsx`), plus a file that resolves as the nearest `package.json`'s declared entry point (`main`/`module`/`types`/`typings`/`exports`, the same resolution `Design.BarrelReexportBloat` uses) — a differently-named central hub that's the project's real entry point (e.g. `container.ts` referenced from `package.json`) is covered by the second rule even though it isn't in the basename list. A differently-named internal hub that isn't the package's declared entry point (an internal convention, never referenced from `package.json`) still isn't covered by either rule and may be flagged. A file with no imports and no exports at all (e.g. a side-effect-only script) still enters the population with fan-in/fan-out of 0, tracked separately from the import/export graph during each file's analysis pass.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
       ]
     },
     {
@@ -150,6 +248,119 @@
           "kind": "integer",
           "doc": "maximum number of parameters per function signature",
           "default": 5
+        }
+      ],
+      "badges": [
+        "file",
+        "advisable"
+      ]
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "Design",
+      "base_priority": 4,
+      "default_severity": "Low",
+      "explanation": "A file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.",
+      "body": "---\nid: Design.MissingTestFile\ncategory: Design\nbase_priority: 4\ndefault_severity: Low\noptions:\n  - name: test_match_patterns\n    kind: string_list\n    default: [\"{name}.test.ts\", \"{name}.test.tsx\", \"{name}.spec.ts\", \"{name}.spec.tsx\", \"__tests__/{name}.test.ts\", \"__tests__/{name}.test.tsx\", \"__tests__/{name}.spec.ts\", \"__tests__/{name}.spec.tsx\"]\n  - name: test_file_patterns\n    kind: string_list\n    default: [\".test.\", \".spec.\", \"_test.\", \"_spec.\", \"/__tests__/\", \"/__mocks__/\"]\n  - name: framework_entry_patterns\n    kind: string_list\n    default: [\"/page.\", \"/layout.\", \"/route.\", \"...\"]\n---\n\nA file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.\n\n```ts\n// format-currency.ts — exported behavior with no test file anywhere\nexport function formatCurrency(cents: number): string {\n  return `$${(cents / 100).toFixed(2)}`;\n}\n```\n\nNot flagged — the file only re-exports (a barrel) or only exports types, so there's no behavior of its own to test:\n\n```ts\n// index.ts\nexport * from \"./format-currency\";\nexport type { CurrencyOptions } from \"./types\";\n```\n\nMatching: for each candidate source file, the check substitutes `{name}` (the file's stem) into every `test_match_patterns` template, resolves the result relative to the source file's own directory, and looks for it in the project's known-files universe (built from the import/export graph, same construction `Design.ImportFanOutOutlier` uses). The default templates cover same-directory and sibling-`__tests__/` conventions for both `.test.` and `.spec.` naming, across `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.mts`/`.cts` extensions. Configure `test_match_patterns` for a project with a different layout (e.g. a top-level `tests/` directory mirroring `src/`).\n\nExemptions: a file already recognised as a test/mock itself (`test_file_patterns`, same default list as `Design.OrphanExport`) is never flagged for missing its own test. A framework entry-point file (`framework_entry_patterns`, shared default with `Design.OrphanExport`/`Warning.UnusedImport`) is exempt too — the framework runtime, not a unit test, is what exercises it.\n\nScope: the known-files universe only includes files that appear as an import source, an export site, or a resolved import target — a test file with zero imports and zero exports of its own wouldn't be visible here even if it exists on disk. In practice a test file almost always imports the module it's testing, so this is a narrow gap. A project with a `tests/` directory that mirrors `src/` at the project root (rather than sitting alongside each source file) needs a custom `test_match_patterns` entry — the defaults only check same-directory and sibling-`__tests__/` locations. The default templates aren't matched against the source file's own extension — they're just a flat list covering every supported extension — so a `.ts` source with only a stray `.test.js` sibling would technically also suppress a finding; this cross-extension false-negative is accepted as harmless in practice.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [
+        {
+          "id": "test_match_patterns",
+          "kind": "string[]",
+          "doc": "Templates checked, relative to the source file's own directory, for a corresponding test file. `{name}` substitutes the source file's stem. A file with no match under any template is flagged.",
+          "default": [
+            "{name}.test.ts",
+            "{name}.test.tsx",
+            "{name}.test.js",
+            "{name}.test.jsx",
+            "{name}.test.mjs",
+            "{name}.test.mts",
+            "{name}.test.cts",
+            "{name}.spec.ts",
+            "{name}.spec.tsx",
+            "{name}.spec.js",
+            "{name}.spec.jsx",
+            "{name}.spec.mjs",
+            "{name}.spec.mts",
+            "{name}.spec.cts",
+            "__tests__/{name}.test.ts",
+            "__tests__/{name}.test.tsx",
+            "__tests__/{name}.test.js",
+            "__tests__/{name}.test.jsx",
+            "__tests__/{name}.test.mjs",
+            "__tests__/{name}.test.mts",
+            "__tests__/{name}.test.cts",
+            "__tests__/{name}.spec.ts",
+            "__tests__/{name}.spec.tsx",
+            "__tests__/{name}.spec.js",
+            "__tests__/{name}.spec.jsx",
+            "__tests__/{name}.spec.mjs",
+            "__tests__/{name}.spec.mts",
+            "__tests__/{name}.spec.cts"
+          ]
+        },
+        {
+          "id": "test_file_patterns",
+          "kind": "string[]",
+          "doc": "Filename substrings that mark a file as itself a test/mock. Such files are never flagged for missing a test of their own.",
+          "default": [
+            ".test.",
+            ".spec.",
+            "_test.",
+            "_spec.",
+            "/__tests__/",
+            "/__mocks__/"
+          ]
+        },
+        {
+          "id": "framework_entry_patterns",
+          "kind": "string[]",
+          "doc": "Filename substrings for framework entry-point files (Next.js App Router, Pages Router, SvelteKit, config files). These are exempt — the framework runtime, not a unit test, is what exercises them.",
+          "default": [
+            "/page.",
+            "/layout.",
+            "/route.",
+            "/error.",
+            "/loading.",
+            "/not-found.",
+            "/default.",
+            "/template.",
+            "/global-error.",
+            "/middleware.",
+            "/instrumentation.",
+            "/manifest.",
+            "/robots.",
+            "/sitemap.",
+            "/icon.",
+            "/apple-icon.",
+            "/opengraph-image.",
+            "/twitter-image.",
+            "/favicon.",
+            "/_app.",
+            "/_document.",
+            "/_error.",
+            "/+page.",
+            "/+layout.",
+            "/+server.",
+            "/next.config.",
+            "/vite.config.",
+            "/vitest.config.",
+            "/tsup.config.",
+            "/tailwind.config.",
+            "/postcss.config.",
+            "/astro.config.",
+            "/svelte.config.",
+            "/remix.config.",
+            "/playwright.config.",
+            "/jest.config.",
+            "/rollup.config.",
+            "/webpack.config.",
+            "/babel.config.",
+            "/eslint.config.",
+            "/prettier.config."
+          ]
         }
       ],
       "badges": [
@@ -242,6 +453,21 @@
       ]
     },
     {
+      "id": "Design.ReadonlyArrayParam",
+      "category": "Design",
+      "base_priority": 5,
+      "default_severity": "Low",
+      "explanation": "A function parameter typed as a mutable array or object, but never mutated in the body, is a missed `readonly` guarantee — a type-checker-enforced promise to callers that's cheap to add and cheap for them to trust.",
+      "body": "---\nid: Design.ReadonlyArrayParam\ncategory: Design\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\nA function parameter declared with a mutable array (`T[]`, `Array<T>`) or object-literal (`{ x: number }`) type, where nothing in the function body mutates it — a missed opportunity for a `readonly` guarantee the type checker would enforce for free.\n\n```ts\nfunction total(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\n```ts\n// fix — readonly is a compiler-enforced promise, not just a convention\nfunction total(items: readonly number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — the parameter is genuinely mutated in the body:\n\n```ts\nfunction sortInPlace(items: number[]): void {\n  items.sort();\n}\n```\n\nNot flagged — the parameter is passed through to another call, which might mutate it; this check can't see across the call graph, so it conservatively skips rather than risk a false positive:\n\n```ts\nfunction process(items: number[]): void {\n  mutateSomewhere(items);\n}\n```\n\nScope: declared-type syntax only — the parameter's own `TSTypeAnnotation` is read directly from the AST, not resolved through the ts-morph type host, so an untyped or inferred parameter isn't checked. A type already wrapped in `readonly`/`ReadonlyArray<T>`/`Readonly<T>` is never a candidate. Only single-level assignment/index writes and array-mutating method calls (`.push`, `.splice`, ...) on the parameter's own root identifier are recognized as \"mutated\" — a nested function or arrow declared inside the callback is a separate scope and isn't descended into, mirroring `Refactor.MutatedParameter`. A mutation inside a nested closure (`items.forEach(() => items.push(1))`) is therefore not seen, and a param handed off wrapped in another expression (`f({ items })`, a ternary arm) isn't recognized as an escape — only a bare identifier/spread passed directly as an argument is.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Design.ScriptedInvariant",
       "category": "Design",
       "base_priority": 7,
@@ -254,6 +480,22 @@
       "options": [],
       "badges": [
         "graph"
+      ]
+    },
+    {
+      "id": "Design.UnionExhaustivenessGap",
+      "category": "Design",
+      "base_priority": 8,
+      "default_severity": "Medium",
+      "explanation": "A switch over a discriminated union's tag doesn't handle every variant and has no default case — adding a new variant later can silently fall through unhandled.",
+      "body": "---\nid: Design.UnionExhaustivenessGap\ncategory: Design\nbase_priority: 8\ndefault_severity: Medium\noptions: []\n---\n\nA `switch` dispatches over a discriminated union's tag (a literal-typed property like `shape.kind`) but doesn't handle every variant, and has no `default` case. Adding a new variant to the union later silently falls through unhandled instead of failing loudly — the whole point of a discriminated union is that the compiler (and a reader) can trust every case is covered.\n\nType-aware: resolves the discriminant's type through the ts-morph type host. Only fires when the discriminant's type is a literal-only union (every member is a string/number/boolean literal) — a plain `string` discriminant, or a union that includes non-literal members, is skipped entirely rather than guessed at.\n\n```ts\ntype Shape =\n  | { kind: \"circle\"; radius: number }\n  | { kind: \"square\"; side: number }\n  | { kind: \"triangle\"; base: number; height: number };\n\nfunction area(shape: Shape) {\n  switch (shape.kind) {          // flagged — \"triangle\" isn't handled, no default\n    case \"circle\":\n      return Math.PI * shape.radius ** 2;\n    case \"square\":\n      return shape.side ** 2;\n  }\n}\n```\n\n```ts\n// fix: handle every variant, or add an explicit default\nfunction area(shape: Shape) {\n  switch (shape.kind) {\n    case \"circle\":\n      return Math.PI * shape.radius ** 2;\n    case \"square\":\n      return shape.side ** 2;\n    case \"triangle\":\n      return (shape.base * shape.height) / 2;\n  }\n}\n```\n\nA `default` case of any content is treated as an intentional catch-all and suppresses the finding — this doesn't require the `const _exhaustive: never = shape` idiom (which `tsc` itself already flags in strict mode where applicable); requiring it here would double-report what the compiler already catches.\n\nScoped to `switch` statements only in this version — exhaustive `if`/`else if` chains over a discriminant are a known gap, not yet detected. Case labels are matched against string, numeric, and boolean literals; a case test that isn't a literal at all (e.g. a computed expression) can't be attributed to a member and is ignored rather than treated as covering anything.\n\n```toml\n# cofferdam.toml\n[checks.\"Design.UnionExhaustivenessGap\"]\nseverity = \"low\"   # demote if your project relies heavily on partial handling by convention\n```\n",
+      "requires_types": true,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file",
+        "type-aware"
       ]
     },
     {
@@ -449,6 +691,66 @@
       ]
     },
     {
+      "id": "Refactor.MixedThrowAndReturnError",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A function that both throws and returns an error-shaped object for what looks like the same class of failure mixes two error-handling idioms, hurting composability of error paths for callers.",
+      "body": "---\nid: Refactor.MixedThrowAndReturnError\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA function that both `throw`s and `return`s an error-shaped object literal (a field named exactly `error`, `ok`, or `success`) for what looks like the same class of failure mixes two error-handling idioms. Callers can't compose the error path — some failures need a `try`/`catch`, others need an `if (result.error)` check.\n\n```ts\nfunction parseConfig(input: string) {\n  if (!input) {\n    throw new Error(\"input required\");\n  }\n  const parsed = tryParse(input);\n  if (!parsed) {\n    return { error: \"invalid config\" };\n  }\n  return parsed;\n}\n```\n\n```ts\n// fix — pick one idiom\nfunction parseConfig(input: string) {\n  if (!input) {\n    return { error: \"input required\" };\n  }\n  const parsed = tryParse(input);\n  if (!parsed) {\n    return { error: \"invalid config\" };\n  }\n  return { ok: true, value: parsed };\n}\n```\n\nNot flagged — a function that only ever returns an error-shaped object, with no throw anywhere:\n\n```ts\nfunction loadResult(): Result {\n  return { error: null, value: 42 };\n}\n```\n\nNot flagged — a throw and an error-shaped return in the exact same block (the return is unreachable dead code, not a competing idiom):\n\n```ts\nfunction overlapping(x: number) {\n  if (x < 0) {\n    throw new Error(\"negative\");\n    return { error: \"unreachable\" };\n  }\n  return x * 2;\n}\n```\n\nNot flagged — `{ error: null }` and `{ ok: true }` / `{ success: true }` are the SUCCESS arm of a Result-shaped return, not a competing error idiom, even alongside an unrelated throw:\n\n```ts\nfunction divide(a: number, b: number) {\n  if (b === 0) {\n    throw new Error(\"division by zero is a programmer error\");\n  }\n  return { error: null, value: a / b };\n}\n```\n\nBrace-less guard clauses (`if (c) throw x;`, no `{}`) are still treated as their own branch, so this flags the same way with or without braces:\n\n```ts\nfunction parseId(raw: string) {\n  if (!raw) throw new Error(\"id required\");\n  if (raw.length > 64) return { error: \"id too long\" };\n  return raw;\n}\n```\n\nScope: only inspects a function's own statements — nested functions (declarations, expressions, arrow functions) are separate scopes and are analyzed independently, not folded into the outer function's throw/return count. Arrow functions themselves aren't currently inspected as the outer subject of this check, only `function` declarations/expressions and class methods.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
+      "id": "Refactor.MutatedParameter",
+      "category": "Refactor",
+      "base_priority": 10,
+      "default_severity": "Medium",
+      "explanation": "Reassigning or mutating a function parameter breaks pure input→output semantics, making the function harder to test and reason about in isolation.",
+      "body": "---\nid: Refactor.MutatedParameter\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\nA function reassigns or mutates one of its own parameters. Callers pass a value expecting the function to compute a result from it, not to have their argument silently changed underneath them — and a function that only reads its parameters is trivially testable input→output, with no need to inspect or snapshot the argument afterward.\n\n```ts\nfunction withDiscount(price: number, rate: number) {\n  price = price - price * rate;   // flagged — reassigns the `price` parameter\n  return price;\n}\n\nfunction tagAsProcessed(item: { status: string }) {\n  item.status = \"processed\";      // flagged — mutates the `item` parameter\n  return item;\n}\n```\n\n```ts\n// fix: compute a new value instead of writing back into the parameter\nfunction withDiscount(price: number, rate: number) {\n  const discounted = price - price * rate;\n  return discounted;\n}\n\nfunction tagAsProcessed(item: { status: string }) {\n  return { ...item, status: \"processed\" };\n}\n```\n\nScoped to simple-identifier parameters only — destructured (`{ a, b }`) and rest (`...rest`) parameters aren't tracked in this first version. Only single-level member/index writes are detected (`x.foo = ...`, `x[0] = ...`); nested writes (`x.a.b = ...`) and `delete x.foo` are not. A nested function inherits its enclosing function's watched parameters, so a closure mutating an outer parameter still flags — but tracking is name-based, so a nested local that happens to share a parameter's name is also flagged as if it were that parameter, a known false-positive edge case for this first version.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
+      "id": "Refactor.PreferArrayMethodOverLoop",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A loop whose entire body pushes one computed value (optionally gated by a single `if`) onto an accumulator array is more clearly expressed as `.map()`/`.filter()`.",
+      "body": "---\nid: Refactor.PreferArrayMethodOverLoop\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `for`/`for-of` loop whose entire body builds one accumulator array by pushing a computed value each iteration is more clearly expressed with `.map()` (unconditional) or `.filter()` (gated by a single `if`).\n\n```ts\nconst doubled: number[] = [];\nfor (const n of nums) {\n  doubled.push(n * 2); // flagged — could be `.map()`\n}\n```\n\n```ts\n// fix\nconst doubled = nums.map((n) => n * 2);\n```\n\n```ts\nconst evens: number[] = [];\nfor (const n of nums) {\n  if (n % 2 === 0) {\n    evens.push(n); // flagged — could be `.filter()`\n  }\n}\n```\n\n```ts\n// fix\nconst evens = nums.filter((n) => n % 2 === 0);\n```\n\nWhen the `if`'s consequent pushes a separately computed value rather than the raw iterated element, the suggestion is `.filter().map()` (a filter, then a transform) rather than a plain `.filter()`, since the loop is doing both:\n\n```ts\nconst labels: string[] = [];\nfor (const n of nums) {\n  if (n % 2 === 0) {\n    const label = `even:${n}`; // flagged — `.filter().map()`, not just `.filter()`\n    labels.push(label);\n  }\n}\n```\n\nDeliberately narrow to avoid false positives: the loop body (or the `if`'s consequent, for the filter shape) must match one of exactly two shapes and nothing else —\n\n1. a single `arr.push(<expr>)` statement, or\n2. a `const`/`let` declaration with an initializer, immediately followed by `arr.push(<thatName>)`.\n\nAny other statement in the body — an early `break`/`continue`, a second accumulator, a side effect beyond the single push, an `if`/`else` — disqualifies the match entirely and the loop is left alone.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferArrayMethodOverLoop\"]\nseverity = \"medium\"   # raise if your project prefers array methods strongly\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
+      "id": "Refactor.PreferConstOverLet",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A `let` binding that's never reassigned should be `const` — it signals the value doesn't change and rules out reassignment bugs at compile time.",
+      "body": "---\nid: Refactor.PreferConstOverLet\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `let` binding that's never reassigned anywhere in the file should be `const` — it signals to a reader that the value doesn't change, and rules out an entire class of reassignment bugs at compile time.\n\n```ts\nlet total = price + tax; // flagged — never reassigned\nreturn total;\n```\n\n```ts\n// fix\nconst total = price + tax;\nreturn total;\n```\n\nReassignment is tracked by name across the whole file, including inside nested closures — a closure that captures and reassigns an outer `let` still counts, so the outer binding is correctly left alone:\n\n```ts\nlet count = 0;\nfunction increment() {\n  count += 1; // reassignment, found even though it's in a nested function\n}\n```\n\nScoped to simple-identifier bindings only in this version — destructured bindings (`let { a, b } = obj`) are skipped. Tracking is name-based rather than true lexical scope: a shadowed `let` that shares a name with a reassigned variable in a different scope won't be flagged even if that specific binding is itself never reassigned. This is a deliberate false-negative, not a false-positive — the safer direction for a \"should be const\" suggestion.\n\nOverlap with ESLint's `prefer-const` rule is expected and acceptable.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferConstOverLet\"]\nseverity = \"medium\"   # raise if your project treats this as more than a style nit\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
       "id": "Refactor.PreferNullishCoalescing",
       "category": "Refactor",
       "base_priority": 3,
@@ -470,6 +772,44 @@
       "default_severity": "Low",
       "explanation": "`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.",
       "body": "---\nid: Refactor.PreferOptionalChain\ncategory: Refactor\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\n`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on `null`/`undefined`. The check flags `lhs && rhs` where the LHS is a \"safe to repeat\" expression (identifier, `this`, or a pure member chain — never contains a `CallExpression` or `NewExpression`) and the RHS is a member access (or call on a member access) whose object span renders to the same source bytes as the LHS span.\n\n```ts\n// flagged\nreturn user && user.profile;\nreturn user && user.profile && user.profile.name;\nreturn arr && arr[0];\n```\n\n```ts\n// fix\nreturn user?.profile;\nreturn user?.profile?.name;\nreturn arr?.[0];\n```\n\n```ts\n// not flagged (LHS is a call — rewriting would halve the call count)\nreturn get() && get().profile;\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
+      "id": "Refactor.PurityHeuristic",
+      "category": "Refactor",
+      "base_priority": -10,
+      "default_severity": "Low",
+      "explanation": "An exported function reads a module-level mutable binding not covered by its own parameter list — a hidden dependency on outside-the-signature state that works against unit-testability.",
+      "body": "---\nid: Refactor.PurityHeuristic\ncategory: Refactor\nbase_priority: -10\ndefault_severity: Low\noptions: [enabled]\n---\n\nAn exported function that reads a module-level `let` binding not covered by its own parameter list — a hidden dependency on outside-the-signature state that works against unit-testability. Only flags when the module-level binding is also reassigned somewhere in the file; read-only module state (config objects, loggers, memoization caches that are never reassigned) is not a mutation dependency and is left alone.\n\n```ts\nlet requestCount = 0;\n\nexport function logRequest(name: string) {\n  // reads `requestCount`, a module-level `let` that IS reassigned\n  // elsewhere — not covered by this function's own parameters.\n  console.log(`${name}: request #${requestCount}`);\n}\n\nexport function bumpRequestCount() {\n  requestCount += 1;\n}\n```\n\n```ts\n// fix — pass the dependency explicitly\nexport function logRequest(name: string, requestCount: number) {\n  console.log(`${name}: request #${requestCount}`);\n}\n```\n\nNot flagged — module state that's declared `let` but never reassigned anywhere in the file (read-only config, a logger instance, a lazily-populated cache) is a legitimate dependency, not hidden mutation coupling:\n\n```ts\nlet config = { apiUrl: \"https://api.example.com\" };\n\nexport function fetchData() {\n  return fetch(config.apiUrl);\n}\n```\n\nThis is a fuzzy, name-based heuristic (not full scope resolution) with a real false-positive risk, so it ships **disabled by default**. Known limitations: only inline `export function foo() {}` declarations are inspected (not `export default function` or a separate `export { foo }`); and \"written to somewhere in the file\" is tracked by name, not by scope, so an unrelated local variable sharing a module-level `let`'s name can still (rarely) pull an otherwise read-only binding into the flagged set.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PurityHeuristic\"]\nenabled = true\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [
+        {
+          "id": "enabled",
+          "kind": "boolean",
+          "doc": "opt in to this fuzzy, high-false-positive-risk heuristic (disabled by default)",
+          "default": false
+        }
+      ],
+      "badges": [
+        "file",
+        "advisable"
+      ]
+    },
+    {
+      "id": "Refactor.SideEffectInMapCallback",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A .map/.filter callback that mutates outer-scope state or calls a known side-effecting function isn't purely computing a value — it's a loop wearing a map costume.",
+      "body": "---\nid: Refactor.SideEffectInMapCallback\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA callback passed to `.map`/`.filter` that mutates something outside itself (an outer-scope variable) or calls a known side-effecting function (`console.*`), instead of purely computing and returning a value — a loop wearing a map costume.\n\n```ts\nconst seen: number[] = [];\nconst doubled = items.map((item) => {\n  seen.push(item); // mutates outer-scope `seen`\n  return item * 2;\n});\n```\n\n```ts\n// fix — separate the accumulation from the transform\nconst doubled = items.map((item) => item * 2);\nitems.forEach((item) => seen.push(item));\n```\n\nNot flagged — the callback only mutates/declares locals of its own:\n\n```ts\nconst doubled = items.map((item) => {\n  const scaled = item * 2;\n  return scaled;\n});\n```\n\nAlso flagged — writing into an outer-scope object property or array index, not just calling an array-mutating method:\n\n```ts\nconst state = { count: 0 };\nconst withCount = items.map((item) => {\n  state.count += 1; // writes into outer-scope `state`\n  return item;\n});\n```\n\nNot flagged — a `.map`/`.filter` callback whose return value happens to be discarded, with no other side effect, is a distinct \"use `.forEach` instead\" concern this check doesn't cover (v1 scope, per the ticket):\n\n```ts\nitems.map((item) => process(item));\n```\n\nScope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry. Member/index assignment targets (`x.y = ...`, `x[y] = ...`) are only checked at the root receiver — a destructured local (`const { acc } = ctx;`) isn't recognized as local, a known name-based limitation.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,

@@ -268,6 +268,43 @@ No new error codes — failures to open the project or resolve ts-morph
 surface via the same `ts_morph_unavailable` / `project_init_failed`
 codes `typeAt` uses.
 
+### `unionMembers` (CD-118)
+
+Resolve the literal members of a union type, for `Design.UnionExhaustivenessGap`'s
+switch/discriminant exhaustiveness check. Same byte-range-to-node
+resolution as `typeAt`.
+
+**Request `params`:** same shape as `typeAt` — `startByte`/`endByte`
+should span the discriminant expression (e.g. `shape.kind` in
+`switch (shape.kind) { ... }`), not the whole discriminated value.
+
+```json
+{
+  "tsconfigPath": "/abs/tsconfig.json",
+  "file": "/abs/src/shapes.ts",
+  "startByte": 42,
+  "endByte": 52
+}
+```
+
+**Response `result`:** `{ "members": string[] }`, or JSON `null`.
+
+```json
+{ "members": ["circle", "square", "triangle"] }
+```
+
+`null` covers every case where the type isn't cleanly "a union whose
+every member is a literal": the node's type isn't a union at all (fewer
+than two union constituents), or any constituent fails `type.isLiteral()`
+or has no resolvable literal value (an object-type union member, most
+commonly — querying the discriminant's own type, not the containing
+object union, is what keeps this case rare). Callers must not treat
+`null` as an empty member list; it means "couldn't determine a literal
+set", not "zero variants".
+
+No new error codes — same `ts_morph_unavailable` / `project_init_failed`
+codes as `typeAt`.
+
 ## Worker pool (CD-31)
 
 The Rust client no longer holds a single worker. `build_type_oracle` spawns a

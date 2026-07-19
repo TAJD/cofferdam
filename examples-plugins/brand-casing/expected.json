@@ -101,12 +101,25 @@
       "start_byte": 1936,
       "end_byte": 1940,
       "message": "`HINT` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/brand-casing/fixture.ts",
+      "line": 17,
+      "column": 14,
+      "start_byte": 679,
+      "end_byte": 685,
+      "message": "`HEADER` is exported here but no matching test file was found in the project"
     }
   ],
   "summary": {
-    "total": 8,
+    "total": 9,
     "by_category": {
-      "design": 6,
+      "design": 7,
       "warning": 2
     }
   }

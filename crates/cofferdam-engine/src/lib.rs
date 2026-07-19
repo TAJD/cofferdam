@@ -114,6 +114,16 @@ pub struct Engine {
 /// holds one `AnalysisState` across many `analyze_incremental` calls
 /// (e.g. the watch loop, one per filesystem event); each call only
 /// re-does pass-1 work for the files it's told changed.
+///
+/// Implicitly bound to the `Engine` it was first passed to (CD-40
+/// lever 2): `initialized` gates `publish_static_slots`
+/// (registered-check-ids, layers, invariants — all engine-config-
+/// derived) to run once rather than every call, since none of that
+/// changes between calls for one `Engine`. Reusing a state across a
+/// config hot-reload (a *different* `Engine` instance, same state)
+/// would leave those slots stale — no current caller does this (the
+/// watch loop holds one `Engine` for its lifetime), but a caller that
+/// wants to pick up new config should start a fresh `AnalysisState`.
 #[derive(Default)]
 pub struct AnalysisState {
     corpus: CorpusIndex,

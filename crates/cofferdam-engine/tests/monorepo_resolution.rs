@@ -45,7 +45,11 @@ fn write(root: &Path, rel: &str, content: &str) -> PathBuf {
 /// - `node_modules/@start-line/{render,sim}` — package.json shims whose
 ///   `main` points back at the real `packages/*/src/index.ts` (no
 ///   symlink: avoids Windows symlink-privilege flakiness in CI while
-///   still exercising real node_modules package resolution).
+///   still exercising real node_modules package resolution). Note this
+///   doesn't cover the real-install shape where `node_modules/@start-line/*`
+///   is itself a symlink the resolver realpaths before reading
+///   `package.json` — the resolved edge target is the same either way,
+///   but the realpath-canonicalization codepath goes unexercised here.
 /// - Root `tsconfig.json` is solution-style: `references` to each
 ///   package's own tsconfig, no top-level `include` — the shape CD-139's
 ///   hypothesis focused on.

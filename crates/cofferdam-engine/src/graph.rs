@@ -19,7 +19,12 @@
 //!   also tries the matching TS source extension first (`.js` ->
 //!   `.ts`/`.tsx`/`.js`) — required for the ESM-standard
 //!   `import "./f.js"` pointing at `f.ts` source, or every such import
-//!   silently fails to resolve.
+//!   silently fails to resolve. `extension_alias` matching bypasses the
+//!   general extension list entirely, so a `.js`/`.mjs`/`.cjs` specifier
+//!   pointing at a declaration-only sibling (`f.d.ts`, `f.d.mts`,
+//!   `f.d.cts`) with no `.ts`/`.js` source is intentionally out of scope —
+//!   narrow in practice since `Design.OrphanExport` cares about first-party
+//!   source, not ambient type declarations.
 //! * tsconfig discovery: `Auto` — walks up from the importing file's
 //!   directory looking for `tsconfig.json`, honors `paths`/`baseUrl`.
 //!

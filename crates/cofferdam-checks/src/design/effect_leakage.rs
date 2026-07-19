@@ -146,7 +146,17 @@ impl Check for EffectLeakage {
             return Vec::new();
         };
         let program = parsed.program;
-        let first_stmt_start = program.body.first().map(|s| s.span().start);
+        // A leading directive (`"use strict";`) lives in `program.directives`,
+        // not `program.body` — without this, a `@pure` comment attached to
+        // such a directive would fail the whole-file check (since
+        // `first_stmt_start` would point past it, at the first real
+        // statement) and silently be dropped instead of read as a file
+        // header.
+        let first_stmt_start = program
+            .directives
+            .first()
+            .map(|d| d.span.start)
+            .or_else(|| program.body.first().map(|s| s.span().start));
 
         let mut pure_file: Option<PureFile> = None;
         let mut pure_functions: Vec<PureFunction> = Vec::new();
@@ -321,6 +331,13 @@ fn referenced_identifiers(body: &oxc_ast::ast::FunctionBody<'_>) -> HashSet<Stri
     }
     impl<'a> Visit<'a> for IdentCollector {
         fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
+            self.names.insert(it.name.to_string());
+        }
+        // JSX element/member names (`<Foo/>`, `<Foo.Bar/>`) are
+        // `JSXIdentifier`, not `IdentifierReference` — without this, a
+        // `@pure` function in a `.tsx` file that renders an imported
+        // component wouldn't attribute that import to its own usage.
+        fn visit_jsx_identifier(&mut self, it: &oxc_ast::ast::JSXIdentifier<'a>) {
             self.names.insert(it.name.to_string());
         }
     }

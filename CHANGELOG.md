@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-07-19
+
 ### Fixed
 - `cofferdam-ignore` suppression comments work again for plugin-check findings when the project is analyzed with a relative discovery path (e.g. `cofferdam check .`, the common case). CD-99 (0.3.8) made the file path sent to the plugin host absolute so a plugin's echoed `report.file` could be matched back to the analyzed file set, but the resulting `Issue.file` was then stamped with that absolutized path instead of the original discovery path — an absolute path never equals the relative path the suppression map is keyed by, so every plugin-check suppression comment silently stopped applying. Built-in checks were unaffected (CD-140).
 

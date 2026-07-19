@@ -38,7 +38,7 @@ use cofferdam_core::{
     Priority, RawOptionValue, Severity, SourceFile, Span, TypeOracle, ALL_PRE_FILTER_FINDINGS,
     INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
-use cofferdam_graph::{build_canonical_graph, CANONICAL_GRAPH};
+use cofferdam_graph::{apply_records, build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_html::{parse_html, HtmlParseTree};
 use cofferdam_rust::{parse_rust, RustParseTree};
 use rayon::prelude::*;
@@ -129,6 +129,21 @@ pub struct AnalysisState {
     /// for changed files each incremental call — parsing every file's
     /// directives in finalize dominated the incremental cost (cd-32).
     suppressions: HashMap<PathBuf, suppress::Suppressions>,
+    /// `SourceFile` per currently-known file (CD-40 lever 1), kept in
+    /// sync with `sources` on every insert/remove. The pass-2
+    /// consistency sweep in `analyze_incremental` previously rebuilt a
+    /// `SourceFile` (a full text clone) for all ~N files on every
+    /// call, even though only `changed`/`removed` files need one
+    /// rebuilt — this cache eliminates that. `sources` itself stays a
+    /// plain text map so `AnalysisState::sources()`'s public shape is
+    /// unaffected.
+    source_files: HashMap<PathBuf, SourceFile>,
+    /// Whether `register_removers`/`publish_static_slots` have already
+    /// run against this state's corpus (CD-40 lever 2). Both are
+    /// idempotent overwrites of engine-derived (not per-call) data, so
+    /// re-running them on every `analyze_incremental` call — as
+    /// happened pre-CD-40 — was pure waste once a state is seeded.
+    initialized: bool,
 }
 
 impl AnalysisState {
@@ -153,6 +168,23 @@ impl AnalysisState {
     pub fn parse_cache(&self) -> &cache::ParseCache {
         &self.parse_cache
     }
+}
+
+/// How [`Engine::finalize_and_filter`] should get the `CANONICAL_GRAPH`
+/// corpus slot to its post-this-call state (CD-40 lever 3).
+enum GraphUpdate<'a> {
+    /// Build a fresh graph from every IMPORTS/EXPORTS record in the
+    /// corpus. Used by every from-scratch `analyze_*` entry point,
+    /// where there's no prior graph to reuse.
+    Rebuild,
+    /// Reuse the graph already persisted in the corpus's
+    /// `CANONICAL_GRAPH` slot. Its `removed`/stale-`changed`
+    /// contributions were already stripped by the registered remover
+    /// (see `Engine::register_removers`) when `analyze_incremental`
+    /// called `corpus.remove_file` earlier in the same call; only
+    /// `changed`'s freshly re-populated records still need replaying
+    /// in via `apply_records`.
+    Incremental { changed: &'a [PathBuf] },
 }
 
 impl Engine {
@@ -701,7 +733,13 @@ impl Engine {
             .iter()
             .map(|(path, text)| (path.clone(), suppress::Suppressions::parse(text)))
             .collect();
-        let issues = self.finalize_and_filter(&corpus, issues, &suppressions_by_file, timing);
+        let issues = self.finalize_and_filter(
+            &corpus,
+            issues,
+            &suppressions_by_file,
+            timing,
+            GraphUpdate::Rebuild,
+        );
         (issues, texts)
     }
 
@@ -752,28 +790,68 @@ impl Engine {
     /// [`Engine::analyze_incremental`] produces byte-identical output
     /// to a from-scratch [`Engine::analyze_with_sources`] given the
     /// same current file set — both funnel through this one method.
+    ///
+    /// `graph_update` (CD-40 lever 3) selects how the `CANONICAL_GRAPH`
+    /// corpus slot gets to its post-this-call state: see [`GraphUpdate`].
     fn finalize_and_filter(
         &self,
         corpus: &CorpusIndex,
         mut issues: Vec<Issue>,
         suppressions_by_file: &HashMap<PathBuf, suppress::Suppressions>,
         timing: Option<&TimingCollector>,
+        graph_update: GraphUpdate<'_>,
     ) -> Vec<Issue> {
-        // Canonical-graph build (cd-9hp.9 cp3). Translates the flat
-        // IMPORTS / EXPORTS slots populated above into the
-        // typed-graph substrate from `cofferdam_graph`. Done once,
-        // after pass 1 + pass 2 finish so every per-file record is in,
-        // and before finalize runs so graph-migrated checks
-        // (Design.OrphanExport first) can query it. The flat slots
-        // stay populated for checks that haven't migrated yet.
+        // Canonical-graph build (cd-9hp.9 cp3; incrementalised in
+        // CD-40 lever 3). Translates the flat IMPORTS / EXPORTS slots
+        // populated above into the typed-graph substrate from
+        // `cofferdam_graph`. Done once, after pass 1 + pass 2 finish
+        // so every per-file record is in, and before finalize runs so
+        // graph-migrated checks (Design.OrphanExport first) can query
+        // it. The flat slots stay populated for checks that haven't
+        // migrated yet.
         {
             let graph_build_start = Instant::now();
-            corpus.with_slot(&IMPORTS, |imports| {
-                corpus.with_slot(&EXPORTS, |exports| {
-                    let graph = build_canonical_graph(imports, exports);
-                    corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
-                });
-            });
+            match graph_update {
+                GraphUpdate::Rebuild => {
+                    corpus.with_slot(&IMPORTS, |imports| {
+                        corpus.with_slot(&EXPORTS, |exports| {
+                            let graph = build_canonical_graph(imports, exports);
+                            corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
+                        });
+                    });
+                }
+                GraphUpdate::Incremental { changed } => {
+                    // `removed`/stale-`changed` contributions were
+                    // already dropped from the persisted
+                    // `CANONICAL_GRAPH` slot by the registered
+                    // remover (see `register_removers`) when
+                    // `analyze_incremental` called
+                    // `corpus.remove_file` earlier this call — so all
+                    // that's left is replaying `changed`'s FRESH
+                    // records (just re-populated into IMPORTS/EXPORTS
+                    // by this call's `pass1_one_file` runs) against
+                    // the live graph, exactly like
+                    // `Graph::remove_file`'s own doc comment describes
+                    // for incremental callers.
+                    corpus.with_slot(&IMPORTS, |imports| {
+                        corpus.with_slot(&EXPORTS, |exports| {
+                            let filtered_imports: Vec<_> = imports
+                                .iter()
+                                .filter(|r| changed.contains(&r.from_file))
+                                .cloned()
+                                .collect();
+                            let filtered_exports: Vec<_> = exports
+                                .iter()
+                                .filter(|r| changed.contains(&r.file))
+                                .cloned()
+                                .collect();
+                            corpus.with_slot(&CANONICAL_GRAPH, |graph| {
+                                apply_records(graph, &filtered_imports, &filtered_exports);
+                            });
+                        });
+                    });
+                }
+            }
             if let Some(t) = timing {
                 t.record_phase("graph_build", graph_build_start.elapsed());
             }
@@ -1290,14 +1368,25 @@ impl Engine {
     }
 
     /// Register every check's cross-file corpus remover plus the
-    /// engine-owned `IMPORTS`/`EXPORTS` removers on `state`'s corpus.
-    /// Idempotent — re-registering the same slot name just overwrites
-    /// the previous closure — so it's safe (and cheap) to call on
-    /// every [`Engine::analyze_incremental`] call rather than only
-    /// the first.
+    /// engine-owned `IMPORTS`/`EXPORTS`/`CANONICAL_GRAPH` removers on
+    /// `state`'s corpus. Idempotent — re-registering the same slot
+    /// name just overwrites the previous closure — but as of CD-40
+    /// lever 2 only called once per `AnalysisState` (see
+    /// `AnalysisState::initialized`) rather than on every call, since
+    /// none of this is call-specific.
+    ///
+    /// The `CANONICAL_GRAPH` remover feeds CD-40 lever 3: it must key
+    /// on the SAME normalised path `apply_records` used as owner
+    /// (`cofferdam_graph::normalized_file_path`), not the raw absolute
+    /// path `analyze_incremental` passes to `CorpusIndex::remove_file`
+    /// — those differ on Windows (case-folding), and a mismatch here
+    /// would silently no-op the removal, leaking stale graph nodes/edges.
     fn register_removers(&self, corpus: &CorpusIndex) {
         corpus.register_removable(&IMPORTS, |slot, path| slot.retain(|r| r.from_file != path));
         corpus.register_removable(&EXPORTS, |slot, path| slot.retain(|r| r.file != path));
+        corpus.register_removable(&CANONICAL_GRAPH, |graph, path| {
+            graph.remove_file(&cofferdam_graph::normalized_file_path(path));
+        });
         for check in &self.checks {
             check.register_removable(corpus);
         }
@@ -1341,12 +1430,16 @@ impl Engine {
             .collect();
 
         let config_hash = self.config_hash();
-        self.register_removers(&state.corpus);
-        self.publish_static_slots(&state.corpus);
+        if !state.initialized {
+            self.register_removers(&state.corpus);
+            self.publish_static_slots(&state.corpus);
+            state.initialized = true;
+        }
 
         for path in &removed {
             state.corpus.remove_file(path);
             state.sources.remove(path);
+            state.source_files.remove(path);
             state.pass1_issues.remove(path);
             state.suppressions.remove(path);
         }
@@ -1370,6 +1463,9 @@ impl Engine {
                 .suppressions
                 .insert(path.clone(), suppress::Suppressions::parse(text));
             state.sources.insert(path.clone(), text.clone());
+            state
+                .source_files
+                .insert(path.clone(), SourceFile::new(path.clone(), text.clone()));
             state.pass1_issues.insert(path.clone(), file_issues);
         }
 
@@ -1381,6 +1477,11 @@ impl Engine {
         // from a file that DID change (e.g. a project-wide dominant
         // style). Parses go through `state.parse_cache`, so unchanged
         // files are a content-hash cache hit rather than a re-parse.
+        // Each file's `SourceFile` comes from `state.source_files`
+        // (CD-40 lever 1) instead of being rebuilt here — rebuilding
+        // meant a full text clone for every currently-known file on
+        // every incremental call, dominating the per-edit floor on
+        // large corpora.
         let consistency_checks: Vec<(usize, &dyn Check)> = self
             .checks
             .iter()
@@ -1389,12 +1490,11 @@ impl Engine {
             .map(|(i, c)| (i, c.as_ref()))
             .collect();
         if !consistency_checks.is_empty() {
-            for (path, text) in &state.sources {
-                let file = SourceFile::new(path.clone(), text.clone());
+            for file in state.source_files.values() {
                 if file.language != Language::TypeScript {
                     continue;
                 }
-                let file_issues = state.parse_cache.with_parsed(&file, |parsed_return| {
+                let file_issues = state.parse_cache.with_parsed(file, |parsed_return| {
                     if parse_fatal(parsed_return) {
                         return Vec::new();
                     }
@@ -1402,7 +1502,7 @@ impl Engine {
                         program: &parsed_return.program,
                         diagnostics: &parsed_return.errors,
                     };
-                    self.pass2_ts_file(&file, &parsed, &consistency_checks, &state.corpus, None)
+                    self.pass2_ts_file(file, &parsed, &consistency_checks, &state.corpus, None)
                 });
                 issues.extend(file_issues);
             }
@@ -1410,7 +1510,16 @@ impl Engine {
 
         // finalize reads the persistent per-file suppression map — only
         // changed files were re-parsed above (cd-32 perf).
-        self.finalize_and_filter(&state.corpus, issues, &state.suppressions, None)
+        let changed_paths: Vec<PathBuf> = changed.iter().map(|(p, _)| p.clone()).collect();
+        self.finalize_and_filter(
+            &state.corpus,
+            issues,
+            &state.suppressions,
+            None,
+            GraphUpdate::Incremental {
+                changed: &changed_paths,
+            },
+        )
     }
 
     /// Cache-aware variant of [`Engine::analyze_with_text`]. Reads

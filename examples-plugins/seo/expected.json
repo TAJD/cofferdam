@@ -106,12 +106,25 @@
           "end_byte": 270
         }
       ]
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/seo/fixture/constants.ts",
+      "line": 6,
+      "column": 14,
+      "start_byte": 241,
+      "end_byte": 256,
+      "message": "`goodDescription` is exported here but no matching test file was found in the project"
     }
   ],
   "summary": {
-    "total": 6,
+    "total": 7,
     "by_category": {
-      "design": 1,
+      "design": 2,
       "warning": 5
     }
   }

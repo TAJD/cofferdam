@@ -50,12 +50,25 @@
       "start_byte": 1692,
       "end_byte": 1713,
       "message": "`listAllMerchantsAdmin` is exported but never imported in the project"
+    },
+    {
+      "id": "Design.MissingTestFile",
+      "category": "design",
+      "docs_url": "https://tajd.github.io/cofferdam/checks/Design.MissingTestFile",
+      "priority": 4,
+      "severity": "low",
+      "file": "examples-plugins/tenant-isolation/fixture.ts",
+      "line": 27,
+      "column": 23,
+      "start_byte": 1100,
+      "end_byte": 1111,
+      "message": "`getMerchant` is exported here but no matching test file was found in the project"
     }
   ],
   "summary": {
-    "total": 4,
+    "total": 5,
     "by_category": {
-      "design": 3,
+      "design": 4,
       "warning": 1
     }
   }

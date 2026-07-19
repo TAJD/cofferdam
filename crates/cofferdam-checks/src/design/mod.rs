@@ -2139,30 +2139,36 @@ function total(items) {
     #[test]
     fn default_patterns_cover_js_jsx_mjs_mts_cts_same_directory_test_files() {
         for ext in ["js", "jsx", "mjs", "mts", "cts"] {
-            let file = PathBuf::from(format!("/p/format.{ext}"));
-            let test_file = PathBuf::from(format!("/p/format.test.{ext}"));
-            let exports = vec![barrel_real_export(&file, "formatCurrency")];
-            let imports = vec![internal_import(&test_file, &file)];
-            let issues = run_missing_test_file_with_default_patterns(imports, exports);
-            assert!(
-                issues.is_empty(),
-                "a same-directory format.test.{ext} must suppress the finding by default; got {issues:?}"
-            );
+            for naming in [".test.", ".spec."] {
+                let file = PathBuf::from(format!("/p/format.{ext}"));
+                let test_file = PathBuf::from(format!("/p/format{naming}{ext}"));
+                let exports = vec![barrel_real_export(&file, "formatCurrency")];
+                let imports = vec![internal_import(&test_file, &file)];
+                let issues = run_missing_test_file_with_default_patterns(imports, exports);
+                assert!(
+                    issues.is_empty(),
+                    "a same-directory format{naming}{ext} must suppress the finding by default; \
+                     got {issues:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn default_patterns_cover_js_jsx_mjs_mts_cts_tests_dir_test_files() {
         for ext in ["js", "jsx", "mjs", "mts", "cts"] {
-            let file = PathBuf::from(format!("/p/format.{ext}"));
-            let test_file = PathBuf::from(format!("/p/__tests__/format.spec.{ext}"));
-            let exports = vec![barrel_real_export(&file, "formatCurrency")];
-            let imports = vec![internal_import(&test_file, &file)];
-            let issues = run_missing_test_file_with_default_patterns(imports, exports);
-            assert!(
-                issues.is_empty(),
-                "a __tests__/format.spec.{ext} must suppress the finding by default; got {issues:?}"
-            );
+            for naming in [".test.", ".spec."] {
+                let file = PathBuf::from(format!("/p/format.{ext}"));
+                let test_file = PathBuf::from(format!("/p/__tests__/format{naming}{ext}"));
+                let exports = vec![barrel_real_export(&file, "formatCurrency")];
+                let imports = vec![internal_import(&test_file, &file)];
+                let issues = run_missing_test_file_with_default_patterns(imports, exports);
+                assert!(
+                    issues.is_empty(),
+                    "a __tests__/format{naming}{ext} must suppress the finding by default; got \
+                     {issues:?}"
+                );
+            }
         }
     }
 

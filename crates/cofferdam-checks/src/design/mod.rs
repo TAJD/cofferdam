@@ -1316,6 +1316,141 @@ function total(items) {
         );
     }
 
+    // ─── Design.EffectLeakage (CD-138): per-function granularity ────────
+
+    fn internal_import_with_specifier(
+        from: &Path,
+        resolved: &Path,
+        specifier: &str,
+    ) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: specifier.to_string(),
+            resolved: Some(resolved.to_path_buf()),
+            names: Vec::new(),
+            type_only: false,
+            span: span(),
+        }
+    }
+
+    #[test]
+    fn pure_tag_on_a_specific_function_does_not_flag_an_unrelated_functions_import() {
+        // The @pure tag is attached to `computeTotal`, not `loadConfig` —
+        // `fs` is only referenced inside `loadConfig`'s own body, so it
+        // must not leak into `computeTotal`'s purity check.
+        let a = PathBuf::from("/p/a.ts");
+        let source = r#"
+import * as fs from "fs";
+
+export function loadConfig(): string {
+  return fs.readFileSync("config.json", "utf8");
+}
+
+// @pure
+export function computeTotal(items: number[]): number {
+  return items.reduce((sum, n) => sum + n, 0);
+}
+"#;
+        let issues = run_effect_leakage(&[(&a, source)], vec![external_import(&a, "fs")]);
+        assert!(
+            issues.is_empty(),
+            "an fs import used only by an unrelated function in the same file must not flag the \
+             @pure-tagged function; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn pure_tag_on_a_specific_function_flags_when_its_own_body_uses_the_side_effect() {
+        let a = PathBuf::from("/p/a.ts");
+        let source = r#"
+import * as fs from "fs";
+
+export function unrelated(): number {
+  return 1;
+}
+
+// @pure
+export function loadConfig(): string {
+  return fs.readFileSync("config.json", "utf8");
+}
+"#;
+        let issues = run_effect_leakage(&[(&a, source)], vec![external_import(&a, "fs")]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "the @pure-tagged function's own direct use of fs must be flagged; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn pure_tag_on_a_specific_function_flags_a_transitive_side_effect_through_its_own_import() {
+        let a = PathBuf::from("/p/a.ts");
+        let b = PathBuf::from("/p/b.ts");
+        let source_a = r#"
+import { readFromDisk } from "./b";
+
+export function unrelated(): number {
+  return 1;
+}
+
+// @pure
+export function computeTotal(items: number[]): number {
+  return items.reduce((sum, n) => sum + n, 0) + readFromDisk().length;
+}
+"#;
+        let issues = run_effect_leakage(
+            &[
+                (&a, source_a),
+                (
+                    &b,
+                    "export function readFromDisk(): string { return \"\"; }",
+                ),
+            ],
+            vec![
+                internal_import_with_specifier(&a, &b, "./b"),
+                external_import(&b, "fs"),
+            ],
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "a side effect reached one hop through the @pure-tagged function's own import must \
+             still be flagged; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn subpath_of_a_denylisted_module_is_flagged() {
+        let a = PathBuf::from("/p/a.ts");
+        let issues = run_effect_leakage(
+            &[(&a, "// @pure\nexport function f() {}")],
+            vec![external_import(&a, "mysql2/promise")],
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "a subpath of a denylisted module (mysql2/promise) must be flagged; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn extra_side_effect_modules_extends_the_denylist() {
+        use effect_leakage::side_effecting_match;
+        assert_eq!(
+            side_effecting_match(
+                "some-custom-db-client",
+                &["some-custom-db-client".to_string()]
+            ),
+            Some("some-custom-db-client".to_string()),
+            "a module named via extra_side_effect_modules must be recognized"
+        );
+        assert_eq!(
+            side_effecting_match("some-custom-db-client", &[]),
+            None,
+            "a module not on either list must not be recognized"
+        );
+    }
+
     // ─── Design.DuplicateTypeShape (CD-128) ─────────────────────────────
 
     use duplicate_type_shape::DuplicateTypeShape;

@@ -1,18 +1,6 @@
 {
   "findings": [
     {
-      "id": "Warning.PluginTypeHostUnavailable",
-      "category": "warning",
-      "priority": 20,
-      "severity": "high",
-      "file": "examples-plugins/seo",
-      "line": 1,
-      "column": 1,
-      "start_byte": 0,
-      "end_byte": 0,
-      "message": "type-aware plugin check(s) declared requiresTypes:true but the type host is unavailable (no tsconfig.json found for type-aware plugin checks) — those checks ran with ctx.types undefined."
-    },
-    {
       "id": "Warning.SeoDuplicateTitle",
       "category": "warning",
       "priority": 15,
@@ -77,6 +65,18 @@
       "start_byte": 0,
       "end_byte": 1,
       "message": "Page component has no `metadata` or `generateMetadata` export."
+    },
+    {
+      "id": "Warning.SeoNonEmptyDescription",
+      "category": "warning",
+      "priority": 15,
+      "severity": "medium",
+      "file": "examples-plugins/seo/fixture/empty-description/page.tsx",
+      "line": 19,
+      "column": 58,
+      "start_byte": 1020,
+      "end_byte": 1031,
+      "message": "SEO description resolves to an empty string."
     },
     {
       "id": "Design.DuplicateExportName",

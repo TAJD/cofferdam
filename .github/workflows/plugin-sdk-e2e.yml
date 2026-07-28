@@ -53,6 +53,16 @@ jobs:
         working-directory: packages/check-sdk
         run: node --test tests/*.test.mjs
 
+      - name: Install seo fixture devDependencies (ts-morph, for type-aware plugin checks)
+        # examples-plugins/seo/src/non-empty-description.ts declares
+        # requiresTypes:true and needs ts-morph resolvable from the
+        # fixture dir. No other example plugin fixture has its own
+        # devDependencies, so this is scoped to seo only (CD-151 follow-up:
+        # without this, the fixture always ran with the type host
+        # unavailable, silently skipping the check's real behavior).
+        working-directory: examples-plugins/seo
+        run: npm install --no-save
+
       - name: Build every example plugin (TS → dist)
         # The plugins declare `@cofferdam/check-sdk: "*"` but the SDK
         # isn't published to npm yet; the script bundles the built dist

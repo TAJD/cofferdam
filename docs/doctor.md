@@ -34,7 +34,7 @@ Remediation: `re-install @cofferdam/cofferdam`
 
 ### config
 
-Searches for `cofferdam.toml` by walking up from the current directory to the nearest `.git` root (the same walk `cofferdam check` uses). Reports whether the file exists, whether it parses cleanly, and whether it references any unknown check IDs.
+Searches for `cofferdam.toml` by walking up from the current directory to the nearest `.git` root. (`cofferdam check` uses the same walk, but anchors it on the paths you ask it to analyze and only falls back to the current directory; `doctor` takes no target path, so it always reports on the current-directory anchor.) Reports whether the file exists, whether it parses cleanly, and whether it references any unknown check IDs.
 
 | Status | Condition |
 |---|---|

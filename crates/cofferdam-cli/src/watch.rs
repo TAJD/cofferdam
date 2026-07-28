@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 use cofferdam_checks::all_builtins;
 use cofferdam_core::Issue;
 use cofferdam_engine::{
-    config::resolve_with_invariants, discover, AnalysisState, DiscoveryOptions, Engine,
+    config::resolve_for_targets, discover, AnalysisState, DiscoveryOptions, Engine,
 };
 use cofferdam_formatters::TextFormatter;
 use notify::{Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -81,7 +81,7 @@ pub fn run(args: WatchArgs) -> ExitCode {
         ..DiscoveryOptions::default()
     };
 
-    let engine = match build_engine(config_path.as_deref(), no_config) {
+    let engine = match build_engine(config_path.as_deref(), &roots, no_config) {
         Ok(e) => e,
         Err(()) => return ExitCode::from(2),
     };
@@ -165,13 +165,17 @@ pub fn run(args: WatchArgs) -> ExitCode {
     }
 }
 
-fn build_engine(config_path: Option<&Path>, no_config: bool) -> Result<Engine, ()> {
+fn build_engine(
+    config_path: Option<&Path>,
+    roots: &[PathBuf],
+    no_config: bool,
+) -> Result<Engine, ()> {
     if no_config {
         return Ok(Engine::new(all_builtins()));
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let (project_config, resolved_path, diags) =
-        match resolve_with_invariants(config_path, &cwd, false) {
+        match resolve_for_targets(config_path, roots, &cwd, false) {
             Ok(triple) => triple,
             Err(e) => {
                 eprintln!("error: {e}");

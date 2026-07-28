@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `Design.DuplicateExportName` gained an `exempt_boundary_pairs` option for projects that mirror an export name across a boundary on purpose (a client/server contract pair, a public re-export shadowing an internal name). Each entry declares one boundary as two or more path globs separated by `|` (e.g. `["client/**|server/**"]`); a duplicate set is exempt only when every occurrence matches a *distinct* side of a single entry, so two files inside one side still collide and a third file outside the boundary keeps the finding. Previously the only escape hatch was demoting the whole check's severity. Fixtures in `examples/duplicate_export_boundary/` (CD-148).
 
+### Fixed
+- `cofferdam.toml` discovery is now anchored on the paths you ask to analyze, not just the process's working directory. `cofferdam check src/app` run from a monorepo root picks up `src/app/cofferdam.toml`; previously the walk-up started at the CWD, so a subproject's own config was silently skipped with no error or warning. Discovery starts from the common ancestor of the given target paths (a file target contributes its parent directory) and falls back to the CWD anchor when that turns up nothing, so `cofferdam check`, `cofferdam check .`, and `--config <path>` behave exactly as before. Applies to `check`, `check --dist`, `watch`, `advise`, `advise --analyze`, and `baseline write` / `prune` / `ratchet` — subcommands with no target-path concept (`explain`, `doctor`, `advise --diff`) still anchor on the CWD (CD-149).
+
 ## [0.3.11] - 2026-07-19
 
 ### Fixed

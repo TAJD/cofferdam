@@ -9,8 +9,10 @@ import rules.
 ## File location
 
 `cofferdam.invariants.toml` lives next to `cofferdam.toml` at the project
-root. Discovery walks up from the working directory until it finds the
-file or hits a `.git` entry — same rule as `cofferdam.toml`. Both files
+root. Discovery walks up from the directory holding `cofferdam.toml` if
+one was found, otherwise from the same anchor `cofferdam.toml` discovery
+used — the analyzed target path, falling back to the working directory —
+until it finds the file or hits a `.git` entry. Both files
 are optional and additive; you can ship one without the other.
 
 ## Starter spec

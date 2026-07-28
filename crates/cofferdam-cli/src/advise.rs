@@ -131,7 +131,11 @@ pub fn run_analyze(args: AnalyzeArgs) -> ExitCode {
         }
     };
 
-    let (project_config, _) = match resolve_and_load_config(config_path.as_deref(), no_config) {
+    let (project_config, _) = match resolve_and_load_config(
+        config_path.as_deref(),
+        std::slice::from_ref(&path),
+        no_config,
+    ) {
         Ok(pair) => pair,
         Err(()) => return ExitCode::from(2),
     };
@@ -305,7 +309,7 @@ pub fn build_advisories(
     files.dedup();
 
     let (project_config, config_path_resolved) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
+        match resolve_and_load_config(config_path.as_deref(), &roots, no_config) {
             Ok(pair) => pair,
             Err(()) => return Err(ExitCode::from(2)),
         };
@@ -977,10 +981,11 @@ fn emit_text(advisories: &[FileAdvisory]) {
 /// pulling in the rest of the CLI's check-mode machinery.
 fn resolve_and_load_config(
     explicit: Option<&Path>,
+    roots: &[PathBuf],
     no_config: bool,
 ) -> Result<(Option<ProjectConfig>, Option<PathBuf>), ()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match cfg::resolve_with_invariants(explicit, &cwd, no_config) {
+    match cfg::resolve_for_targets(explicit, roots, &cwd, no_config) {
         Ok((cfg, path, diags)) => {
             for w in &diags.warnings {
                 eprintln!("warning: {w}");

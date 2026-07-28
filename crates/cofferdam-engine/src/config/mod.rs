@@ -51,7 +51,7 @@ use cofferdam_core::OptionsError;
 // Re-export all public types and functions from submodules
 pub use loader::{discover, load, FILE_NAME};
 pub use options::{options_for, options_for_raw, unknown_check_ids};
-pub use resolution::{resolve_with_invariants, LoadDiagnostics};
+pub use resolution::{resolve_for_targets, resolve_with_invariants, LoadDiagnostics};
 
 /// Parsed project config: per-check raw option bags + per-check
 /// severity overrides. Unknown check IDs are stored verbatim and

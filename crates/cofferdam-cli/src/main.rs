@@ -129,8 +129,9 @@ enum Cmd {
         #[arg(long)]
         fail_on_new: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the current directory until one is found or a `.git`
-        /// directory is reached. Conflicts with `--no-config`.
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely. Equivalent to running
@@ -247,9 +248,10 @@ enum Cmd {
         /// Suppress informational output.
         #[arg(long)]
         quiet: bool,
-        /// Path to a `cofferdam.toml` config file. Used for `[plugins]`
-        /// discovery only. Defaults to walking up from the current
-        /// directory. Conflicts with `--no-config`.
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely.
@@ -353,8 +355,10 @@ enum Cmd {
         /// Disable `.gitignore` / `.cofferdamignore` filtering.
         #[arg(long)]
         no_ignore: bool,
-        /// Path to a `cofferdam.toml` config file. Defaults to
-        /// walking up from the current directory.
+        /// Path to a `cofferdam.toml` config file. Defaults to walking
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely.
@@ -435,8 +439,9 @@ enum Cmd {
         #[arg(long)]
         pretty: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the current directory until one is found or a `.git`
-        /// directory is reached. Conflicts with `--no-config`.
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely.
@@ -584,8 +589,9 @@ enum BaselineAction {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the current directory until one is found or a `.git`
-        /// directory is reached. Conflicts with `--no-config`.
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely.
@@ -653,7 +659,9 @@ enum BaselineAction {
         #[arg(long, value_name = "PATH")]
         baseline: Option<PathBuf>,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the current directory. Conflicts with `--no-config`.
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely.
@@ -687,7 +695,9 @@ enum BaselineAction {
         #[arg(long)]
         no_ignore: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the current directory. Conflicts with `--no-config`.
+        /// up from the analyzed target path — falling back to the
+        /// current directory — until one is found or a `.git` directory
+        /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
         config: Option<PathBuf>,
         /// Disable config-file discovery entirely.
@@ -1383,7 +1393,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // revisions of this function) so `[engine] extra_extensions`
     // (CD-68) can widen `opts.extensions` before the walk runs.
     let (project_config, resolved_config_path) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
+        match resolve_and_load_config(config_path.as_deref(), &roots, no_config) {
             Ok(pair) => pair,
             Err(()) => return ExitCode::from(2),
         };
@@ -2070,11 +2080,14 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
         }
     }
 
-    let (project_config, resolved_config_path) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
-            Ok(pair) => pair,
-            Err(()) => return ExitCode::from(2),
-        };
+    let (project_config, resolved_config_path) = match resolve_and_load_config(
+        config_path.as_deref(),
+        std::slice::from_ref(&dist),
+        no_config,
+    ) {
+        Ok(pair) => pair,
+        Err(()) => return ExitCode::from(2),
+    };
 
     // Built-in checks: only those tagged output-mode-eligible. No
     // `Engine::with_config` / per-check option overrides — no
@@ -2407,7 +2420,7 @@ fn run_baseline_write(args: BaselineWriteArgs) -> ExitCode {
     };
 
     let (project_config, resolved_config_path) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
+        match resolve_and_load_config(config_path.as_deref(), &roots, no_config) {
             Ok(pair) => pair,
             Err(()) => return ExitCode::from(2),
         };
@@ -2624,7 +2637,7 @@ fn run_baseline_prune(args: BaselinePruneArgs) -> ExitCode {
         paths
     };
     let (project_config, resolved_config_path) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
+        match resolve_and_load_config(config_path.as_deref(), &roots, no_config) {
             Ok(pair) => pair,
             Err(()) => return ExitCode::from(2),
         };
@@ -2790,8 +2803,13 @@ fn run_baseline_ratchet(args: BaselineRatchetArgs) -> ExitCode {
         pretty,
     } = args;
 
+    let roots: Vec<PathBuf> = if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths
+    };
     let (project_config, resolved_config_path) =
-        match resolve_and_load_config(config_path.as_deref(), no_config) {
+        match resolve_and_load_config(config_path.as_deref(), &roots, no_config) {
             Ok(pair) => pair,
             Err(()) => return ExitCode::from(2),
         };
@@ -2812,11 +2830,6 @@ fn run_baseline_ratchet(args: BaselineRatchetArgs) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let roots: Vec<PathBuf> = if paths.is_empty() {
-        vec![PathBuf::from(".")]
-    } else {
-        paths
-    };
     let mut opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
         include_hidden: hidden,
@@ -3058,7 +3071,9 @@ fn load_baseline_with_warning(path: &Path) -> BaselineLoad {
     }
 }
 
-/// Resolve which `cofferdam.toml` to load (if any) and parse it. Returns
+/// Resolve which `cofferdam.toml` to load (if any) and parse it.
+/// Discovery is anchored on `roots` — the paths the user asked to
+/// analyze — falling back to the process CWD (CD-149). Returns
 /// `(config, path)` — both `None` when discovery is skipped or no file
 /// is found. Hard-errors (return `Err(())`) only when the user passed
 /// `--config <path>` to a missing or invalid file. Discovered configs
@@ -3067,10 +3082,11 @@ fn load_baseline_with_warning(path: &Path) -> BaselineLoad {
 /// in the first place.
 fn resolve_and_load_config(
     explicit: Option<&Path>,
+    roots: &[PathBuf],
     no_config: bool,
 ) -> Result<(Option<ProjectConfig>, Option<PathBuf>), ()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match cfg::resolve_with_invariants(explicit, &cwd, no_config) {
+    match cfg::resolve_for_targets(explicit, roots, &cwd, no_config) {
         Ok((cfg, path, diags)) => {
             for w in &diags.warnings {
                 eprintln!("warning: {w}");

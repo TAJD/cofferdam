@@ -94,7 +94,7 @@ are:
 | `--format <text\|json>` | Output format. Default `text`; with `--robot` and no explicit `--format`, defaults to `json`. |
 | `--robot` | Switch the default to JSON. Token-economical for AI agents. |
 | `--pretty` | Pretty-print JSON. |
-| `--config <PATH>` | Path to a config file. Defaults to walking up from CWD until one is found. |
+| `--config <PATH>` | Path to a config file. Defaults to walking up from the analyzed target path, falling back to CWD, until one is found. |
 | `--no-config` | Disable config discovery entirely — every check uses its built-in defaults. |
 | `--hidden` | Walk hidden files/directories. |
 | `--no-ignore` | Disable `.gitignore` / `.cofferdamignore` filtering. |

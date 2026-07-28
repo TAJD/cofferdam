@@ -95,7 +95,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 * `--baseline <PATH>` — Path to a baseline file. Defaults to `.cofferdam/baseline.json` when that file exists. Conflicts with `--no-baseline`
 * `--no-baseline` — Disable baseline detection entirely. Equivalent to running without a baseline file present
 * `--fail-on-new` — Only fail (exit 1) on findings absent from the baseline. Implicit when a baseline is active; pass explicitly to document intent in CI scripts. Has no effect without a baseline
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely. Equivalent to running without a `cofferdam.toml` present
 * `--since <GIT-REF>` — PR mode — report only findings on files changed in `<git-ref>...HEAD`. The full project tree is still analysed for cross-file soundness (OrphanExport, DeadExport, import cycles); only the reported findings are filtered to the diff
 * `--fail-on <LEVEL>` — Severity threshold for the exit-1 gate. Findings below this level still print; the process only exits 1 if at least one finding is at this level or above. Baselined findings never trigger the gate
@@ -150,7 +150,7 @@ Limitations (v1): CSR/SPA apps with no static HTML output are not supported (wou
   Possible values: `info`, `low`, `medium`, `high`, `critical`
 
 * `--quiet` — Suppress informational output
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Used for `[plugins]` discovery only. Defaults to walking up from the current directory. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 
 
@@ -186,7 +186,7 @@ Run the analyzer and write the current set of findings to the baseline file. Sub
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
 * `--output <PATH>` — Where to write the baseline. Defaults to `.cofferdam/baseline.json` in the current directory
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--robot` — Machine-readable JSON output. Emits a `delta` block when a prior baseline existed; omitted on first run
 * `--pretty` — Pretty-print JSON output. No effect without `--robot`
@@ -245,7 +245,7 @@ Keeps the baseline from accumulating dead weight that never gets re-examined onc
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
 * `--baseline <PATH>` — Path to the baseline file. Defaults to auto-detected `.cofferdam/baseline.json`
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--dry-run` — List stale entries without writing. Always exits 0
 * `--check` — List stale entries without writing; exit 1 if any exist. For CI gating on baseline hygiene
@@ -268,7 +268,7 @@ Lower `[budgets]` entries in `cofferdam.toml` to match the current finding count
 
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--dry-run` — Compute and print the new budgets without writing them
 * `--robot` — Machine-readable JSON output
@@ -346,7 +346,7 @@ Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a rec
 
 * `--hidden` — Walk hidden files/directories
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--debounce <MS>` — Debounce filesystem events by this many milliseconds. Lower = faster reaction to a save; higher = fewer duplicate runs when an editor emits multiple events per save. 100 ms is the typical sweet spot
 
@@ -410,7 +410,7 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
 
 * `--robot` — Default to a machine-readable JSON array when `--format` is not set. Token-economical output for AI agents
 * `--pretty` — Pretty-print JSON output
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the current directory until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering

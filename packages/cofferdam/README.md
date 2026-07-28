@@ -97,8 +97,10 @@ pnpm exec cofferdam check --since HEAD --fail-on=high
 ## Configuration
 
 `cofferdam.toml` at the project root. Discovered by walking up from the
-working directory until a `.git` is reached. Every key is optional —
-unset values fall back to the defaults.
+path you asked to analyze (`cofferdam check src/app` finds
+`src/app/cofferdam.toml`), falling back to the working directory when
+that turns up nothing; either walk stops at a `.git`. Every key is
+optional — unset values fall back to the defaults.
 
 ```toml
 # Lower a check's severity so it stops failing CI but still appears in reports

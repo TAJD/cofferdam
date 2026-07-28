@@ -1078,19 +1078,39 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
         // keeps this from colliding with another cofferdam build's copy;
         // always overwritten for the same reason the host script is.
         let core_path = dir.join(CORE_SCRIPT_NAME);
-        std::fs::write(&core_path, CORE_SCRIPT)?;
+        write_atomic(&core_path, CORE_SCRIPT)?;
 
         let path = dir.join(HOST_SCRIPT_NAME);
         // Always overwrite — the embedded script changes when the CLI
         // is rebuilt. Compared to file-content-hash-named caching, this
         // is one extra write per process. Fine for a multi-second run.
-        std::fs::write(&path, HOST_SCRIPT)?;
+        write_atomic(&path, HOST_SCRIPT)?;
         Ok(path)
     });
     match result {
         Ok(p) => Ok(p.clone()),
         Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
     }
+}
+
+/// Write `contents` to `path` via a process-unique temp file + rename.
+/// `OnceLock` only dedupes writers *within* one process — every
+/// `cofferdam` invocation is a separate process, and under parallel
+/// test/CI load many of them race to overwrite the same deterministic,
+/// version-scoped path concurrently. A plain `fs::write` (open, truncate,
+/// write) lets one process's truncate/write interleave with another
+/// process's `node --import` read of the same path, producing a
+/// truncated or torn script — the root cause of CD-141's intermittent
+/// "no such check" / "never emitted its completion marker" failures.
+/// `fs::rename` onto an existing destination is an atomic replace on
+/// both POSIX (rename(2)) and Windows (Rust's std uses
+/// `MOVEFILE_REPLACE_EXISTING`), so readers only ever see the old
+/// complete file or the new complete file, never a torn one.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&tmp_path, contents)?;
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
 }
 
 pub fn capitalize_category(wire: &str) -> Option<&'static str> {

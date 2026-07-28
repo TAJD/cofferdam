@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use cofferdam_core::graph::{InvariantsRuntime, INVARIANTS as GRAPH_INVARIANTS};
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
-    Priority, RelatedSpan, Severity, SourceFile, Span,
+    OptionDefault, OptionKind, OptionSpec, Priority, RelatedSpan, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{Declaration, ExportNamedDeclaration, VariableDeclaration};
 use oxc_ast_visit::Visit;
@@ -21,6 +22,21 @@ struct NamedExport {
 /// it (only one is registered today, but the API permits sharing).
 static EXPORTS: CorpusKey<Vec<NamedExport>> = CorpusKey::new("Design.DuplicateExportName.exports");
 
+const DEN_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "exempt_boundary_pairs",
+    kind: OptionKind::StringList,
+    default: OptionDefault::StringList(&[]),
+    // One entry per boundary, sides separated by `|`. A collision is
+    // exempt only when every occurrence lands on a *different* side of
+    // one entry, so two files inside the same side still collide and a
+    // third file outside the boundary un-exempts the whole group. A flat
+    // list of paths can't express that — it would mute the file
+    // everywhere, not just against its declared counterpart. `|` is the
+    // separator because it is not a glob metacharacter and is illegal in
+    // Windows paths.
+    doc: "Boundaries across which the same export name is mirrored on purpose. Each entry lists two or more path globs separated by `|` (e.g. `client/**|server/**`); a duplicate set is exempt only if each occurrence matches a distinct side of one entry. Globs are matched against the project-root-relative path and, when unanchored, at any depth.",
+}];
+
 /// `Design.DuplicateExportName` — finalize-stage cross-file check
 /// that flags identifier names exported from more than one file. See
 /// `CheckMeta` for the full emission rules.
@@ -35,7 +51,7 @@ const DEN_META: CheckMeta = CheckMeta {
     body: include_str!("../../docs/Design.DuplicateExportName.md"),
     requires_types: false,
     consistency: false,
-    options: &[],
+    options: DEN_OPTIONS,
     autofix: false,
     // Writes per-file ExportRecords into the EXPORTS slot during run();
     // skipping run() on cache hit would drop those contributions and
@@ -74,6 +90,19 @@ impl Check for DuplicateExportName {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        let boundaries: Vec<Boundary> = ctx
+            .options
+            .get_string_list("exempt_boundary_pairs")
+            .unwrap_or(&[])
+            .iter()
+            .map(|entry| Boundary::parse(entry))
+            .collect();
+        let runtime: Option<InvariantsRuntime> =
+            ctx.corpus.with_slot(&GRAPH_INVARIANTS, |slot| slot.clone());
+        let project_root = runtime
+            .map(|r| r.project_root)
+            .unwrap_or_else(|| PathBuf::from(""));
+
         let mut by_name: BTreeMap<String, Vec<NamedExport>> = BTreeMap::new();
         // Read-only (cd-32): a draining read would empty the slot as a
         // side effect of finalize, which is fine for a one-shot analyze
@@ -89,6 +118,10 @@ impl Check for DuplicateExportName {
         let mut issues = Vec::new();
         for (name, mut occurrences) in by_name {
             if occurrences.len() < 2 {
+                continue;
+            }
+            let paths: Vec<&Path> = occurrences.iter().map(|e| e.file.as_path()).collect();
+            if boundaries.iter().any(|b| b.exempts(&paths, &project_root)) {
                 continue;
             }
             // Stable order: first-seen by (file, start_byte). The smallest
@@ -117,6 +150,73 @@ impl Check for DuplicateExportName {
             });
         }
         issues
+    }
+}
+
+/// One configured boundary: the sides an intentional mirror may span.
+struct Boundary {
+    sides: Vec<Side>,
+}
+
+struct Side {
+    matchers: Vec<globset::GlobMatcher>,
+}
+
+impl Boundary {
+    fn parse(entry: &str) -> Self {
+        Self {
+            sides: entry
+                .split('|')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(Side::new)
+                .collect(),
+        }
+    }
+
+    /// True when every occurrence sits on a side of this boundary and no
+    /// two share one. Sides are claimed greedily in declaration order,
+    /// so overlapping globs resolve deterministically.
+    fn exempts(&self, paths: &[&Path], project_root: &Path) -> bool {
+        if self.sides.len() < 2 {
+            return false;
+        }
+        let mut claimed = vec![false; self.sides.len()];
+        for path in paths {
+            let rel = super::relative_normalised(project_root, path);
+            let found = self
+                .sides
+                .iter()
+                .enumerate()
+                .position(|(i, side)| !claimed[i] && side.is_match(&rel));
+            match found {
+                Some(i) => claimed[i] = true,
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
+impl Side {
+    fn new(pattern: &str) -> Self {
+        let mut matchers = Vec::new();
+        if let Ok(g) = globset::Glob::new(pattern) {
+            matchers.push(g.compile_matcher());
+        }
+        // An unanchored `client/**` should still match a nested
+        // `packages/app/client/foo.ts` — the project root isn't always
+        // the directory the globs were written against.
+        if !pattern.starts_with("**") && !pattern.starts_with('/') {
+            if let Ok(g) = globset::Glob::new(&format!("**/{pattern}")) {
+                matchers.push(g.compile_matcher());
+            }
+        }
+        Self { matchers }
+    }
+
+    fn is_match(&self, rel: &str) -> bool {
+        self.matchers.iter().any(|m| m.is_match(rel))
     }
 }
 

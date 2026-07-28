@@ -113,6 +113,38 @@ fn check_fail_on_type_unavailable_exits_2_when_oracle_missing() {
     );
 }
 
+/// CD-151: tsconfig.json discovery must anchor on the analyzed target,
+/// not the invoking process's CWD. Before the fix, `find_tsconfig` was
+/// always called with a CWD-derived root, so `cofferdam check <target>`
+/// run from outside <target>'s tree reported "no tsconfig.json found
+/// near <cwd>" even when <target> has its own valid tsconfig.json.
+/// Doesn't require Node — the symptom (the wrong search root) shows up
+/// in the warning message itself, before any ts-morph spawn is
+/// attempted.
+#[test]
+fn check_finds_tsconfig_anchored_on_target_not_cwd() {
+    let unrelated_cwd = tempfile::tempdir().expect("create unrelated cwd");
+    let project = tempfile::tempdir().expect("create project dir");
+    std::fs::write(project.path().join("tsconfig.json"), b"{}\n").expect("write tsconfig.json");
+    std::fs::write(
+        project.path().join("a.ts"),
+        b"const x: string | null = null;\n",
+    )
+    .expect("write a.ts");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-cache"])
+        .arg(project.path())
+        .current_dir(unrelated_cwd.path())
+        .output()
+        .expect("spawn cofferdam check");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("no tsconfig.json found near"),
+        "tsconfig discovery must anchor on the analyzed target, not the CWD; stderr={stderr}"
+    );
+}
+
 /// Without --fail-on-type-unavailable the oracle failure is a warning only.
 /// The process must NOT exit with code 2 on oracle unavailability alone.
 #[test]

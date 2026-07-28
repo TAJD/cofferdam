@@ -184,7 +184,12 @@ pub fn resolve_for_targets(
 /// directory that is an ancestor of every root. `None` when there are no
 /// roots or they share no common prefix (disjoint Windows drives) — the
 /// caller then falls back to the CWD anchor.
-fn target_anchor(roots: &[PathBuf], cwd: &Path) -> Option<PathBuf> {
+///
+/// Public so other CWD-anchored discovery walks (e.g. the CLI's
+/// tsconfig.json lookup for the ts-morph type host, CD-151) can anchor
+/// on the same target-derived directory `resolve_for_targets` uses for
+/// `cofferdam.toml`, instead of duplicating the common-ancestor logic.
+pub fn target_anchor(roots: &[PathBuf], cwd: &Path) -> Option<PathBuf> {
     let mut acc: Option<PathBuf> = None;
     for root in roots {
         let abs = normalize(&cwd.join(root));

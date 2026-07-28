@@ -115,13 +115,21 @@
       "base_priority": 6,
       "default_severity": "Medium",
       "explanation": "The same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got.",
-      "body": "---\nid: Design.DuplicateExportName\ncategory: Design\nbase_priority: 6\ndefault_severity: Medium\noptions: []\n---\n\nThe same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got. The check runs in the engine's `finalize` pass — per-file `run` collects export names into the shared corpus, then `finalize` groups by name and emits one `Issue` per duplicate set with the canonical occurrence as the primary span and the rest as `related: Vec<RelatedSpan>`.\n\n```ts\n// src/users.ts\nexport function format(u: User) { /* ... */ }   // flagged\n\n// src/posts.ts\nexport function format(p: Post) { /* ... */ }   // also flagged (related)\n```\n\n```ts\n// fix: namespace, rename, or pick one canonical home\nexport function formatUser(u: User) { /* ... */ }\nexport function formatPost(p: Post) { /* ... */ }\n```\n\n```toml\n# cofferdam.toml\n[checks.\"Design.DuplicateExportName\"]\nseverity = \"low\"   # demote to info-only if your project relies on barrel collisions\n```\n",
+      "body": "---\nid: Design.DuplicateExportName\ncategory: Design\nbase_priority: 6\ndefault_severity: Medium\noptions: [exempt_boundary_pairs]\n---\n\nThe same name is exported from multiple files. Barrel re-exports collide silently and importers can't tell which one they got. The check runs in the engine's `finalize` pass — per-file `run` collects export names into the shared corpus, then `finalize` groups by name and emits one `Issue` per duplicate set with the canonical occurrence as the primary span and the rest as `related: Vec<RelatedSpan>`.\n\n```ts\n// src/users.ts\nexport function format(u: User) { /* ... */ }   // flagged\n\n// src/posts.ts\nexport function format(p: Post) { /* ... */ }   // also flagged (related)\n```\n\n```ts\n// fix: namespace, rename, or pick one canonical home\nexport function formatUser(u: User) { /* ... */ }\nexport function formatPost(p: Post) { /* ... */ }\n```\n\n## Intentional cross-boundary mirrors\n\nSome projects mirror a name across a boundary on purpose — a client/server\ncontract pair, or a public re-export that deliberately shadows an internal\nname. `exempt_boundary_pairs` exempts exactly those pairings and nothing\nelse. Each entry names one boundary; its sides are path globs separated by\n`|`:\n\n```toml\n# cofferdam.toml\n[checks.\"Design.DuplicateExportName\"]\nexempt_boundary_pairs = [\"client/**|server/**\", \"packages/public/**|packages/internal/**\"]\n```\n\nA duplicate set is exempt only when **every** occurrence matches a\n**distinct** side of a single entry. So:\n\n- `client/schema.ts` + `server/schema.ts` → exempt (one per side).\n- `client/a.ts` + `client/b.ts` → still flagged; both are on the same side,\n  which is an ordinary collision, not a mirror.\n- `client/schema.ts` + `server/schema.ts` + `utils/misc.ts` → still flagged;\n  the third file is outside the boundary, so the set is not a clean mirror.\n- `client/schema.ts` + `utils/misc.ts` → still flagged; only the declared\n  pairing is exempt, so the file stays under scrutiny everywhere else.\n\nMore than two sides are allowed (`client/**|server/**|shared/**`). Globs are\nmatched against the project-root-relative path; an unanchored glob also\nmatches at any depth, so `client/**` covers `packages/app/client/schema.ts`.\nSides should be mutually exclusive — a path matching several sides is\nassigned to the first unclaimed one in declaration order.\n\nFixtures: `examples/duplicate_export_boundary/`.\n\nIf you'd rather not enumerate boundaries at all, demote the whole check:\n\n```toml\n# cofferdam.toml\n[checks.\"Design.DuplicateExportName\"]\nseverity = \"low\"   # demote to info-only if your project relies on barrel collisions\n```\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": [],
+      "options": [
+        {
+          "id": "exempt_boundary_pairs",
+          "kind": "string[]",
+          "doc": "Boundaries across which the same export name is mirrored on purpose. Each entry lists two or more path globs separated by `|` (e.g. `client/**|server/**`); a duplicate set is exempt only if each occurrence matches a distinct side of one entry. Globs are matched against the project-root-relative path and, when unanchored, at any depth.",
+          "default": []
+        }
+      ],
       "badges": [
-        "graph"
+        "graph",
+        "advisable"
       ]
     },
     {

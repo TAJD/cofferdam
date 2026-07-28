@@ -2319,4 +2319,153 @@ export function computeTotal(items: number[]): number {
         );
         assert_eq!(issues[0].file, file);
     }
+
+    // ─── Design.DuplicateExportName (CD-148) ────────────────────────────
+
+    use cofferdam_core::{validate_options, CheckOptions, RawOptionValue};
+    use duplicate_export_name::DuplicateExportName;
+
+    fn duplicate_export_opts(pairs: &[&str]) -> CheckOptions {
+        let mut raw: std::collections::BTreeMap<String, RawOptionValue> =
+            std::collections::BTreeMap::new();
+        raw.insert(
+            "exempt_boundary_pairs".to_string(),
+            RawOptionValue::List(
+                pairs
+                    .iter()
+                    .map(|p| RawOptionValue::String(p.to_string()))
+                    .collect(),
+            ),
+        );
+        let meta = DuplicateExportName.meta();
+        validate_options(meta.id, meta.options, &raw).expect("valid options")
+    }
+
+    /// Runs `DuplicateExportName.run()` over each `(path, source)` fixture,
+    /// then `.finalize()` with `exempt_boundary_pairs` set to `pairs`.
+    fn run_duplicate_export_name(fixtures: &[(&Path, &str)], pairs: &[&str]) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::new();
+        for (path, src) in fixtures {
+            let file = SourceFile::new(path.to_path_buf(), src.to_string());
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, &file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(&file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            DuplicateExportName.run(&file, &mut ctx);
+        }
+        let opts = duplicate_export_opts(pairs);
+        let mut finalize_ctx = FinalizeContext::new(&corpus).with_options(&opts);
+        DuplicateExportName.finalize(&mut finalize_ctx)
+    }
+
+    const MIRROR_A: &str = "export const UserId = 1;";
+    const MIRROR_B: &str = "export const UserId = 2;";
+
+    #[test]
+    fn cross_boundary_mirror_is_flagged_without_config() {
+        let client = PathBuf::from("/p/client/schema.ts");
+        let server = PathBuf::from("/p/server/schema.ts");
+        let issues = run_duplicate_export_name(&[(&client, MIRROR_A), (&server, MIRROR_B)], &[]);
+        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
+    }
+
+    #[test]
+    fn declared_boundary_pair_is_exempt() {
+        let client = PathBuf::from("/p/client/schema.ts");
+        let server = PathBuf::from("/p/server/schema.ts");
+        let issues = run_duplicate_export_name(
+            &[(&client, MIRROR_A), (&server, MIRROR_B)],
+            &["client/**|server/**"],
+        );
+        assert!(
+            issues.is_empty(),
+            "a declared client/server mirror must be exempt; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn two_files_on_the_same_side_are_still_flagged() {
+        let a = PathBuf::from("/p/client/a.ts");
+        let b = PathBuf::from("/p/client/b.ts");
+        let issues =
+            run_duplicate_export_name(&[(&a, MIRROR_A), (&b, MIRROR_B)], &["client/**|server/**"]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a collision inside one side of the boundary is not a mirror; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_third_file_outside_the_boundary_un_exempts_the_group() {
+        let client = PathBuf::from("/p/client/schema.ts");
+        let server = PathBuf::from("/p/server/schema.ts");
+        let stray = PathBuf::from("/p/utils/misc.ts");
+        let issues = run_duplicate_export_name(
+            &[
+                (&client, MIRROR_A),
+                (&server, MIRROR_B),
+                (&stray, "export const UserId = 3;"),
+            ],
+            &["client/**|server/**"],
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "an occurrence outside the declared boundary must keep the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_collision_is_unaffected_by_the_exemption() {
+        let client = PathBuf::from("/p/client/schema.ts");
+        let stray = PathBuf::from("/p/utils/misc.ts");
+        let issues = run_duplicate_export_name(
+            &[(&client, MIRROR_A), (&stray, MIRROR_B)],
+            &["client/**|server/**"],
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "only the declared pairing is exempt; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn boundary_globs_match_at_any_depth() {
+        let client = PathBuf::from("/p/packages/app/client/schema.ts");
+        let server = PathBuf::from("/p/packages/app/server/schema.ts");
+        let issues = run_duplicate_export_name(
+            &[(&client, MIRROR_A), (&server, MIRROR_B)],
+            &["client/**|server/**"],
+        );
+        assert!(
+            issues.is_empty(),
+            "an unanchored side glob must match nested paths; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_three_sided_boundary_exempts_a_three_way_mirror() {
+        let client = PathBuf::from("/p/client/schema.ts");
+        let server = PathBuf::from("/p/server/schema.ts");
+        let shared = PathBuf::from("/p/shared/schema.ts");
+        let issues = run_duplicate_export_name(
+            &[
+                (&client, MIRROR_A),
+                (&server, MIRROR_B),
+                (&shared, "export const UserId = 3;"),
+            ],
+            &["client/**|server/**|shared/**"],
+        );
+        assert!(
+            issues.is_empty(),
+            "a three-sided boundary must exempt a three-way mirror; got {issues:?}"
+        );
+    }
 }

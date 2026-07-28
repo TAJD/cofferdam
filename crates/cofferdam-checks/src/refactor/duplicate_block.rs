@@ -263,15 +263,18 @@ impl Check for DuplicateBlock {
         // earlier-in-the-source windows claim the territory first.
         let mut candidates: Vec<Vec<Fingerprint>> = by_hash
             .into_values()
-            .filter(|fps| fps.len() >= 2)
             .map(|mut fps| {
                 fps.sort_by(|a, b| {
                     a.file
                         .cmp(&b.file)
                         .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
                 });
-                fps
+                dedupe_self_overlaps(fps)
             })
+            // Self-overlap dedup can shrink a group below 2 (a single
+            // real block whose sliding windows all hashed identically),
+            // so re-check the size floor after it, not before.
+            .filter(|fps| fps.len() >= 2)
             .collect();
         // AST candidates run first so they claim territory before token
         // candidates compete. Inside a kind, sort by primary's location.
@@ -348,6 +351,36 @@ impl Check for DuplicateBlock {
         }
         issues
     }
+}
+
+/// Collapse windows *within one hash group* that overlap each other in
+/// the same file. `fps` is pre-sorted by `(file, start_byte)`, so a
+/// contiguous run of mutually-overlapping windows is walked in order
+/// and only the first (earliest-starting) window per run is kept.
+///
+/// Needed because a uniform field-copy chain (e.g. six back-to-back
+/// `this.x = value.x;` lines) canonicalizes every sliding window to
+/// the *same* structural hash — local-identifier numbering restarts at
+/// 0 within each window, so a window starting one statement later
+/// hashes identically to the one before it. Without this pass, those
+/// self-overlapping windows land in one hash group and get reported as
+/// spurious "duplicates" of themselves (CD-147); the cross-group
+/// `claimed` check in the caller only guards against a *different*
+/// hash group re-covering already-emitted territory, not against
+/// overlap inside the same group.
+fn dedupe_self_overlaps(fps: Vec<Fingerprint>) -> Vec<Fingerprint> {
+    let mut kept: Vec<Fingerprint> = Vec::with_capacity(fps.len());
+    for fp in fps {
+        let overlaps_prev = kept.last().is_some_and(|prev: &Fingerprint| {
+            prev.file == fp.file
+                && prev.span.start_byte < fp.span.end_byte
+                && fp.span.start_byte < prev.span.end_byte
+        });
+        if !overlaps_prev {
+            kept.push(fp);
+        }
+    }
+    kept
 }
 
 struct DupCollector<'a> {

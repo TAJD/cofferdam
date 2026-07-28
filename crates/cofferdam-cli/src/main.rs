@@ -1559,9 +1559,21 @@ fn run_check(args: CheckArgs) -> ExitCode {
         .as_ref()
         .map(cfg::ProjectConfig::type_aware_enabled)
         .unwrap_or(true);
-    let type_root = project_root
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // CD-151: fall back to the same target-anchor `resolve_and_load_config`
+    // used for `cofferdam.toml` discovery, not the CWD. Without this,
+    // `cofferdam check <target>` run from outside <target>'s tree looked
+    // for tsconfig.json near the invoking directory instead of near the
+    // analyzed files, producing a spurious "no tsconfig.json found"
+    // warning even when <target> has its own valid tsconfig.json.
+    let type_root = project_root.clone().unwrap_or_else(|| {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        resolved_config_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .or_else(|| cfg::target_anchor(&roots, &cwd))
+            .unwrap_or(cwd)
+    });
     let (engine, type_oracle_unavailable) = if type_aware_enabled {
         install_type_oracle_if_needed(engine, &type_root)
     } else {
@@ -2105,10 +2117,17 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
     // output-mode-eligible.
     if let Some(cfg) = project_config.as_ref() {
         if !cfg.plugins.is_empty() {
+            // CD-151: same target-anchor fallback as the `check` command's
+            // `type_root` — anchor on `dist`, not the CWD, when no
+            // cofferdam.toml was found for it.
             let cfg_dir = resolved_config_path
                 .as_deref()
                 .and_then(Path::parent)
                 .map(Path::to_path_buf)
+                .or_else(|| {
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    cfg::target_anchor(std::slice::from_ref(&dist), &cwd)
+                })
                 .unwrap_or_else(|| PathBuf::from("."));
             let project_root = cfg_dir.clone();
             let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &project_root);

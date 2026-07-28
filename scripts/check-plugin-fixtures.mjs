@@ -109,6 +109,7 @@ function normalise(raw) {
         if (typeof r.file === "string") r.file = toRepoRelative(r.file);
       }
     }
+    if (typeof f.message === "string") f.message = stripRepoRoot(f.message);
   }
   return JSON.stringify(doc, null, 2) + "\n";
 }
@@ -119,6 +120,16 @@ function toRepoRelative(absPath) {
   if (norm.startsWith(repoNorm + "/")) return norm.slice(repoNorm.length + 1);
   if (norm === repoNorm) return ".";
   return norm;
+}
+
+// Some findings (e.g. type-host-unavailable warnings) embed an absolute
+// path in free-text `message` rather than a dedicated `file` field —
+// `toRepoRelative` doesn't cover those. Strip the repo-root prefix
+// wherever it appears in the message text so goldens stay portable
+// across machines/CI runners instead of baking in a host-specific path.
+function stripRepoRoot(message) {
+  const repoNorm = REPO_ROOT.replace(/\\/g, "/");
+  return message.replace(/\\/g, "/").split(repoNorm + "/").join("");
 }
 
 function printUnifiedDiff(a, b) {

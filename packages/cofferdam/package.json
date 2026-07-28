@@ -1,6 +1,6 @@
 {
   "name": "@cofferdam/cofferdam",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "TypeScript code-quality analyzer — Rust core + JS plugin layer, inspired by Elixir's Credo",
   "license": "MIT",
   "publishConfig": {

@@ -1,6 +1,6 @@
 {
   "name": "@cofferdam/check-sdk",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Author cofferdam plugin checks in TypeScript. defineCheck factory + types.",
   "license": "MIT",
   "repository": {

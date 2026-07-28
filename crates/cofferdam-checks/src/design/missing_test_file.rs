@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::framework_paths::FRAMEWORK_ENTRY_PATTERNS;
@@ -7,9 +7,11 @@ use cofferdam_core::graph::{
 };
 use cofferdam_core::path_key;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, OptionDefault,
-    OptionKind, OptionSpec, Priority, Severity, SourceFile,
+    Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext, Issue, Location,
+    OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile,
 };
+use oxc_ast::ast::{BinaryExpression, BinaryOperator, CallExpression, Expression};
+use oxc_ast_visit::{walk, Visit};
 
 /// `{name}` template patterns checked (relative to the source file's own
 /// directory) for a corresponding test file. `{name}` substitutes the
@@ -65,6 +67,19 @@ const DEFAULT_TEST_FILE_PATTERNS: &[&str] = &[
     "/__mocks__/",
 ];
 
+/// Jest/Vitest matchers whose *argument* is a class used as a type
+/// assertion rather than a value under test. `expect(fn).toThrow(E)`
+/// and `expect(e).toBeInstanceOf(E)` exercise `E`'s type identity in
+/// exactly the way a bare `instanceof E` does.
+const TYPE_ASSERTION_MATCHERS: &[&str] = &["toThrow", "toThrowError", "toBeInstanceOf"];
+
+/// Test file (`path_key`) → local identifier names that file uses in a
+/// type-assertion position (`x instanceof Name`, `.toThrow(Name)`,
+/// `.toBeInstanceOf(Name)`). Filled during `run` for test files only;
+/// read back in `finalize` (CD-146).
+pub(crate) static TYPE_ASSERTED_NAMES: CorpusKey<HashMap<String, HashSet<String>>> =
+    CorpusKey::new("Design.MissingTestFile.type_asserted_names");
+
 const MTF_OPTIONS: &[OptionSpec] = &[
     OptionSpec {
         name: "test_match_patterns",
@@ -103,7 +118,11 @@ const META: CheckMeta = CheckMeta {
     consistency: false,
     options: MTF_OPTIONS,
     autofix: false,
-    pure_run: true,
+    // Writes the per-test-file type-assertion index into the
+    // TYPE_ASSERTED_NAMES slot during run(); skipping run() on a
+    // findings-cache hit would drop those contributions and resurrect
+    // the CD-146 false positive.
+    pure_run: false,
 };
 
 /// `Design.MissingTestFile` — finalize-stage check (CD-132) that flags
@@ -132,7 +151,37 @@ impl Check for MissingTestFile {
         &META
     }
 
-    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        // Only test files contribute; every other file skips the walk
+        // after two cheap string tests.
+        let test_file_patterns = ctx
+            .options
+            .get_string_list("test_file_patterns")
+            .map(|xs| xs.to_vec())
+            .unwrap_or_default();
+        if !matches_substring(&file.path, &test_file_patterns) {
+            return Vec::new();
+        }
+        if !file.text.contains("instanceof")
+            && !TYPE_ASSERTION_MATCHERS
+                .iter()
+                .any(|m| file.text.contains(m))
+        {
+            return Vec::new();
+        }
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+        let mut visitor = TypeAssertionCollector {
+            names: HashSet::new(),
+        };
+        visitor.visit_program(parsed.program);
+        if !visitor.names.is_empty() {
+            let key = path_key(&file.path);
+            ctx.corpus.with_slot(&TYPE_ASSERTED_NAMES, |slot| {
+                slot.entry(key).or_default().extend(visitor.names.clone());
+            });
+        }
         Vec::new()
     }
 
@@ -155,13 +204,48 @@ impl Check for MissingTestFile {
 
         let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
+        let type_asserted = ctx
+            .corpus
+            .with_slot(&TYPE_ASSERTED_NAMES, |slot| slot.clone());
         compute_missing_test_files(
             &imports,
             &exports,
+            &type_asserted,
             &test_match_patterns,
             &test_file_patterns,
             &framework_entry_patterns,
         )
+    }
+}
+
+/// Collects identifiers used in a type-assertion position within a
+/// test file: `x instanceof Name`, `.toThrow(Name)`,
+/// `.toThrowError(Name)`, `.toBeInstanceOf(Name)`.
+struct TypeAssertionCollector {
+    names: HashSet<String>,
+}
+
+impl<'a> Visit<'a> for TypeAssertionCollector {
+    fn visit_binary_expression(&mut self, node: &BinaryExpression<'a>) {
+        if node.operator == BinaryOperator::Instanceof {
+            if let Expression::Identifier(id) = &node.right {
+                self.names.insert(id.name.to_string());
+            }
+        }
+        walk::walk_binary_expression(self, node);
+    }
+
+    fn visit_call_expression(&mut self, node: &CallExpression<'a>) {
+        if let Expression::StaticMemberExpression(member) = &node.callee {
+            if TYPE_ASSERTION_MATCHERS.contains(&member.property.name.as_str()) {
+                if let Some(Expression::Identifier(id)) =
+                    node.arguments.first().and_then(|a| a.as_expression())
+                {
+                    self.names.insert(id.name.to_string());
+                }
+            }
+        }
+        walk::walk_call_expression(self, node);
     }
 }
 
@@ -174,9 +258,78 @@ fn matches_substring(path: &Path, patterns: &[String]) -> bool {
 /// `compute_orphans`) so unit tests can exercise the matching logic
 /// directly, without fighting `FinalizeContext::options`' default
 /// empty bag.
+/// Index of export names a test file exercises via a type assertion,
+/// keyed by the `path_key` of the file that *defines* the export
+/// (CD-146).
+///
+/// An entry is recorded only when all three line up: a test file
+/// imports a binding, that binding's local name appears in a
+/// type-assertion position in the same file, and the import resolves
+/// to the defining file. Resolution follows one re-export hop so a
+/// class reached through an `errors/index.ts` barrel still credits
+/// `errors/validation.ts` — the layout error classes almost always
+/// use.
+fn type_asserted_exports_by_defining_file(
+    imports: &[ImportRecord],
+    exports: &[ExportRecord],
+    type_asserted: &HashMap<String, HashSet<String>>,
+) -> HashMap<String, HashSet<String>> {
+    let mut index: HashMap<String, HashSet<String>> = HashMap::new();
+    if type_asserted.is_empty() {
+        return index;
+    }
+
+    let mut reexports_by_barrel: HashMap<String, Vec<&ExportRecord>> = HashMap::new();
+    for exp in exports {
+        if exp.kind == ExportKind::ReExport && exp.resolved_source.is_some() {
+            reexports_by_barrel
+                .entry(path_key(&exp.file))
+                .or_default()
+                .push(exp);
+        }
+    }
+
+    for imp in imports {
+        let Some(asserted) = type_asserted.get(&path_key(&imp.from_file)) else {
+            continue;
+        };
+        let Some(resolved) = &imp.resolved else {
+            continue;
+        };
+        let resolved_key = path_key(resolved);
+        for name in &imp.names {
+            if name.type_only || !asserted.contains(&name.local_name) {
+                continue;
+            }
+            index
+                .entry(resolved_key.clone())
+                .or_default()
+                .insert(name.source_name.clone());
+            // One re-export hop: the import landed on a barrel that
+            // forwards this name from the file that actually defines it.
+            for re in reexports_by_barrel
+                .get(&resolved_key)
+                .into_iter()
+                .flatten()
+                .filter(|re| re.name == name.source_name || re.name == "*")
+            {
+                let Some(source) = &re.resolved_source else {
+                    continue;
+                };
+                index
+                    .entry(path_key(source))
+                    .or_default()
+                    .insert(name.source_name.clone());
+            }
+        }
+    }
+    index
+}
+
 pub fn compute_missing_test_files(
     imports: &[ImportRecord],
     exports: &[ExportRecord],
+    type_asserted: &HashMap<String, HashSet<String>>,
     test_match_patterns: &[String],
     test_file_patterns: &[String],
     framework_entry_patterns: &[String],
@@ -195,6 +348,9 @@ pub fn compute_missing_test_files(
     for exp in exports {
         known_files.insert(path_key(&exp.file));
     }
+
+    let type_asserted_index =
+        type_asserted_exports_by_defining_file(imports, exports, type_asserted);
 
     let mut by_file: std::collections::HashMap<std::path::PathBuf, Vec<&ExportRecord>> =
         std::collections::HashMap::new();
@@ -228,6 +384,15 @@ pub fn compute_missing_test_files(
             known_files.contains(&path_key(&candidate))
         });
         if has_test {
+            continue;
+        }
+        // CD-146: a class this file exports is exercised for its type
+        // identity (`instanceof` / `toThrow` / `toBeInstanceOf`) by a
+        // test file that doesn't happen to be named after this file.
+        if type_asserted_index
+            .get(&path_key(file))
+            .is_some_and(|names| real_exports.iter().any(|e| names.contains(&e.name)))
+        {
             continue;
         }
 

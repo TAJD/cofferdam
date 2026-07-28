@@ -2149,9 +2149,18 @@ export function computeTotal(items: number[]): number {
         imports: Vec<ImportRecord>,
         exports: Vec<ExportRecord>,
     ) -> Vec<CoreIssue> {
+        run_missing_test_file_asserting(imports, exports, Default::default())
+    }
+
+    fn run_missing_test_file_asserting(
+        imports: Vec<ImportRecord>,
+        exports: Vec<ExportRecord>,
+        type_asserted: std::collections::HashMap<String, std::collections::HashSet<String>>,
+    ) -> Vec<CoreIssue> {
         compute_missing_test_files(
             &imports,
             &exports,
+            &type_asserted,
             &owned(MTF_TEST_MATCH_PATTERNS),
             &owned(MTF_TEST_FILE_PATTERNS),
             &owned(MTF_FRAMEWORK_PATTERNS),
@@ -2265,6 +2274,7 @@ export function computeTotal(items: number[]): number {
         compute_missing_test_files(
             &imports,
             &exports,
+            &Default::default(),
             &owned(missing_test_file::DEFAULT_TEST_MATCH_PATTERNS),
             &owned(MTF_TEST_FILE_PATTERNS),
             &owned(MTF_FRAMEWORK_PATTERNS),
@@ -2318,6 +2328,168 @@ export function computeTotal(items: number[]): number {
             "a .mjs source with no matching test file must still be flagged by default; got {issues:?}"
         );
         assert_eq!(issues[0].file, file);
+    }
+
+    // ─── Design.MissingTestFile: instanceof-only usage (CD-146) ─────────
+
+    fn asserted(
+        entries: &[(&Path, &[&str])],
+    ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+        entries
+            .iter()
+            .map(|(file, names)| {
+                (
+                    cofferdam_core::path_key(file),
+                    names.iter().map(|n| n.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn type_asserted_class_from_a_differently_named_test_is_not_flagged() {
+        let errors = PathBuf::from("/p/errors.ts");
+        let test_file = PathBuf::from("/p/validate.test.ts");
+        let exports = vec![barrel_real_export(&errors, "ValidationError")];
+        let imports = vec![named_import(
+            &test_file,
+            &errors,
+            "ValidationError",
+            "ValidationError",
+        )];
+        let issues = run_missing_test_file_asserting(
+            imports,
+            exports,
+            asserted(&[(&test_file, &["ValidationError"])]),
+        );
+        assert!(
+            issues.is_empty(),
+            "a class exercised via instanceof/toThrow from validate.test.ts must count as tested; \
+             got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn plain_import_from_a_test_file_does_not_count_as_tested() {
+        // The discriminator for CD-146: importing a helper into a test
+        // to build fixtures is not the same as testing it.
+        let helpers = PathBuf::from("/p/helpers.ts");
+        let test_file = PathBuf::from("/p/validate.test.ts");
+        let exports = vec![barrel_real_export(&helpers, "makeUser")];
+        let imports = vec![named_import(&test_file, &helpers, "makeUser", "makeUser")];
+        let issues = run_missing_test_file_asserting(imports, exports, Default::default());
+        assert_eq!(
+            issues.len(),
+            1,
+            "a plain (non-type-asserted) import from a test must still be flagged; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, helpers);
+    }
+
+    #[test]
+    fn type_assertion_of_an_unrelated_name_does_not_suppress() {
+        let errors = PathBuf::from("/p/errors.ts");
+        let test_file = PathBuf::from("/p/validate.test.ts");
+        let exports = vec![barrel_real_export(&errors, "ValidationError")];
+        let imports = vec![named_import(
+            &test_file,
+            &errors,
+            "ValidationError",
+            "ValidationError",
+        )];
+        let issues = run_missing_test_file_asserting(
+            imports,
+            exports,
+            asserted(&[(&test_file, &["SomeOtherError"])]),
+        );
+        assert_eq!(
+            issues.len(),
+            1,
+            "asserting on a different class must not credit this file; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn type_asserted_class_reached_through_a_barrel_is_not_flagged() {
+        let errors = PathBuf::from("/p/errors/validation.ts");
+        let barrel = PathBuf::from("/p/errors/index.ts");
+        let test_file = PathBuf::from("/p/validate.test.ts");
+        let mut forward = barrel_reexport(&barrel, "ValidationError");
+        forward.resolved_source = Some(errors.clone());
+        let exports = vec![barrel_real_export(&errors, "ValidationError"), forward];
+        let imports = vec![named_import(
+            &test_file,
+            &barrel,
+            "ValidationError",
+            "ValidationError",
+        )];
+        let issues = run_missing_test_file_asserting(
+            imports,
+            exports,
+            asserted(&[(&test_file, &["ValidationError"])]),
+        );
+        assert!(
+            issues.is_empty(),
+            "a class type-asserted through an errors/index.ts barrel must credit the defining \
+             file; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn run_collects_instanceof_and_matcher_names_from_test_files_only() {
+        const TEST_SRC: &str = r#"
+import { ValidationError, NotFound, Other } from "./errors";
+test("a", () => {
+  const e: unknown = new ValidationError();
+  expect(e instanceof ValidationError).toBe(true);
+  expect(() => { throw new NotFound(); }).toThrow(NotFound);
+  expect(new Other()).toBeInstanceOf(Other);
+});
+"#;
+        let mut raw = std::collections::BTreeMap::new();
+        raw.insert(
+            "test_file_patterns".to_string(),
+            RawOptionValue::List(vec![RawOptionValue::String(".test.".to_string())]),
+        );
+        let meta = MissingTestFile.meta();
+        let opts = validate_options(meta.id, meta.options, &raw).expect("valid options");
+
+        let mut collected = Vec::new();
+        for path in ["/p/validate.test.ts", "/p/validate.ts"] {
+            let corpus = CorpusIndex::new();
+            let file = SourceFile::new(PathBuf::from(path), TEST_SRC.to_string());
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, &file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(&file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus)
+                .with_options(&opts);
+            MissingTestFile.run(&file, &mut ctx);
+            collected.push(
+                corpus.with_slot(&missing_test_file::TYPE_ASSERTED_NAMES, |slot| slot.clone()),
+            );
+        }
+
+        let from_test = collected[0]
+            .get(&cofferdam_core::path_key(Path::new("/p/validate.test.ts")))
+            .cloned()
+            .unwrap_or_default();
+        let mut names: Vec<&str> = from_test.iter().map(|s| s.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["NotFound", "Other", "ValidationError"],
+            "instanceof, toThrow, and toBeInstanceOf arguments must all be collected"
+        );
+        assert!(
+            collected[1].is_empty(),
+            "a non-test file must contribute nothing; got {:?}",
+            collected[1]
+        );
     }
 
     // ─── Design.DuplicateExportName (CD-148) ────────────────────────────

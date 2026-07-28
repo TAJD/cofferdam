@@ -262,6 +262,90 @@ mod tests {
         check.finalize(&mut finalize_ctx)
     }
 
+    /// Run DuplicateBlock on a single file and return the issues emitted
+    /// by finalize — used to check that a genuinely non-duplicated block
+    /// doesn't report itself as a duplicate of its own sliding windows.
+    fn run_duplicate_block_single_file(
+        check: &DuplicateBlock,
+        source: &str,
+        options: &CheckOptions,
+    ) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::default();
+        let alloc = Allocator::default();
+        let file = SourceFile::new(PathBuf::from("a.ts"), source.to_string());
+        let ret = parse_into(&alloc, &file);
+        let view = ParsedView {
+            program: &ret.program,
+            diagnostics: &ret.errors,
+        };
+        let mut ctx = CheckContext::new(&file)
+            .with_parsed(&view)
+            .with_options(options)
+            .with_corpus(&corpus);
+        check.run(&file, &mut ctx);
+
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        check.finalize(&mut finalize_ctx)
+    }
+
+    #[test]
+    fn duplicate_block_field_copy_chain_does_not_self_overlap() {
+        // CD-147: property names canonicalise the same way identifiers do
+        // (`visit_identifier_name`), so a uniform field-copy chain like
+        // this makes every 6-statement sliding window hash identically —
+        // each window has the same shape with local identifier indices
+        // restarting at 0. Before the fix, those overlapping windows
+        // landed in one hash group and finalize reported the single real
+        // block as a "duplicate" of itself.
+        let check = DuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source = [
+            "target.alpha = source.alpha;",
+            "target.beta = source.beta;",
+            "target.gamma = source.gamma;",
+            "target.delta = source.delta;",
+            "target.epsilon = source.epsilon;",
+            "target.zeta = source.zeta;",
+            "target.eta = source.eta;",
+            "target.theta = source.theta;",
+        ]
+        .join("\n");
+        let issues = run_duplicate_block_single_file(&check, &source, &opts);
+        assert!(
+            issues.is_empty(),
+            "a single non-duplicated field-copy chain must not self-report as a duplicate; got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn duplicate_block_field_copy_chain_still_detects_real_cross_file_duplicate() {
+        // Same self-overlapping shape as above, but genuinely duplicated
+        // across two files — the self-overlap fix must not suppress a
+        // real cross-file duplicate, and must report it exactly once
+        // (not once per overlapping window pair).
+        let check = DuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source = [
+            "target.alpha = source.alpha;",
+            "target.beta = source.beta;",
+            "target.gamma = source.gamma;",
+            "target.delta = source.delta;",
+            "target.epsilon = source.epsilon;",
+            "target.zeta = source.zeta;",
+            "target.eta = source.eta;",
+            "target.theta = source.theta;",
+        ]
+        .join("\n");
+        let issues = run_duplicate_block_with_options(&check, &source, &opts);
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected exactly one duplicate finding for the real cross-file copy, got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn duplicate_block_default_options_fires_on_duplicate() {
         let check = DuplicateBlock::default();

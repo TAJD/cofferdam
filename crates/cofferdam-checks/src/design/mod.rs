@@ -2640,4 +2640,51 @@ test("a", () => {
             "a three-sided boundary must exempt a three-way mirror; got {issues:?}"
         );
     }
+
+    #[test]
+    fn invalid_boundary_glob_never_exempts_and_emits_a_warning() {
+        // `client/[` is an unclosed character class — not a valid glob.
+        // CD-150: previously `Side::new` just skipped the non-compiling
+        // matcher with no diagnostic, so the exemption silently never
+        // applied and the user had no way to know why. Now: the
+        // collision is still flagged (the broken side matches nothing)
+        // AND a warning names the bad pattern.
+        let client = PathBuf::from("/p/client/schema.ts");
+        let server = PathBuf::from("/p/server/schema.ts");
+        let issues = run_duplicate_export_name(
+            &[(&client, MIRROR_A), (&server, MIRROR_B)],
+            &["client/[|server/**"],
+        );
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.message.contains("is exported from"))
+                .count(),
+            1,
+            "the broken side must never match, so the collision stays flagged; got {issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("invalid glob pattern")
+                    && i.message.contains("client/[")),
+            "expected a warning naming the invalid pattern `client/[`; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn all_valid_boundary_globs_emit_no_warning() {
+        let client = PathBuf::from("/p/client/schema.ts");
+        let server = PathBuf::from("/p/server/schema.ts");
+        let issues = run_duplicate_export_name(
+            &[(&client, MIRROR_A), (&server, MIRROR_B)],
+            &["client/**|server/**"],
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.message.contains("invalid glob pattern")),
+            "well-formed globs must not emit a warning; got {issues:?}"
+        );
+    }
 }

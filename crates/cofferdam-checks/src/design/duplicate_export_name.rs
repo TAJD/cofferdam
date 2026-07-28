@@ -103,6 +103,36 @@ impl Check for DuplicateExportName {
             .map(|r| r.project_root)
             .unwrap_or_else(|| PathBuf::from(""));
 
+        let mut issues: Vec<Issue> = boundaries
+            .iter()
+            .filter(|b| !b.invalid_patterns.is_empty())
+            .map(|b| {
+                let patterns = b.invalid_patterns.join(", ");
+                Issue {
+                    check_id: DEN_META.id.to_string(),
+                    message: format!(
+                        "exempt_boundary_pairs entry `{}` has invalid glob pattern(s) [{}] — \
+                         that side will never match any file, so no duplicate through it will \
+                         ever be exempted",
+                        b.raw, patterns
+                    ),
+                    file: project_root.clone(),
+                    location: Location::from_span(
+                        &project_root,
+                        Span {
+                            line: 1,
+                            column: 1,
+                            start_byte: 0,
+                            end_byte: 0,
+                        },
+                    ),
+                    priority: Priority(DEN_META.base_priority),
+                    severity: Severity::Medium,
+                    related: Vec::new(),
+                }
+            })
+            .collect();
+
         let mut by_name: BTreeMap<String, Vec<NamedExport>> = BTreeMap::new();
         // Read-only (cd-32): a draining read would empty the slot as a
         // side effect of finalize, which is fine for a one-shot analyze
@@ -115,7 +145,6 @@ impl Check for DuplicateExportName {
             }
         });
 
-        let mut issues = Vec::new();
         for (name, mut occurrences) in by_name {
             if occurrences.len() < 2 {
                 continue;
@@ -155,7 +184,15 @@ impl Check for DuplicateExportName {
 
 /// One configured boundary: the sides an intentional mirror may span.
 struct Boundary {
+    raw: String,
     sides: Vec<Side>,
+    /// Side patterns that failed to compile as globs. `Side::new` skips
+    /// a non-compiling matcher rather than erroring `Boundary::parse`
+    /// (a boundary can still have other, valid sides), but a side with
+    /// zero matchers can never match anything — silently defeating the
+    /// exemption the user configured. Surfaced as a warning in
+    /// `finalize()` instead of failing quietly (CD-150).
+    invalid_patterns: Vec<String>,
 }
 
 struct Side {
@@ -164,13 +201,23 @@ struct Side {
 
 impl Boundary {
     fn parse(entry: &str) -> Self {
+        let mut invalid_patterns = Vec::new();
+        let sides: Vec<Side> = entry
+            .split('|')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|pattern| {
+                let side = Side::new(pattern);
+                if side.matchers.is_empty() {
+                    invalid_patterns.push(pattern.to_string());
+                }
+                side
+            })
+            .collect();
         Self {
-            sides: entry
-                .split('|')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(Side::new)
-                .collect(),
+            raw: entry.to_string(),
+            sides,
+            invalid_patterns,
         }
     }
 

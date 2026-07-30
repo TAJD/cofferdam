@@ -500,6 +500,17 @@ impl Engine {
         run_cache: Option<&run_cache::RunCache>,
         timing: Option<&TimingCollector>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
+        // Absolutize once, up front, so every returned `texts` map is
+        // keyed identically to every returned `Issue.file` regardless
+        // of which branch below serves the result. Previously this
+        // normalization happened only inside `analyze_with_sources_caches_inner`
+        // (the miss path), so a `RunCache` hit reconstructed `texts`
+        // from the raw (often relative) `sources` while replaying
+        // `Issue`s already stamped with absolute paths from the miss
+        // pass that first populated the cache — `texts.get(&issue.file)`
+        // then missed on every lookup, silently degrading baseline
+        // signatures to the hash of an empty snippet (CD-153).
+        let sources = absolutize_sources(sources);
         // Outermost layer: if the run cache has an entry for this
         // exact input set + config, return its issues directly.
         // The text map is reconstructed cheaply from `sources` — no
@@ -592,11 +603,10 @@ impl Engine {
         // `std::path::absolute` resolves against the process CWD without
         // touching the filesystem (no canonicalization, no symlink follow,
         // no Windows `\\?\` prefix surprises) — exactly the lightweight
-        // normalisation we want.
-        let sources: Vec<(PathBuf, String)> = sources
-            .into_iter()
-            .map(|(p, t)| (std::path::absolute(&p).unwrap_or(p), t))
-            .collect();
+        // normalisation we want. Idempotent: `analyze_with_sources_full_impl`
+        // already absolutized `sources` before reaching here (CD-153), and
+        // every other caller of this inner function needs the same form.
+        let sources = absolutize_sources(sources);
         let mut issues = Vec::new();
         // Every input path gets an entry regardless of parse outcome
         // (that's how callers clear stale results for a file that
@@ -1727,6 +1737,22 @@ impl Engine {
         }
         sev
     }
+}
+
+/// Promote every input path to its absolute form (cd-q9f), resolved
+/// against the process CWD without touching the filesystem (no
+/// canonicalization, no symlink follow, no Windows `\\?\` prefix
+/// surprises). The single definition every entry point into the
+/// per-file analysis pipeline must use: every `Issue.file` the engine
+/// produces is stamped with this form, so any `texts` map built
+/// alongside those issues has to be keyed the same way or lookups by
+/// `issue.file` (e.g. baseline signature computation) silently miss
+/// (CD-153).
+fn absolutize_sources(sources: Vec<(PathBuf, String)>) -> Vec<(PathBuf, String)> {
+    sources
+        .into_iter()
+        .map(|(p, t)| (std::path::absolute(&p).unwrap_or(p), t))
+        .collect()
 }
 
 /// Overlay an override block's option keys onto the global per-check

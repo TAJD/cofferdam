@@ -210,6 +210,59 @@ export function alpha(x: any) {
     );
 }
 
+// CD-153: a `RunCache` hit rebuilds `texts` from the raw (relative)
+// `sources` it was called with, but the cached `Issue`s were stamped
+// with the absolutized paths `analyze_with_sources_caches_inner`
+// computes internally (cd-q9f). `sign_issues` then looks up
+// `texts.get(&issue.file)` by the absolute path, misses, and falls
+// back to an empty snippet — so the cold pass's signature and the
+// warm pass's signature disagree for the exact same finding, and a
+// `baseline check` run immediately after a `baseline write` reports
+// everything as new.
+#[test]
+fn run_cache_hit_preserves_correct_baseline_signature() {
+    let engine = engine();
+    let run_cache = RunCache::new();
+
+    // Relative path, matching how the CLI passes `discover()` output.
+    let sources = vec![(
+        PathBuf::from("a.ts"),
+        "export function foo(a, b, c, d, e, f) {\n  return a + b;\n}\n".to_string(),
+    )];
+
+    let (cold_issues, cold_texts) =
+        engine.analyze_with_sources_full(sources.clone(), None, None, Some(&run_cache));
+    assert_eq!(run_cache.misses(), 1);
+    let cold_signed: Vec<(cofferdam_core::Issue, String)> = cold_issues
+        .into_iter()
+        .map(|issue| {
+            let text = cold_texts.get(&issue.file).cloned().unwrap_or_default();
+            let sig = cofferdam_engine::baseline::signature_for_issue(&text, &issue);
+            (issue, sig)
+        })
+        .collect();
+    assert!(!cold_signed.is_empty(), "fixture must produce findings");
+
+    let (warm_issues, warm_texts) =
+        engine.analyze_with_sources_full(sources, None, None, Some(&run_cache));
+    assert_eq!(run_cache.hits(), 1, "second pass must hit the run cache");
+    let warm_signed: Vec<(cofferdam_core::Issue, String)> = warm_issues
+        .into_iter()
+        .map(|issue| {
+            let text = warm_texts.get(&issue.file).cloned().unwrap_or_default();
+            let sig = cofferdam_engine::baseline::signature_for_issue(&text, &issue);
+            (issue, sig)
+        })
+        .collect();
+
+    let cold_sigs: Vec<&String> = cold_signed.iter().map(|(_, s)| s).collect();
+    let warm_sigs: Vec<&String> = warm_signed.iter().map(|(_, s)| s).collect();
+    assert_eq!(
+        cold_sigs, warm_sigs,
+        "a RunCache hit must not change a finding's baseline signature"
+    );
+}
+
 #[test]
 fn run_cache_isolates_across_config_changes() {
     // Two engines built from the same registry share a config_hash,

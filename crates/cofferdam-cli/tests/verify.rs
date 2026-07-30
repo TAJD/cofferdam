@@ -184,11 +184,27 @@ export default {
 #[test]
 fn verify_dist_skips_nested_gitignored_subdirectory_but_scans_the_rest() {
     let dir = tempfile::TempDir::new().expect("temp dir");
-    Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .output()
-        .expect("git init");
+    // Strip any GIT_DIR / GIT_WORK_TREE / etc. this process inherited
+    // (e.g. from a `pre-push` hook, or from running inside a git
+    // worktree checkout) — otherwise `git init` here targets the
+    // *inherited* repo instead of `dir`, so `dir` never gets its own
+    // `.git` and the ignore crate's repo-boundary detection walks up
+    // into the wrong tree. Mirrors `GIT_ENV_VARS_TO_CLEAR` in
+    // `tests/orphan_since_report_scope.rs`.
+    let mut git_init = Command::new("git");
+    git_init.args(["init", "-q"]).current_dir(dir.path());
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    ] {
+        git_init.env_remove(var);
+    }
+    git_init.output().expect("git init");
     std::fs::write(dir.path().join(".gitignore"), "dist/\ndist/coverage/\n")
         .expect("write .gitignore");
     std::fs::create_dir_all(dir.path().join("dist/coverage")).expect("mkdir");

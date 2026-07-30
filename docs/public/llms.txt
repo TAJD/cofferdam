@@ -1,6 +1,6 @@
 # Cofferdam
 
-> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. Five-category model: Consistency, Design, Readability, Refactor, Warning. Priority-sorted output, baseline workflow, CI-friendly. Current version: 0.3.12.
+> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. Five-category model: Consistency, Design, Readability, Refactor, Warning. Priority-sorted output, baseline workflow, CI-friendly. Current version: 0.3.13.
 
 ## Install
 

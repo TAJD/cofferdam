@@ -377,12 +377,28 @@ fn discover_respects_gitignore_for_matching_extension() {
     let root = temp_dir.path();
 
     // .gitignore is only honored inside a git worktree.
-    std::process::Command::new("git")
-        .arg("init")
-        .arg("-q")
-        .current_dir(root)
-        .status()
-        .expect("git init");
+    //
+    // Strip any GIT_DIR / GIT_WORK_TREE / etc. this process inherited
+    // (e.g. from a `pre-push` hook, or from running inside a git
+    // worktree checkout) — otherwise `git init` targets the *inherited*
+    // repo instead of `root`, `root` never gets its own `.git`, and the
+    // ignore crate's repo-boundary detection walks up into the wrong
+    // tree. Mirrors `GIT_ENV_VARS_TO_CLEAR` in
+    // `cofferdam-cli/tests/orphan_since_report_scope.rs`.
+    let mut git_init = std::process::Command::new("git");
+    git_init.arg("init").arg("-q").current_dir(root);
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    ] {
+        git_init.env_remove(var);
+    }
+    git_init.status().expect("git init");
     fs::write(root.join(".gitignore"), "*.test.ts\n").unwrap();
     fs::write(root.join("a.test.ts"), "").unwrap();
     fs::write(root.join("a.ts"), "").unwrap();

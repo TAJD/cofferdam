@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_by": "cofferdam gen-docs",
-  "cofferdam_version": "0.3.12",
+  "cofferdam_version": "0.3.13",
   "checks": [
     {
       "id": "Consistency.BroadSuppression",

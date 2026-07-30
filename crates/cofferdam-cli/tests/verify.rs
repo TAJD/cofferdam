@@ -184,8 +184,17 @@ export default {
 #[test]
 fn verify_dist_skips_nested_gitignored_subdirectory_but_scans_the_rest() {
     let dir = tempfile::TempDir::new().expect("temp dir");
+    // Strip any GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE this process
+    // inherited (e.g. from a `pre-push` hook running the test suite) —
+    // otherwise `git init` here targets the *inherited* repo instead of
+    // `dir`, so `dir` never gets its own `.git` and the ignore-crate's
+    // repo-boundary detection walks up into the wrong tree.
     Command::new("git")
         .args(["init", "-q"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CEILING_DIRECTORIES")
         .current_dir(dir.path())
         .output()
         .expect("git init");

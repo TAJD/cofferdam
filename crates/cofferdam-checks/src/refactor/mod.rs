@@ -599,6 +599,74 @@ export function b() { let total = 2; return total; }";
         );
     }
 
+    #[test]
+    fn object_destructuring_assignment_reassignment_is_not_flagged() {
+        // CD-154: `({ token, slug } = ...)` reassigns both names.
+        let src = "\
+let token: string;
+let slug: string;
+({ token, slug } = getPair());
+return token + slug;";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "destructuring-assignment reassignment must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn array_destructuring_assignment_reassignment_is_not_flagged() {
+        // CD-154: `[first, second] = pair()` reassigns both names.
+        let src = "\
+let first: number;
+let second: number;
+[first, second] = pair();
+return first + second;";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "array destructuring-assignment reassignment must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn renamed_object_destructuring_assignment_reassignment_is_not_flagged() {
+        // `{ foo: bar }` binds `bar`, not `foo`.
+        let src = "let bar: string;\n({ foo: bar } = getObj());\nreturn bar;";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "renamed destructuring-assignment target must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn for_of_destructuring_reassignment_is_not_flagged() {
+        // CD-154 follow-up: a `for ([a, b] of pairs)` loop head reassigns
+        // its target every iteration — not an `AssignmentExpression`.
+        let src = "\
+let l: number;
+let r: number;
+for ([l, r] of pairs) {
+  use(l, r);
+}";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "for-of destructuring target must suppress the finding; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn for_of_simple_reassignment_is_not_flagged() {
+        let src = "let item: number;\nfor (item of xs) {\n  use(item);\n}";
+        let issues = run_prefer_const_over_let(src);
+        assert!(
+            issues.is_empty(),
+            "for-of simple-identifier target must suppress the finding; got {issues:?}"
+        );
+    }
+
     // ─── Refactor.PreferArrayMethodOverLoop (CD-120) ───────────────────
 
     use prefer_array_method_over_loop::PreferArrayMethodOverLoop;

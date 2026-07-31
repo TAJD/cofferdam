@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `Engine::config_hash()` didn't account for whether a type oracle (ts-morph host) was installed, so the disk-persisted whole-run cache (`RunCache`, used by the one-shot `cofferdam check` CLI path) could replay a prior run's type-aware findings — or their absence — across a ts-morph install/uninstall that touched neither files nor config (CD-152). Fixed by folding `type_oracle.is_some()` into the shared `config_hash()` computation used by both `FindingsKey` and `RunKey`.
+
 ## [0.3.13] - 2026-07-30
 
 ### Fixed

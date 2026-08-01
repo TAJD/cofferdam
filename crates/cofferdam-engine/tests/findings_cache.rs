@@ -308,6 +308,38 @@ fn config_hash_changes_when_options_change() {
 }
 
 #[test]
+fn config_hash_changes_when_type_oracle_installed() {
+    // CD-152: whether a type oracle is installed changes what every
+    // `requires_types` check emits for identical (content, per-check-
+    // config) inputs. If `config_hash` doesn't capture that axis, the
+    // whole-run disk cache (`run_cache::RunCache`) replays a prior
+    // run's type-aware findings — or their absence — across a
+    // ts-morph install/uninstall that touched neither files nor config.
+    struct NoopOracle;
+    impl cofferdam_core::TypeOracle for NoopOracle {
+        fn type_at(
+            &self,
+            _file: &std::path::Path,
+            _start: u32,
+            _end: u32,
+        ) -> Option<cofferdam_core::TypeFacts> {
+            None
+        }
+    }
+
+    let without_oracle = engine();
+    let with_oracle = engine().with_type_oracle(Box::new(NoopOracle));
+
+    assert_ne!(
+        without_oracle.config_hash(),
+        with_oracle.config_hash(),
+        "installing a type oracle must change config_hash, otherwise the disk-persisted \
+         RunCache/FindingsCache replay stale type-aware findings across a ts-morph \
+         install/uninstall"
+    );
+}
+
+#[test]
 fn non_pure_checks_always_re_run() {
     // Refactor.DuplicateBlock writes to corpus in run() and is
     // marked pure_run: false. With both caches present, its run()

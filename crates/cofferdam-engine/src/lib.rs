@@ -311,10 +311,11 @@ impl Engine {
     }
 
     /// Stable hash of the engine's resolved configuration: per-check
-    /// options, severity overrides, layers, invariants. Used as one
-    /// axis of the per-file findings cache key
-    /// ([`findings_cache::FindingsKey::config_hash`]) so a config
-    /// edit invalidates cached findings.
+    /// options, severity overrides, layers, invariants, and whether a
+    /// type oracle is installed. Used as one axis of both the per-file
+    /// findings cache key ([`findings_cache::FindingsKey::config_hash`])
+    /// and the whole-run cache key ([`run_cache::RunKey::config_hash`])
+    /// so a config edit invalidates cached findings.
     ///
     /// cp2's implementation hashes the Rust `Debug` format of each
     /// component — deterministic for the `BTreeMap` / `Option<T>`
@@ -350,6 +351,15 @@ impl Engine {
         for block in &self.overrides {
             h.update(format!("{:?}", (&block.paths, &block.checks)).as_bytes());
         }
+        // CD-152: whether the type oracle (ts-morph host) is installed
+        // changes what every `requires_types` check emits for identical
+        // (content, per-check-config) inputs, but none of the axes
+        // above capture it. Without this, the whole-run disk cache
+        // (`run_cache::RunCache`, persisted across separate `cofferdam
+        // check` invocations) replays a prior run's type-aware findings
+        // — or their absence — across a ts-morph install/uninstall that
+        // didn't touch any file or config.
+        h.update([self.type_oracle.is_some() as u8]);
         h.finalize().into()
     }
 

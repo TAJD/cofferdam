@@ -587,6 +587,50 @@ pub fn run_plugins_with_sources(
     let layer_matchers: Vec<LayerMatcher> =
         layers_cfg.map(layers::build_matchers).unwrap_or_default();
 
+    // CD-171: skip wire construction (reparse + line-views + AST
+    // serialization) for files no loaded plugin check's `files` scope
+    // will ever match. Measured as ~66% of plugin-host wall-clock on a
+    // real repo (projektor: 1886ms -> 782ms restricted to the plugin's
+    // actual scope) — narrowly-scoped project-internal plugins are the
+    // common case, so the JS host was discarding most of this expensive
+    // payload anyway, just after it was already built and shipped.
+    // Costs one extra `node` spawn in metadata mode (~50-150ms) to learn
+    // the scopes upfront; a net win whenever any check declares a
+    // `files` scope, a no-op (every file still sent) otherwise.
+    //
+    // Correctness: `plugin_file_matches_scope` mirrors the JS host's own
+    // `fileMatchesScope` (see that function's doc comment — the two are
+    // kept in sync by convention, same as the existing `advise --diff`
+    // use of this function). A file is sent whenever ANY loaded check's
+    // scope matches it, or when any check declares no scope at all
+    // (applies to every file) — so this can only skip files that every
+    // loaded check would also have rejected.
+    let plugin_metas = query_plugin_metadata(plugin_paths, project_root);
+    let sources: std::borrow::Cow<'_, [(PathBuf, String)]> =
+        if plugin_metas.iter().any(|m| m.files.is_none()) {
+            std::borrow::Cow::Borrowed(sources)
+        } else {
+            let filtered: Vec<(PathBuf, String)> = sources
+                .iter()
+                .filter(|(path, _)| {
+                    let fwd_path = forward_slash(&absolutize(path));
+                    let layer = layers_cfg.and_then(|cfg| {
+                        layers::layer_for(&layer_matchers, &cfg.project_root, path)
+                    });
+                    plugin_metas.iter().any(|m| {
+                        crate::advise::plugin_file_matches_scope(
+                            &fwd_path,
+                            m.files.as_ref(),
+                            layer.as_deref(),
+                        )
+                    })
+                })
+                .cloned()
+                .collect();
+            std::borrow::Cow::Owned(filtered)
+        };
+    let sources: &[(PathBuf, String)] = &sources;
+
     // Canonicalise to absolute paths before handing to the host. The
     // host's `resolvePath(cwd, plugin)` is a no-op when the second arg
     // is absolute, so we avoid double-joining when ProjectConfig has

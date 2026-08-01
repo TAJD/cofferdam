@@ -92,6 +92,29 @@ export default {
 };
 "#;
 
+/// CD-183: `files` is a string instead of an object — a plausible author
+/// mistake. Malformed on the wire, but must not block the scopes
+/// channel: the Rust side tolerates it as `None` (applies to every file)
+/// instead of failing `ScopeEntry` deserialization for the whole record.
+const MALFORMED_FILES_PLUGIN: &str = r#"
+export default {
+  id: "Test.MalformedFilesPlugin",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "cd-183 integration test plugin — files is a string, not an object",
+  requiresTypes: false,
+  options: {},
+  files: "src/**",
+  run(file, ctx) {
+    ctx.report({
+      message: "MALFORMEDSAW " + file.path,
+      span: { start_byte: 0, end_byte: 1 },
+    });
+  },
+};
+"#;
+
 fn write_sources(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join("src/included")).expect("mkdir included");
     std::fs::create_dir_all(dir.join("src/excluded")).expect("mkdir excluded");
@@ -247,5 +270,55 @@ fn scope_prefilter_costs_no_extra_host_spawn() {
         spawns, 1,
         "the scope pre-filter must reuse the single real host spawn, not add a \
          metadata-mode one; observed {spawns} plugin-host spawn(s)\nstdout={stdout}\nstderr={stderr}"
+    );
+}
+
+/// CD-183: a plugin declaring `files` as a malformed shape (a string
+/// instead of an object) must not stall the scopes channel for the full
+/// `host_timeout()` (60s default) before falling back to fail-open
+/// streaming. Before the fix, `ScopeEntry` deserialization failed for
+/// the whole record, the scopes channel never fired, and every run
+/// against the plugin paid the full timeout. Assert the run completes
+/// well under that timeout and findings are still reported (fail-open,
+/// nothing dropped).
+#[test]
+fn malformed_files_scope_shape_fails_open_without_timeout() {
+    if !node_present() {
+        return;
+    }
+    let _host = serialize_plugin_host();
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    write_sources(dir.path());
+    std::fs::create_dir_all(dir.path().join("plugin-malformed")).expect("mkdir plugin");
+    std::fs::write(
+        dir.path().join("plugin-malformed/index.mjs"),
+        MALFORMED_FILES_PLUGIN,
+    )
+    .expect("write plugin");
+    std::fs::write(
+        dir.path().join("cofferdam.toml"),
+        "plugins = [\"./plugin-malformed\"]\n",
+    )
+    .expect("write toml");
+
+    let start = std::time::Instant::now();
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-baseline"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam");
+    let elapsed = start.elapsed();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "malformed files scope must not stall on the host timeout; took {elapsed:?}\n\
+         stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.contains("MALFORMEDSAW") && stdout.contains("in.ts"),
+        "plugin must still report findings (fail-open, not dropped); \
+         stdout={stdout}\nstderr={stderr}"
     );
 }

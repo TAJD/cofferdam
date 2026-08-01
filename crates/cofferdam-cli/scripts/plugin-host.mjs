@@ -765,6 +765,7 @@ function buildAstView(wire) {
         out.declarations = (w.declarations ?? []).map((d) => ({
           name: d.name ?? undefined,
           init: get(d.initIdx ?? -1) ?? undefined,
+          initSpan: d.initSpan ?? undefined,
         }));
         break;
       }

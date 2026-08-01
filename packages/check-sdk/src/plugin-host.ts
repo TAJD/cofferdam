@@ -210,10 +210,12 @@ const NODE_BUILDERS: Partial<Record<NodeKind, NodeBuilder>> = {
   },
   VariableDeclaration: (w, out, _idx, ctx) => {
     out["declarationKind"] = w["declarationKind"];
-    const decls = (w["declarations"] as { name?: string; initIdx: number }[]) ?? [];
+    const decls =
+      (w["declarations"] as { name?: string; initIdx: number; initSpan?: Span }[]) ?? [];
     out["declarations"] = decls.map((d) => ({
       name: d.name ?? undefined,
       init: ctx.get(d.initIdx ?? -1) ?? undefined,
+      initSpan: d.initSpan ?? undefined,
     }));
   },
   JSXElement: (w, out, _idx, ctx) => {

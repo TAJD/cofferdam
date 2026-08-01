@@ -138,15 +138,23 @@ export interface IdentifierReferenceNode extends AstNodeBase<"IdentifierReferenc
  * declarator in the statement — iterate `declarations`. `name` is
  * `undefined` for a destructuring pattern (`const { a } = obj`); `init`
  * is `undefined` when the initializer isn't a surfaced node kind (e.g. a
- * numeric/string literal, which the v0 surface doesn't expose). Check
- * `init?.kind === "ArrowFunctionExpression"` (or `"Function"`) to detect
- * a `const`-bound function.
+ * numeric/string literal or a binary expression, which the v0 surface
+ * doesn't expose as a typed node). Check `init?.kind ===
+ * "ArrowFunctionExpression"` (or `"Function"`) to detect a `const`-bound
+ * function.
+ *
+ * `initSpan` (CD-190) is populated whenever an initializer is present at
+ * all, regardless of whether `init` itself is populated — use it to
+ * isolate just the initializer's own source text (e.g. via a line's
+ * `spanFor`-style byte slice) without falling back to the whole
+ * declaration's span.
  */
 export interface VariableDeclarationNode extends AstNodeBase<"VariableDeclaration"> {
   readonly declarationKind: "const" | "let" | "var";
   readonly declarations: readonly {
     readonly name: string | undefined;
     readonly init: AstNode | undefined;
+    readonly initSpan: Span | undefined;
   }[];
 }
 

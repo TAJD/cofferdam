@@ -161,6 +161,14 @@ pub struct VariableDeclaratorWire {
     pub name: Option<String>,
     #[serde(rename = "initIdx")]
     pub init_idx: i32,
+    /// CD-190: the initializer's own span, populated whenever an
+    /// initializer is present — independent of `init_idx`, which stays
+    /// `-1` for initializer kinds the v0 wire surface doesn't model as a
+    /// full node (string/numeric literals, binary expressions, ...).
+    /// Lets a plugin isolate just the initializer's source text even
+    /// when `init` itself is `undefined`.
+    #[serde(rename = "initSpan", skip_serializing_if = "Option::is_none")]
+    pub init_span: Option<cofferdam_core::Span>,
 }
 
 struct StackFrame {
@@ -345,19 +353,25 @@ impl<'a> Visit<'a> for WireBuilder<'a> {
             // pushes nothing / a descendant, so it's left as -1 — the same
             // span-match guard visit_call_expression uses for its args.
             let mut init_idx = -1;
+            let mut init_span = None;
             if let Some(init) = &decl.init {
-                let init_span = init.span();
+                let raw_span = init.span();
+                init_span = Some(span_from_bytes(self.text, raw_span.start, raw_span.end));
                 let init_first_idx = self.nodes.len() as i32;
                 self.visit_expression(init);
                 if let Some(pushed) = self.nodes.get(init_first_idx as usize) {
-                    if pushed.span.start_byte == init_span.start
-                        && pushed.span.end_byte == init_span.end
+                    if pushed.span.start_byte == raw_span.start
+                        && pushed.span.end_byte == raw_span.end
                     {
                         init_idx = init_first_idx;
                     }
                 }
             }
-            declarations.push(VariableDeclaratorWire { name, init_idx });
+            declarations.push(VariableDeclaratorWire {
+                name,
+                init_idx,
+                init_span,
+            });
         }
 
         self.exit();
@@ -618,6 +632,41 @@ mod tests {
         WireBuilder::new(text).build(&parsed.program)
     }
 
+    /// CD-191 investigation: the bead reported `JSXAttributeNode.span`
+    /// shifted/truncated for a JSX element with multiple attributes on one
+    /// line (e.g. `className` in `<button type="button" onClick={onClose}
+    /// className={CANCEL_BTN}>` slicing to `"ame={CANCEL_BTN}>\n    "`
+    /// instead of its own text). Exhaustively re-verified end-to-end
+    /// against the real plugin host (single-line, multi-line-component,
+    /// CRLF, and self-closing variants) and could not reproduce — every
+    /// attribute's `span` slices back to exactly its own source text, both
+    /// here at the wire-builder level and through the actual NDJSON
+    /// pipeline `crates/cofferdam-cli/scripts/plugin-host.mjs` runs.
+    /// Kept as a permanent regression guard; see CD-191 for the
+    /// non-repro writeup.
+    #[test]
+    fn jsx_attribute_spans_are_independently_correct_on_one_line() {
+        let text = "const x = <button type=\"button\" onClick={onClose} className={CANCEL_BTN}>hi</button>;\n";
+        let wire = build_wire_tsx(text);
+        let attrs: Vec<(&str, &str)> = wire
+            .nodes
+            .iter()
+            .filter(|n| n.kind == "JSXAttribute")
+            .map(|n| {
+                let s = &n.span;
+                (n.kind, &text[s.start_byte as usize..s.end_byte as usize])
+            })
+            .collect();
+        assert_eq!(
+            attrs.into_iter().map(|(_, t)| t).collect::<Vec<_>>(),
+            vec![
+                "type=\"button\"",
+                "onClick={onClose}",
+                "className={CANCEL_BTN}",
+            ]
+        );
+    }
+
     fn call_extras(wire: &AstWire, idx: i32) -> (i32, &[i32]) {
         match &wire.nodes[idx as usize].extras {
             WireExtras::Call {
@@ -849,7 +898,8 @@ mod tests {
         let init0 = &wire.nodes[decls0[0].init_idx as usize];
         assert_eq!(init0.kind, "CallExpression");
 
-        // `let b = 2;` — numeric literal init is not a v0 kind → init_idx == -1.
+        // `let b = 2;` — numeric literal init is not a v0 kind → init_idx == -1,
+        // but init_span (CD-190) still covers just the literal.
         let (kind1, decls1) = var_decl_extras(&wire, vd_idxs[1]);
         assert_eq!(kind1, "let");
         assert_eq!(decls1.len(), 1);
@@ -857,6 +907,13 @@ mod tests {
         assert_eq!(
             decls1[0].init_idx, -1,
             "numeric literal init has no v0 node"
+        );
+        let init_span1 = decls1[0]
+            .init_span
+            .expect("init_span set for a present initializer");
+        assert_eq!(
+            &text[init_span1.start_byte as usize..init_span1.end_byte as usize],
+            "2"
         );
 
         // `const { x, y } = obj;` — one declarator, object-pattern binding →
@@ -872,6 +929,49 @@ mod tests {
         assert_eq!(
             &text[span2.start_byte as usize..span2.end_byte as usize],
             "const { x, y } = obj;"
+        );
+    }
+
+    /// CD-190: `init_idx` stays `-1` for a string-literal or
+    /// binary-expression initializer (neither is a v0 wire node kind), but
+    /// `init_span` must still isolate just the initializer's own source
+    /// text rather than forcing callers to fall back to the whole
+    /// `VariableDeclaration`'s span.
+    #[test]
+    fn variable_declaration_init_span_covers_literal_and_binary_initializers() {
+        let text = "const SEND_BTN = 'bg-brass text-white';\nconst GREETING = 'a' + 'b';\n";
+        let wire = build_wire(text);
+
+        let vd_idxs: Vec<i32> = wire
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.kind == "VariableDeclaration")
+            .map(|(i, _)| i as i32)
+            .collect();
+        assert_eq!(vd_idxs.len(), 2);
+
+        let (_, decls0) = var_decl_extras(&wire, vd_idxs[0]);
+        assert_eq!(decls0[0].init_idx, -1, "string literal init has no v0 node");
+        let span0 = decls0[0]
+            .init_span
+            .expect("init_span set for a present initializer");
+        assert_eq!(
+            &text[span0.start_byte as usize..span0.end_byte as usize],
+            "'bg-brass text-white'"
+        );
+
+        let (_, decls1) = var_decl_extras(&wire, vd_idxs[1]);
+        assert_eq!(
+            decls1[0].init_idx, -1,
+            "binary expression init has no v0 node"
+        );
+        let span1 = decls1[0]
+            .init_span
+            .expect("init_span set for a present initializer");
+        assert_eq!(
+            &text[span1.start_byte as usize..span1.end_byte as usize],
+            "'a' + 'b'"
         );
     }
 

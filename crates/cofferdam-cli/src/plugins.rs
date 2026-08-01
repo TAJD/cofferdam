@@ -5,8 +5,11 @@
 //! `node cofferdam-plugin-host.mjs` and exchanges NDJSON records over
 //! stdin/stdout instead of one whole-repo JSON blob. Stdin carries a
 //! `header` record (plugins + options), one `file` record per source
-//! file, then an `end` record. Stdout carries `report` / `error` records
-//! streamed as each file is processed, then a final `done` record. This
+//! file, then an `end` record. Stdout carries a one-shot `scopes` record
+//! (emitted right after the host loads the plugins, and awaited by the
+//! writer before it streams any file — CD-178's scope pre-filter), then
+//! `report` / `error` records streamed as each file is processed, then a
+//! final `done` record. This
 //! keeps peak memory on both sides at O(one file) instead of O(repo) —
 //! see `design/sdk-ast-wire.md` for the wire spec. Writing (this
 //! process) and reading (a background thread) run concurrently so a
@@ -167,6 +170,14 @@ enum StreamRecord {
     Report(HostReport),
     #[serde(rename = "error")]
     Error(HostError),
+    /// CD-178: one-per-run record the host emits right after loading
+    /// plugins, carrying each loaded check's `files` scope. Read by the
+    /// reader thread and handed to the writer, which blocks on it before
+    /// streaming any `file` record so it can scope-prefilter the source
+    /// set on the *same* spawn (CD-171 paid a second `node` spawn in
+    /// metadata mode for this).
+    #[serde(rename = "scopes")]
+    Scopes { checks: Vec<ScopeEntry> },
     #[serde(rename = "done")]
     Done {
         /// CD-81: set only when at least one loaded plugin check declared
@@ -311,6 +322,18 @@ pub struct PluginFileScope {
     pub path_patterns: Vec<String>,
     #[serde(default)]
     pub exclude_patterns: Vec<String>,
+}
+
+/// One entry of the streamed `scopes` record (CD-178). The host also
+/// sends each check's `id` for wire readability; the Rust side only
+/// needs the scope, so it's dropped by serde's default unknown-field
+/// handling.
+#[derive(Debug, Clone, Deserialize)]
+struct ScopeEntry {
+    /// `None` (JSON `null`) means "applies to every file", which
+    /// disables the pre-filter entirely — see `scope_prefilter_sources`.
+    #[serde(default)]
+    files: Option<PluginFileScope>,
 }
 
 /// One option entry returned by the plugin host's metadata mode.
@@ -568,21 +591,24 @@ pub fn run_plugins(
 /// plugin check's `files` scope will match, so `run_plugins_with_sources`
 /// skips wire construction for files no check will ever look at.
 ///
-/// Must fail OPEN: `plugin_metas` is empty whenever `query_plugin_metadata`
-/// hit a host failure (spawn error, timeout, malformed response), not just
-/// when no plugins declared scopes. Filtering against an empty scope list
-/// would reject every file and silently drop every plugin finding instead
-/// of surfacing the real failure through the normal host spawn — so an
-/// empty `plugin_metas` disables the pre-filter rather than filtering as
-/// if no check matched anything. Likewise, any check with `files: None`
-/// applies to every file, so its presence also disables the pre-filter.
+/// Must fail OPEN. `scopes` is `None` whenever the host's `scopes` record
+/// never arrived (host died before emitting it, wait timed out, record
+/// malformed) — filtering against no scope information would reject every
+/// file and silently drop every plugin finding instead of surfacing the
+/// real failure through the normal host run. An empty `scopes` list (every
+/// plugin failed to load) is treated the same way for the same reason.
+/// Likewise, any check with `files: None` applies to every file, so its
+/// presence also disables the pre-filter.
 fn scope_prefilter_sources<'a>(
     sources: &'a [(PathBuf, String)],
-    plugin_metas: &[PluginCheckMeta],
+    scopes: Option<&[ScopeEntry]>,
     layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
     layer_matchers: &[LayerMatcher],
 ) -> std::borrow::Cow<'a, [(PathBuf, String)]> {
-    if plugin_metas.is_empty() || plugin_metas.iter().any(|m| m.files.is_none()) {
+    let Some(scopes) = scopes else {
+        return std::borrow::Cow::Borrowed(sources);
+    };
+    if scopes.is_empty() || scopes.iter().any(|s| s.files.is_none()) {
         return std::borrow::Cow::Borrowed(sources);
     }
     let filtered: Vec<(PathBuf, String)> = sources
@@ -591,10 +617,10 @@ fn scope_prefilter_sources<'a>(
             let fwd_path = forward_slash(&absolutize(path));
             let layer = layers_cfg
                 .and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, path));
-            plugin_metas.iter().any(|m| {
+            scopes.iter().any(|s| {
                 crate::advise::plugin_file_matches_scope(
                     &fwd_path,
-                    m.files.as_ref(),
+                    s.files.as_ref(),
                     layer.as_deref(),
                 )
             })
@@ -626,29 +652,6 @@ pub fn run_plugins_with_sources(
     // layer config is present; layer field serialises to JSON `null`.
     let layer_matchers: Vec<LayerMatcher> =
         layers_cfg.map(layers::build_matchers).unwrap_or_default();
-
-    // CD-171: skip wire construction (reparse + line-views + AST
-    // serialization) for files no loaded plugin check's `files` scope
-    // will ever match — see `scope_prefilter_sources`'s doc comment for
-    // the fail-open contract. Measured as ~66% of plugin-host wall-clock
-    // on a real repo (projektor: 1886ms -> 782ms restricted to the
-    // plugin's actual scope) — narrowly-scoped project-internal plugins
-    // are the common case, so the JS host was discarding most of this
-    // expensive payload anyway, just after it was already built and
-    // shipped. Costs one extra `node` spawn in metadata mode
-    // (~50-150ms) to learn the scopes upfront; a net win whenever any
-    // check declares a `files` scope, a no-op (every file still sent)
-    // otherwise.
-    // `sources` (the full, unfiltered set) stays bound under its
-    // original name for `text_index` below — the "analyzed file set"
-    // that finalize reports are validated against must still cover
-    // every file the caller passed in, not just the subset actually
-    // streamed to the host. Only the streaming loop uses the filtered
-    // `streamed_sources`.
-    let plugin_metas = query_plugin_metadata(plugin_paths, project_root);
-    let streamed_sources =
-        scope_prefilter_sources(sources, &plugin_metas, layers_cfg, &layer_matchers);
-    let streamed_sources: &[(PathBuf, String)] = &streamed_sources;
 
     // Canonicalise to absolute paths before handing to the host. The
     // host's `resolvePath(cwd, plugin)` is a no-op when the second arg
@@ -703,7 +706,12 @@ pub fn run_plugins_with_sources(
     // thread is still writing input (see the module doc's deadlock
     // note). Both threads terminate on EOF, which happens once the
     // child exits (normally or via the timeout kill below).
-    let reader_handle = thread::spawn(move || read_stream_records(stdout));
+    // CD-178: the reader thread forwards the host's one-shot `scopes`
+    // record here; the writer below blocks on it before streaming any
+    // file. A dropped sender (reader hit EOF without ever seeing the
+    // record) makes `recv_timeout` return immediately — fail open.
+    let (scopes_tx, scopes_rx) = std::sync::mpsc::channel::<Vec<ScopeEntry>>();
+    let reader_handle = thread::spawn(move || read_stream_records(stdout, scopes_tx));
     let stderr_handle = thread::spawn(move || {
         let mut buf = String::new();
         let mut reader = BufReader::new(stderr);
@@ -721,8 +729,32 @@ pub fn run_plugins_with_sources(
     };
     let mut write_error = write_record(&mut stdin, &header).err();
 
+    // CD-171/CD-178: skip wire construction (reparse + line-views + AST
+    // serialization) for files no loaded plugin check's `files` scope
+    // will ever match — see `scope_prefilter_sources`'s doc comment for
+    // the fail-open contract. Measured as ~66% of plugin-host wall-clock
+    // on a real repo (projektor: 1886ms -> 782ms restricted to the
+    // plugin's actual scope) — narrowly-scoped project-internal plugins
+    // are the common case, so the JS host was discarding most of this
+    // expensive payload anyway, just after it was already built and
+    // shipped.
+    //
+    // The scopes come from a single extra round-trip on THIS spawn: the
+    // host emits them right after loading plugins, so learning them costs
+    // no second `node` process. Measured on projektor (476 files, one
+    // scoped plugin): 1303ms -> 1088ms median for `check --no-cache
+    // --no-baseline`, i.e. ~215ms was the bare cost of CD-171's extra
+    // metadata-mode spawn.
+    // `sources` (the full, unfiltered set) stays bound under its original
+    // name for `text_index` below — the "analyzed file set" that finalize
+    // reports are validated against must still cover every file the
+    // caller passed in, not just the subset actually streamed to the
+    // host. Only the streaming loop uses the filtered `streamed_sources`.
     if write_error.is_none() {
-        for (path, text) in streamed_sources {
+        let scopes = scopes_rx.recv_timeout(host_timeout()).ok();
+        let streamed_sources =
+            scope_prefilter_sources(sources, scopes.as_deref(), layers_cfg, &layer_matchers);
+        for (path, text) in streamed_sources.iter() {
             let file = SourceFile::new(path.clone(), text.clone());
             // Per-language dispatch (CD-84): oxc only understands
             // TS/JS/JSX — feeding it an `.html` file would parse
@@ -1233,7 +1265,7 @@ fn write_record<T: Serialize>(stdin: &mut impl Write, record: &T) -> std::io::Re
     stdin.flush()
 }
 
-/// Read NDJSON `report`/`error`/`done` records from the host's stdout
+/// Read NDJSON `report`/`error`/`scopes`/`done` records from the host's stdout
 /// until EOF or a `done` record. Runs on a background thread (see
 /// `run_plugins_with_sources`) so it can drain the pipe concurrently
 /// with this process still writing input. A line that fails to parse is
@@ -1248,6 +1280,7 @@ fn write_record<T: Serialize>(stdin: &mut impl Write, record: &T) -> std::io::Re
 /// result, even when the child's exit status is success.
 fn read_stream_records(
     stdout: ChildStdout,
+    scopes_tx: std::sync::mpsc::Sender<Vec<ScopeEntry>>,
 ) -> (
     Vec<HostReport>,
     Vec<HostError>,
@@ -1274,6 +1307,13 @@ fn read_stream_records(
                 match serde_json::from_str::<StreamRecord>(trimmed) {
                     Ok(StreamRecord::Report(r)) => reports.push(r),
                     Ok(StreamRecord::Error(e)) => errors.push(e),
+                    // CD-178: hand off to the blocked writer. A send
+                    // failure means the writer already gave up waiting
+                    // (timeout) and moved on unfiltered — nothing left
+                    // to do but keep draining stdout.
+                    Ok(StreamRecord::Scopes { checks }) => {
+                        let _ = scopes_tx.send(checks);
+                    }
                     Ok(StreamRecord::Done {
                         type_host_unavailable: reason,
                     }) => {
@@ -1351,23 +1391,11 @@ fn synthetic_warning(check_id: &'static str, file: &Path, message: String) -> Is
 mod scope_prefilter_tests {
     use super::*;
 
-    fn meta_with_scope(files: Option<PluginFileScope>) -> PluginCheckMeta {
-        PluginCheckMeta {
-            path: "plugin".to_string(),
-            id: "Test.Check".to_string(),
-            category: "warning".to_string(),
-            base_priority: 5,
-            explanation: String::new(),
-            default_severity: "medium".to_string(),
-            body: None,
-            requires_types: false,
-            output_mode: false,
-            options: Vec::new(),
-            files,
-        }
+    fn meta_with_scope(files: Option<PluginFileScope>) -> ScopeEntry {
+        ScopeEntry { files }
     }
 
-    fn scoped(pattern: &str) -> PluginCheckMeta {
+    fn scoped(pattern: &str) -> ScopeEntry {
         meta_with_scope(Some(PluginFileScope {
             extensions: Vec::new(),
             layers: Vec::new(),
@@ -1384,21 +1412,35 @@ mod scope_prefilter_tests {
         ]
     }
 
-    /// CD-171: an empty `plugin_metas` (query failure — spawn error,
-    /// timeout, malformed response — NOT "no plugins configured", since
-    /// callers already early-return before reaching this function when
-    /// `plugin_paths` is empty) must disable the pre-filter rather than
-    /// reject every file. Filtering here would silently drop every
-    /// plugin finding on a transient host hiccup instead of surfacing
-    /// the real failure through the normal host spawn.
+    /// CD-178: no `scopes` record ever arrived (host died before
+    /// emitting it, the wait timed out, or the record was malformed).
+    /// Must disable the pre-filter rather than reject every file —
+    /// filtering here would silently drop every plugin finding on a
+    /// transient host hiccup instead of surfacing the real failure
+    /// through the normal host run.
     #[test]
-    fn empty_plugin_metas_fails_open() {
+    fn missing_scopes_record_fails_open() {
         let sources = sources();
-        let filtered = scope_prefilter_sources(&sources, &[], None, &[]);
+        let filtered = scope_prefilter_sources(&sources, None, None, &[]);
         assert_eq!(
             filtered.len(),
             2,
-            "must send every file when metadata query failed"
+            "must send every file when the scopes record never arrived"
+        );
+    }
+
+    /// CD-171: an empty scope list (every plugin failed to load — NOT
+    /// "no plugins configured", since callers already early-return
+    /// before reaching this function when `plugin_paths` is empty)
+    /// disables the pre-filter for the same fail-open reason.
+    #[test]
+    fn empty_scopes_fails_open() {
+        let sources = sources();
+        let filtered = scope_prefilter_sources(&sources, Some(&[]), None, &[]);
+        assert_eq!(
+            filtered.len(),
+            2,
+            "must send every file when no check loaded"
         );
     }
 
@@ -1406,7 +1448,7 @@ mod scope_prefilter_tests {
     fn scoped_check_filters_non_matching_files() {
         let sources = sources();
         let metas = vec![scoped("src/included/**")];
-        let filtered = scope_prefilter_sources(&sources, &metas, None, &[]);
+        let filtered = scope_prefilter_sources(&sources, Some(&metas), None, &[]);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].0, PathBuf::from("src/included/in.ts"));
     }
@@ -1415,7 +1457,7 @@ mod scope_prefilter_tests {
     fn any_unscoped_check_disables_filter() {
         let sources = sources();
         let metas = vec![scoped("src/included/**"), meta_with_scope(None)];
-        let filtered = scope_prefilter_sources(&sources, &metas, None, &[]);
+        let filtered = scope_prefilter_sources(&sources, Some(&metas), None, &[]);
         assert_eq!(
             filtered.len(),
             2,

@@ -29,6 +29,10 @@
 //   {"type":"error","kind":"load_failed"|"run_threw"|"finalize_threw",
 //    "plugin":"./examples-plugins/brand-casing",
 //    "file":"/abs/.../foo.ts","message":"..."}   // file empty for load_failed
+//   {"type":"scopes","checks":[{"id":"BrandCasing","files":{...}|null}]}
+//     // emitted exactly once, immediately after the header's loadPlugins;
+//     // the Rust side blocks on it before streaming files so it can
+//     // scope-prefilter them (CD-178).
 //   {"type":"done","typeHostUnavailable":null}   // typeHostUnavailable field
 //     // present only when a loaded check declared requiresTypes:true;
 //     // null when ts-morph resolved fine, else a human-readable reason
@@ -449,6 +453,20 @@ async function handleRecord(rec) {
       tsconfigPath = typeof rec.tsconfigPath === "string" ? rec.tsconfigPath : null;
       const errors = await loadPlugins(rec.plugins ?? []);
       for (const e of errors) writeRecord({ type: "error", ...e });
+
+      // CD-178: hand the Rust side every loaded check's `files` scope
+      // before the first "file" record is asked for, so it can skip wire
+      // construction for files nothing will look at. Emitted here — after
+      // loadPlugins, before the ts-morph load below — so the writer is
+      // unblocked while this process is still warming up types. Replaces
+      // CD-171's second `node` spawn in metadata mode.
+      writeRecord({
+        type: "scopes",
+        checks: loadedPlugins.map(({ check }) => ({
+          id: check.id,
+          files: check.files ?? null,
+        })),
+      });
 
       anyCheckRequiresTypes = loadedPlugins.some(({ check }) => check.requiresTypes === true);
       // Load ts-morph once, up front, so every `ctx.types.typeAt` call

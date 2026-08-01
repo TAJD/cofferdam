@@ -469,7 +469,7 @@ fn build_advisory(
 /// logic in plugin-host.mjs — the three (this, the .mjs, the SDK's
 /// plugin-host.ts) must stay in sync. `layer` is the file's resolved
 /// layer (or `None` when outside every declared layer).
-fn plugin_file_matches_scope(
+pub(crate) fn plugin_file_matches_scope(
     fwd_path: &str,
     scope: Option<&PluginFileScope>,
     layer: Option<&str>,

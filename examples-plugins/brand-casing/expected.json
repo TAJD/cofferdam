@@ -6,10 +6,10 @@
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 13,
+      "line": 19,
       "column": 24,
-      "start_byte": 611,
-      "end_byte": 619,
+      "start_byte": 977,
+      "end_byte": 985,
       "message": "Brand name must be \"EXAMPLCO\", not \"Examplco\"."
     },
     {
@@ -18,10 +18,10 @@
       "priority": 15,
       "severity": "high",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 17,
+      "line": 23,
       "column": 24,
-      "start_byte": 689,
-      "end_byte": 697,
+      "start_byte": 1055,
+      "end_byte": 1063,
       "message": "Brand name must be \"EXAMPLCO\", not \"Examplco\"."
     },
     {
@@ -31,10 +31,10 @@
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 17,
+      "line": 23,
       "column": 14,
-      "start_byte": 679,
-      "end_byte": 685,
+      "start_byte": 1045,
+      "end_byte": 1051,
       "message": "`HEADER` is exported but never imported in the project"
     },
     {
@@ -44,10 +44,10 @@
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 21,
+      "line": 27,
       "column": 14,
-      "start_byte": 894,
-      "end_byte": 900,
+      "start_byte": 1260,
+      "end_byte": 1266,
       "message": "`LEGACY` is exported but never imported in the project"
     },
     {
@@ -57,10 +57,10 @@
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 25,
+      "line": 31,
       "column": 14,
-      "start_byte": 1133,
-      "end_byte": 1141,
+      "start_byte": 1499,
+      "end_byte": 1507,
       "message": "`CAMPAIGN` is exported but never imported in the project"
     },
     {
@@ -70,10 +70,10 @@
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 31,
+      "line": 37,
       "column": 17,
-      "start_byte": 1448,
-      "end_byte": 1450,
+      "start_byte": 1814,
+      "end_byte": 1816,
       "message": "`ok` is exported but never imported in the project"
     },
     {
@@ -83,10 +83,10 @@
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 37,
+      "line": 43,
       "column": 14,
-      "start_byte": 1684,
-      "end_byte": 1691,
+      "start_byte": 2050,
+      "end_byte": 2057,
       "message": "`VERSION` is exported but never imported in the project"
     },
     {
@@ -96,10 +96,10 @@
       "priority": 5,
       "severity": "medium",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 42,
+      "line": 48,
       "column": 14,
-      "start_byte": 1936,
-      "end_byte": 1940,
+      "start_byte": 2302,
+      "end_byte": 2306,
       "message": "`HINT` is exported but never imported in the project"
     },
     {
@@ -109,10 +109,10 @@
       "priority": 4,
       "severity": "low",
       "file": "examples-plugins/brand-casing/fixture.ts",
-      "line": 17,
+      "line": 23,
       "column": 14,
-      "start_byte": 679,
-      "end_byte": 685,
+      "start_byte": 1045,
+      "end_byte": 1051,
       "message": "`HEADER` is exported here but no matching test file was found in the project"
     }
   ],

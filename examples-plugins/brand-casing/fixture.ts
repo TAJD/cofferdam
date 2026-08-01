@@ -1,9 +1,15 @@
 // fixture.ts — input to `cofferdam check` for the BrandCasing plugin (cd-7e4).
 //
 // Comments label the expected outcome on each line. The plugin should emit
-// exactly 2 issues, on the lines marked FLAG #1 and FLAG #2. Every other
+// exactly 2 issues — on the lines marked FLAG #1 and FLAG #2. Every other
 // occurrence of the trigger word is exempted by one of the rules in the
 // design doc (docs/plugin-sdk-e2e.md §1).
+//
+// The em dash above is load-bearing (CD-176): it is a 3-byte UTF-8
+// character on a line *before* both FLAG lines, so the flagged findings'
+// `start_byte` in expected.json only matches if the plugin host derives
+// per-line byte offsets as BYTES rather than JS string indices. The wire
+// no longer ships `lineStart` — the host recomputes it from `text`.
 
 import { Examplco } from "./brand";        // OK: identifier import
 import type { ExamplcoClient } from "./b"; // OK: type-only identifier

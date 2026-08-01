@@ -1,5 +1,13 @@
 //! Cofferdam CLI entry point.
 
+// CD-169 — the run is allocation-dominated (one oxc `Allocator` per file
+// plus per-check `Vec`/`String` churn), so the general-purpose allocator
+// is on the hot path. Binary-only by design: library crates stay
+// allocator-neutral so embedders keep their own choice.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use cofferdam_cli::{
     advise, advise_diff, agents, baseline_diff, baseline_lint, doctor, explain, gen_docs, init,
     plugins, type_host, watch,

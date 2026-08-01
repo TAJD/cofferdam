@@ -35,8 +35,18 @@ path = "tests/type_host.rs"
 [lints]
 workspace = true
 
+[features]
+default = ["mimalloc"]
+# CD-169 — mimalloc as the binary's global allocator. Kept behind a
+# default-on feature so a build that can't compile mimalloc's C source
+# (an exotic cross target, a hermetic no-cc sandbox) can opt out with
+# `--no-default-features` without losing the CLI. Library crates stay
+# allocator-neutral — this belongs to the binary only.
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
 cofferdam-core = { workspace = true }
+mimalloc = { version = "0.1", optional = true }
 cofferdam-engine = { workspace = true }
 cofferdam-checks = { workspace = true }
 cofferdam-formatters = { workspace = true }

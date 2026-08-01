@@ -436,6 +436,28 @@ impl Drop for Worker {
     }
 }
 
+/// Mirrors `type-host-core.mjs`'s `findTsMorphPackageJson` walk: starting
+/// at `start`, check `node_modules/ts-morph/package.json`, then walk up
+/// to each parent directory in turn. Existence-only — doesn't validate
+/// the package.json is well-formed or that `main`/`module` resolves,
+/// since this is purely a fast-path gate to avoid spawning Node workers
+/// that would immediately fail the same way the JS-side walk already
+/// handles.
+fn ts_morph_resolvable(start: &Path) -> bool {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if d.join("node_modules")
+            .join("ts-morph")
+            .join("package.json")
+            .is_file()
+        {
+            return true;
+        }
+        dir = d.parent();
+    }
+    false
+}
+
 fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
     let host_script = materialise_host_script()
         .map_err(|e| TypeHostError::ScriptMaterialiseFailed(e.to_string()))?;
@@ -590,6 +612,33 @@ fn build_type_oracle_with_pool_size(
     tsconfig_path: &Path,
     size: usize,
 ) -> Result<WorkerTypeOracle, TypeHostError> {
+    // CD-172: `type-host-core.mjs`'s own `loadTsMorph` walks up from
+    // `projectRoot` looking for `node_modules/ts-morph/package.json`
+    // and fails with this exact `ts_morph_unavailable` error/code when
+    // it isn't found — but only after a Node process has already been
+    // spawned per pool worker (`pool_size()` of them, concurrently) to
+    // discover that. Mirroring the same walk here in Rust turns the
+    // extremely common "Node/ts-morph not installed" case (any
+    // Node-less CI runner, any repo that hasn't opted into type-aware
+    // checks) into a handful of `Path::exists` stats instead of N
+    // concurrent `node` spawns — measured ~300ms of fixed overhead per
+    // `cofferdam check` invocation on a real repo (CD-172). A
+    // false-negative here (this check says "not found" but the JS
+    // walk would have succeeded) just falls back to the exact same
+    // error the JS path would have produced anyway, so this can only
+    // remove overhead, never change behavior for the case where
+    // ts-morph genuinely resolves.
+    if !ts_morph_resolvable(project_root) {
+        return Err(TypeHostError::HostError {
+            code: "ts_morph_unavailable".to_string(),
+            message: format!(
+                "ts-morph not found in any node_modules walking up from {}. \
+                 Install with: npm install --save-dev ts-morph",
+                project_root.display()
+            ),
+        });
+    }
+
     let tsconfig = tsconfig_path.to_string_lossy().replace('\\', "/");
 
     let results: Vec<Result<Worker, TypeHostError>> = std::thread::scope(|scope| {
@@ -648,6 +697,62 @@ fn build_type_oracle_with_pool_size(
 mod tests {
     use super::*;
     use cofferdam_core::TypeOracle;
+
+    /// CD-172: the Rust-side pre-check must agree with what
+    /// `type-host-core.mjs`'s JS walk would find, in both directions —
+    /// no `node_modules/ts-morph` anywhere in the ancestor chain is
+    /// `false`; a `package.json` directly under `start` is `true`.
+    #[test]
+    fn ts_morph_resolvable_false_when_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(!ts_morph_resolvable(dir.path()));
+    }
+
+    #[test]
+    fn ts_morph_resolvable_true_in_start_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("node_modules").join("ts-morph");
+        std::fs::create_dir_all(&pkg_dir).expect("mkdir");
+        std::fs::write(pkg_dir.join("package.json"), b"{}").expect("write package.json");
+        assert!(ts_morph_resolvable(dir.path()));
+    }
+
+    /// The JS walk climbs parent directories looking for
+    /// `node_modules/ts-morph` (matching how Node itself resolves
+    /// `node_modules` up a project tree); a nested source directory
+    /// must find an ancestor's install just as readily as its own.
+    #[test]
+    fn ts_morph_resolvable_true_via_ancestor_walk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pkg_dir = dir.path().join("node_modules").join("ts-morph");
+        std::fs::create_dir_all(&pkg_dir).expect("mkdir");
+        std::fs::write(pkg_dir.join("package.json"), b"{}").expect("write package.json");
+
+        let nested = dir.path().join("src").join("deeply").join("nested");
+        std::fs::create_dir_all(&nested).expect("mkdir nested");
+        assert!(ts_morph_resolvable(&nested));
+    }
+
+    /// CD-172: `build_type_oracle` must short-circuit with the same
+    /// `ts_morph_unavailable` error the JS-side walk would produce
+    /// (see `type_host_ping_without_ts_morph_surfaces_clear_error` in
+    /// `tests/type_host.rs` for the JS-path equivalent), WITHOUT
+    /// spawning any Node worker — this test needs no `node_present()`
+    /// gate, which is itself proof the fast path never touches Node.
+    #[test]
+    fn build_type_oracle_short_circuits_when_ts_morph_absent() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let tsconfig = project.path().join("tsconfig.json");
+        std::fs::write(&tsconfig, b"{}").expect("write tsconfig");
+
+        match build_type_oracle(project.path(), &tsconfig) {
+            Err(TypeHostError::HostError { code, .. }) => {
+                assert_eq!(code, "ts_morph_unavailable");
+            }
+            Err(other) => panic!("expected HostError{{code: ts_morph_unavailable}}, got {other}"),
+            Ok(_) => panic!("no node_modules/ts-morph anywhere under a fresh tempdir"),
+        }
+    }
 
     /// Real worker end-to-end test (cd-9hp.2 cp2). Gated on a ts-morph
     /// install: set `COFFERDAM_TYPE_HOST_TS_MORPH_ROOT` to a directory

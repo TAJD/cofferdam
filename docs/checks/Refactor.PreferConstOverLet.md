@@ -33,7 +33,15 @@ function increment() {
 }
 ```
 
-Scoped to simple-identifier bindings only in this version — destructured bindings (`let { a, b } = obj`) are skipped. Tracking is name-based rather than true lexical scope: a shadowed `let` that shares a name with a reassigned variable in a different scope won't be flagged even if that specific binding is itself never reassigned. This is a deliberate false-negative, not a false-positive — the safer direction for a "should be const" suggestion.
+Declaration sites are scoped to simple-identifier bindings only in this version — a destructured `let` declaration (`let { a, b } = obj`) is skipped. Reassignment detection is broader: a `let`-declared name is recognized as reassigned when it's the target of a plain assignment (`x = v`), an object/array destructuring-assignment (`({ a, b } = v)`, `([a, b] = v)`, including renamed properties, rest elements, and defaults), or a `for...of`/`for...in` loop head (`for (x of xs)`, `for ([a, b] of pairs)`).
+
+```ts
+let token: string;
+let slug: string;
+({ token, slug } = await fetchPair()); // reassignment — not flagged
+```
+
+Tracking is name-based rather than true lexical scope: a shadowed `let` that shares a name with a reassigned variable in a different scope won't be flagged even if that specific binding is itself never reassigned. This is a deliberate false-negative, not a false-positive — the safer direction for a "should be const" suggestion.
 
 Overlap with ESLint's `prefer-const` rule is expected and acceptable.
 

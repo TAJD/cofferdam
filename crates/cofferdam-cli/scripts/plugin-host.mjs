@@ -7,16 +7,22 @@
 // export, runs every plugin against each file as it arrives, and
 // streams the merged report/error set back as NDJSON on stdout. This
 // keeps both sides at O(one file) peak memory instead of O(repo) — see
-// `design/sdk-ast-wire.md` for the wire spec (wireVersion 2).
+// `design/sdk-ast-wire.md` for the wire spec (wireVersion 3).
 //
 // STREAMED MANIFEST (Rust side: HeaderRecord/ManifestFile/EndRecord in
 // plugins.rs), one JSON object per stdin line:
-//   {"type":"header","wireVersion":2,"cwd":"/abs/project-root",
+//   {"type":"header","wireVersion":3,"cwd":"/abs/project-root",
 //    "plugins":["./examples-plugins/brand-casing"],
 //    "options":{"<checkId>":{"<key>":<RawOptionValue>}},
 //    "tsconfigPath":"/abs/project-root/tsconfig.json"}   // null/absent when none found
 //   {"type":"file","path":"/abs/file.ts","text":"...",
-//    "lineViews":[{...}],"layer":null,"ast":{...}}
+//    "lines":{"flags":[0,4,...],"literalRanges":[1,10,18,...]},
+//    "layer":null,"ast":{...}}
+//     // CD-176: `lines` carries ONLY the AST-derived per-line flag
+//     // bitmask (+ sparse string-literal ranges as flat lineIdx/start/end
+//     // triples). Line text, numbering and byte offsets are re-derived
+//     // host-side from `text` — see deriveLineStarts. `lines` is absent
+//     // for languages with no line views at all (Rust, failed HTML parse).
 //   ... (one "file" record per source file, in order) ...
 //   {"type":"end"}
 //
@@ -220,7 +226,7 @@ async function processFile(rec) {
   if (dumpEntries) dumpEntries.push({ path: rec.path, text: rec.text, ast: rec.ast ?? null });
   if (process.env.COFFERDAM_PLUGIN_HOST_DEBUG) {
     process.stderr.write(
-      `[host] file=${rec.path} lines=${rec.lineViews.length} ` +
+      `[host] file=${rec.path} lines=${rec.lines?.flags?.length ?? 0} ` +
         `astNodes=${rec.ast?.nodes?.length ?? 0} plugins=${loadedPlugins.length}\n`,
     );
   }
@@ -645,7 +651,7 @@ function pickEntry(pkg) {
 }
 
 function buildSourceFile(file) {
-  const lineViews = file.lineViews.map(buildLineView);
+  const lineViews = buildLineViews(file.text, file.lines ?? null);
   return {
     path: file.path,
     text: file.text,
@@ -873,24 +879,95 @@ function visitorMethod(visitor, kind) {
   return typeof fn === "function" ? fn : null;
 }
 
-function buildLineView(native) {
+// Bit positions in the wire's `lines.flags`. Mirrors `line_flags` in
+// crates/cofferdam-cli/src/plugins.rs — keep the two in sync.
+const LINE_FLAG_COMMENT = 1 << 0;
+const LINE_FLAG_DOC_COMMENT = 1 << 1;
+const LINE_FLAG_STRING_LITERAL = 1 << 2;
+const LINE_FLAG_JSX_TEXT = 1 << 3;
+const LINE_FLAG_PRAGMA = 1 << 4;
+const LINE_FLAG_TAG = 1 << 5;
+const LINE_FLAG_TEXT = 1 << 6;
+
+// CD-176: the wire no longer carries per-line `text`/`lineNo`/`lineStart`
+// — only the AST-derived flags, which can't be recovered from text. This
+// re-derives the rest from the `text` field the record already carries,
+// reproducing `cofferdam_core::lines::compute_line_starts` exactly:
+//
+//   - Lines split on '\n' only (a lone '\r' is NOT a line break), so the
+//     line count is `count('\n') + 1`. A trailing newline therefore
+//     yields a final empty line, and "" yields exactly one empty line —
+//     same as Rust's `starts = [0]` seed.
+//   - `lineStart` is a BYTE offset into the UTF-8 source, not a JS string
+//     index. `spanFor` feeds it straight into `start_byte`, so getting
+//     this wrong on any non-ASCII file would silently shift every
+//     subsequent line's reported span. Buffer.byteLength is the only
+//     correct measure; the ASCII fast path is an optimisation, guarded by
+//     a whole-file check (byteLength === length iff every code unit is
+//     ASCII).
+//   - Line text drops a trailing '\r' (CRLF sources) but keeps it in the
+//     byte accounting, matching `LineView.text`'s strip_suffix('\r').
+function deriveLineStarts(text) {
+  const parts = text.split("\n");
+  const ascii = Buffer.byteLength(text) === text.length;
+  const out = new Array(parts.length);
+  let byte = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const raw = parts[i];
+    const hasCr = raw.charCodeAt(raw.length - 1) === 13;
+    out[i] = { text: hasCr ? raw.slice(0, -1) : raw, lineStart: byte };
+    // +1 for the '\n' that split() consumed. On the last part there is
+    // no '\n', but nothing reads `byte` after the loop.
+    byte += (ascii ? raw.length : Buffer.byteLength(raw)) + 1;
+  }
+  return out;
+}
+
+function buildLineViews(text, lines) {
+  // `lines: null` means the language has no line views at all (Rust, or
+  // a failed HTML parse) — yield zero lines, as wireVersion 2's empty
+  // `lineViews: []` did.
+  if (!lines) return [];
+  const flags = lines.flags ?? [];
+  const derived = deriveLineStarts(text);
+
+  // stringLiteralRanges arrive as flat (lineIdx, start, end) triples
+  // because literals are sparse; fan them back out per line.
+  const ranges = lines.literalRanges ?? [];
+  const byLine = new Map();
+  for (let i = 0; i + 2 < ranges.length; i += 3) {
+    const key = ranges[i];
+    const bucket = byLine.get(key);
+    if (bucket) bucket.push([ranges[i + 1], ranges[i + 2]]);
+    else byLine.set(key, [[ranges[i + 1], ranges[i + 2]]]);
+  }
+
+  const out = new Array(derived.length);
+  for (let i = 0; i < derived.length; i++) {
+    out[i] = buildLineView(i + 1, derived[i], flags[i] ?? 0, byLine.get(i) ?? []);
+  }
+  return out;
+}
+
+function buildLineView(lineNo, derived, flags, stringLiteralRanges) {
+  const lineStart = derived.lineStart;
   return {
-    lineNo: native.lineNo,
-    text: native.text,
-    isComment: native.isComment,
-    isDocComment: native.isDocComment,
-    isStringLiteral: native.isStringLiteral,
-    stringLiteralRanges: native.stringLiteralRanges ?? [],
-    isJsxText: native.isJsxText,
-    isPragma: native.isPragma,
-    isTag: native.isTag,
-    isText: native.isText,
+    lineNo,
+    text: derived.text,
+    isComment: (flags & LINE_FLAG_COMMENT) !== 0,
+    isDocComment: (flags & LINE_FLAG_DOC_COMMENT) !== 0,
+    isStringLiteral: (flags & LINE_FLAG_STRING_LITERAL) !== 0,
+    stringLiteralRanges,
+    isJsxText: (flags & LINE_FLAG_JSX_TEXT) !== 0,
+    isPragma: (flags & LINE_FLAG_PRAGMA) !== 0,
+    isTag: (flags & LINE_FLAG_TAG) !== 0,
+    isText: (flags & LINE_FLAG_TEXT) !== 0,
     spanFor(charStart, charEnd) {
       return {
-        line: native.lineNo,
+        line: lineNo,
         column: charStart + 1,
-        start_byte: native.lineStart + charStart,
-        end_byte: native.lineStart + charEnd,
+        start_byte: lineStart + charStart,
+        end_byte: lineStart + charEnd,
       };
     },
   };

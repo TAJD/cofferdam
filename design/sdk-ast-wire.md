@@ -442,7 +442,7 @@ above; final v0 wire shape:
 Reviewable as a doc PR. Implementation lands as a separate bead once
 this is approved.
 
-## Transport streaming (CD-33, wireVersion 2)
+## Transport streaming (CD-33, wireVersion 3)
 
 The per-node `AstWire` shape above (kind/span/firstChild/nextSibling +
 per-kind extras) is unchanged. What changed is *how many manifests* cross
@@ -460,11 +460,56 @@ the bestefforttools corpus) is the size of that one blob.
 type-host's framing (`design/type-host-wire.md`). Stdin carries:
 
 ```json
-{"type":"header","wireVersion":2,"cwd":"...","plugins":[...],"options":{...},"tsconfigPath":"..."}
-{"type":"file","path":"...","text":"...","lineViews":[...],"layer":null,"ast":{...}}
+{"type":"header","wireVersion":3,"cwd":"...","plugins":[...],"options":{...},"tsconfigPath":"..."}
+{"type":"file","path":"...","text":"...","lines":{"flags":[...],"literalRanges":[...]},"layer":null,"ast":{...}}
 ... (one "file" record per source file, in order) ...
 {"type":"end"}
 ```
+
+**Line views: derived, not shipped (CD-176, wireVersion 3).** Through
+wireVersion 2 the `file` record carried `lineViews`: one JSON object per
+source line with `lineNo`, `text`, `lineStart` and ten boolean fields.
+That re-encoded the whole source a second time *and* repeated ~185 bytes
+of key names per line. Measured on projektor (476 files, 2.57 MB of
+source) it was 17.4 MB — 39% of the 45.1 MB wire payload, 6.8x the text
+it duplicated.
+
+Everything in a line view that is a pure function of the file text — the
+line count, each line's text, and its `lineStart` byte offset — is now
+recomputed host-side from the `text` field the record already carries
+(`deriveLineStarts` in `plugin-host.mjs`). Only the classification flags,
+which come from the oxc comment table / literal walk (or tree-sitter for
+HTML) and cannot be recovered from text, still cross the wire:
+
+- `flags` — one `u8` bitmask per line, in line order:
+  `1` comment, `2` docComment, `4` stringLiteral, `8` jsxText,
+  `16` pragma, `32` tag (HTML), `64` text (HTML). Bit positions are
+  declared in `line_flags` (`plugins.rs`) and `LINE_FLAG_*`
+  (`plugin-host.mjs`) — keep the two in sync.
+- `literalRanges` — CD-100's per-line string-literal byte ranges,
+  flattened to `(0-based lineIdx, start, end)` triples and omitted when
+  empty. Flat triples rather than a per-line array-of-arrays because
+  literals are sparse; the latter would re-pay `[],` on every line
+  without one.
+- The whole `lines` key is **absent** when the language has no line views
+  at all (Rust, or an HTML parse that failed). The host then yields zero
+  lines from `file.lines()`, exactly as the empty `lineViews: []` did.
+
+The plugin-visible `LineView` shape is unchanged — `lineNo`, `text`,
+the booleans, `stringLiteralRanges`, and `spanFor(start, end)` all behave
+identically. This is a wire-encoding change only.
+
+The derivation must match `cofferdam_core::lines::compute_line_starts`
+byte-for-byte or every plugin finding after the first multi-byte
+character points at the wrong offset. Two properties do the work:
+lines split on `
+` only (a lone `` is not a break, so `"" `is one
+empty line and a trailing newline yields a final empty one), and
+`lineStart` is a **UTF-8 byte** offset, not a JS string index — the host
+measures with `Buffer.byteLength`, fast-pathing only when the whole file
+is ASCII. `examples-plugins/brand-casing/fixture.ts` carries an em dash
+on a line above both flagged lines specifically so the committed
+`expected.json` start_bytes fail if that distinction is ever lost.
 
 `tsconfigPath` (CD-81) is `null`/absent when no tsconfig was discovered or
 type-awareness is disabled; when present, it's the same tsconfig the built-in
@@ -548,9 +593,11 @@ there. The `COFFERDAM_PLUGIN_HOST_DUMP_WIRE` debug dump (consumed by
 records — this re-introduces O(repo) memory deliberately, but only
 when the debug env var is set.
 
-**Versioning.** `WIRE_VERSION: u32 = 2` in `plugins.rs` marks this as a
-structural (major) change per the cd-9hp.12 schema-versioning policy —
-the framing changed even though the AST node payload didn't.
+**Versioning.** `WIRE_VERSION: u32 = 3` in `plugins.rs`. v2 marked the
+framing change (one-shot -> NDJSON) and v3 the line-view re-encoding
+above; both are structural (major) changes per the cd-9hp.12
+schema-versioning policy, even though the AST node payload has not
+changed since v1.
 
 **Completion handshake (cd-41).** `{"type":"done"}` is not just the
 loop-exit signal for the Rust reader — it's the only thing that

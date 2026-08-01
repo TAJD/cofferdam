@@ -1,7 +1,7 @@
 //! Plugin host driver — invokes Node-side plugins declared in
 //! `cofferdam.toml`'s `plugins = [...]` array (cd-7e4 / cd-81a.7).
 //!
-//! Architecture (CD-33: streamed, wireVersion 2): the Rust CLI spawns
+//! Architecture (CD-33: streamed, wireVersion 3): the Rust CLI spawns
 //! `node cofferdam-plugin-host.mjs` and exchanges NDJSON records over
 //! stdin/stdout instead of one whole-repo JSON blob. Stdin carries a
 //! `header` record (plugins + options), one `file` record per source
@@ -106,7 +106,7 @@ fn current_user_tag() -> String {
 /// Wire version for the streamed manifest protocol (CD-33). Bump and
 /// document in `design/sdk-ast-wire.md` on any breaking change to the
 /// record shapes below.
-const WIRE_VERSION: u32 = 2;
+const WIRE_VERSION: u32 = 3;
 
 /// First record on stdin: plugin list + per-check option overrides.
 /// Field names match `scripts/plugin-host.mjs`'s reads (camelCase on the
@@ -139,8 +139,12 @@ struct ManifestFile<'a> {
     kind: &'static str,
     path: String,
     text: &'a str,
-    #[serde(rename = "lineViews")]
-    line_views: Vec<ManifestLineView>,
+    /// CD-176: compact line-view payload. `None` (key omitted) means the
+    /// language has no line views at all (Rust, or an HTML parse that
+    /// failed) — the host then yields zero lines from `file.lines()`,
+    /// matching the empty `lineViews: []` wireVersion 2 sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lines: Option<ManifestLines>,
     /// Layer name from `cofferdam.invariants.toml` `[layers]`. `None`
     /// (serialised as JSON `null`) when no layer config is present or the
     /// file is not a member of any declared layer.
@@ -191,39 +195,60 @@ enum StreamRecord {
     },
 }
 
+/// Per-line classification for one file, column-oriented (CD-176).
+///
+/// wireVersion 2 sent an array of per-line objects carrying `lineNo`,
+/// `text`, `lineStart` and ten boolean fields — ~185 bytes of repeated
+/// key names per line *plus* a second copy of the whole source text.
+/// Measured on projektor (476 files, 2.57 MB of source) that was 17.4 MB,
+/// 39% of the entire wire payload and 6.8x the source it re-encoded.
+///
+/// Everything that is a pure function of the file text — line count, line
+/// text, `lineStart` byte offsets — is now derived host-side from the
+/// `text` field the record already carries (`deriveLineStarts` in
+/// `plugin-host.mjs`, which reproduces `cofferdam_core::lines`'
+/// `compute_line_starts` + CRLF-stripping exactly). Only the flags, which
+/// come from the AST and cannot be recovered from text, cross the wire.
 #[derive(Serialize)]
-struct ManifestLineView {
-    #[serde(rename = "lineNo")]
-    line_no: u32,
-    text: String,
-    #[serde(rename = "isComment")]
-    is_comment: bool,
-    #[serde(rename = "isDocComment")]
-    is_doc_comment: bool,
-    #[serde(rename = "isStringLiteral")]
-    is_string_literal: bool,
-    /// CD-100: span-aware counterpart to `is_string_literal` — byte
-    /// ranges `[start, end)` relative to this line's own text, one per
-    /// literal that touches the line. Empty when the line has no
-    /// literal (or for languages/wire paths that only ever produce the
-    /// whole-line flag, e.g. HTML/Astro).
-    #[serde(rename = "stringLiteralRanges")]
-    string_literal_ranges: Vec<(u32, u32)>,
-    #[serde(rename = "isJsxText")]
-    is_jsx_text: bool,
-    #[serde(rename = "isPragma")]
-    is_pragma: bool,
-    /// CD-84: HTML-only — `true` when a tag (`start_tag`/`end_tag`/
-    /// `self_closing_tag`/`doctype`) overlaps this line. Always `false`
-    /// for TS/JS files.
-    #[serde(rename = "isTag")]
-    is_tag: bool,
-    /// CD-84: HTML-only — `true` when an HTML `text` node overlaps this
-    /// line. Always `false` for TS/JS files.
-    #[serde(rename = "isText")]
-    is_text: bool,
-    #[serde(rename = "lineStart")]
-    line_start: u32,
+struct ManifestLines {
+    /// One bitmask per line, in line order (`flags.len()` == line count).
+    /// Bits per `line_flags`.
+    flags: Vec<u8>,
+    /// CD-100: span-aware counterpart to the `STRING_LITERAL` flag — byte
+    /// ranges `[start, end)` relative to a line's own text, one per
+    /// literal that touches the line. Flattened to triples of
+    /// `(0-based line index, start, end)` because literals are sparse:
+    /// a per-line array-of-arrays would re-pay `[],` for every line
+    /// without one. Empty for languages/wire paths that only ever produce
+    /// the whole-line flag (HTML/Astro/Markdown).
+    #[serde(rename = "literalRanges", skip_serializing_if = "Vec::is_empty")]
+    literal_ranges: Vec<u32>,
+}
+
+/// All-flags-false line classification, sized to `text`'s line count —
+/// for languages with no parse to derive flags from (Astro CD-93,
+/// Markdown/MDX CD-68). Pattern-A line-scan plugins still get real line
+/// text and byte-accurate spans, which the host derives from `text`.
+fn unclassified_lines(text: &str) -> ManifestLines {
+    ManifestLines {
+        flags: vec![0u8; cofferdam_core::Lines::plain(text).count()],
+        literal_ranges: Vec::new(),
+    }
+}
+
+/// Bit positions in `ManifestLines::flags`. Mirrored by `LINE_FLAG_*` in
+/// `scripts/plugin-host.mjs` — keep the two in sync.
+mod line_flags {
+    pub const COMMENT: u8 = 1 << 0;
+    pub const DOC_COMMENT: u8 = 1 << 1;
+    pub const STRING_LITERAL: u8 = 1 << 2;
+    pub const JSX_TEXT: u8 = 1 << 3;
+    pub const PRAGMA: u8 = 1 << 4;
+    /// HTML-only: a `start_tag`/`end_tag`/`self_closing_tag`/`doctype`
+    /// node overlaps this line. Never set for TS/JS.
+    pub const TAG: u8 = 1 << 5;
+    /// HTML-only: an HTML `text` node overlaps this line.
+    pub const TEXT: u8 = 1 << 6;
 }
 
 /// JSON-friendly projection of `RawOptionValue` for the plugin host.
@@ -765,7 +790,7 @@ pub fn run_plugins_with_sources(
             // `cofferdam-engine/src/lib.rs::pass1_one_file` (a
             // separate code path from this one — plugins.rs has its
             // own oxc/tree-sitter calls).
-            let (line_views, ast): (Vec<ManifestLineView>, Option<crate::ast_wire::AstWire>) =
+            let (lines, ast): (Option<ManifestLines>, Option<crate::ast_wire::AstWire>) =
                 match file.language {
                     // Unlike the engine path (which rejects a tree with
                     // `has_errors()` and emits `Warning.ParseError`),
@@ -775,101 +800,88 @@ pub fn run_plugins_with_sources(
                     // so a partial tree is more useful than none.
                     Language::Html => match cofferdam_html::parse_html(text) {
                         Ok(tree) => {
-                            let line_views = cofferdam_html::html_lines(text, &tree)
+                            let flags = cofferdam_html::html_lines(text, &tree)
                                 .into_iter()
-                                .map(|lv| ManifestLineView {
-                                    line_no: lv.line_no,
-                                    text: lv.text.to_string(),
-                                    is_comment: lv.is_comment,
-                                    is_doc_comment: false,
-                                    is_string_literal: false,
-                                    string_literal_ranges: Vec::new(),
-                                    is_jsx_text: false,
-                                    is_pragma: false,
-                                    is_tag: lv.is_tag,
-                                    is_text: lv.is_text,
-                                    line_start: lv.line_start,
+                                .map(|lv| {
+                                    let mut f = 0u8;
+                                    if lv.is_comment {
+                                        f |= line_flags::COMMENT;
+                                    }
+                                    if lv.is_tag {
+                                        f |= line_flags::TAG;
+                                    }
+                                    if lv.is_text {
+                                        f |= line_flags::TEXT;
+                                    }
+                                    f
                                 })
                                 .collect();
                             let ast = crate::html_wire::HtmlWireBuilder::new(&tree).build();
-                            (line_views, Some(ast))
+                            (
+                                Some(ManifestLines {
+                                    flags,
+                                    literal_ranges: Vec::new(),
+                                }),
+                                Some(ast),
+                            )
                         }
-                        Err(_) => (Vec::new(), None),
+                        Err(_) => (None, None),
                     },
                     Language::TypeScript => {
                         let allocator = Allocator::default();
                         let parsed = parse_into(&allocator, &file);
-                        let line_views = Lines::build(text, &parsed.program)
-                            .map(|lv| ManifestLineView {
-                                line_no: lv.line_no,
-                                text: lv.text.to_string(),
-                                is_comment: lv.is_comment,
-                                is_doc_comment: lv.is_doc_comment,
-                                is_string_literal: lv.is_string_literal,
-                                string_literal_ranges: lv.string_literal_ranges.clone(),
-                                is_jsx_text: lv.is_jsx_text,
-                                is_pragma: lv.is_pragma,
-                                is_tag: false,
-                                is_text: false,
-                                line_start: lv.line_start,
-                            })
-                            .collect();
+                        let mut flags = Vec::new();
+                        let mut literal_ranges = Vec::new();
+                        for lv in Lines::build(text, &parsed.program) {
+                            let mut f = 0u8;
+                            if lv.is_comment {
+                                f |= line_flags::COMMENT;
+                            }
+                            if lv.is_doc_comment {
+                                f |= line_flags::DOC_COMMENT;
+                            }
+                            if lv.is_string_literal {
+                                f |= line_flags::STRING_LITERAL;
+                            }
+                            if lv.is_jsx_text {
+                                f |= line_flags::JSX_TEXT;
+                            }
+                            if lv.is_pragma {
+                                f |= line_flags::PRAGMA;
+                            }
+                            for &(start, end) in &lv.string_literal_ranges {
+                                literal_ranges.extend_from_slice(&[lv.line_no - 1, start, end]);
+                            }
+                            flags.push(f);
+                        }
                         // Build the flat-array AST wire (cd-svf). One
                         // Visit pass per file; re-uses the parse
                         // already done for line views.
                         let ast = crate::ast_wire::WireBuilder::new(text).build(&parsed.program);
-                        (line_views, Some(ast))
+                        (
+                            Some(ManifestLines {
+                                flags,
+                                literal_ranges,
+                            }),
+                            Some(ast),
+                        )
                     }
                     // Astro has no oxc/tree-sitter adapter to build an
                     // AST from, but Pattern-A line-scan checks (CD-93)
                     // still need real line text/spans rather than
                     // silently iterating zero lines — `Lines::plain`
                     // gives unclassified (all flags false) line views.
-                    Language::Astro => {
-                        let line_views = cofferdam_core::Lines::plain(text)
-                            .map(|lv| ManifestLineView {
-                                line_no: lv.line_no,
-                                text: lv.text.to_string(),
-                                is_comment: false,
-                                is_doc_comment: false,
-                                is_string_literal: false,
-                                string_literal_ranges: Vec::new(),
-                                is_jsx_text: false,
-                                is_pragma: false,
-                                is_tag: false,
-                                is_text: false,
-                                line_start: lv.line_start,
-                            })
-                            .collect();
-                        (line_views, None)
-                    }
+                    Language::Astro => (Some(unclassified_lines(text)), None),
                     // Markdown/MDX (CD-68): same shape as Astro — no
                     // whole-file parse, but Pattern-A line-scan plugin
                     // checks (frontmatter length, heading structure,
                     // link density) still need real line text/spans.
-                    Language::Markdown => {
-                        let line_views = cofferdam_core::Lines::plain(text)
-                            .map(|lv| ManifestLineView {
-                                line_no: lv.line_no,
-                                text: lv.text.to_string(),
-                                is_comment: false,
-                                is_doc_comment: false,
-                                is_string_literal: false,
-                                string_literal_ranges: Vec::new(),
-                                is_jsx_text: false,
-                                is_pragma: false,
-                                is_tag: false,
-                                is_text: false,
-                                line_start: lv.line_start,
-                            })
-                            .collect();
-                        (line_views, None)
-                    }
+                    Language::Markdown => (Some(unclassified_lines(text)), None),
                     // Rust, unrecognised: no whole-file parse for
                     // plugins today (matches the engine's catch-all —
                     // no built-in check declares Rust for the plugin
                     // surface yet).
-                    Language::Rust => (Vec::new(), None),
+                    Language::Rust => (None, None),
                 };
             // Resolve layer membership for this file. `None` → JSON `null`.
             let layer: Option<String> = layers_cfg
@@ -878,7 +890,7 @@ pub fn run_plugins_with_sources(
                 kind: "file",
                 path: forward_slash(&absolutize(path)),
                 text,
-                line_views,
+                lines,
                 layer,
                 ast,
             };

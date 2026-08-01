@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Plugin-host wire bumped to `wireVersion 3`: the per-file record no longer ships `lineViews` (an array of per-line JSON objects carrying `lineNo`, `text`, `lineStart` and ten booleans). Line count, line text and `lineStart` byte offsets are pure functions of the `text` the record already carries, so the host now derives them itself; only the AST-derived classification flags — a `u8` bitmask per line, plus CD-100's string-literal ranges flattened to sparse `(lineIdx, start, end)` triples — still cross the wire. Measured on projektor (476 files, 2.57 MB of source, one scoped plugin) the stdin payload drops from 14.7 MB to 8.7 MB, −41%. The plugin-visible `LineView` API is unchanged — same fields, same `spanFor` semantics, byte-identical findings (CD-176).
+
 ### Fixed
 - `Engine::config_hash()` didn't account for whether a type oracle (ts-morph host) was installed, so the disk-persisted whole-run cache (`RunCache`, used by the one-shot `cofferdam check` CLI path) could replay a prior run's type-aware findings — or their absence — across a ts-morph install/uninstall that touched neither files nor config (CD-152). Fixed by folding `type_oracle.is_some()` into the shared `config_hash()` computation used by both `FindingsKey` and `RunKey`.
 

@@ -9,15 +9,20 @@ Tracked, opt-in hooks for cofferdam contributors. Mirror the cheapest
 git config core.hooksPath .githooks
 ```
 
-That's it. Git now runs `.githooks/pre-commit` and `.githooks/pre-push`
-on every commit / push.
+That's it. Git now runs `.githooks/pre-commit` on every commit.
 
 ## What runs
 
 | Hook | Checks | Why here |
 |---|---|---|
 | `pre-commit` | `cargo fmt --all -- --check` + `cofferdam gen-docs --check` + `node scripts/check-vitepress.mjs` (only when `docs/*.md` changed) | Sub-second on warm cache. The checks that drift most often. `gen-docs` is the most-forgotten step during releases — see the `cut-release` skill. The VitePress check catches the three classes of docs-build failure we've shipped and reverted: bare `<Capital>` tags, literal `{{` template interpolation, and relative links escaping `docs/`. |
-| `pre-push` | `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` | 10s+ on warm cache; too slow per-commit but cheap to run before propagating to origin. Catches the same red-CI cases as the `ci` workflow. |
+
+There is no `pre-push` hook. `cargo clippy --workspace --all-targets -- -D warnings`
+and `cargo test --workspace` are enforced by CI (the `test` job, required
+by the branch-protection ruleset on `main`) instead of locally — a local
+pre-push run duplicated the same check a contributor (or agent) had
+usually just run seconds earlier as part of their own verification, for
+no independent value CI doesn't already provide as the actual merge gate.
 
 ## Bypassing
 

@@ -151,6 +151,12 @@ impl Check for MissingTestFile {
         &META
     }
 
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&TYPE_ASSERTED_NAMES, |slot, path| {
+            slot.remove(&path_key(path));
+        });
+    }
+
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
         // Only test files contribute; every other file skips the walk
         // after two cheap string tests.

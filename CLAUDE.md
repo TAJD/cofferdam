@@ -27,7 +27,7 @@ Tracked hooks live in `.githooks/`. Mirror the cheapest `ci.yml` checks so drift
 git config core.hooksPath .githooks
 ```
 
-`pre-commit` runs `cargo fmt --check` + `cofferdam gen-docs --check` (sub-second on warm cache). `pre-push` runs `cargo clippy -D warnings` + `cargo test --workspace` (10s+ but only fires before publishing). See `.githooks/README.md` for details. Don't bypass with `--no-verify` — fix the underlying issue.
+`pre-commit` runs `cargo fmt --check` + `cofferdam gen-docs --check` (sub-second on warm cache). There is no `pre-push` hook — `cargo clippy -D warnings` and `cargo test --workspace` are enforced by CI instead, since a local pre-push run duplicated verification already done seconds earlier without adding independent value CI (the actual merge gate) doesn't already provide. See `.githooks/README.md` for details. Don't bypass `pre-commit` with `--no-verify` — fix the underlying issue.
 
 ## Cutting a release
 

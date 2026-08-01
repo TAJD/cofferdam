@@ -564,6 +564,46 @@ pub fn run_plugins(
 /// doesn't bake a `Warning.PluginTypeHostUnavailable` finding into
 /// `baseline.json` on every run — the built-in oracle produces no
 /// Issue at all on those paths (CD-81 review).
+/// CD-171: filter `sources` down to files that at least one loaded
+/// plugin check's `files` scope will match, so `run_plugins_with_sources`
+/// skips wire construction for files no check will ever look at.
+///
+/// Must fail OPEN: `plugin_metas` is empty whenever `query_plugin_metadata`
+/// hit a host failure (spawn error, timeout, malformed response), not just
+/// when no plugins declared scopes. Filtering against an empty scope list
+/// would reject every file and silently drop every plugin finding instead
+/// of surfacing the real failure through the normal host spawn — so an
+/// empty `plugin_metas` disables the pre-filter rather than filtering as
+/// if no check matched anything. Likewise, any check with `files: None`
+/// applies to every file, so its presence also disables the pre-filter.
+fn scope_prefilter_sources<'a>(
+    sources: &'a [(PathBuf, String)],
+    plugin_metas: &[PluginCheckMeta],
+    layers_cfg: Option<&cofferdam_core::graph::LayersConfig>,
+    layer_matchers: &[LayerMatcher],
+) -> std::borrow::Cow<'a, [(PathBuf, String)]> {
+    if plugin_metas.is_empty() || plugin_metas.iter().any(|m| m.files.is_none()) {
+        return std::borrow::Cow::Borrowed(sources);
+    }
+    let filtered: Vec<(PathBuf, String)> = sources
+        .iter()
+        .filter(|(path, _)| {
+            let fwd_path = forward_slash(&absolutize(path));
+            let layer = layers_cfg
+                .and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, path));
+            plugin_metas.iter().any(|m| {
+                crate::advise::plugin_file_matches_scope(
+                    &fwd_path,
+                    m.files.as_ref(),
+                    layer.as_deref(),
+                )
+            })
+        })
+        .cloned()
+        .collect();
+    std::borrow::Cow::Owned(filtered)
+}
+
 pub fn run_plugins_with_sources(
     plugin_paths: &[PathBuf],
     sources: &[(PathBuf, String)],
@@ -589,47 +629,26 @@ pub fn run_plugins_with_sources(
 
     // CD-171: skip wire construction (reparse + line-views + AST
     // serialization) for files no loaded plugin check's `files` scope
-    // will ever match. Measured as ~66% of plugin-host wall-clock on a
-    // real repo (projektor: 1886ms -> 782ms restricted to the plugin's
-    // actual scope) — narrowly-scoped project-internal plugins are the
-    // common case, so the JS host was discarding most of this expensive
-    // payload anyway, just after it was already built and shipped.
-    // Costs one extra `node` spawn in metadata mode (~50-150ms) to learn
-    // the scopes upfront; a net win whenever any check declares a
-    // `files` scope, a no-op (every file still sent) otherwise.
-    //
-    // Correctness: `plugin_file_matches_scope` mirrors the JS host's own
-    // `fileMatchesScope` (see that function's doc comment — the two are
-    // kept in sync by convention, same as the existing `advise --diff`
-    // use of this function). A file is sent whenever ANY loaded check's
-    // scope matches it, or when any check declares no scope at all
-    // (applies to every file) — so this can only skip files that every
-    // loaded check would also have rejected.
+    // will ever match — see `scope_prefilter_sources`'s doc comment for
+    // the fail-open contract. Measured as ~66% of plugin-host wall-clock
+    // on a real repo (projektor: 1886ms -> 782ms restricted to the
+    // plugin's actual scope) — narrowly-scoped project-internal plugins
+    // are the common case, so the JS host was discarding most of this
+    // expensive payload anyway, just after it was already built and
+    // shipped. Costs one extra `node` spawn in metadata mode
+    // (~50-150ms) to learn the scopes upfront; a net win whenever any
+    // check declares a `files` scope, a no-op (every file still sent)
+    // otherwise.
+    // `sources` (the full, unfiltered set) stays bound under its
+    // original name for `text_index` below — the "analyzed file set"
+    // that finalize reports are validated against must still cover
+    // every file the caller passed in, not just the subset actually
+    // streamed to the host. Only the streaming loop uses the filtered
+    // `streamed_sources`.
     let plugin_metas = query_plugin_metadata(plugin_paths, project_root);
-    let sources: std::borrow::Cow<'_, [(PathBuf, String)]> =
-        if plugin_metas.iter().any(|m| m.files.is_none()) {
-            std::borrow::Cow::Borrowed(sources)
-        } else {
-            let filtered: Vec<(PathBuf, String)> = sources
-                .iter()
-                .filter(|(path, _)| {
-                    let fwd_path = forward_slash(&absolutize(path));
-                    let layer = layers_cfg.and_then(|cfg| {
-                        layers::layer_for(&layer_matchers, &cfg.project_root, path)
-                    });
-                    plugin_metas.iter().any(|m| {
-                        crate::advise::plugin_file_matches_scope(
-                            &fwd_path,
-                            m.files.as_ref(),
-                            layer.as_deref(),
-                        )
-                    })
-                })
-                .cloned()
-                .collect();
-            std::borrow::Cow::Owned(filtered)
-        };
-    let sources: &[(PathBuf, String)] = &sources;
+    let streamed_sources =
+        scope_prefilter_sources(sources, &plugin_metas, layers_cfg, &layer_matchers);
+    let streamed_sources: &[(PathBuf, String)] = &streamed_sources;
 
     // Canonicalise to absolute paths before handing to the host. The
     // host's `resolvePath(cwd, plugin)` is a no-op when the second arg
@@ -703,7 +722,7 @@ pub fn run_plugins_with_sources(
     let mut write_error = write_record(&mut stdin, &header).err();
 
     if write_error.is_none() {
-        for (path, text) in sources {
+        for (path, text) in streamed_sources {
             let file = SourceFile::new(path.clone(), text.clone());
             // Per-language dispatch (CD-84): oxc only understands
             // TS/JS/JSX — feeding it an `.html` file would parse
@@ -1325,5 +1344,82 @@ fn synthetic_warning(check_id: &'static str, file: &Path, message: String) -> Is
         file: file_buf,
         message,
         related: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod scope_prefilter_tests {
+    use super::*;
+
+    fn meta_with_scope(files: Option<PluginFileScope>) -> PluginCheckMeta {
+        PluginCheckMeta {
+            path: "plugin".to_string(),
+            id: "Test.Check".to_string(),
+            category: "warning".to_string(),
+            base_priority: 5,
+            explanation: String::new(),
+            default_severity: "medium".to_string(),
+            body: None,
+            requires_types: false,
+            output_mode: false,
+            options: Vec::new(),
+            files,
+        }
+    }
+
+    fn scoped(pattern: &str) -> PluginCheckMeta {
+        meta_with_scope(Some(PluginFileScope {
+            extensions: Vec::new(),
+            layers: Vec::new(),
+            path_pattern: None,
+            path_patterns: vec![pattern.to_string()],
+            exclude_patterns: Vec::new(),
+        }))
+    }
+
+    fn sources() -> Vec<(PathBuf, String)> {
+        vec![
+            (PathBuf::from("src/included/in.ts"), "a".to_string()),
+            (PathBuf::from("src/excluded/out.ts"), "b".to_string()),
+        ]
+    }
+
+    /// CD-171: an empty `plugin_metas` (query failure — spawn error,
+    /// timeout, malformed response — NOT "no plugins configured", since
+    /// callers already early-return before reaching this function when
+    /// `plugin_paths` is empty) must disable the pre-filter rather than
+    /// reject every file. Filtering here would silently drop every
+    /// plugin finding on a transient host hiccup instead of surfacing
+    /// the real failure through the normal host spawn.
+    #[test]
+    fn empty_plugin_metas_fails_open() {
+        let sources = sources();
+        let filtered = scope_prefilter_sources(&sources, &[], None, &[]);
+        assert_eq!(
+            filtered.len(),
+            2,
+            "must send every file when metadata query failed"
+        );
+    }
+
+    #[test]
+    fn scoped_check_filters_non_matching_files() {
+        let sources = sources();
+        let metas = vec![scoped("src/included/**")];
+        let filtered = scope_prefilter_sources(&sources, &metas, None, &[]);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].0, PathBuf::from("src/included/in.ts"));
+    }
+
+    #[test]
+    fn any_unscoped_check_disables_filter() {
+        let sources = sources();
+        let metas = vec![scoped("src/included/**"), meta_with_scope(None)];
+        let filtered = scope_prefilter_sources(&sources, &metas, None, &[]);
+        assert_eq!(
+            filtered.len(),
+            2,
+            "an unscoped check applies to every file, so no file may be skipped"
+        );
     }
 }

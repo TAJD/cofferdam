@@ -49,7 +49,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use cofferdam_core::{Issue, Uri};
@@ -93,6 +93,10 @@ pub struct FindingsCache {
     entries: RwLock<HashMap<FindingsKey, Arc<Vec<Issue>>>>,
     hits: AtomicU64,
     misses: AtomicU64,
+    /// Set by [`Self::insert`], cleared by [`Self::mark_clean`]. A run
+    /// whose every lookup hit has nothing new to persist, so the caller
+    /// can skip a whole-file rewrite (CD-185).
+    dirty: AtomicBool,
 }
 
 impl FindingsCache {
@@ -131,6 +135,20 @@ impl FindingsCache {
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .insert(key, Arc::new(issues));
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// True when at least one entry was inserted since construction or
+    /// the last [`Self::mark_clean`]. The disk-cache loader marks the
+    /// cache clean after hydrating, so this answers "does the on-disk
+    /// file already contain everything we hold?".
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Relaxed)
+    }
+
+    /// Declare the current contents to match what's on disk.
+    pub fn mark_clean(&self) {
+        self.dirty.store(false, Ordering::Relaxed);
     }
 
     /// Drop every cached entry. Useful when the caller knows the
@@ -143,6 +161,7 @@ impl FindingsCache {
             .clear();
         self.hits.store(0, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     /// Hits since construction (or last `clear`).

@@ -1984,12 +1984,18 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // Persist disk cache after analyze (cd-9hp.4 cp4). Save failures
     // are non-fatal warnings — a corrupted save just means the next
     // run rebuilds from cold.
+    // A cache that hit on everything already matches the file on disk;
+    // rewriting it is pure cost (CD-185).
     if let Some(dir) = resolved_cache_dir.as_deref() {
-        if let Err(e) = cofferdam_engine::disk_cache::save_findings(dir, &findings_cache) {
-            eprintln!("warning: failed to save findings cache: {e}");
+        if findings_cache.is_dirty() {
+            if let Err(e) = cofferdam_engine::disk_cache::save_findings(dir, &findings_cache) {
+                eprintln!("warning: failed to save findings cache: {e}");
+            }
         }
-        if let Err(e) = cofferdam_engine::disk_cache::save_run(dir, &run_cache) {
-            eprintln!("warning: failed to save run cache: {e}");
+        if run_cache.is_dirty() {
+            if let Err(e) = cofferdam_engine::disk_cache::save_run(dir, &run_cache) {
+                eprintln!("warning: failed to save run cache: {e}");
+            }
         }
     }
 

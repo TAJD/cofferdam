@@ -64,6 +64,34 @@ export default {
 };
 "#;
 
+/// Same shape as `FOX_PLUGIN` (scoped, so the pre-filter engages) but
+/// appends one line to `host-spawns.txt` at module-evaluation time. The
+/// host `import()`s each plugin exactly once per process, so the line
+/// count is a direct count of plugin-host `node` spawns.
+const SPAWN_COUNTING_PLUGIN: &str = r#"
+import { appendFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+appendFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "host-spawns.txt"), "spawn\n");
+
+export default {
+  id: "Test.SpawnCounter",
+  category: "warning",
+  basePriority: 5,
+  defaultSeverity: "medium",
+  explanation: "cd-178 integration test plugin — counts plugin-host spawns",
+  requiresTypes: false,
+  options: {},
+  files: { pathPatterns: ["src/included/**"] },
+  run(file, ctx) {
+    ctx.report({
+      message: "COUNTERSAW " + file.path,
+      span: { start_byte: 0, end_byte: 1 },
+    });
+  },
+};
+"#;
+
 fn write_sources(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join("src/included")).expect("mkdir included");
     std::fs::create_dir_all(dir.join("src/excluded")).expect("mkdir excluded");
@@ -170,5 +198,54 @@ fn unscoped_check_disables_prefilter_for_every_loaded_plugin() {
         !fox_saw_out,
         "scoped plugin must never report out.ts even when the file is streamed to the host; \
          stdout={stdout}"
+    );
+}
+
+/// CD-178: the scope pre-filter must cost ZERO extra `node` processes.
+/// CD-171's first cut learned each check's `files` scope from a second
+/// spawn in metadata mode (~215ms on a real repo); the scopes now arrive
+/// as one extra round-trip on the single real host spawn. It's easy to
+/// "fix" this and still spawn twice, so guard the spawn count directly.
+#[test]
+fn scope_prefilter_costs_no_extra_host_spawn() {
+    if !node_present() {
+        return;
+    }
+    let _host = serialize_plugin_host();
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    write_sources(dir.path());
+    std::fs::create_dir_all(dir.path().join("plugin-counter")).expect("mkdir plugin");
+    std::fs::write(
+        dir.path().join("plugin-counter/index.mjs"),
+        SPAWN_COUNTING_PLUGIN,
+    )
+    .expect("write plugin");
+    std::fs::write(
+        dir.path().join("cofferdam.toml"),
+        "plugins = [\"./plugin-counter\"]\n",
+    )
+    .expect("write toml");
+
+    let out = Command::new(cofferdam_bin())
+        .args(["check", "--no-baseline"])
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn cofferdam");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Sanity: the plugin actually ran and the pre-filter actually filtered.
+    assert!(
+        stdout.contains("COUNTERSAW") && stdout.contains("in.ts"),
+        "plugin must have run against the in-scope file; stdout={stdout}\nstderr={stderr}"
+    );
+
+    let marker = std::fs::read_to_string(dir.path().join("host-spawns.txt"))
+        .expect("plugin must have been loaded at least once");
+    let spawns = marker.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(
+        spawns, 1,
+        "the scope pre-filter must reuse the single real host spawn, not add a \
+         metadata-mode one; observed {spawns} plugin-host spawn(s)\nstdout={stdout}\nstderr={stderr}"
     );
 }

@@ -476,10 +476,36 @@ check declaring `requiresTypes: true`.
 Stdout carries, streamed as each file is processed:
 
 ```json
+{"type":"scopes","checks":[{"id":"...","files":{...}}]}
 {"type":"report","checkId":"...","message":"...","file":"...","startByte":0,"endByte":0,"severity":"..."}
 {"type":"error","kind":"load_failed"|"run_threw"|"finalize_threw","plugin":"...","file":"...","message":"..."}
 {"type":"done","typeHostUnavailable":null}
 ```
+
+**Scope pre-filter round-trip (CD-171, CD-178).** `scopes` is emitted exactly
+once, immediately after the `header` record's `loadPlugins` step and before
+ts-morph is loaded. It carries each successfully loaded check's `files` scope
+(`null` for an unscoped check). The Rust writer blocks on it after writing the
+header and before writing the first `file` record, then streams only the files
+at least one check's scope can match — skipping the reparse, line-view build,
+and AST serialization for the rest. This is a genuinely bidirectional pause in
+an otherwise write-then-read protocol; it's deadlock-free because the stdout
+reader is already on its own thread, so the writer waits on a channel rather
+than on the pipe.
+
+It must **fail open**: if `scopes` never arrives (host died before emitting it,
+the wait exceeded the host timeout, the record was malformed), or arrives empty,
+or any check declares `files: null`, every file is streamed. Filtering against
+absent scope information would silently drop every plugin finding instead of
+surfacing the real failure through the normal host run. The unfiltered source
+set is also what `plugins.rs` keys `text_index` on, so `finalize` reports are
+still validated against every file the caller passed in, not just the streamed
+subset.
+
+CD-171's first cut learned the same scopes from a *second* `node` spawn in
+metadata mode; CD-178 replaced that with this round-trip, removing ~215ms per
+`cofferdam check` on a repo with plugins configured (measured on projektor:
+476 files, one scoped plugin, 1303ms -> 1088ms median).
 
 `typeHostUnavailable` (CD-81) is present on the `done` record only when at
 least one loaded check declared `requiresTypes: true`: `null` when ts-morph

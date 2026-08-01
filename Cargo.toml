@@ -90,6 +90,13 @@ proptest = "1"
 # (crates/cofferdam-engine/benches) so later changes can't silently
 # regress them.
 criterion = "0.5"
+# CD-169 — global allocator swap. The engine's rayon-parallel per-file
+# loop does heavy short-lived allocation (one Allocator/AST per file,
+# many small Vec<Issue>/String allocations per check); mimalloc's
+# thread-local free lists scale better under that pattern than the
+# system allocator, especially on Windows where the default allocator
+# is a known bottleneck under concurrent alloc/free churn.
+mimalloc = "0.1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

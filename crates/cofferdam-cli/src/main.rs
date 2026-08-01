@@ -23,6 +23,12 @@ use cofferdam_formatters::{
     TextFormatter, TextRenderOpts,
 };
 
+// CD-169: mimalloc's thread-local free lists scale better than the
+// system allocator under the engine's rayon-parallel per-file loop
+// (many short-lived per-file/per-check allocations across threads).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
     /// Human-readable text grouped by category (default).

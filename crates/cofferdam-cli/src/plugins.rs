@@ -357,8 +357,23 @@ pub struct PluginFileScope {
 struct ScopeEntry {
     /// `None` (JSON `null`) means "applies to every file", which
     /// disables the pre-filter entirely — see `scope_prefilter_sources`.
-    #[serde(default)]
+    /// CD-183: a malformed author-supplied shape (e.g. a string instead
+    /// of an object) is tolerated the same as `null` instead of failing
+    /// the whole record's deserialization — that used to stall the
+    /// scopes channel for the full host timeout.
+    #[serde(default, deserialize_with = "tolerant_file_scope")]
     files: Option<PluginFileScope>,
+}
+
+/// Deserializes `files` leniently: a well-formed object or `null` parses
+/// normally, anything else (e.g. a plugin author's `files: "src/**"`
+/// string) falls back to `None` instead of failing the enclosing record.
+fn tolerant_file_scope<'de, D>(deserializer: D) -> Result<Option<PluginFileScope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or(None))
 }
 
 /// One option entry returned by the plugin host's metadata mode.

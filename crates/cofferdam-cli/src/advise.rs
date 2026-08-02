@@ -406,8 +406,12 @@ fn build_advisory(
 ) -> FileAdvisory {
     // Must resolve against an absolutized path (matching `cfg.project_root`,
     // which is always absolute) — the raw discovery-walk path can carry a
-    // leading `./` (e.g. root `.` for a no-path scan), which breaks both
-    // `strip_prefix` and glob matching (CD-192).
+    // leading `./` (e.g. root `.` for a no-path scan), which breaks
+    // `strip_prefix` inside `layer_for` (CD-192). NB: `fwd_path` below is
+    // deliberately left non-absolutized for `pathPattern`/`excludePatterns`
+    // glob matching — those globs tolerate a leading `./` via a `**/`-prefix
+    // fallback, so it's a pre-existing (harmless, but not identical to the
+    // runtime host's absolute-path matching) divergence, not a live bug.
     let file_abs = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
     let layer = ctx
         .layers_cfg

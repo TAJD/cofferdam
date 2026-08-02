@@ -11,6 +11,7 @@ pub mod agents;
 pub mod ast_wire;
 pub mod baseline_diff;
 pub mod baseline_lint;
+pub mod context_digest;
 pub mod doctor;
 pub mod explain;
 pub mod gen_docs;

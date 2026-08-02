@@ -121,6 +121,94 @@ fn blast_radius_surfaces_affected_callers_in_top_three() {
     assert!(test_item.body.contains("test file"));
 }
 
+/// TEMPORARY diagnostic for the CI-only (Linux) failure of
+/// `blast_radius_surfaces_affected_callers_in_top_three` — reproduces
+/// the exact resolver call the engine makes and prints what it gets
+/// back, so the CI log tells us whether resolution itself is failing
+/// or something downstream (graph node identity) is. Remove before
+/// merging.
+#[test]
+fn diagnostic_resolve_lib() {
+    use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery};
+    use std::fmt::Write as _;
+
+    let mut log = String::new();
+
+    let sources = read_fixture_sources();
+    for (p, _) in &sources {
+        let _ = writeln!(log, "source: {p:?}");
+    }
+    let direct_caller = sources
+        .iter()
+        .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some("direct_caller.ts"))
+        .expect("direct_caller.ts present")
+        .0
+        .clone();
+    let lib = sources
+        .iter()
+        .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some("lib.ts"))
+        .expect("lib.ts present")
+        .0
+        .clone();
+    let _ = writeln!(log, "direct_caller = {direct_caller:?}");
+    let _ = writeln!(log, "lib = {lib:?}");
+
+    let opts = ResolveOptions {
+        extensions: vec![
+            ".ts".into(),
+            ".tsx".into(),
+            ".d.ts".into(),
+            ".mts".into(),
+            ".cts".into(),
+            ".js".into(),
+            ".jsx".into(),
+            ".mjs".into(),
+            ".cjs".into(),
+            ".json".into(),
+        ],
+        extension_alias: vec![
+            (
+                ".js".into(),
+                vec![".ts".into(), ".tsx".into(), ".js".into()],
+            ),
+            (".jsx".into(), vec![".tsx".into(), ".jsx".into()]),
+            (".mjs".into(), vec![".mts".into(), ".mjs".into()]),
+            (".cjs".into(), vec![".cts".into(), ".cjs".into()]),
+        ],
+        tsconfig: Some(TsconfigDiscovery::Auto),
+        ..ResolveOptions::default()
+    };
+    let resolver = Resolver::new(opts);
+    let result = resolver.resolve_file(&direct_caller, "./lib");
+    match &result {
+        Ok(res) => {
+            let _ = writeln!(
+                log,
+                "resolve_file(direct_caller, \"./lib\") = Ok({:?})",
+                res.full_path()
+            );
+        }
+        Err(e) => {
+            let _ = writeln!(log, "resolve_file(direct_caller, \"./lib\") = Err({e:?})");
+        }
+    }
+    let _ = writeln!(
+        log,
+        "lib == resolved full_path? {:?}",
+        result.ok().map(|r| r.full_path() == lib)
+    );
+
+    let engine = build_engine();
+    let changeset = changed_lib_changeset(&sources);
+    let out = engine.analyze_context(sources, &changeset);
+    let _ = writeln!(log, "total context items: {}", out.items.len());
+    for i in &out.items {
+        let _ = writeln!(log, "item: {} (score {})", i.title, i.score);
+    }
+
+    panic!("DIAGNOSTIC OUTPUT (not a real failure):\n{log}");
+}
+
 #[test]
 fn blast_radius_is_deterministic_across_ten_trials() {
     let sources = read_fixture_sources();

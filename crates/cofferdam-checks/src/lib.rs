@@ -6,6 +6,7 @@
 //! progressively as oxc and the project graph wire up.
 
 pub mod consistency;
+pub mod context;
 pub mod design;
 pub mod framework_paths;
 pub mod readability;
@@ -104,6 +105,14 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
     checks.extend(cofferdam_rust::all_rust_checks());
     checks.extend(cofferdam_html::all_html_checks());
     checks
+}
+
+/// Registry of Context-category providers for `cofferdam context`.
+/// Deliberately separate from `all_builtins()` so `cofferdam check`
+/// never constructs or runs them (spec criterion 4: check output is
+/// byte-for-byte unchanged by the context feature's existence).
+pub fn all_context_providers() -> Vec<Box<dyn Check>> {
+    Vec::new()
 }
 
 #[cfg(test)]

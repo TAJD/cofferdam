@@ -981,6 +981,42 @@ mod tests {
     }
 
     #[test]
+    fn variable_declaration_init_span_chained_declarators_and_type_annotation() {
+        // CD-190 follow-up: a chained declarator list gives each declarator
+        // its own init_span (not the whole statement's), and a type
+        // annotation on the binding doesn't leak into the initializer's span.
+        let text = "const a = 1, b: string = 'x';\n";
+        let wire = build_wire(text);
+
+        let vd_idx = wire
+            .nodes
+            .iter()
+            .position(|n| n.kind == "VariableDeclaration")
+            .expect("VariableDeclaration must be emitted") as i32;
+        let (_, decls) = var_decl_extras(&wire, vd_idx);
+        assert_eq!(decls.len(), 2, "one entry per declarator in the chain");
+
+        assert_eq!(decls[0].name.as_deref(), Some("a"));
+        let span_a = decls[0]
+            .init_span
+            .expect("init_span set for a's initializer");
+        assert_eq!(
+            &text[span_a.start_byte as usize..span_a.end_byte as usize],
+            "1"
+        );
+
+        assert_eq!(decls[1].name.as_deref(), Some("b"));
+        let span_b = decls[1]
+            .init_span
+            .expect("init_span set for b's initializer");
+        assert_eq!(
+            &text[span_b.start_byte as usize..span_b.end_byte as usize],
+            "'x'",
+            "the `: string` type annotation must not leak into the initializer's span"
+        );
+    }
+
+    #[test]
     fn jsx_namespaced_attribute_name() {
         let wire = build_wire_tsx(r#"const x = <svg xml:lang="en" />;"#);
         let el_idx = wire
@@ -1000,5 +1036,29 @@ mod tests {
         assert_eq!(value, Some("en"));
         assert!(!is_expression);
         assert!(!is_spread);
+    }
+
+    #[test]
+    fn variable_declaration_init_span_includes_wrapping_parens() {
+        // CD-190 follow-up: oxc's initializer span for a parenthesized
+        // expression includes the wrapping parens (it doesn't strip them
+        // the way it drops the node from the v0 wire kinds), so init_span
+        // must too — documented on `VariableDeclarationNode.declarations`
+        // in packages/check-sdk/src/ast.ts.
+        let text = "const x = (1 + 2);\n";
+        let wire = build_wire(text);
+        let vd_idx = wire
+            .nodes
+            .iter()
+            .position(|n| n.kind == "VariableDeclaration")
+            .unwrap() as i32;
+        let (_, decls) = var_decl_extras(&wire, vd_idx);
+        let span = decls[0]
+            .init_span
+            .expect("init_span set for a present initializer");
+        assert_eq!(
+            &text[span.start_byte as usize..span.end_byte as usize],
+            "(1 + 2)"
+        );
     }
 }

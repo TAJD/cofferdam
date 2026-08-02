@@ -145,9 +145,11 @@ export interface IdentifierReferenceNode extends AstNodeBase<"IdentifierReferenc
  *
  * `initSpan` (CD-190) is populated whenever an initializer is present at
  * all, regardless of whether `init` itself is populated — use it to
- * isolate just the initializer's own source text (e.g. via a line's
- * `spanFor`-style byte slice) without falling back to the whole
- * declaration's span.
+ * isolate just the initializer's own source text (e.g. via
+ * `SourceFile.textAt`) without falling back to the whole declaration's
+ * span. For `const x = (1 + 2)`, `initSpan` covers `(1 + 2)` including
+ * the wrapping parentheses — the wire builder uses the initializer
+ * expression's own span as oxc reports it, parens included.
  */
 export interface VariableDeclarationNode extends AstNodeBase<"VariableDeclaration"> {
   readonly declarationKind: "const" | "let" | "var";

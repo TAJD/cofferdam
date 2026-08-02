@@ -497,7 +497,7 @@ enum Cmd {
         /// Only staged changes (`git diff --cached`).
         #[arg(long, conflicts_with = "base")]
         staged: bool,
-        /// Diff against merge-base(<ref>, HEAD) — everything on this
+        /// Diff against merge-base(`<ref>`, HEAD) — everything on this
         /// branch, committed or not.
         #[arg(long, value_name = "GIT-REF")]
         base: Option<String>,

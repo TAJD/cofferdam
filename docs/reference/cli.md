@@ -438,7 +438,7 @@ Post-edit context digest (CD-156) — given the current diff, consult the knowle
 ###### **Options:**
 
 * `--staged` — Only staged changes (`git diff --cached`)
-* `--base <GIT-REF>` — Diff against merge-base(<ref>, HEAD) — everything on this branch, committed or not
+* `--base <GIT-REF>` — Diff against merge-base(`<ref>`, HEAD) — everything on this branch, committed or not
 * `--budget <BUDGET>` — Token budget for the digest (crude 4-chars/token estimate)
 
   Default value: `2000`

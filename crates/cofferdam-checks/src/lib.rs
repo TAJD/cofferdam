@@ -112,7 +112,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
 /// never constructs or runs them (spec criterion 4: check output is
 /// byte-for-byte unchanged by the context feature's existence).
 pub fn all_context_providers() -> Vec<Box<dyn Check>> {
-    Vec::new()
+    vec![Box::new(context::findings::Findings)]
 }
 
 #[cfg(test)]
@@ -155,6 +155,7 @@ mod tests {
     fn no_orphan_companion_files() {
         let registered: HashSet<String> = all_builtins()
             .iter()
+            .chain(all_context_providers().iter())
             .map(|c| format!("{}.md", c.meta().id))
             .collect();
 

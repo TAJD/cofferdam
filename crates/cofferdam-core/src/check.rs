@@ -56,6 +56,13 @@ pub enum Category {
     /// Likely bugs or footguns — `==` vs `===`, unhandled rejections,
     /// always-truthy conditions. Highest default severity.
     Warning,
+    /// Advisory context providers for `cofferdam context` (CD-156).
+    /// NOT a finding category: checks in this category are registered
+    /// via `all_context_providers()`, never `all_builtins()`, so
+    /// `cofferdam check` never runs them. Excluded from
+    /// `Category::ALL` deliberately — ALL enumerates the finding
+    /// categories that formatters and gen-docs group `Issue`s under.
+    Context,
 }
 
 impl Category {
@@ -371,6 +378,19 @@ pub trait Check: Send + Sync {
     fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         Vec::new()
     }
+
+    /// Emit advisory context items for a `cofferdam context` run.
+    /// Called after finalize Phase B — the corpus (including the
+    /// canonical graph slot) is complete. Only checks with
+    /// `meta().category == Category::Context` are invoked. Default:
+    /// nothing — ordinary checks never see this call.
+    fn context_items(
+        &self,
+        _changeset: &crate::changeset::ChangeSet,
+        _ctx: &mut FinalizeContext<'_>,
+    ) -> Vec<crate::context_item::ContextItem> {
+        Vec::new()
+    }
     /// Return the `TextEdit` that would fix `issue`, or `None` if this
     /// check does not support mechanical autofix for the given finding.
     ///
@@ -434,5 +454,19 @@ mod tests {
     #[test]
     fn output_mode_defaults_to_false() {
         assert!(!DummyCheck.output_mode());
+    }
+
+    #[test]
+    fn context_items_default_is_empty() {
+        let check = DummyCheck;
+        let corpus = CorpusIndex::default();
+        let mut fctx = FinalizeContext::new(&corpus);
+        let cs = crate::changeset::ChangeSet::default();
+        assert!(check.context_items(&cs, &mut fctx).is_empty());
+    }
+
+    #[test]
+    fn category_all_excludes_context() {
+        assert!(!Category::ALL.contains(&Category::Context));
     }
 }

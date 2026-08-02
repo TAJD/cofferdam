@@ -826,6 +826,7 @@ fn category_str(c: Category) -> &'static str {
         Category::Readability => "readability",
         Category::Refactor => "refactor",
         Category::Warning => "warning",
+        Category::Context => "context",
     }
 }
 

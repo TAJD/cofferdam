@@ -855,6 +855,7 @@ fn category_pascal(cat: Category) -> &'static str {
         Category::Readability => "Readability",
         Category::Refactor => "Refactor",
         Category::Warning => "Warning",
+        Category::Context => "Context",
     }
 }
 

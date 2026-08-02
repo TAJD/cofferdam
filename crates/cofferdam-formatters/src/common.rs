@@ -24,6 +24,10 @@ pub(crate) fn category_str(cat: Option<Category>) -> &'static str {
         Some(Category::Readability) => "readability",
         Some(Category::Refactor) => "refactor",
         Some(Category::Warning) => "warning",
+        // Context-category checks never emit `Issue`s (they run only under
+        // `cofferdam context`, never `cofferdam check`), so this arm is
+        // unreachable in practice — kept for exhaustiveness.
+        Some(Category::Context) => "context",
         None => "unknown",
     }
 }

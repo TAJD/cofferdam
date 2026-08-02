@@ -15,10 +15,19 @@ use cofferdam_engine::Engine;
 
 fn fixture_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR is crates/cofferdam-engine; the fixture lives
-    // at the workspace root's examples/blast_radius/.
+    // at the workspace root's examples/blast_radius/. `.parent()` twice
+    // (not `.join("..")` twice) — `std::path::absolute` only collapses
+    // `..` components on Windows (GetFullPathNameW); on POSIX it's a
+    // pure lexical CWD-prepend per the platform's own documented
+    // semantics, so a literal `..` survives into the path used to key
+    // graph nodes and never matches oxc_resolver's already-normalized
+    // resolved paths — 0 incoming edges, 0 blast-radius items. CI-only
+    // (Linux) failure root-caused via a temporary diagnostic test.
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("examples")
         .join("blast_radius")
 }
@@ -119,94 +128,6 @@ fn blast_radius_surfaces_affected_callers_in_top_three() {
         .find(|i| i.title.contains("lib.test.ts"))
         .expect("lib.test.ts item present");
     assert!(test_item.body.contains("test file"));
-}
-
-/// TEMPORARY diagnostic for the CI-only (Linux) failure of
-/// `blast_radius_surfaces_affected_callers_in_top_three` — reproduces
-/// the exact resolver call the engine makes and prints what it gets
-/// back, so the CI log tells us whether resolution itself is failing
-/// or something downstream (graph node identity) is. Remove before
-/// merging.
-#[test]
-fn diagnostic_resolve_lib() {
-    use oxc_resolver::{ResolveOptions, Resolver, TsconfigDiscovery};
-    use std::fmt::Write as _;
-
-    let mut log = String::new();
-
-    let sources = read_fixture_sources();
-    for (p, _) in &sources {
-        let _ = writeln!(log, "source: {p:?}");
-    }
-    let direct_caller = sources
-        .iter()
-        .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some("direct_caller.ts"))
-        .expect("direct_caller.ts present")
-        .0
-        .clone();
-    let lib = sources
-        .iter()
-        .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some("lib.ts"))
-        .expect("lib.ts present")
-        .0
-        .clone();
-    let _ = writeln!(log, "direct_caller = {direct_caller:?}");
-    let _ = writeln!(log, "lib = {lib:?}");
-
-    let opts = ResolveOptions {
-        extensions: vec![
-            ".ts".into(),
-            ".tsx".into(),
-            ".d.ts".into(),
-            ".mts".into(),
-            ".cts".into(),
-            ".js".into(),
-            ".jsx".into(),
-            ".mjs".into(),
-            ".cjs".into(),
-            ".json".into(),
-        ],
-        extension_alias: vec![
-            (
-                ".js".into(),
-                vec![".ts".into(), ".tsx".into(), ".js".into()],
-            ),
-            (".jsx".into(), vec![".tsx".into(), ".jsx".into()]),
-            (".mjs".into(), vec![".mts".into(), ".mjs".into()]),
-            (".cjs".into(), vec![".cts".into(), ".cjs".into()]),
-        ],
-        tsconfig: Some(TsconfigDiscovery::Auto),
-        ..ResolveOptions::default()
-    };
-    let resolver = Resolver::new(opts);
-    let result = resolver.resolve_file(&direct_caller, "./lib");
-    match &result {
-        Ok(res) => {
-            let _ = writeln!(
-                log,
-                "resolve_file(direct_caller, \"./lib\") = Ok({:?})",
-                res.full_path()
-            );
-        }
-        Err(e) => {
-            let _ = writeln!(log, "resolve_file(direct_caller, \"./lib\") = Err({e:?})");
-        }
-    }
-    let _ = writeln!(
-        log,
-        "lib == resolved full_path? {:?}",
-        result.ok().map(|r| r.full_path() == lib)
-    );
-
-    let engine = build_engine();
-    let changeset = changed_lib_changeset(&sources);
-    let out = engine.analyze_context(sources, &changeset);
-    let _ = writeln!(log, "total context items: {}", out.items.len());
-    for i in &out.items {
-        let _ = writeln!(log, "item: {} (score {})", i.title, i.score);
-    }
-
-    panic!("DIAGNOSTIC OUTPUT (not a real failure):\n{log}");
 }
 
 #[test]

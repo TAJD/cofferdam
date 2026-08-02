@@ -8,11 +8,13 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use cofferdam_checks::context::knowledge;
 use cofferdam_checks::{all_builtins, all_context_providers};
 use cofferdam_core::ChangeSet;
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
+use globset::Glob;
 
 use crate::context_digest::{assemble, render_json, render_markdown};
 
@@ -34,6 +36,7 @@ pub struct ContextArgs {
     pub no_config: bool,
     pub hidden: bool,
     pub no_ignore: bool,
+    pub lint_knowledge: bool,
 }
 
 pub fn run(args: ContextArgs) -> ExitCode {
@@ -49,7 +52,12 @@ pub fn run(args: ContextArgs) -> ExitCode {
         no_config,
         hidden,
         no_ignore,
+        lint_knowledge,
     } = args;
+
+    if lint_knowledge {
+        return run_lint_knowledge(hidden, no_ignore, config_path.as_deref(), no_config);
+    }
 
     let format = format.unwrap_or(if robot {
         ContextFormat::Json
@@ -166,6 +174,18 @@ pub fn run(args: ContextArgs) -> ExitCode {
     // `ALL_PRE_FILTER_FINDINGS` corpus slot, not through the CLI.
     let out = engine.analyze_context(sources, &changeset);
 
+    // `Context.Knowledge` load-time validation warnings (CD-150 policy:
+    // warn loudly, never silently match nothing) flow through as
+    // ordinary `Issue`s from `finalize()` — checks may not `eprintln!`
+    // directly. Surface them here since findings aren't otherwise
+    // consumed by this CLI yet (CD-159's `Context.Findings` provider
+    // will read them from the corpus, not from `out.issues`).
+    for issue in &out.issues {
+        if issue.check_id == "Context.Knowledge" {
+            eprintln!("warning: {}", issue.message);
+        }
+    }
+
     // 6-7. Assemble digest and render.
     let digest = assemble(out.items, budget);
     print_digest(&digest, &changeset, format, pretty);
@@ -200,5 +220,132 @@ fn resolve_and_load_config(
             eprintln!("error: {e}");
             Err(())
         }
+    }
+}
+
+/// `cofferdam context --lint-knowledge` (CD-162): validates every
+/// `.cofferdam/knowledge/*.md` file instead of producing a digest.
+/// Two failure classes, both printed as `error:` lines:
+///
+/// 1. Load-time validation failures (`knowledge::load_knowledge_dir`'s
+///    warnings) — unparseable frontmatter, a glob/predicate that
+///    failed to compile, a note left with no valid selector.
+/// 2. Orphan selectors — a `match.paths` glob or `match.layers` name
+///    that matches zero files in the currently discovered repo.
+///    Limited to `paths`/`layers`: a `match.predicate` selector can
+///    depend on import/export facts a plain file listing can't
+///    evaluate without false positives, so predicate orphan-checking
+///    is left to real-world usage (an always-false predicate simply
+///    never contributes a digest item) rather than approximated here.
+///
+/// Exits nonzero on any failure — the one deliberate carve-out from
+/// `cofferdam context`'s otherwise-always-exit-0 contract, so CI can
+/// gate on stale knowledge notes.
+fn run_lint_knowledge(
+    hidden: bool,
+    no_ignore: bool,
+    config_path: Option<&Path>,
+    no_config: bool,
+) -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = knowledge::find_project_root(&cwd);
+    let load = knowledge::load_knowledge_dir(&root);
+
+    let mut failed = false;
+    for w in &load.warnings {
+        eprintln!("error: {w}");
+        failed = true;
+    }
+
+    let (project_config, _resolved_path) = match resolve_and_load_config(config_path, no_config) {
+        Ok(pair) => pair,
+        Err(()) => return ExitCode::from(2),
+    };
+
+    let mut opts = DiscoveryOptions {
+        respect_ignore: !no_ignore,
+        include_hidden: hidden,
+        ..DiscoveryOptions::default()
+    };
+    if let Some(cfg) = project_config.as_ref() {
+        opts.extensions
+            .extend(cfg.engine_extra_extensions.iter().cloned());
+    }
+    // Discover from `root` (not `.`): `discover` returns paths relative
+    // to whatever root it's given, so walking from cwd would yield
+    // `./`-prefixed paths that `strip_prefix(&root)` below can't strip
+    // (root is absolute), silently defeating every selector match.
+    let files = match discover(std::slice::from_ref(&root), &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("cofferdam context --lint-knowledge: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let rel_files: Vec<String> = files
+        .iter()
+        .map(|f| {
+            f.strip_prefix(&root)
+                .unwrap_or(f)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+
+    let layers = project_config.as_ref().and_then(|c| c.layers.clone());
+
+    if load.notes.is_empty() {
+        println!(
+            "cofferdam context --lint-knowledge: no knowledge notes found under {}",
+            knowledge::knowledge_dir_path(&root).display()
+        );
+    }
+
+    for note in &load.notes {
+        for pattern in &note.raw_paths {
+            let Ok(glob) = Glob::new(pattern) else {
+                // Already reported as a load-time error above.
+                continue;
+            };
+            let matcher = glob.compile_matcher();
+            if !rel_files.iter().any(|f| matcher.is_match(f)) {
+                eprintln!(
+                    "error: {}: orphan selector — match.paths `{pattern}` matches 0 files in the current repo",
+                    note.source_path.display()
+                );
+                failed = true;
+            }
+        }
+        for layer_name in &note.raw_layers {
+            let matched = layers.as_ref().is_some_and(|lc| {
+                lc.layers.get(layer_name).is_some_and(|globs| {
+                    globs.iter().any(|pattern| {
+                        Glob::new(pattern)
+                            .map(|g| {
+                                let m = g.compile_matcher();
+                                rel_files.iter().any(|f| m.is_match(f))
+                            })
+                            .unwrap_or(false)
+                    })
+                })
+            });
+            if !matched {
+                eprintln!(
+                    "error: {}: orphan selector — match.layers `{layer_name}` matches 0 files in the current repo (or the layer isn't declared in cofferdam.invariants.toml)",
+                    note.source_path.display()
+                );
+                failed = true;
+            }
+        }
+    }
+
+    if failed {
+        ExitCode::from(1)
+    } else {
+        println!(
+            "cofferdam context --lint-knowledge: {} note(s) OK",
+            load.notes.len()
+        );
+        ExitCode::SUCCESS
     }
 }

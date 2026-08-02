@@ -1,0 +1,7 @@
+schema_version = "1.0"
+# Fixture for Context.Knowledge (CD-162): one layer ("billing") so the
+# `match.layers` selector in .cofferdam/knowledge/billing.md has
+# something to resolve against.
+
+[layers]
+billing = ["src/billing/**"]

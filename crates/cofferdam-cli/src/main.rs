@@ -525,6 +525,15 @@ enum Cmd {
         /// Disable .gitignore/.cofferdamignore filtering.
         #[arg(long)]
         no_ignore: bool,
+        /// Validate every `.cofferdam/knowledge/*.md` file instead of
+        /// producing a digest (CD-162): selectors must parse, and every
+        /// selector must match at least one file in the current repo
+        /// (catches broken globs and orphan selectors). The one
+        /// deliberate nonzero-exit carve-out for `cofferdam context` —
+        /// exits nonzero when validation fails, so CI can gate on it.
+        /// Ignores `paths`/`staged`/`base`/`budget`/`format`.
+        #[arg(long)]
+        lint_knowledge: bool,
     },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
@@ -1086,6 +1095,7 @@ fn run() -> ExitCode {
             no_config,
             hidden,
             no_ignore,
+            lint_knowledge,
         } => context_cmd::run(context_cmd::ContextArgs {
             paths,
             staged,
@@ -1101,6 +1111,7 @@ fn run() -> ExitCode {
             no_config,
             hidden,
             no_ignore,
+            lint_knowledge,
         }),
         Cmd::GenDocs { out, check } => gen_docs::run::<Cli>(out, check),
         Cmd::Lsp => run_lsp(),

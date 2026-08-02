@@ -35,6 +35,7 @@ Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64
 - `cofferdam agents`: print a version-pinned onboarding prompt for AI coding agents — pipe into AGENTS.md / CLAUDE.md.
 - `cofferdam advise <file>`: print the rules and constraints that apply to a file — run this BEFORE editing.
 - `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports `would_fire` / `would_clear` against the working tree.
+- `cofferdam context [paths...]`: post-edit context digest — delta-scoped findings, blast radius, precedent, and curated knowledge for the current diff.
 - `cofferdam baseline write`: snapshot accepted findings so future `check` runs ignore them.
 - `cofferdam baseline lint`: gate CI on findings not already in the baseline.
 - `cofferdam baseline diff`: compare two baselines (e.g. before/after a refactor).

@@ -443,6 +443,8 @@ fn build_llms_txt() -> String {
              — run this BEFORE editing.\n",
             "- `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports \
              `would_fire` / `would_clear` against the working tree.\n",
+            "- `cofferdam context [paths...]`: post-edit context digest — delta-scoped \
+             findings, blast radius, precedent, and curated knowledge for the current diff.\n",
             "- `cofferdam baseline write`: snapshot accepted findings so future `check` runs \
              ignore them.\n",
             "- `cofferdam baseline lint`: gate CI on findings not already in the baseline.\n",
@@ -855,6 +857,7 @@ fn category_pascal(cat: Category) -> &'static str {
         Category::Readability => "Readability",
         Category::Refactor => "Refactor",
         Category::Warning => "Warning",
+        Category::Context => "Context",
     }
 }
 

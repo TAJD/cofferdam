@@ -33,10 +33,10 @@ use std::collections::BTreeMap;
 use cofferdam_core::graph::{EXPORTS, IMPORTS};
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    validate_options, Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext,
-    InvariantsRuntime, InvariantsSpec, Issue, Language, LayersConfig, Location, OptionSpec,
-    Priority, RawOptionValue, Severity, SourceFile, Span, TypeOracle, ALL_PRE_FILTER_FINDINGS,
-    INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
+    validate_options, Allocator, Category, ChangeSet, Check, CheckContext, CheckOptions,
+    ContextItem, CorpusIndex, FinalizeContext, InvariantsRuntime, InvariantsSpec, Issue, Language,
+    LayersConfig, Location, OptionSpec, Priority, RawOptionValue, Severity, SourceFile, Span,
+    TypeOracle, ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 use cofferdam_graph::{apply_records, build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_html::{parse_html, HtmlParseTree};
@@ -55,6 +55,14 @@ pub enum EngineError {
         #[source]
         source: std::io::Error,
     },
+}
+
+/// Result of a `cofferdam context` engine run: the ordinary findings
+/// (feed Context.Findings summarization, CD-159) plus the advisory
+/// items from Context-category providers.
+pub struct ContextOutput {
+    pub issues: Vec<Issue>,
+    pub items: Vec<ContextItem>,
 }
 
 /// The analyzer's orchestrator. Owns the registered check set, their
@@ -478,7 +486,14 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        self.analyze_with_sources_full_impl(sources, parse_cache, findings_cache, run_cache, None)
+        self.analyze_with_sources_full_impl(
+            sources,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            None,
+            None,
+        )
     }
 
     /// Same as [`Engine::analyze_with_sources_full`] but records
@@ -499,9 +514,33 @@ impl Engine {
             findings_cache,
             run_cache,
             Some(timing),
+            None,
         )
     }
 
+    /// Run a `cofferdam context` analysis: the normal from-scratch
+    /// analyze (no caches in v1 — cache reuse is a follow-up), then
+    /// Context-category providers with `changeset` against the
+    /// completed corpus. `issues` are the ordinary findings; the
+    /// caller decides what to do with them (CD-159 summarizes).
+    pub fn analyze_context(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        changeset: &ChangeSet,
+    ) -> ContextOutput {
+        let mut items = Vec::new();
+        let (issues, _texts) = self.analyze_with_sources_full_impl(
+            sources,
+            None,
+            None,
+            None,
+            None,
+            Some((changeset, &mut items)),
+        );
+        ContextOutput { issues, items }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn analyze_with_sources_full_impl(
         &self,
         sources: Vec<(PathBuf, String)>,
@@ -509,6 +548,7 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
         timing: Option<&TimingCollector>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Absolutize once, up front, so every returned `texts` map is
         // keyed identically to every returned `Issue.file` regardless
@@ -536,36 +576,46 @@ impl Engine {
                 return ((*cached).clone(), texts);
             }
             let (issues, texts) =
-                self.run_cache_miss_path(sources, parse_cache, findings_cache, timing);
+                self.run_cache_miss_path(sources, parse_cache, findings_cache, timing, context);
             rc.insert(key, issues.clone());
             return (issues, texts);
         }
-        self.run_cache_miss_path(sources, parse_cache, findings_cache, timing)
+        self.run_cache_miss_path(sources, parse_cache, findings_cache, timing, context)
     }
 
     /// The full analyze path used on a `RunCache` miss. Factored out
     /// so the outermost-cache branch can call it without code
     /// duplication.
+    #[allow(clippy::too_many_arguments)]
     fn run_cache_miss_path(
         &self,
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
         timing: Option<&TimingCollector>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache, timing)
+        self.analyze_with_sources_caches_inner(
+            sources,
+            parse_cache,
+            findings_cache,
+            timing,
+            context,
+        )
     }
 
     /// Inner entry point — does the full per-file analysis through
     /// the parse + findings caches. Was the body of
     /// `analyze_with_sources_caches` before the cp3 outermost-layer
     /// `RunCache` was layered on top.
+    #[allow(clippy::too_many_arguments)]
     fn analyze_with_sources_caches_inner(
         &self,
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
         timing: Option<&TimingCollector>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Two execution modes, chosen by whether the caller supplied a
         // long-lived `ParseCache` (CD-30):
@@ -769,6 +819,7 @@ impl Engine {
             &suppressions_by_file,
             timing,
             GraphUpdate::Rebuild,
+            context,
         );
         (issues, texts)
     }
@@ -823,6 +874,7 @@ impl Engine {
     ///
     /// `graph_update` (CD-40 lever 3) selects how the `CANONICAL_GRAPH`
     /// corpus slot gets to its post-this-call state: see [`GraphUpdate`].
+    #[allow(clippy::too_many_arguments)]
     fn finalize_and_filter(
         &self,
         corpus: &CorpusIndex,
@@ -830,6 +882,7 @@ impl Engine {
         suppressions_by_file: &HashMap<PathBuf, suppress::Suppressions>,
         timing: Option<&TimingCollector>,
         graph_update: GraphUpdate<'_>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> Vec<Issue> {
         // Canonical-graph build (cd-9hp.9 cp3; incrementalised in
         // CD-40 lever 3). Translates the flat IMPORTS / EXPORTS slots
@@ -959,6 +1012,21 @@ impl Engine {
         }
         if let Some(t) = timing {
             t.record_phase("finalize_b", finalize_b_start.elapsed());
+        }
+
+        // Context-category providers (CD-158): run only for
+        // `Engine::analyze_context` callers, after finalize Phase B so
+        // the corpus (including CANONICAL_GRAPH) is fully populated.
+        // Ordinary `cofferdam check` runs pass `context: None` and never
+        // reach this branch.
+        if let Some((changeset, items_out)) = context {
+            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                if check.meta().category != Category::Context {
+                    continue;
+                }
+                let mut finalize_ctx = FinalizeContext::new(corpus).with_options(opts);
+                items_out.extend(check.context_items(changeset, &mut finalize_ctx));
+            }
         }
 
         // Per-glob `disabled` overrides (cd-97): `run()` call sites already
@@ -1549,6 +1617,7 @@ impl Engine {
             GraphUpdate::Incremental {
                 changed: &changed_paths,
             },
+            None,
         )
     }
 

@@ -3,7 +3,7 @@ use cofferdam_core::{
     Severity, SourceFile,
 };
 use cofferdam_engine::Engine;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct EchoProvider;
 
@@ -66,4 +66,88 @@ fn analyze_context_still_returns_normal_issues() {
     let out = engine.analyze_context(vec![(src, "if (a == b) { console.log(1) }\n".into())], &cs);
     assert!(!out.issues.is_empty());
     assert!(out.items.is_empty());
+}
+
+/// CD-159 acceptance: a fixture with a fresh finding (inside the diff's
+/// changed line range) and a legacy finding (outside it) produces two
+/// distinct `Context.Findings` signals — a fresh-findings summary and a
+/// per-file legacy-debt rollup — and both survive as `pinned: true`.
+#[test]
+fn context_findings_provider_distinguishes_fresh_from_legacy() {
+    use cofferdam_core::LineRange;
+
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("examples/context-findings");
+    // Match the engine's own `std::path::absolute` normalization (see
+    // `absolutize_sources`) so the `ChangeSet` keys line up with the
+    // `Issue.file` paths the engine stamps on findings.
+    let dirty = std::path::absolute(fixture_dir.join("dirty.ts")).expect("absolute path");
+    let clean = std::path::absolute(fixture_dir.join("clean.ts")).expect("absolute path");
+    let dirty_text = std::fs::read_to_string(&dirty).expect("read dirty.ts fixture");
+    let clean_text = std::fs::read_to_string(&clean).expect("read clean.ts fixture");
+
+    // Deliberately a narrow check set (not `all_builtins()`) so this test
+    // isn't coupled to unrelated builtins (e.g. `Design.OrphanExport`,
+    // `Design.MissingTestFile`) that would also fire on an isolated
+    // fixture pair and muddy the fresh/legacy counts being asserted.
+    let checks: Vec<Box<dyn Check>> = vec![
+        Box::new(cofferdam_checks::warning::TripleEquals),
+        Box::new(cofferdam_checks::warning::NoConsoleLog),
+        Box::new(cofferdam_checks::context::findings::Findings),
+    ];
+    let engine = Engine::new(checks);
+
+    // The diff only touched the `touched` function (lines 7-10); the
+    // `Warning.TripleEquals` finding on line 2 (inside `legacy`) is
+    // outside that range and so counts as legacy debt, while the
+    // `Warning.NoConsoleLog` finding on line 8 is fresh.
+    let cs = ChangeSet {
+        files: [dirty.clone(), clean.clone()].into_iter().collect(),
+        line_ranges: [(dirty.clone(), vec![LineRange { start: 7, end: 10 }])]
+            .into_iter()
+            .collect(),
+    };
+
+    let out = engine.analyze_context(vec![(dirty.clone(), dirty_text), (clean, clean_text)], &cs);
+
+    let findings_items: Vec<_> = out
+        .items
+        .iter()
+        .filter(|i| i.check_id == "Context.Findings")
+        .collect();
+    assert_eq!(
+        findings_items.len(),
+        2,
+        "expected one fresh summary + one legacy rollup, got: {findings_items:?}"
+    );
+    assert!(findings_items.iter().all(|i| i.pinned));
+
+    let fresh = findings_items
+        .iter()
+        .find(|i| i.title.contains("in changed lines"))
+        .expect("fresh-findings item");
+    assert!(
+        fresh.body.contains("Warning.NoConsoleLog"),
+        "{}",
+        fresh.body
+    );
+    assert!(
+        !fresh.body.contains("Warning.TripleEquals"),
+        "legacy finding must not appear in the fresh summary: {}",
+        fresh.body
+    );
+
+    let legacy = findings_items
+        .iter()
+        .find(|i| i.title.contains("Legacy debt"))
+        .expect("legacy-debt item");
+    assert!(legacy.title.contains("dirty.ts"), "{}", legacy.title);
+    assert!(
+        legacy.body.contains("1 baselined finding"),
+        "{}",
+        legacy.body
+    );
 }

@@ -3,7 +3,10 @@
 //! [`crate::all_context_providers`], never [`crate::all_builtins`].
 //! Providers land in CP3–CP7 (CD-159..CD-163).
 
+pub mod blast_radius;
+pub mod findings;
 pub mod knowledge;
+pub mod precedent;
 
 #[cfg(test)]
 mod tests {

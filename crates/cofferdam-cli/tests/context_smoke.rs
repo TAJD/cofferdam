@@ -1,10 +1,11 @@
 //! Integration tests for `cofferdam context`.
 //!
-//! No Context providers are registered yet (CD-157/CD-158 is the
-//! foundations checkpoint; providers land in CP3-CP7), so every digest
-//! is honestly empty — these tests assert the invocation contract
-//! (exit codes, changeset resolution modes, JSON shape) rather than
-//! any provider output.
+//! `Context.Findings` (CD-159) is the first registered provider; these
+//! tests assert the invocation contract (exit codes, changeset
+//! resolution modes, JSON shape) using fixtures deliberately chosen not
+//! to trip any builtin check (e.g. non-exported bindings, so
+//! `Design.OrphanExport` doesn't fire), so the assertions stay about the
+//! contract rather than any particular provider's output.
 
 use std::path::Path;
 use std::process::Command;
@@ -114,10 +115,13 @@ fn context_json_shape_is_stable() {
     let tmp = TempDir::new().expect("temp dir");
     let dir = tmp.path();
     init_repo(dir);
+    // Non-exported binding: nothing for a builtin check (e.g.
+    // `Design.OrphanExport`) to flag, so the digest stays empty and this
+    // test can assert on JSON shape alone, independent of provider output.
     let file = dir.join("a.ts");
-    std::fs::write(&file, "export const x = 1;\n").expect("write");
+    std::fs::write(&file, "const x = 1;\n").expect("write");
     commit_all(dir, "init");
-    std::fs::write(&file, "export const x = 2;\n").expect("edit");
+    std::fs::write(&file, "const x = 2;\n").expect("edit");
 
     let out = cofferdam_cmd(dir)
         .args(["context", "--format", "json"])

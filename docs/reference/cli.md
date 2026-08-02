@@ -452,6 +452,7 @@ Post-edit context digest (CD-156) — given the current diff, consult the knowle
 * `--no-config` — Disable config discovery
 * `--hidden` — Walk hidden files (default: skip)
 * `--no-ignore` — Disable .gitignore/.cofferdamignore filtering
+* `--lint-knowledge` — Validate every `.cofferdam/knowledge/*.md` file instead of producing a digest (CD-162): selectors must parse, and every selector must match at least one file in the current repo (catches broken globs and orphan selectors). The one deliberate nonzero-exit carve-out for `cofferdam context` — exits nonzero when validation fails, so CI can gate on it. Ignores `paths`/`staged`/`base`/`budget`/`format`
 
 
 

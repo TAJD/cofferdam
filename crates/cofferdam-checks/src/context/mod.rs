@@ -5,6 +5,7 @@
 
 pub mod blast_radius;
 pub mod findings;
+pub mod knowledge;
 pub mod precedent;
 
 #[cfg(test)]

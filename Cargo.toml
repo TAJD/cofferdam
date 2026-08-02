@@ -48,6 +48,10 @@ oxc_span = "0.128"
 oxc_syntax = "0.128"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# CD-162 — `.cofferdam/knowledge/*.md` frontmatter is YAML (spec:
+# wiki `cofferdam-context-product-criteria` section 3); no other
+# workspace consumer needs YAML today.
+serde_yaml = "0.9"
 sha2 = "0.11"
 # cd-9hp.4 cp1 — self-referential parse-cache entry (Allocator + parse
 # result borrowed from it). The pattern in `crates/cofferdam-core/src/parser.rs`

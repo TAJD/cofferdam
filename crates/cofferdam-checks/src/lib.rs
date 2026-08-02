@@ -158,6 +158,7 @@ mod tests {
     fn no_orphan_companion_files() {
         let registered: HashSet<String> = all_builtins()
             .iter()
+            .chain(all_context_providers().iter())
             .map(|c| format!("{}.md", c.meta().id))
             .collect();
 

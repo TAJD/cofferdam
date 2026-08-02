@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use cofferdam_core::span_from_bytes;
@@ -85,12 +85,13 @@ const META: CheckMeta = CheckMeta {
 /// fields. Only plain identifier property keys are counted;
 /// computed/private keys are ignored, so a shape with only such keys
 /// will never reach `MIN_FIELDS` (unless it has a non-empty `extends`).
-/// Comparison is pairwise, but only within an `extends` bucket and only
-/// across a field-count band that provably brackets every pair able to
-/// reach the threshold (CD-180), so the all-pairs blow-up is avoided;
-/// mutually-similar shapes are transitively clustered via union-find:
-/// three mutually-similar types produce one finding naming all three,
-/// not three separate pairwise findings.
+/// Comparison only ever happens within an `extends` bucket (CD-180), and
+/// within a bucket, candidate pairs are found via a field-name
+/// prefix-filtering similarity join (CD-193) rather than an all-pairs or
+/// sliding-window scan — see `cluster_bucket`/`prefix_len` for the
+/// derivation. Mutually-similar shapes are transitively clustered via
+/// union-find: three mutually-similar types produce one finding naming
+/// all three, not three separate pairwise findings.
 pub struct DuplicateTypeShape;
 
 impl Check for DuplicateTypeShape {
@@ -243,26 +244,137 @@ fn compute_duplicates(shapes: &[TypeShape]) -> Vec<Issue> {
         }
     }
 
-    for mut bucket in buckets.into_values() {
-        bucket.sort_by_key(|&i| shapes[i].fields.len());
-        for (pos, &i) in bucket.iter().enumerate() {
-            let count_i = shapes[i].fields.len();
-            for &j in &bucket[(pos + 1)..] {
-                // `bucket` is sorted ascending by field count, so every
-                // remaining `j` has `count_j >= count_i` and the counts
-                // only grow — once one leaves the band, so does the rest
-                // of the tail.
-                if count_band_excludes(count_i, shapes[j].fields.len()) {
-                    break;
-                }
-                if similarity(&shapes[i], &shapes[j]) >= SIMILARITY_THRESHOLD {
-                    dsu.union(i, j);
+    for bucket in buckets.into_values() {
+        cluster_bucket(shapes, &bucket, &mut dsu);
+    }
+
+    build_issues(shapes, &mut dsu)
+}
+
+/// Shortest field-name prefix (in the bucket's rarest-name-first global
+/// order) of a size-`count` shape that is provably guaranteed to share a
+/// name with any other shape it could reach `SIMILARITY_THRESHOLD`
+/// against — the "prefix-filtering principle" from set-similarity joins
+/// (Chaudhuri, Ganti & Kaushik 2006; the "All-Pairs"/PPJoin family of
+/// algorithms). `count_band_excludes`'s derivation gives
+/// `similarity >= T` implies `matching <= |name-overlap|` and
+/// `matching >= T * max(count_a, count_b) >= T * count` for either
+/// side (since `max(count_a, count_b) >= count`), so `alpha = ceil(T *
+/// count)` is the minimum name-overlap any valid partner must have with
+/// this shape. If none of a shape's `count - alpha + 1` rarest names
+/// appear anywhere in a candidate's own same-sized prefix, no shared
+/// name can exist among the (at most `alpha - 1`)-sized remainder on
+/// either side — pigeonhole — so the pair is provably below threshold
+/// and never needs `similarity()`. `EPSILON` is subtracted before
+/// `ceil` so a floating-point overshoot of an exact integer boundary
+/// (e.g. `0.8 * 5` landing a hair above `4.0`) can only ever round
+/// `alpha` down, which widens the prefix — the un-subtracted direction
+/// would shrink it and risk dropping a real match.
+fn prefix_len(count: usize) -> usize {
+    const EPSILON: f64 = 1e-9;
+    let alpha = (SIMILARITY_THRESHOLD * count as f64 - EPSILON)
+        .ceil()
+        .max(0.0) as usize;
+    (count.saturating_sub(alpha) + 1).min(count)
+}
+
+/// Clusters one `extends` bucket in place via `dsu.union`.
+///
+/// Zero-own-field shapes (only eligible via a shared, already-bucketed
+/// `extends` — CD-135) are mutually similar to every other zero-field
+/// shape in the bucket (the `union_len == 0` branch of `similarity`
+/// always returns 1.0 when both sides share `extends`) and to nothing
+/// else (`similarity` returns 0.0 whenever exactly one side has fields,
+/// since `matching` is then capped at 0) — so they're unioned directly
+/// instead of being run through the field-name index below, and dropped
+/// from it entirely (indexing an empty field set contributes nothing).
+///
+/// The remainder is a set-similarity join over field-name prefixes
+/// (`prefix_len`): an inverted index maps each name that appears in some
+/// shape's prefix to the shapes carrying it there, candidate pairs are
+/// every two shapes sharing an index entry, and each candidate is
+/// confirmed with the exact `similarity()` (with `count_band_excludes`
+/// as a cheap pre-check). This is what turns the giant single-bucket
+/// pairwise scan (CD-193 — most real interfaces have no `extends`, so
+/// nearly everything lands in one bucket) into work proportional to how
+/// often field names actually recur, rather than to the bucket size
+/// squared: a bucket dominated by singleton, mutually-dissimilar shapes
+/// spends most of its time on short posting lists instead of comparing
+/// every shape against every other.
+fn cluster_bucket(shapes: &[TypeShape], bucket: &[usize], dsu: &mut Dsu) {
+    let mut zero_field = bucket
+        .iter()
+        .copied()
+        .filter(|&i| shapes[i].fields.is_empty());
+    if let Some(first) = zero_field.next() {
+        for i in zero_field {
+            dsu.union(first, i);
+        }
+    }
+
+    let non_zero: Vec<usize> = bucket
+        .iter()
+        .copied()
+        .filter(|&i| !shapes[i].fields.is_empty())
+        .collect();
+    if non_zero.len() < 2 {
+        return;
+    }
+
+    // Global (bucket-local) rarest-first order over field names, so every
+    // shape's prefix is computed against the same ordering — required
+    // for the prefix-filtering guarantee above to hold.
+    let mut freq: HashMap<&str, u32> = HashMap::new();
+    for &i in &non_zero {
+        for name in shapes[i].fields.keys() {
+            *freq.entry(name.as_str()).or_insert(0) += 1;
+        }
+    }
+    let mut names_by_rarity: Vec<&str> = freq.keys().copied().collect();
+    names_by_rarity.sort_by(|a, b| freq[a].cmp(&freq[b]).then_with(|| a.cmp(b)));
+    let rank: HashMap<&str, usize> = names_by_rarity
+        .into_iter()
+        .enumerate()
+        .map(|(r, name)| (name, r))
+        .collect();
+
+    let mut prefixes: Vec<Vec<&str>> = Vec::with_capacity(non_zero.len());
+    let mut index: HashMap<&str, Vec<usize>> = HashMap::new();
+    for &i in &non_zero {
+        let mut sorted_names: Vec<&str> = shapes[i].fields.keys().map(String::as_str).collect();
+        sorted_names.sort_by_key(|name| rank[name]);
+        sorted_names.truncate(prefix_len(sorted_names.len()));
+        for &name in &sorted_names {
+            index.entry(name).or_default().push(i);
+        }
+        prefixes.push(sorted_names);
+    }
+
+    let mut candidates: HashSet<(usize, usize)> = HashSet::new();
+    for (pos, &i) in non_zero.iter().enumerate() {
+        for &name in &prefixes[pos] {
+            for &j in &index[name] {
+                if j != i {
+                    candidates.insert((i.min(j), i.max(j)));
                 }
             }
         }
     }
 
-    build_issues(shapes, &mut dsu)
+    for (i, j) in candidates {
+        let (count_i, count_j) = (shapes[i].fields.len(), shapes[j].fields.len());
+        let (small, large) = if count_i <= count_j {
+            (count_i, count_j)
+        } else {
+            (count_j, count_i)
+        };
+        if count_band_excludes(small, large) {
+            continue;
+        }
+        if similarity(&shapes[i], &shapes[j]) >= SIMILARITY_THRESHOLD {
+            dsu.union(i, j);
+        }
+    }
 }
 
 /// Group eligible indices into connected components and emit one `Issue`

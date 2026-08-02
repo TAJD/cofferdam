@@ -114,6 +114,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
 pub fn all_context_providers() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(context::blast_radius::BlastRadius),
+        Box::new(context::findings::Findings),
         Box::new(context::precedent::Precedent),
     ]
 }

@@ -112,7 +112,10 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
 /// never constructs or runs them (spec criterion 4: check output is
 /// byte-for-byte unchanged by the context feature's existence).
 pub fn all_context_providers() -> Vec<Box<dyn Check>> {
-    vec![Box::new(context::blast_radius::BlastRadius)]
+    vec![
+        Box::new(context::blast_radius::BlastRadius),
+        Box::new(context::precedent::Precedent),
+    ]
 }
 
 #[cfg(test)]

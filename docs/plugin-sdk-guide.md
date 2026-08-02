@@ -91,10 +91,11 @@ Key points:
   carries classification flags (`isComment`, `isDocComment`, `isStringLiteral`,
   `isJsxText`, `isPragma`) populated by the engine from the parsed comment list
   and an AST walk over string/template literals.
-- `ln.spanFor(start, end)` takes byte offsets **relative to the start of
-  `ln.text`** and returns a file-absolute `Span` for `ctx.report`. Do not
-  construct spans by hand — the helper handles CRLF stripping and line-start
-  accounting correctly.
+- `ln.spanFor(start, end)` takes UTF-16 code-unit indices into `ln.text`
+  (the same units `String.prototype.indexOf`/a regex match's `.index` use)
+  and returns a file-absolute `Span` for `ctx.report`. Do not construct
+  spans by hand — the helper handles CRLF stripping, line-start accounting,
+  and the UTF-16-to-UTF-8-byte conversion correctly.
 - Magic-comment filtering (`brand:ignore`) runs **inside** `run()` — you
   decide which lines to skip. Engine-level suppression (`// cofferdam-ignore:
   BrandCasing`) filters after `run()` returns. Both mechanisms coexist; see

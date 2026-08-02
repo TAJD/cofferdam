@@ -516,3 +516,70 @@ test("cd-85: outputMode defaults to false when omitted", async () => {
 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+test("CD-191: LineView.spanFor is byte-safe when non-ASCII precedes the match", async () => {
+  const { defineCheck, Category, runPlugin } = await import(
+    `file://${PKG.replace(/\\/g, "/")}/dist/index.js`
+  );
+
+  const trigger = /\bExamplco\b/;
+  const check = defineCheck({
+    id: "BrandCasing",
+    category: Category.Warning,
+    basePriority: 15,
+    explanation: "Brand must be EXAMPLCO.",
+    run(file, ctx) {
+      for (const ln of file.lines()) {
+        const m = trigger.exec(ln.text);
+        if (!m) continue;
+        ctx.report({
+          message: "brand",
+          span: ln.spanFor(m.index, m.index + m[0].length),
+        });
+      }
+    },
+  });
+
+  // 'café ' (é is 1 UTF-16 code unit but 2 UTF-8 bytes) and an emoji (a
+  // UTF-16 surrogate pair, 4 UTF-8 bytes) both precede the trigger on the
+  // same line — a naive `lineStart + charStart` would under-shift the
+  // byte offset by the number of extra UTF-8 bytes those characters add.
+  const lineText = "const y = 'café 🎉 Examplco';";
+  const text = lineText + "\n";
+  const lineViews = [
+    {
+      lineNo: 1,
+      text: lineText,
+      isComment: false,
+      isDocComment: false,
+      isStringLiteral: true,
+      isJsxText: false,
+      isPragma: false,
+      lineStart: 0,
+    },
+  ];
+
+  const reports = runPlugin(check, { path: "synthetic.ts", text, lineViews });
+  assert.equal(reports.length, 1);
+  const r = reports[0];
+
+  const textBuf = Buffer.from(text, "utf8");
+  assert.equal(textBuf.subarray(r.startByte, r.endByte).toString("utf8"), "Examplco");
+  // A plugin naively slicing the JS string by byte offsets would get the
+  // wrong substring here — that's the bug this test guards against.
+  assert.notEqual(text.slice(r.startByte, r.endByte), "Examplco");
+});
+
+test("CD-191: SourceFile.textAt is byte-safe when non-ASCII precedes the span", async () => {
+  const { buildSourceFile } = await import(`file://${PKG.replace(/\\/g, "/")}/dist/index.js`);
+
+  const text = "const x = 'café 🎉 Examplco';\n";
+  const startByte = Buffer.byteLength("const x = 'café 🎉 ");
+  const endByte = startByte + Buffer.byteLength("Examplco");
+
+  const file = buildSourceFile({ path: "synthetic.ts", text, lineViews: [], layer: null });
+  const span = { line: 1, column: 1, start_byte: startByte, end_byte: endByte };
+
+  assert.equal(file.textAt(span), "Examplco");
+  assert.notEqual(text.slice(span.start_byte, span.end_byte), "Examplco");
+});

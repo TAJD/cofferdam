@@ -12,13 +12,27 @@ import type { Span } from "./span.js";
 export interface SourceFile {
   /** Absolute path as cofferdam discovered it. Forward-slashed on every host. */
   readonly path: string;
-  /** Full text of the file, UTF-8. Byte offsets in spans index into this. */
+  /**
+   * Full text of the file, UTF-8. `Span.start_byte`/`end_byte` are UTF-8
+   * *byte* offsets, but this is a JS string, which is indexed in UTF-16
+   * code units — `text.slice(span.start_byte, span.end_byte)` silently
+   * returns the wrong substring whenever non-ASCII content precedes the
+   * span (CD-191). Use {@link SourceFile.textAt} instead of slicing
+   * `text` directly with a `Span`'s byte offsets.
+   */
   readonly text: string;
   /**
    * Layer name from `cofferdam.invariants.toml` `[layers]`.
    * `null` when the file is not a member of any declared layer.
    */
   readonly layer: string | null;
+
+  /**
+   * Return the source text covered by `span`, decoded correctly from its
+   * UTF-8 byte offsets — the byte-safe alternative to
+   * `text.slice(span.start_byte, span.end_byte)` (CD-191).
+   */
+  textAt(span: Span): string;
 
   /**
    * Iterate every line in the file with classification flags drawn

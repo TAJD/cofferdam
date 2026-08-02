@@ -654,9 +654,10 @@ fn scope_prefilter_sources<'a>(
     let filtered: Vec<(PathBuf, String)> = sources
         .iter()
         .filter(|(path, _)| {
-            let fwd_path = forward_slash(&absolutize(path));
+            let abs_path = absolutize(path);
+            let fwd_path = forward_slash(&abs_path);
             let layer = layers_cfg
-                .and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, path));
+                .and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, &abs_path));
             scopes.iter().any(|s| {
                 crate::advise::plugin_file_matches_scope(
                     &fwd_path,
@@ -899,11 +900,16 @@ pub fn run_plugins_with_sources(
                     Language::Rust => (None, None),
                 };
             // Resolve layer membership for this file. `None` → JSON `null`.
+            // Must use the absolutized path (matching `cfg.project_root`,
+            // which is always absolute) — the raw discovery-walk path can
+            // carry a leading `./` (e.g. root `.` for a no-path scan),
+            // which breaks both `strip_prefix` and glob matching (CD-192).
+            let abs_path = absolutize(path);
             let layer: Option<String> = layers_cfg
-                .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
+                .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, &abs_path));
             let record = ManifestFile {
                 kind: "file",
-                path: forward_slash(&absolutize(path)),
+                path: forward_slash(&abs_path),
                 text,
                 lines,
                 layer,
@@ -1489,6 +1495,48 @@ mod scope_prefilter_tests {
             filtered.len(),
             2,
             "an unscoped check applies to every file, so no file may be skipped"
+        );
+    }
+
+    fn scoped_layer(name: &str) -> ScopeEntry {
+        meta_with_scope(Some(PluginFileScope {
+            extensions: Vec::new(),
+            layers: vec![name.to_string()],
+            path_pattern: None,
+            path_patterns: Vec::new(),
+            exclude_patterns: Vec::new(),
+        }))
+    }
+
+    /// CD-192: a no-path-argument full-repo scan roots the discovery walk
+    /// at `.`, so the walked paths carry a leading `./` (or `.\` on
+    /// Windows) — e.g. `./src/web/foo.ts` rather than `src/web/foo.ts`.
+    /// `layer_for` resolves layers against an *absolute* `project_root`,
+    /// so it must be given an absolutized path too, or `strip_prefix`
+    /// silently fails and the leftover `./` breaks glob matching against
+    /// `[layers]` patterns — silently excluding every file from a
+    /// `files.layers`-scoped check.
+    #[test]
+    fn layers_scope_matches_dot_relative_walk_path() {
+        let project_root = std::env::current_dir().unwrap();
+        let sources = vec![(
+            PathBuf::from(".").join("src").join("web").join("foo.ts"),
+            "a".to_string(),
+        )];
+        let mut layers = std::collections::BTreeMap::new();
+        layers.insert("web".to_string(), vec!["src/web/**".to_string()]);
+        let cfg = cofferdam_core::graph::LayersConfig {
+            project_root,
+            layers,
+            allow: std::collections::BTreeMap::new(),
+        };
+        let matchers = layers::build_matchers(&cfg);
+        let metas = vec![scoped_layer("web")];
+        let filtered = scope_prefilter_sources(&sources, Some(&metas), Some(&cfg), &matchers);
+        assert_eq!(
+            filtered.len(),
+            1,
+            "a `./`-relative path under the `web` layer must still match a `files.layers: ['web']` scope"
         );
     }
 }

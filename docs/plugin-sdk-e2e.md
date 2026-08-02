@@ -155,7 +155,7 @@ export default defineCheck({
       ctx.report({
         message: `Brand name must be "${opts.brand}", not "${m[0]}".`,
         severity: Severity.Medium,
-        span: ln.spanFor(m.index, m.index + m[0].length), // byte offsets, not chars
+        span: ln.spanFor(m.index, m.index + m[0].length), // UTF-16 indices in, byte-offset Span out
       });
     }
   },
@@ -174,7 +174,7 @@ export default defineCheck({
 | `LineView.isStringLiteral`    | cd-81a.1    | Only flag inside `"…"` / `'…'` / `` `…` `` |
 | `LineView.isJsxText` (new)    | cd-81a.1?   | Flag JSX text content. See §6.            |
 | `LineView.isPragma`           | cd-81a.1    | Skip `// @ts-…`, `/** @jsx … */`.         |
-| `LineView.spanFor(s,e)`       | cd-81a.1    | Byte-offset span for `ctx.report`.        |
+| `LineView.spanFor(s,e)`       | cd-81a.1    | UTF-16 indices in, byte-offset `Span` out. |
 | `ctx.report({...})`           | cd-81a.6    | Issue emission — span must round-trip.    |
 | `opts` typing inference       | cd-81a.3    | `opts.brand: string`, `opts.allowedAliases: string[]` |
 | Plugin loader handshake       | cd-81a.7    | Loaded via `plugins = [...]` in toml.     |

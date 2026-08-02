@@ -4,6 +4,7 @@
 //! Providers land in CP3–CP7 (CD-159..CD-163).
 
 pub mod findings;
+pub mod precedent;
 
 #[cfg(test)]
 mod tests {

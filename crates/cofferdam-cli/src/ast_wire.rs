@@ -636,14 +636,19 @@ mod tests {
     /// shifted/truncated for a JSX element with multiple attributes on one
     /// line (e.g. `className` in `<button type="button" onClick={onClose}
     /// className={CANCEL_BTN}>` slicing to `"ame={CANCEL_BTN}>\n    "`
-    /// instead of its own text). Exhaustively re-verified end-to-end
-    /// against the real plugin host (single-line, multi-line-component,
-    /// CRLF, and self-closing variants) and could not reproduce — every
-    /// attribute's `span` slices back to exactly its own source text, both
-    /// here at the wire-builder level and through the actual NDJSON
-    /// pipeline `crates/cofferdam-cli/scripts/plugin-host.mjs` runs.
-    /// Kept as a permanent regression guard; see CD-191 for the
-    /// non-repro writeup.
+    /// instead of its own text). The wire-builder's `span` values
+    /// themselves are correct — this ASCII-only fixture proves that, and
+    /// still passes. The real bug is one layer up: a plugin naively
+    /// slicing `file.text` (a UTF-16-indexed JS string) with a `Span`'s
+    /// UTF-8 *byte* offsets gets the wrong substring whenever non-ASCII
+    /// content precedes the span (reproduced with a `café … 🎉` fixture
+    /// preceding the attributes). Fixed by adding a byte-safe
+    /// `SourceFile.textAt(span)` to the plugin host / SDK surface (and a
+    /// matching fix to `LineView.spanFor`'s own byte-vs-UTF16
+    /// conflation) rather than by changing anything here. See
+    /// `packages/check-sdk/tests/plugin-host.test.mjs` for the non-ASCII
+    /// regression tests. Kept as a permanent regression guard that the
+    /// wire-builder side stays correct.
     #[test]
     fn jsx_attribute_spans_are_independently_correct_on_one_line() {
         let text = "const x = <button type=\"button\" onClick={onClose} className={CANCEL_BTN}>hi</button>;\n";

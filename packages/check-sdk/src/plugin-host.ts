@@ -105,11 +105,17 @@ function buildLineView(native: NativeLineView): LineView {
     isTag: native.isTag,
     isText: native.isText,
     spanFor(charStart: number, charEnd: number): Span {
+      // charStart/charEnd are UTF-16 indices into `native.text`, but
+      // `native.lineStart` is a UTF-8 *byte* offset — must convert via
+      // Buffer.byteLength rather than adding them directly, or any
+      // non-ASCII content earlier on the line shifts the result (CD-191).
+      const startByte = native.lineStart + Buffer.byteLength(native.text.slice(0, charStart));
+      const endByte = native.lineStart + Buffer.byteLength(native.text.slice(0, charEnd));
       return {
         line: native.lineNo,
-        column: charStart + 1,
-        start_byte: native.lineStart + charStart,
-        end_byte: native.lineStart + charEnd,
+        column: startByte - native.lineStart + 1,
+        start_byte: startByte,
+        end_byte: endByte,
       };
     },
   };
@@ -335,10 +341,14 @@ export function buildAstView(wire: AstWireInput): AstView {
  */
 export function buildSourceFile(input: PluginRunInput) {
   const lineViews = input.lineViews.map(buildLineView);
+  const textBuf = Buffer.from(input.text, "utf8");
   return {
     path: input.path,
     text: input.text,
     layer: input.layer,
+    textAt(span: Span): string {
+      return textBuf.subarray(span.start_byte, span.end_byte).toString("utf8");
+    },
     lines(): IterableIterator<LineView> {
       let i = 0;
       const it: IterableIterator<LineView> = {

@@ -652,10 +652,19 @@ function pickEntry(pkg) {
 
 function buildSourceFile(file) {
   const lineViews = buildLineViews(file.text, file.lines ?? null);
+  const textBuf = Buffer.from(file.text, "utf8");
   return {
     path: file.path,
     text: file.text,
     layer: file.layer ?? null,
+    // CD-191: `text` is a JS (UTF-16) string but `span.start_byte`/
+    // `end_byte` are UTF-8 byte offsets — `text.slice(start_byte,
+    // end_byte)` silently returns the wrong substring once any non-ASCII
+    // content precedes the span. This slices the underlying UTF-8 bytes
+    // directly, so it's correct regardless of what precedes the span.
+    textAt(span) {
+      return textBuf.subarray(span.start_byte, span.end_byte).toString("utf8");
+    },
     lines() {
       let i = 0;
       const it = {
@@ -964,11 +973,18 @@ function buildLineView(lineNo, derived, flags, stringLiteralRanges) {
     isTag: (flags & LINE_FLAG_TAG) !== 0,
     isText: (flags & LINE_FLAG_TEXT) !== 0,
     spanFor(charStart, charEnd) {
+      // charStart/charEnd are UTF-16 indices into `derived.text` (e.g. a
+      // regex match's `.index`), but `lineStart` is a UTF-8 *byte*
+      // offset — must convert via Buffer.byteLength rather than adding
+      // them directly, or any non-ASCII content earlier on the line
+      // shifts the result (CD-191).
+      const startByte = lineStart + Buffer.byteLength(derived.text.slice(0, charStart));
+      const endByte = lineStart + Buffer.byteLength(derived.text.slice(0, charEnd));
       return {
         line: lineNo,
-        column: charStart + 1,
-        start_byte: lineStart + charStart,
-        end_byte: lineStart + charEnd,
+        column: startByte - lineStart + 1,
+        start_byte: startByte,
+        end_byte: endByte,
       };
     },
   };

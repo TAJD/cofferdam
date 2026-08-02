@@ -53,10 +53,13 @@ export interface LineView {
   readonly isText: boolean;
 
   /**
-   * Build a `Span` covering bytes `[charStart, charEnd)` *within this
-   * line*. `charStart`/`charEnd` are byte offsets relative to the start
-   * of `text` (after CRLF stripping). The returned span carries
-   * file-absolute `start_byte`/`end_byte` for direct use in
+   * Build a `Span` covering `[charStart, charEnd)` *within this line*.
+   * `charStart`/`charEnd` are UTF-16 code-unit indices into `text` — the
+   * same units `String.prototype.indexOf`/`.search()` and a regex
+   * match's `.index` use, so `ln.spanFor(m.index, m.index + m[0].length)`
+   * for a match against `line.text` is always correct. The returned
+   * span's `start_byte`/`end_byte`/`column` are converted to UTF-8 bytes
+   * internally (CD-191) and are file-absolute, for direct use in
    * `ctx.report({ span })`.
    *
    * Filed as cd-cgd to keep authoring concise — without this the check

@@ -1,8 +1,8 @@
 //! Cofferdam CLI entry point.
 
 use cofferdam_cli::{
-    advise, advise_diff, agents, baseline_diff, baseline_lint, doctor, explain, gen_docs, init,
-    plugins, type_host, watch,
+    advise, advise_diff, agents, baseline_diff, baseline_lint, context_cmd, doctor, explain,
+    gen_docs, init, plugins, type_host, watch,
 };
 
 use std::collections::BTreeMap;
@@ -45,6 +45,12 @@ enum AdviseOutputFormat {
     /// Human-readable text grouped by file (default).
     Text,
     /// Machine-readable JSON array. One object per file.
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ContextOutputFormat {
+    Text,
     Json,
 }
 
@@ -478,6 +484,48 @@ enum Cmd {
         #[arg(long)]
         analyze: bool,
     },
+    /// Post-edit context digest (CD-156) — given the current diff,
+    /// consult the knowledge graph and emit a token-budgeted advisory
+    /// digest: delta-scoped findings, blast radius, precedent, and
+    /// curated knowledge. Advisory only: always exits 0 (usage/git
+    /// errors excepted). Markdown by default; `--format json` for
+    /// harness integration.
+    Context {
+        /// Explicit changed files (no git required). Empty → resolve
+        /// from git (staged + unstaged vs HEAD by default).
+        paths: Vec<PathBuf>,
+        /// Only staged changes (`git diff --cached`).
+        #[arg(long, conflicts_with = "base")]
+        staged: bool,
+        /// Diff against merge-base(<ref>, HEAD) — everything on this
+        /// branch, committed or not.
+        #[arg(long, value_name = "GIT-REF")]
+        base: Option<String>,
+        /// Token budget for the digest (crude 4-chars/token estimate).
+        #[arg(long, default_value_t = 2000)]
+        budget: usize,
+        /// Output format: text (markdown, default) or json.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<ContextOutputFormat>,
+        /// Shorthand: JSON output unless --format given.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON.
+        #[arg(long)]
+        pretty: bool,
+        /// Path to cofferdam.toml (same semantics as `check`).
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config discovery.
+        #[arg(long)]
+        no_config: bool,
+        /// Walk hidden files (default: skip).
+        #[arg(long)]
+        hidden: bool,
+        /// Disable .gitignore/.cofferdamignore filtering.
+        #[arg(long)]
+        no_ignore: bool,
+    },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
     /// index, and the CLI reference page (from clap-markdown). Use
@@ -716,6 +764,25 @@ enum BaselineAction {
 }
 
 fn main() -> ExitCode {
+    // Windows MSVC debug builds default to a 1MiB main-thread stack.
+    // clap's derived `Cli::parse()` codegen for this many
+    // subcommands/args (14 top-level `Cmd` variants, several with 15+
+    // fields) sits close enough to that limit that adding one more
+    // variant (`Cmd::Context`, CD-158) tipped a debug build over into a
+    // stack overflow before a single line of application logic ran —
+    // reproduced with `cofferdam hello`, so it's a parse-time cost, not
+    // anything specific to the new command. Running on a thread with a
+    // larger stack sidesteps it; release builds and non-Windows hosts
+    // had headroom already, so this is a no-op there.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+        .expect("failed to spawn main worker thread")
+        .join()
+        .unwrap_or_else(|_| ExitCode::from(101))
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
@@ -1001,6 +1068,34 @@ fn main() -> ExitCode {
                 AdviseOutputFormat::Text => advise::AdviseFormat::Text,
                 AdviseOutputFormat::Json => advise::AdviseFormat::Json,
             },
+            pretty,
+            config_path: config,
+            no_config,
+            hidden,
+            no_ignore,
+        }),
+        Cmd::Context {
+            paths,
+            staged,
+            base,
+            budget,
+            format,
+            robot,
+            pretty,
+            config,
+            no_config,
+            hidden,
+            no_ignore,
+        } => context_cmd::run(context_cmd::ContextArgs {
+            paths,
+            staged,
+            base,
+            budget,
+            format: format.map(|f| match f {
+                ContextOutputFormat::Text => context_cmd::ContextFormat::Text,
+                ContextOutputFormat::Json => context_cmd::ContextFormat::Json,
+            }),
+            robot,
             pretty,
             config_path: config,
             no_config,

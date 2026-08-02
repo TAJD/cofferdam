@@ -27,6 +27,7 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam fix`↴](#cofferdam-fix)
 * [`cofferdam agents`↴](#cofferdam-agents)
 * [`cofferdam advise`↴](#cofferdam-advise)
+* [`cofferdam context`↴](#cofferdam-context)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
 * [`cofferdam lsp`↴](#cofferdam-lsp)
 * [`cofferdam typst`↴](#cofferdam-typst)
@@ -50,6 +51,7 @@ TypeScript code-quality analyzer
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
 * `agents` — Print the agent-onboarding prompt — a ready-to-paste markdown block that tells an AI coding agent how to use cofferdam in this repository. Covers `advise`, `advise --diff`, `check --robot`, and the `cofferdam.invariants.toml` contract. Output is version-pinned so AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a file to create or refresh an agent context fragment:
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
+* `context` — Post-edit context digest (CD-156) — given the current diff, consult the knowledge graph and emit a token-budgeted advisory digest: delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
 * `lsp` — Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
 * `typst` — Lint a Typst package directory for Typst Universe submission hygiene (manifest fields, license, naming, README, bundle hygiene). Standalone from the AST engine — the unit of analysis is the package directory (`typst.toml` + `LICENSE` + `README.md` + bundle), not individual `.typ` files
@@ -420,6 +422,36 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
   Possible values: `info`, `low`, `medium`, `high`, `critical`
 
 * `--analyze` — State-of-play mode (CD-65 A4): parse exactly one file (no project graph) and report `current`/`remaining` budget for the complexity/length checks (`Refactor.CyclomaticComplexity`, `Refactor.CognitiveComplexity`, `Readability.MaxFunctionLength`, `Readability.MaxLineLength`, `Design.MaxParameters`) alongside their configured `limit`. Requires exactly one path in `paths`. Always JSON; `--format`/`--diff` are ignored
+
+
+
+## `cofferdam context`
+
+Post-edit context digest (CD-156) — given the current diff, consult the knowledge graph and emit a token-budgeted advisory digest: delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
+
+**Usage:** `cofferdam context [OPTIONS] [PATHS]...`
+
+###### **Arguments:**
+
+* `<PATHS>` — Explicit changed files (no git required). Empty → resolve from git (staged + unstaged vs HEAD by default)
+
+###### **Options:**
+
+* `--staged` — Only staged changes (`git diff --cached`)
+* `--base <GIT-REF>` — Diff against merge-base(<ref>, HEAD) — everything on this branch, committed or not
+* `--budget <BUDGET>` — Token budget for the digest (crude 4-chars/token estimate)
+
+  Default value: `2000`
+* `--format <FORMAT>` — Output format: text (markdown, default) or json
+
+  Possible values: `text`, `json`
+
+* `--robot` — Shorthand: JSON output unless --format given
+* `--pretty` — Pretty-print JSON
+* `--config <PATH>` — Path to cofferdam.toml (same semantics as `check`)
+* `--no-config` — Disable config discovery
+* `--hidden` — Walk hidden files (default: skip)
+* `--no-ignore` — Disable .gitignore/.cofferdamignore filtering
 
 
 

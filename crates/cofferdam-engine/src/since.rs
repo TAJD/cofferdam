@@ -12,7 +12,8 @@
 //! release-mode binary size. For a single `diff --name-only` call we
 //! don't need a managed object database — `git` on PATH is enough.
 
-use std::collections::HashSet;
+use cofferdam_core::{ChangeSet, LineRange};
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -185,10 +186,156 @@ pub fn intersect(discovered: &[PathBuf], changed: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Parse `git diff -U0` output into a `ChangeSet`. Pure — testable
+/// without git. Only `+++ b/<path>` headers and `@@` hunk headers are
+/// read. Post-image ranges come from the `+<start>[,<count>]` field;
+/// `count == 0` (pure deletion hunk) contributes no range but the file
+/// still counts as changed. `+++ /dev/null` (deleted file) is skipped —
+/// callers use `--diff-filter=AMR` so it should not appear, but defend.
+pub fn parse_unified_changeset(raw: &str, repo_root: &Path) -> ChangeSet {
+    let mut files = std::collections::BTreeSet::new();
+    let mut line_ranges: BTreeMap<PathBuf, Vec<LineRange>> = BTreeMap::new();
+    let mut current: Option<PathBuf> = None;
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            if rest == "/dev/null" {
+                current = None;
+                continue;
+            }
+            let rel = rest.strip_prefix("b/").unwrap_or(rest);
+            let abs = repo_root.join(rel);
+            files.insert(abs.clone());
+            current = Some(abs);
+        } else if let (Some(path), Some(hunk)) = (&current, line.strip_prefix("@@ ")) {
+            // Format: -<old>[,<n>] +<start>[,<count>] @@ ...
+            let Some(plus) = hunk.split_whitespace().find_map(|t| t.strip_prefix('+')) else {
+                continue;
+            };
+            let (start_s, count_s) = match plus.split_once(',') {
+                Some((s, c)) => (s, c),
+                None => (plus, "1"),
+            };
+            let (Ok(start), Ok(count)) = (start_s.parse::<u32>(), count_s.parse::<u32>()) else {
+                continue;
+            };
+            if count == 0 {
+                continue;
+            }
+            line_ranges
+                .entry(path.clone())
+                .or_default()
+                .push(LineRange {
+                    start,
+                    end: start + count - 1,
+                });
+        }
+    }
+    ChangeSet { files, line_ranges }
+}
+
+/// Which delta a `cofferdam context` run resolves.
+#[derive(Debug, Clone)]
+pub enum DiffMode {
+    /// Staged + unstaged vs HEAD (`git diff HEAD`). The default.
+    WorkingTree,
+    /// Staged only (`git diff --cached`).
+    Staged,
+    /// Working tree vs `merge-base(<ref>, HEAD)` — "everything on
+    /// this branch", committed or not.
+    Base(String),
+}
+
+/// Resolve `mode` to a `ChangeSet` with one `git diff -U0` call.
+/// `-U0` gives exact post-image hunk ranges with zero context lines;
+/// `--diff-filter=AMR` matches the module-wide deletion rationale.
+pub fn diff_changeset(repo_root: &Path, mode: &DiffMode) -> Result<ChangeSet, SinceError> {
+    let mut args: Vec<String> = vec![
+        "diff".into(),
+        "-U0".into(),
+        "--no-color".into(),
+        "--diff-filter=AMR".into(),
+    ];
+    match mode {
+        DiffMode::WorkingTree => args.push("HEAD".into()),
+        DiffMode::Staged => args.push("--cached".into()),
+        DiffMode::Base(git_ref) => {
+            let mb = merge_base(repo_root, git_ref)?;
+            args.push(mb);
+        }
+    }
+    let out = Command::new("git")
+        .args(args.iter().map(String::as_str))
+        .current_dir(repo_root)
+        .output()
+        .map_err(SinceError::Spawn)?;
+    if !out.status.success() {
+        return Err(SinceError::DiffFailed {
+            code: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    }
+    let raw = std::str::from_utf8(&out.stdout).map_err(|_| SinceError::NonUtf8Output)?;
+    Ok(parse_unified_changeset(raw, repo_root))
+}
+
+/// `git merge-base <ref> HEAD`. Errors surface as `DiffFailed` — the
+/// caller's diagnostic ("bad ref") is the same class.
+fn merge_base(repo_root: &Path, git_ref: &str) -> Result<String, SinceError> {
+    let out = Command::new("git")
+        .args(["merge-base", git_ref, "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(SinceError::Spawn)?;
+    if !out.status.success() {
+        return Err(SinceError::DiffFailed {
+            code: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    }
+    let raw = std::str::from_utf8(&out.stdout).map_err(|_| SinceError::NonUtf8Output)?;
+    Ok(raw.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn parse_unified_changeset_extracts_files_and_post_image_ranges() {
+        let raw = "\
+diff --git a/src/a.ts b/src/a.ts
+index 111..222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -10,2 +10,3 @@ fn ctx
++line
++line
++line
+@@ -30,0 +34 @@
++single
+diff --git a/src/gone.ts b/src/gone.ts
+--- a/src/gone.ts
++++ b/src/gone.ts
+@@ -5,2 +4,0 @@
+-removed
+-removed
+";
+        let root = Path::new("/repo");
+        let cs = parse_unified_changeset(raw, root);
+        let a = root.join("src/a.ts");
+        let gone = root.join("src/gone.ts");
+        assert!(cs.files.contains(&a));
+        assert!(cs.files.contains(&gone)); // file changed even if hunk is pure deletion
+        assert_eq!(
+            cs.line_ranges[&a],
+            vec![
+                LineRange { start: 10, end: 12 },
+                LineRange { start: 34, end: 34 }
+            ]
+        );
+        assert!(!cs.line_ranges.contains_key(&gone)); // no post-image lines
+    }
 
     /// `intersect` returns only files present in both lists, comparing
     /// canonical paths.

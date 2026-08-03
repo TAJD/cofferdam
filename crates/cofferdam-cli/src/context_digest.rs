@@ -3,6 +3,7 @@
 //! rendering. Pure functions — all git/engine work happens upstream.
 
 use cofferdam_core::{ChangeSet, ContextItem};
+use std::collections::{BTreeMap, VecDeque};
 
 /// Crude but deterministic token estimate: ceil(chars / 4). Good
 /// enough for budget enforcement; NOT a tokenizer.
@@ -23,32 +24,68 @@ pub struct Digest {
     pub spent: usize,
 }
 
-/// Sort pinned-first, then score desc, then (check_id, title) for
-/// deterministic ties; greedily include until the budget is spent.
-/// Pinned items are always included (spec: findings + high-priority
-/// knowledge can never be evicted by filler) — `spent` tracks the
-/// resulting actual total so callers can tell how much a pinned
-/// overrun cost instead of only knowing `omitted`.
-pub fn assemble(mut items: Vec<ContextItem>, budget: usize) -> Digest {
-    items.sort_by(|a, b| {
-        b.pinned
-            .cmp(&a.pinned)
-            .then(b.score.cmp(&a.score))
-            .then(a.check_id.cmp(&b.check_id))
-            .then(a.title.cmp(&b.title))
-    });
+/// Pinned items (never evicted) are always included first, in score
+/// order. The remaining items are grouped by `check_id` — one
+/// provider's worth of items per group, each group sorted score desc
+/// — and included round-robin: every provider with items left gets one
+/// pick per round (highest-scoring group head first) before any
+/// provider gets a second pick. This is CD-211: a single high-volume
+/// provider (e.g. `Context.BlastRadius` on a busy shared file) can no
+/// longer consume the whole budget before a low-volume provider (e.g.
+/// `Context.Precedent`) gets a single item considered, which a flat
+/// global sort by score allowed.
+pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Digest {
+    let mut pinned_items = Vec::new();
+    let mut groups: BTreeMap<String, Vec<ContextItem>> = BTreeMap::new();
+    for item in items {
+        if item.pinned {
+            pinned_items.push(item);
+        } else {
+            groups.entry(item.check_id.clone()).or_default().push(item);
+        }
+    }
+    pinned_items.sort_by(|a, b| b.score.cmp(&a.score).then(a.title.cmp(&b.title)));
+    for group in groups.values_mut() {
+        group.sort_by(|a, b| b.score.cmp(&a.score).then(a.title.cmp(&b.title)));
+    }
+    let mut groups: Vec<VecDeque<ContextItem>> = groups.into_values().map(VecDeque::from).collect();
+
     let mut included = Vec::new();
     let mut spent = 0usize;
     let mut omitted = 0usize;
-    for item in items {
-        let cost = item_tokens(&item);
-        if item.pinned || spent + cost <= budget {
-            spent += cost;
-            included.push(item);
-        } else {
-            omitted += 1;
+
+    for item in pinned_items {
+        spent += item_tokens(&item);
+        included.push(item);
+    }
+
+    loop {
+        let mut turn_order: Vec<usize> = (0..groups.len())
+            .filter(|&i| !groups[i].is_empty())
+            .collect();
+        if turn_order.is_empty() {
+            break;
+        }
+        turn_order.sort_by(|&a, &b| {
+            groups[b][0]
+                .score
+                .cmp(&groups[a][0].score)
+                .then(groups[a][0].check_id.cmp(&groups[b][0].check_id))
+        });
+        for idx in turn_order {
+            let item = groups[idx]
+                .pop_front()
+                .expect("filtered to non-empty above");
+            let cost = item_tokens(&item);
+            if spent + cost <= budget {
+                spent += cost;
+                included.push(item);
+            } else {
+                omitted += 1;
+            }
         }
     }
+
     Digest {
         included,
         omitted,
@@ -177,6 +214,32 @@ mod tests {
             10,
         );
         assert!(d.included.iter().any(|i| i.check_id == "Context.P"));
+    }
+
+    /// CD-211: a provider with many items (e.g. `Context.BlastRadius`
+    /// on a busy shared file) must not consume the entire budget
+    /// before a low-volume provider (e.g. `Context.Precedent`) gets a
+    /// single item considered.
+    #[test]
+    fn assemble_round_robins_across_providers_so_a_high_volume_provider_cannot_starve_others() {
+        let mut items = vec![item("Context.Precedent", "p", 5, false, 100)];
+        for i in 0..10 {
+            items.push(item(
+                "Context.BlastRadius",
+                &format!("br{i}"),
+                90 - i,
+                false,
+                100,
+            ));
+        }
+        let per_item_cost = item_tokens(&items[0]).max(item_tokens(&items[1]));
+        let budget = per_item_cost * 3; // fits ~3 items total, out of 11 offered
+        let d = assemble(items, budget);
+        assert!(
+            d.included.iter().any(|i| i.check_id == "Context.Precedent"),
+            "Precedent must get a slot before BlastRadius consumes the whole budget; included={:?}",
+            d.included.iter().map(|i| &i.check_id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -177,6 +177,16 @@ pub struct OverrideCheck {
 /// real caller passes it) — so it's handled explicitly instead. A
 /// leading `./` on `file_key` (a relative, non-engine-promoted path) is
 /// always project-relative already and is returned as-is.
+///
+/// CD-232: the out-of-root rejection must recognise every absolute or
+/// escaping form `file_key` can take, not just a leading `/`. `path_key`
+/// (loader.rs) normalises backslashes to `/` before either key reaches
+/// here, so a bare `\`-prefix check is dead code on Windows — but a
+/// Windows key still carries a `c:/`-style drive prefix (lowercased by
+/// `path_key`), which a leading-`/`-only check lets straight through as
+/// "already relative", reopening the CD-226 sibling-directory leak on
+/// Windows. A `../`-prefixed key (escaping the root upward) needs the
+/// same rejection for the same reason.
 fn relativize<'a>(root_key: &str, file_key: &'a str) -> Option<&'a str> {
     if let Some(stripped) = file_key.strip_prefix("./") {
         return Some(stripped);
@@ -193,11 +203,24 @@ fn relativize<'a>(root_key: &str, file_key: &'a str) -> Option<&'a str> {
         Some(stripped)
     } else if file_key == root_trimmed {
         Some("")
-    } else if file_key.starts_with('/') || file_key.starts_with("\\") {
+    } else if is_absolute_or_escaping(file_key) {
         None
     } else {
         Some(file_key)
     }
+}
+
+/// True when `key` is unambiguously not root-relative: a leading `/`
+/// (POSIX absolute), a drive-letter prefix (`c:/...`, Windows
+/// absolute), or a `../` escape upward out of the root. See
+/// [`relativize`]'s CD-232 doc note — anything not covered by this
+/// check falls through to being treated as already project-relative.
+fn is_absolute_or_escaping(key: &str) -> bool {
+    if key.starts_with('/') || key == ".." || key.starts_with("../") {
+        return true;
+    }
+    let bytes = key.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 impl OverrideBlock {
@@ -358,6 +381,32 @@ mod tests {
             relativize("/repo/", "/repo/src/legacy/a.ts"),
             Some("src/legacy/a.ts")
         );
+    }
+
+    #[test]
+    fn relativize_rejects_a_windows_drive_letter_sibling_directory() {
+        // CD-232: `path_key` lowercases and forward-slashes Windows
+        // paths, so a sibling directory looks like
+        // "c:/repo-backup/..." — a leading-`/`-only out-of-root check
+        // let this through as "already relative", reopening the
+        // CD-226 leak on Windows. The genuinely-nested case must still
+        // strip correctly.
+        assert_eq!(
+            relativize("c:/repo", "c:/repo-backup/src/legacy/a.ts"),
+            None
+        );
+        assert_eq!(
+            relativize("c:/repo", "c:/repo/src/legacy/a.ts"),
+            Some("src/legacy/a.ts")
+        );
+    }
+
+    #[test]
+    fn relativize_rejects_a_relative_key_that_escapes_the_root_upward() {
+        // CD-232: a `../`-prefixed file_key steps out of root_key
+        // entirely and must not be treated as project-relative.
+        assert_eq!(relativize("/repo", "../sibling/legacy/a.ts"), None);
+        assert_eq!(relativize("/repo", ".."), None);
     }
 
     fn glob_for(pattern: &str) -> globset::GlobSet {

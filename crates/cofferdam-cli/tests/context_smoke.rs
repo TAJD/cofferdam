@@ -234,6 +234,101 @@ fn context_explicit_path_matches_git_diff_mode_on_blast_radius_fixture() {
     );
 }
 
+/// CD-164 criterion 4: `cofferdam check`'s output must be byte-for-byte
+/// unaffected by the existence of `Category::Context` providers —
+/// `Cmd::Check` only ever constructs the engine from `all_builtins()`
+/// (verified statically: `all_context_providers()` is referenced nowhere
+/// in `cofferdam-cli` outside `context_cmd.rs`). This test pins that
+/// behavior at the black-box level: two `cofferdam check` runs against a
+/// fixture that trips a real builtin finding must produce identical
+/// output, and that output must never mention a `Context.*` check id.
+#[test]
+fn check_output_is_byte_for_byte_unaffected_by_context_providers() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    // `==` trips `Warning.TripleEquals`, a real builtin finding.
+    std::fs::write(dir.join("a.ts"), "export function f(x: number) {\n  if (x == 1) {\n    return true;\n  }\n  return false;\n}\n").expect("write");
+    commit_all(dir, "init");
+
+    let run = || {
+        let out = cofferdam_cmd(dir)
+            .args(["check", "--format", "json"])
+            .output()
+            .expect("invoke cofferdam check");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(
+        first, second,
+        "cofferdam check output must be deterministic across repeated runs"
+    );
+    assert!(
+        first.contains("Warning.TripleEquals"),
+        "expected fixture to trip a real builtin finding; got: {first}"
+    );
+    assert!(
+        !first.contains("\"Context."),
+        "cofferdam check output must never contain a Context.* check id; got: {first}"
+    );
+}
+
+/// CD-164 criterion 2: `cofferdam context` digests must be deterministic
+/// (golden-snapshot precondition) — two runs over the same changeset
+/// produce byte-identical JSON, including item ordering.
+#[test]
+fn context_digest_is_deterministic_across_repeated_runs() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+
+    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join("blast_radius");
+    for entry in std::fs::read_dir(&fixture_dir).expect("read fixture dir") {
+        let entry = entry.expect("dir entry");
+        let name = entry.file_name();
+        std::fs::copy(entry.path(), dir.join(&name)).expect("copy fixture file");
+    }
+    commit_all(dir, "init");
+    std::fs::write(
+        dir.join("lib.ts"),
+        "export function doThing(x: number, y: number): string {\n  return String(x + y);\n}\n",
+    )
+    .expect("edit lib.ts");
+
+    let run = || {
+        let out = cofferdam_cmd(dir)
+            .args(["context", "--format", "json"])
+            .output()
+            .expect("invoke cofferdam context");
+        assert!(
+            out.status.success(),
+            "expected exit 0; stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(
+        first, second,
+        "cofferdam context digest must be byte-for-byte deterministic across repeated runs"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&first).expect("valid JSON");
+    assert!(
+        !parsed["items"].as_array().unwrap().is_empty(),
+        "expected a non-empty digest for this fixture"
+    );
+}
+
 #[test]
 fn context_bad_base_ref_is_a_usage_error() {
     let tmp = TempDir::new().expect("temp dir");

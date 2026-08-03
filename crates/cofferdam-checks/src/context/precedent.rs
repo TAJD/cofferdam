@@ -1110,6 +1110,132 @@ mod tests {
     }
 
     #[test]
+    fn a_changeset_capping_both_a_directory_and_a_kind_group_emits_both_halves() {
+        // CD-237: two independent changed files in one changeset, one
+        // whose own directory is oversized (capped_dirs) and one whose
+        // kind fallback group is oversized (capped_kinds) — the single
+        // build_capped_groups_item call at the end of context_items must
+        // see both maps populated in the same run, not just one.
+        let dir_shape_src =
+            "export interface RouteResponse { data: string; status: string; error: string; }";
+        let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_GROUP_SIZE)
+            .map(|i| {
+                (
+                    PathBuf::from(format!("/p/bigdir/sibling{i}.ts")),
+                    dir_shape_src,
+                )
+            })
+            .collect();
+        let dir_changed = PathBuf::from("/p/bigdir/changed.ts");
+        fixtures.push((
+            dir_changed.clone(),
+            "export async function GET(): Promise<void> {}",
+        ));
+
+        let kind_shape_src =
+            "export interface Config { host: string; port: string; scheme: string; }";
+        fixtures.extend((0..=MAX_GROUP_SIZE).map(|i| {
+            (
+                PathBuf::from(format!("/p/kindmod{i}/config.ts")),
+                kind_shape_src,
+            )
+        }));
+        let kind_changed = PathBuf::from("/p/kindmod_changed/config.ts");
+        fixtures.push((
+            kind_changed.clone(),
+            "export async function noop(): Promise<void> {}",
+        ));
+
+        let fixture_refs: Vec<(&Path, &str)> =
+            fixtures.iter().map(|(p, s)| (p.as_path(), *s)).collect();
+        let corpus = run_precedent(&fixture_refs);
+
+        let changeset = ChangeSet::from_files([dir_changed, kind_changed]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        let advisory = items
+            .iter()
+            .find(|i| i.title.contains("oversized group"))
+            .unwrap_or_else(|| panic!("expected a capped-groups advisory item; got {items:?}"));
+        assert!(
+            advisory.title.contains("2 oversized group"),
+            "expected the advisory to report both the capped directory and kind group; got {:?}",
+            advisory.title
+        );
+        let explain = advisory.explain.as_ref().expect("explain is set");
+        assert!(
+            explain.contains("directories ["),
+            "expected the capped directory in explain; got {explain:?}"
+        );
+        assert!(
+            explain.contains("kinds ["),
+            "expected the capped kind in explain; got {explain:?}"
+        );
+        assert!(advisory.body.contains("directory `"));
+        assert!(advisory.body.contains("kind `"));
+    }
+
+    #[test]
+    fn a_capped_directory_still_falls_through_to_a_cross_directory_kind_match() {
+        // CD-237: when a changed file's own directory is capped
+        // (MAX_GROUP_SIZE+ shaped siblings), `edges` is empty and
+        // `largest_cluster_excluding` returns None for that directory —
+        // control must still fall through to the CD-213 kind fallback
+        // and find a genuine cross-directory convention, alongside the
+        // capped-groups advisory for the directory itself.
+        let dir_shape_src =
+            "export interface RouteResponse { data: string; status: string; error: string; }";
+        let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_GROUP_SIZE)
+            .map(|i| {
+                (
+                    PathBuf::from(format!("/p/bigdir/sibling{i}.ts")),
+                    dir_shape_src,
+                )
+            })
+            .collect();
+        let changed = PathBuf::from("/p/bigdir/route.ts");
+        fixtures.push((
+            changed.clone(),
+            "export async function GET(): Promise<void> {}",
+        ));
+
+        // Two other `route.ts` files elsewhere sharing a distinct shape
+        // from `dir_shape_src`, so the kind fallback for "route.ts" has
+        // a genuine cluster once `changed` is excluded.
+        let kind_shape_src = "export interface RouteConfig { path: string; method: string; }";
+        let other_a = PathBuf::from("/p/other1/route.ts");
+        let other_b = PathBuf::from("/p/other2/route.ts");
+        fixtures.push((other_a.clone(), kind_shape_src));
+        fixtures.push((other_b.clone(), kind_shape_src));
+
+        let fixture_refs: Vec<(&Path, &str)> =
+            fixtures.iter().map(|(p, s)| (p.as_path(), *s)).collect();
+        let corpus = run_precedent(&fixture_refs);
+
+        let changeset = ChangeSet::from_files([changed]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(
+            items.len(),
+            2,
+            "expected the capped-groups advisory plus a genuine cross-directory kind item; got {items:?}"
+        );
+        assert!(
+            items.iter().any(|i| i.title.contains("oversized group")),
+            "missing the capped-directory advisory item; got {items:?}"
+        );
+        let kind_item = items
+            .iter()
+            .find(|i| i.title.starts_with("Cross-directory convention"))
+            .unwrap_or_else(|| {
+                panic!("expected a cross-directory kind item to survive the directory cap; got {items:?}")
+            });
+        assert!(kind_item.body.contains("other1") || kind_item.body.contains("other2"));
+    }
+
+    #[test]
     fn capped_groups_item_truncates_the_body_when_more_groups_than_the_listing_cap() {
         // CD-235: unit-tests build_capped_groups_item directly with
         // synthetic counts rather than driving thousands of fixture

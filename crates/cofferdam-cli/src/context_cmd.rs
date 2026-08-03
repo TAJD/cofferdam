@@ -505,3 +505,81 @@ fn run_lint_knowledge(
         ExitCode::SUCCESS
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CD-237: a wildcard `[[context_suppress]]` rule (`paths` omitted)
+    /// targeting `Context.Precedent` drops the CD-228/CD-235
+    /// capped-groups advisory item exactly like any other
+    /// `Context.Precedent` item, even though the item is `pinned: true`
+    /// and carries no `related` spans. Suppression runs before
+    /// `context_digest::assemble`'s pinning-aware eviction (see
+    /// `run_context` step 6-7 above), so pinning offers no protection
+    /// here — a user who blanket-suppresses `Context.Precedent` noise
+    /// silently loses the "matching was skipped for N oversized
+    /// group(s)" diagnostic along with it. Pinning current behaviour
+    /// rather than asserting it should be otherwise: the docs (CD-236)
+    /// call this out explicitly as the tradeoff of the wildcard form.
+    #[test]
+    fn wildcard_context_precedent_rule_drops_the_pinned_capped_groups_advisory_item() {
+        let advisory = ContextItem {
+            check_id: "Context.Precedent".to_string(),
+            title: "Precedent matching skipped for 1 oversized group(s)".to_string(),
+            body: "The following groups exceeded the cap...".to_string(),
+            score: 0,
+            pinned: true,
+            related: Vec::new(),
+            explain: Some("group(s) over 200 files: kinds [route.ts]".to_string()),
+        };
+        let rule = cfg::ContextSuppressRule {
+            check_id: "Context.Precedent".to_string(),
+            paths: Vec::new(),
+            globset: globset::GlobSetBuilder::new()
+                .build()
+                .expect("empty globset"),
+            root_key: "/repo".to_string(),
+            reason: None,
+        };
+
+        let survivors = suppress_items(vec![advisory], &[rule]);
+
+        assert!(
+            survivors.is_empty(),
+            "wildcard Context.Precedent rule must drop the pinned capped-groups advisory item; got {survivors:?}"
+        );
+    }
+
+    /// Sanity check for the above: a wildcard rule for a *different*
+    /// `check_id` must not touch the advisory item.
+    #[test]
+    fn wildcard_rule_for_a_different_check_id_leaves_the_capped_groups_advisory_item() {
+        let advisory = ContextItem {
+            check_id: "Context.Precedent".to_string(),
+            title: "Precedent matching skipped for 1 oversized group(s)".to_string(),
+            body: "The following groups exceeded the cap...".to_string(),
+            score: 0,
+            pinned: true,
+            related: Vec::new(),
+            explain: None,
+        };
+        let rule = cfg::ContextSuppressRule {
+            check_id: "Context.Findings".to_string(),
+            paths: Vec::new(),
+            globset: globset::GlobSetBuilder::new()
+                .build()
+                .expect("empty globset"),
+            root_key: "/repo".to_string(),
+            reason: None,
+        };
+
+        let survivors = suppress_items(vec![advisory], &[rule]);
+
+        assert_eq!(
+            survivors.len(),
+            1,
+            "unrelated check_id must not suppress; got {survivors:?}"
+        );
+    }
+}

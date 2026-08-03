@@ -2,8 +2,34 @@
 //! ranking, token budgeting with honest truncation, markdown + JSON
 //! rendering. Pure functions — all git/engine work happens upstream.
 
-use cofferdam_core::{ChangeSet, ContextItem};
+use cofferdam_core::{ChangeSet, ContextItem, RelatedSpan};
 use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
+
+/// CD-241: strip `root` off `path` and forward-slash the remainder so
+/// `--format json`'s `changed_files`/`related[].file` are portable
+/// across machines/OSes instead of leaking the developer's absolute
+/// home-directory path (and matching the "forward-slashed" claim in
+/// `docs/reference/context.md`). Falls back to the forward-slashed
+/// absolute path when `path` isn't under `root` (shouldn't happen in
+/// practice — every path here comes from discovery/`ChangeSet` rooted
+/// at `root` — but a lossy display beats a panic).
+fn relativize(path: &Path, root_fwd: &str) -> String {
+    let s = path.to_string_lossy().replace('\\', "/");
+    match s.strip_prefix(root_fwd) {
+        Some(rest) => rest.trim_start_matches('/').to_string(),
+        None => s,
+    }
+}
+
+/// Same idea as [`relativize`], but for `root` occurrences embedded in
+/// free text (`ContextItem::title`/`body`/`explain`) rather than a bare
+/// path — providers format the absolute path directly into prose
+/// (`format!("Sibling convention in {}", dir.display())`), so there's
+/// no single `Path` value to relativize structurally.
+fn relativize_text(text: &str, root_fwd: &str) -> String {
+    text.replace('\\', "/").replace(&format!("{root_fwd}/"), "")
+}
 
 /// Crude but deterministic token estimate: ceil(chars / 4). Good
 /// enough for budget enforcement; NOT a tokenizer.
@@ -135,18 +161,24 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Digest {
     }
 }
 
-pub fn render_markdown(digest: &Digest, changed_file_count: usize) -> String {
+pub fn render_markdown(digest: &Digest, changed_file_count: usize, root: &Path) -> String {
     if digest.included.is_empty() {
         return format!("No relevant context found for {changed_file_count} changed file(s).\n");
     }
+    let root_fwd = root.to_string_lossy().replace('\\', "/");
     let mut out = format!("# Cofferdam context — {changed_file_count} changed file(s)\n\n");
     for item in &digest.included {
         out.push_str(&format!(
             "## {}  `{}`\n\n{}\n\n",
-            item.title, item.check_id, item.body
+            relativize_text(&item.title, &root_fwd),
+            item.check_id,
+            relativize_text(&item.body, &root_fwd)
         ));
         if let Some(explain) = &item.explain {
-            out.push_str(&format!("_why: {explain}_\n\n"));
+            out.push_str(&format!(
+                "_why: {}_\n\n",
+                relativize_text(explain, &root_fwd)
+            ));
         }
     }
     if digest.omitted > 0 {
@@ -166,12 +198,12 @@ pub fn render_markdown(digest: &Digest, changed_file_count: usize) -> String {
     out
 }
 
-pub fn render_json(digest: &Digest, changeset: &ChangeSet, pretty: bool) -> String {
+pub fn render_json(digest: &Digest, changeset: &ChangeSet, root: &Path, pretty: bool) -> String {
     #[derive(serde::Serialize)]
-    struct Payload<'a> {
+    struct Payload {
         schema_version: u32,
-        changed_files: Vec<&'a std::path::Path>,
-        items: &'a [ContextItem],
+        changed_files: Vec<String>,
+        items: Vec<ContextItem>,
         omitted: usize,
         budget: usize,
         /// Actual tokens spent on `items` — additive field (CD-204) so
@@ -179,10 +211,38 @@ pub fn render_json(digest: &Digest, changeset: &ChangeSet, pretty: bool) -> Stri
         /// (`spent > budget`) without re-deriving it from `items`.
         spent: usize,
     }
+    let root_fwd = root.to_string_lossy().replace('\\', "/");
+    let items = digest
+        .included
+        .iter()
+        .map(|item| ContextItem {
+            check_id: item.check_id.clone(),
+            title: relativize_text(&item.title, &root_fwd),
+            body: relativize_text(&item.body, &root_fwd),
+            score: item.score,
+            pinned: item.pinned,
+            related: item
+                .related
+                .iter()
+                .map(|r| RelatedSpan {
+                    file: PathBuf::from(relativize(&r.file, &root_fwd)),
+                    location: r.location.clone(),
+                })
+                .collect(),
+            explain: item
+                .explain
+                .as_deref()
+                .map(|e| relativize_text(e, &root_fwd)),
+        })
+        .collect();
     let payload = Payload {
         schema_version: 1,
-        changed_files: changeset.files.iter().map(|p| p.as_path()).collect(),
-        items: &digest.included,
+        changed_files: changeset
+            .files
+            .iter()
+            .map(|p| relativize(p, &root_fwd))
+            .collect(),
+        items,
         omitted: digest.omitted,
         budget: digest.budget,
         spent: digest.spent,
@@ -401,7 +461,7 @@ mod tests {
     #[test]
     fn render_markdown_empty_digest_is_honest() {
         let d = assemble(vec![], 2000);
-        let md = render_markdown(&d, 3);
+        let md = render_markdown(&d, 3, Path::new("/repo"));
         assert!(md.contains("No relevant context found for 3 changed file(s)."));
     }
 
@@ -413,7 +473,7 @@ mod tests {
             budget: 2000,
             spent: 3,
         };
-        let md = render_markdown(&d, 1);
+        let md = render_markdown(&d, 1, Path::new("/repo"));
         assert!(md.contains("7 item(s) omitted"));
         assert!(md.contains("--budget"));
     }
@@ -428,14 +488,64 @@ mod tests {
             10,
         );
         assert!(d.spent > d.budget);
-        let md = render_markdown(&d, 1);
+        let md = render_markdown(&d, 1, Path::new("/repo"));
         assert!(md.contains("pinned item(s) exceeded the budget"));
     }
 
     #[test]
     fn render_markdown_no_overrun_disclosure_when_within_budget() {
         let d = assemble(vec![item("Context.A", "a", 9, false, 4)], 2000);
-        let md = render_markdown(&d, 1);
+        let md = render_markdown(&d, 1, Path::new("/repo"));
         assert!(!md.contains("exceeded the budget"));
+    }
+
+    #[test]
+    fn relativize_strips_the_root_and_forward_slashes_a_windows_style_absolute_path() {
+        let got = relativize(
+            Path::new("C:\\Users\\tajdi\\cofferdam\\crates/cofferdam-cli/src/type_host.rs"),
+            "C:/Users/tajdi/cofferdam",
+        );
+        assert_eq!(got, "crates/cofferdam-cli/src/type_host.rs");
+    }
+
+    #[test]
+    fn relativize_text_strips_every_occurrence_of_the_root_in_free_text() {
+        let got = relativize_text(
+            "Legacy debt: C:\\repo\\src\\a.ts imports C:\\repo\\src\\b.ts",
+            "C:/repo",
+        );
+        assert_eq!(got, "Legacy debt: src/a.ts imports src/b.ts");
+    }
+
+    #[test]
+    fn render_json_omits_the_absolute_root_from_changed_files_title_body_explain_and_related() {
+        let mut i = item("Context.A", "Legacy debt: C:\\repo\\src\\a.ts", 9, false, 0);
+        i.body = "See C:\\repo\\src\\a.ts for detail.".into();
+        i.explain = Some("finding in C:\\repo\\src\\a.ts".into());
+        i.related = vec![RelatedSpan {
+            file: PathBuf::from("C:\\repo\\src\\a.ts"),
+            location: cofferdam_core::Location::from_span(
+                Path::new("C:\\repo\\src\\a.ts"),
+                cofferdam_core::Span {
+                    start_byte: 0,
+                    end_byte: 0,
+                    line: 1,
+                    column: 1,
+                },
+            ),
+        }];
+        let d = assemble(vec![i], 2000);
+        let changeset = ChangeSet {
+            files: [PathBuf::from("C:\\repo\\src\\a.ts")].into_iter().collect(),
+            line_ranges: Default::default(),
+        };
+        let json = render_json(&d, &changeset, Path::new("C:\\repo"), false);
+        // `location.uri` is a separate, explicitly out-of-scope leak (CD-241
+        // note) — everything else this ticket targets must be relativized.
+        assert!(json.contains("\"changed_files\":[\"src/a.ts\"]"));
+        assert!(json.contains("\"title\":\"Legacy debt: src/a.ts\""));
+        assert!(json.contains("\"body\":\"See src/a.ts for detail.\""));
+        assert!(json.contains("\"explain\":\"finding in src/a.ts\""));
+        assert!(json.contains("\"file\":\"src/a.ts\""));
     }
 }

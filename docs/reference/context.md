@@ -130,7 +130,7 @@ Envelope:
 | Key | Type | Notes |
 |---|---|---|
 | `schema_version` | integer | `1` today. |
-| `changed_files` | string[] | The resolved `ChangeSet`'s file paths, forward-slashed. |
+| `changed_files` | string[] | The resolved `ChangeSet`'s file paths, relative to the project root and forward-slashed (CD-241) — path-bearing fields on `items` (`title`, `body`, `explain`, `related[].file`) are relativized the same way. |
 | `items` | array | The digest, after budget truncation — see `ContextItem` below. |
 | `omitted` | integer | Count of items that scored/ranked below the cutoff and were dropped for budget. `0` means nothing was cut. |
 | `budget` | integer | The `--budget` value used. |

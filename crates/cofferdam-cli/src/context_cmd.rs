@@ -122,22 +122,30 @@ pub fn run(args: ContextArgs) -> ExitCode {
         }
     };
 
-    // 2. Empty change → honest empty digest, exit 0.
-    if changeset.is_empty() {
-        print_digest(&assemble(Vec::new(), budget), &changeset, format, pretty);
-        return ExitCode::SUCCESS;
-    }
-
-    // 3. Discover the full project — cross-file graph needs every file.
     // Discover from the repo root (not cwd): `discover` returns paths
     // relative to whatever root it's given, and the ChangeSet above holds
     // absolute paths, so a cwd-relative discovery root would produce
     // discovered paths that never equal a changeset entry, silently
     // dropping every file from `out.items` (mirrors the fix already
-    // applied in `run_lint_knowledge` below).
+    // applied in `run_lint_knowledge` below). Also doubles as the root
+    // `render_markdown`/`render_json` relativize paths against (CD-241).
     let cwd = std::env::current_dir().expect("cwd");
     let root = knowledge::find_project_root(&cwd);
-    let roots: Vec<PathBuf> = vec![root];
+
+    // 2. Empty change → honest empty digest, exit 0.
+    if changeset.is_empty() {
+        print_digest(
+            &assemble(Vec::new(), budget),
+            &changeset,
+            &root,
+            format,
+            pretty,
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    // 3. Discover the full project — cross-file graph needs every file.
+    let roots: Vec<PathBuf> = vec![root.clone()];
     let (project_config, resolved_config_path) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
             Ok(pair) => pair,
@@ -213,7 +221,7 @@ pub fn run(args: ContextArgs) -> ExitCode {
         .unwrap_or(&[]);
     let items = suppress_items(out.items, rules);
     let digest = assemble(items, budget);
-    print_digest(&digest, &changeset, format, pretty);
+    print_digest(&digest, &changeset, &root, format, pretty);
     ExitCode::SUCCESS
 }
 
@@ -251,12 +259,13 @@ fn suppress_items(items: Vec<ContextItem>, rules: &[cfg::ContextSuppressRule]) -
 fn print_digest(
     digest: &crate::context_digest::Digest,
     changeset: &ChangeSet,
+    root: &Path,
     format: ContextFormat,
     pretty: bool,
 ) {
     match format {
-        ContextFormat::Text => print!("{}", render_markdown(digest, changeset.files.len())),
-        ContextFormat::Json => println!("{}", render_json(digest, changeset, pretty)),
+        ContextFormat::Text => print!("{}", render_markdown(digest, changeset.files.len(), root)),
+        ContextFormat::Json => println!("{}", render_json(digest, changeset, root, pretty)),
     }
 }
 

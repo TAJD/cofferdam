@@ -83,6 +83,7 @@ cofferdam context --robot --pretty
 | `--hidden` | Walk hidden files/directories. |
 | `--no-ignore` | Disable `.gitignore`/`.cofferdamignore` filtering. |
 | `--lint-knowledge` | Validate every `.cofferdam/knowledge/*.md` note instead of producing a digest — see below. Ignores `paths`/`staged`/`base`/`budget`/`format`. |
+| `--lint-context-suppress` | Validate every `[[context_suppress]]` rule instead of producing a digest — see below. Ignores `paths`/`staged`/`base`/`budget`/`format`. |
 
 ## Text output
 
@@ -170,6 +171,70 @@ broken note.
 
 ```bash
 cofferdam context --lint-knowledge
+```
+
+## `[[context_suppress]]` — suppressing noisy digest items
+
+A `[[context_suppress]]` block in `cofferdam.toml` (CD-212) drops
+matching items from the digest before it's assembled, for the case
+where a provider is technically correct but not useful for this
+project — a `Context.Precedent` convention that's actually deliberate
+divergence, a `Context.Knowledge` note that's gone stale but hasn't
+been deleted yet.
+
+```toml
+[[context_suppress]]
+check_id = "Context.Precedent"
+paths = ["src/legacy/**"]
+reason = "src/legacy intentionally predates the current convention"
+
+[[context_suppress]]
+check_id = "Context.Findings"
+```
+
+| Key | Type | Effect |
+|---|---|---|
+| `check_id` | string, required | The provider id to suppress items from — `Context.Findings`, `Context.BlastRadius`, `Context.Precedent`, `Context.Knowledge`, or `Context.Annotations`. |
+| `paths` | string[], optional | Glob(s), matched the same way as [`[[overrides]]`](/overrides) — project-root-relative, forward-slash, `**` crosses directory separators. An item is suppressed when *any* of its `related` spans' files match *any* glob here. |
+| `reason` | string, optional | Free text, surfaced in `--lint-context-suppress` diagnostics; has no effect on matching. |
+
+**Omitting `paths` suppresses every item the `check_id` emits, related
+or not** (CD-227) — this is the *only* way to suppress an item that
+has no `related` span at all, such as `Context.Findings`'s
+"N pre-existing finding(s) outside the diff" summary or
+`Context.Precedent`'s "matching skipped for N oversized group(s)"
+advisory (CD-228/CD-235). Both are relatedless by design (they don't
+point at one specific file), so a `paths`-scoped rule can never match
+them — the second example in the block above turns off
+`Context.Findings` entirely, including that summary item.
+
+**This is the opposite of `[[overrides]]`'s convention for the same
+shape.** An `[[overrides]]` block with `paths` omitted compiles to an
+empty globset and matches **nothing** — the block does nothing. A
+`[[context_suppress]]` block with `paths` omitted matches
+**everything** the `check_id` emits. Same TOML shape (`paths` absent),
+opposite meaning — don't carry an intuition from one config surface to
+the other.
+
+### `--lint-context-suppress` mode
+
+`cofferdam context --lint-context-suppress` validates every
+`[[context_suppress]]` rule instead of producing a digest:
+
+- **Unknown `check_id`** (a typo, e.g. `Context.Percedent`) always
+  fails, for both path-scoped and wildcard rules (CD-233) — validated
+  against the real provider set, no hardcoded id list.
+- **Stale `paths` glob** — a path-scoped rule whose globs match zero
+  files in the current repo almost certainly targeted files that have
+  since moved, been renamed, or been deleted. A wildcard rule (`paths`
+  omitted) is exempt from this specific check, since "matches 0 files"
+  is meaningless for a rule that isn't matching by path in the first
+  place.
+
+Same nonzero-exit carve-out as `--lint-knowledge`.
+
+```bash
+cofferdam context --lint-context-suppress
 ```
 
 ## Why a separate command (vs. `check` / `advise`)

@@ -69,7 +69,14 @@ pub fn run(args: ContextArgs) -> ExitCode {
     let changeset = if !paths.is_empty() {
         let mut abs = BTreeSet::new();
         for p in &paths {
-            match std::fs::canonicalize(p) {
+            if !p.exists() {
+                eprintln!(
+                    "cofferdam context: cannot resolve {}: No such file or directory",
+                    p.display()
+                );
+                return ExitCode::from(1);
+            }
+            match std::path::absolute(p) {
                 Ok(c) => {
                     abs.insert(c);
                 }
@@ -117,7 +124,15 @@ pub fn run(args: ContextArgs) -> ExitCode {
     }
 
     // 3. Discover the full project — cross-file graph needs every file.
-    let roots: Vec<PathBuf> = vec![PathBuf::from(".")];
+    // Discover from the repo root (not cwd): `discover` returns paths
+    // relative to whatever root it's given, and the ChangeSet above holds
+    // absolute paths, so a cwd-relative discovery root would produce
+    // discovered paths that never equal a changeset entry, silently
+    // dropping every file from `out.items` (mirrors the fix already
+    // applied in `run_lint_knowledge` below).
+    let cwd = std::env::current_dir().expect("cwd");
+    let root = knowledge::find_project_root(&cwd);
+    let roots: Vec<PathBuf> = vec![root];
     let (project_config, resolved_config_path) =
         match resolve_and_load_config(config_path.as_deref(), no_config) {
             Ok(pair) => pair,

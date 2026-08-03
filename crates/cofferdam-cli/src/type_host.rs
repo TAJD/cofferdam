@@ -19,7 +19,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -864,6 +864,18 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
 /// regressing unnoticed.
 pub struct WorkerTypeOracle {
     workers: Vec<Mutex<Worker>>,
+    /// CD-271: parallel to `workers` — `false` once a worker's mutex has
+    /// been observed poisoned. A panic while a `Worker`'s mutex is held
+    /// can leave a half-written request on stdin or an unread response
+    /// line on stdout, so reading through the poison risks desyncing the
+    /// NDJSON stream (the failure CD-261 guards against); retiring the
+    /// worker from round-robin rotation is safer than reusing it. Without
+    /// this, `next_worker`'s blind `fetch_add % len` keeps routing 1/N of
+    /// all subsequent queries to the poisoned worker for the rest of the
+    /// run, and every one of those silently returns `None` — the same
+    /// "no resolvable type" outcome as a query that legitimately found
+    /// nothing, so the lost coverage was previously invisible.
+    alive: Vec<AtomicBool>,
     tsconfig_path: String,
     next_id: AtomicU64,
     next_worker: AtomicUsize,
@@ -874,11 +886,36 @@ impl WorkerTypeOracle {
         format!("ta-{}", self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Pick the next worker round-robin. Panics only if the pool is
-    /// empty, which [`build_type_oracle`] never constructs.
-    fn next_worker(&self) -> &Mutex<Worker> {
-        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        &self.workers[idx]
+    /// Pick the next worker round-robin, skipping any worker already
+    /// marked dead (CD-271). Scans at most one full lap of the pool; if
+    /// every worker is dead, falls back to the raw round-robin index —
+    /// the same "no coverage" outcome as today, just without spinning.
+    /// Panics only if the pool is empty, which [`build_type_oracle`]
+    /// never constructs.
+    fn next_worker(&self) -> (usize, &Mutex<Worker>) {
+        let len = self.workers.len();
+        for _ in 0..len {
+            let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % len;
+            if self.alive[idx].load(Ordering::Relaxed) {
+                return (idx, &self.workers[idx]);
+            }
+        }
+        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % len;
+        (idx, &self.workers[idx])
+    }
+
+    /// Retire a worker from rotation after its mutex was found poisoned.
+    /// Logs once per worker (the `swap` guards against re-logging on
+    /// every subsequent query that happens to land on an already-dead
+    /// index) so a run that lost a share of its type coverage says so,
+    /// per the CD-271 finding — the prior behaviour was fully silent.
+    fn mark_dead(&self, idx: usize) {
+        if self.alive[idx].swap(false, Ordering::Relaxed) {
+            eprintln!(
+                "cofferdam: type-host worker {idx} poisoned by a prior panic — retiring it \
+                 from the pool; type-aware findings from its share of the run may be reduced"
+            );
+        }
     }
 }
 
@@ -892,7 +929,14 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
+        let (idx, worker_mutex) = self.next_worker();
+        let mut worker = match worker_mutex.lock() {
+            Ok(w) => w,
+            Err(_) => {
+                self.mark_dead(idx);
+                return None;
+            }
+        };
         let wire: Option<TypeFactsWire> = worker.request_nullable(&id, "typeAt", &params).ok()?;
         wire.map(Into::into)
     }
@@ -906,7 +950,14 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
+        let (idx, worker_mutex) = self.next_worker();
+        let mut worker = match worker_mutex.lock() {
+            Ok(w) => w,
+            Err(_) => {
+                self.mark_dead(idx);
+                return None;
+            }
+        };
         let wire: Option<LiteralFactsWire> = worker
             .request_nullable(&id, "resolveLiteral", &params)
             .ok()?;
@@ -922,7 +973,14 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
+        let (idx, worker_mutex) = self.next_worker();
+        let mut worker = match worker_mutex.lock() {
+            Ok(w) => w,
+            Err(_) => {
+                self.mark_dead(idx);
+                return None;
+            }
+        };
         let wire: Option<UnionFactsWire> =
             worker.request_nullable(&id, "unionMembers", &params).ok()?;
         wire.map(Into::into)
@@ -1036,8 +1094,10 @@ fn build_type_oracle_with_pool_size(
         return Err(err);
     }
 
+    let alive = workers.iter().map(|_| AtomicBool::new(true)).collect();
     Ok(WorkerTypeOracle {
         workers: workers.into_iter().map(Mutex::new).collect(),
+        alive,
         tsconfig_path: tsconfig,
         next_id: AtomicU64::new(0),
         next_worker: AtomicUsize::new(0),
@@ -1583,6 +1643,82 @@ mod tests {
             }
             Err(other) => panic!("expected HostError{{code: ts_morph_unavailable}}, got {other}"),
             Ok(_) => panic!("no node_modules/ts-morph anywhere under a fresh tempdir"),
+        }
+    }
+
+    /// CD-271: a worker whose mutex is found poisoned must be retired
+    /// from round-robin rotation rather than continuing to claim 1/N of
+    /// all subsequent queries and silently returning `None` for each one
+    /// (the previously-silent "1/N of type findings quietly vanish"
+    /// hazard the ticket describes).
+    #[test]
+    fn poisoned_worker_is_retired_from_round_robin_rotation() {
+        if !node_present() {
+            return;
+        }
+        let spawn = |i: usize| -> Worker {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg("process.exit(0)")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|e| panic!("spawn worker {i}: {e}"));
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            }
+        };
+
+        let workers: Vec<Worker> = (0..3).map(spawn).collect();
+        let oracle = WorkerTypeOracle {
+            alive: workers.iter().map(|_| AtomicBool::new(true)).collect(),
+            workers: workers.into_iter().map(Mutex::new).collect(),
+            tsconfig_path: String::new(),
+            next_id: AtomicU64::new(0),
+            next_worker: AtomicUsize::new(0),
+        };
+
+        // Poison worker 0's mutex by panicking while holding its lock.
+        {
+            let guard = oracle.workers[0].lock().expect("lock worker 0");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = guard;
+                panic!("deliberate poison for CD-271 test");
+            }));
+            assert!(result.is_err(), "expected the deliberate panic to unwind");
+        }
+        assert!(oracle.workers[0].is_poisoned());
+
+        // Round-robin starts at index 0, so this query is the one that
+        // discovers the poison. `type_at` must degrade to `None` like any
+        // other transport failure, not panic or hang.
+        let result = oracle.type_at(Path::new("dummy.ts"), 0, 1);
+        assert!(result.is_none(), "poisoned worker must degrade to None");
+        assert!(
+            !oracle.alive[0].load(Ordering::Relaxed),
+            "worker 0 must be marked dead after its mutex was found poisoned"
+        );
+
+        // Subsequent round-robin picks must skip the retired worker.
+        for _ in 0..10 {
+            let (idx, _) = oracle.next_worker();
+            assert_ne!(idx, 0, "round robin must skip the retired worker");
+        }
+
+        for w in oracle.workers {
+            let _ = w
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .close();
         }
     }
 

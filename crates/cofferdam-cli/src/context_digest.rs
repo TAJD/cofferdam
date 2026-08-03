@@ -15,6 +15,19 @@ fn item_tokens(i: &ContextItem) -> usize {
     estimate_tokens(&i.title) + estimate_tokens(&i.body) + estimate_tokens(&i.check_id)
 }
 
+/// Total order for presenting items: score desc, then `(check_id,
+/// title, body)` as a deterministic tie-break (CD-218) — `body` is the
+/// final discriminator since two items can otherwise share both score
+/// and title (e.g. two providers pinned at the same
+/// `relevance::VERIFIED` anchor, per CD-210).
+fn item_order(a: &ContextItem, b: &ContextItem) -> std::cmp::Ordering {
+    b.score
+        .cmp(&a.score)
+        .then(a.check_id.cmp(&b.check_id))
+        .then(a.title.cmp(&b.title))
+        .then(a.body.cmp(&b.body))
+}
+
 pub struct Digest {
     pub included: Vec<ContextItem>,
     pub omitted: usize,
@@ -27,13 +40,17 @@ pub struct Digest {
 /// Pinned items (never evicted) are always included first, in score
 /// order. The remaining items are grouped by `check_id` — one
 /// provider's worth of items per group, each group sorted score desc
-/// — and included round-robin: every provider with items left gets one
-/// pick per round (highest-scoring group head first) before any
+/// — and *selected* round-robin: every provider with items left gets
+/// one pick per round (highest-scoring group head first) before any
 /// provider gets a second pick. This is CD-211: a single high-volume
 /// provider (e.g. `Context.BlastRadius` on a busy shared file) can no
 /// longer consume the whole budget before a low-volume provider (e.g.
 /// `Context.Precedent`) gets a single item considered, which a flat
-/// global sort by score allowed.
+/// global sort by score allowed. Round-robin governs *selection* only
+/// — the selected non-pinned items are re-sorted by [`item_order`]
+/// before being appended, so presentation stays relevance-ordered
+/// regardless of which round a round-robin pick happened to land in
+/// (CD-216).
 pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Digest {
     let mut pinned_items = Vec::new();
     let mut groups: BTreeMap<String, Vec<ContextItem>> = BTreeMap::new();
@@ -44,13 +61,14 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Digest {
             groups.entry(item.check_id.clone()).or_default().push(item);
         }
     }
-    pinned_items.sort_by(|a, b| b.score.cmp(&a.score).then(a.title.cmp(&b.title)));
+    pinned_items.sort_by(item_order);
     for group in groups.values_mut() {
-        group.sort_by(|a, b| b.score.cmp(&a.score).then(a.title.cmp(&b.title)));
+        group.sort_by(item_order);
     }
     let mut groups: Vec<VecDeque<ContextItem>> = groups.into_values().map(VecDeque::from).collect();
 
     let mut included = Vec::new();
+    let mut selected = Vec::new();
     let mut spent = 0usize;
     let mut omitted = 0usize;
 
@@ -79,12 +97,15 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Digest {
             let cost = item_tokens(&item);
             if spent + cost <= budget {
                 spent += cost;
-                included.push(item);
+                selected.push(item);
             } else {
                 omitted += 1;
             }
         }
     }
+
+    selected.sort_by(item_order);
+    included.extend(selected);
 
     Digest {
         included,
@@ -214,6 +235,55 @@ mod tests {
             10,
         );
         assert!(d.included.iter().any(|i| i.check_id == "Context.P"));
+    }
+
+    /// CD-216: round-robin governs *selection*, not presentation —
+    /// once several providers each contribute multiple items, the
+    /// resulting digest must still read in strict relevance order, not
+    /// round-by-round pick order.
+    #[test]
+    fn assemble_presents_selected_items_in_score_order_even_though_selection_was_round_robin() {
+        let d = assemble(
+            vec![
+                item("Context.A", "a1", 95, false, 4),
+                item("Context.A", "a2", 94, false, 4),
+                item("Context.A", "a3", 93, false, 4),
+                item("Context.B", "b1", 70, false, 4),
+                item("Context.B", "b2", 69, false, 4),
+                item("Context.C", "c1", 5, false, 4),
+            ],
+            10_000, // fits everything
+        );
+        let scores: Vec<i32> = d.included.iter().map(|i| i.score).collect();
+        let mut sorted = scores.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(
+            scores, sorted,
+            "digest must read in non-increasing score order regardless of round-robin pick order"
+        );
+    }
+
+    /// CD-218: two pinned items from different providers sharing both
+    /// `score` and `title` (the designed-for case since CD-210 anchors
+    /// multiple providers at the same `relevance` constants) must still
+    /// assemble deterministically, not fall back to input/collection
+    /// order.
+    #[test]
+    fn assemble_breaks_score_and_title_ties_deterministically_regardless_of_input_order() {
+        let mut a = item("Context.Findings", "same title", 95, true, 4);
+        a.body = "body-a".into();
+        let mut b = item("Context.Knowledge", "same title", 95, true, 4);
+        b.body = "body-b".into();
+
+        let d1 = assemble(vec![a.clone(), b.clone()], 10_000);
+        let d2 = assemble(vec![b, a], 10_000);
+
+        let ids1: Vec<&str> = d1.included.iter().map(|i| i.check_id.as_str()).collect();
+        let ids2: Vec<&str> = d2.included.iter().map(|i| i.check_id.as_str()).collect();
+        assert_eq!(
+            ids1, ids2,
+            "tie-break order must not depend on input vec order"
+        );
     }
 
     /// CD-211: a provider with many items (e.g. `Context.BlastRadius`

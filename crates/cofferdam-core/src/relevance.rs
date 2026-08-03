@@ -63,6 +63,16 @@ pub const INFERRED_MIN: i32 = 6;
 /// must rank below every other provider's signal, always. Pinning it
 /// to a dedicated constant below [`INFERRED_MIN`] makes that ordering
 /// hold by construction: no other provider may clamp this low.
+///
+/// This governs *presentation order and tie-breaks* (a `FLOOR`-scored
+/// item always sorts last among items included in the same digest —
+/// `crates/cofferdam-cli/src/context_digest.rs`'s `item_order`), not
+/// eviction odds: `context_digest::assemble`'s round-robin fairness
+/// (CD-211) guarantees every provider with items offered, including
+/// `Context.Precedent`, a minimum share of the budget regardless of
+/// score, so a `FLOOR`-scored item is not literally "first evicted"
+/// under budget pressure (CD-217 — this was CD-210's original claim,
+/// superseded once CD-211 landed fairness).
 pub const FLOOR: i32 = 5;
 
 #[cfg(test)]

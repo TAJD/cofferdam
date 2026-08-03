@@ -162,6 +162,15 @@ pub struct OverrideCheck {
 /// project-relative form globs are written against: strip the absolute
 /// `root_key` prefix (or a leading `./`). Shared by
 /// [`OverrideBlock::is_match`] and [`ContextSuppressRule::is_match`].
+/// CD-225: the naive `file_key.strip_prefix(root_key)` this used to fall
+/// back to (without requiring a separator after the match) mis-strips a
+/// sibling directory whose name merely *extends* `root_key`'s — e.g.
+/// `root_key = "/repo"` against `file_key = "/repo-backup/a.ts"` yielded
+/// `"-backup/a.ts"`, a path that was never inside the project root but
+/// now reads as project-relative to the globset. The only case that
+/// fallback needs beyond the separator-anchored `with_slash` match above
+/// is `file_key == root_key` exactly (a directory, not a file, so no
+/// real caller passes it) — so it's handled explicitly instead.
 fn relativize<'a>(root_key: &str, file_key: &'a str) -> &'a str {
     let with_slash = if root_key.ends_with('/') {
         root_key.to_string()
@@ -170,8 +179,8 @@ fn relativize<'a>(root_key: &str, file_key: &'a str) -> &'a str {
     };
     if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
         stripped
-    } else if let Some(stripped) = file_key.strip_prefix(root_key) {
-        stripped.trim_start_matches('/')
+    } else if file_key == root_key {
+        ""
     } else {
         file_key.trim_start_matches("./")
     }
@@ -301,6 +310,63 @@ mod tests {
         default: OptionDefault::Int(80),
         doc: "max line length",
     }];
+
+    #[test]
+    fn relativize_does_not_strip_a_root_key_that_is_only_a_string_prefix() {
+        // CD-225 regression: `/repo-backup/...` must not be mistaken for
+        // a path under `/repo` just because "/repo" is a string prefix
+        // of "/repo-backup" — the missing separator means it's really a
+        // sibling directory.
+        assert_eq!(
+            relativize("/repo", "/repo-backup/src/legacy/a.ts"),
+            "/repo-backup/src/legacy/a.ts"
+        );
+        // The genuinely-nested case still strips correctly.
+        assert_eq!(
+            relativize("/repo", "/repo/src/legacy/a.ts"),
+            "src/legacy/a.ts"
+        );
+        assert_eq!(relativize("/repo", "/repo"), "");
+    }
+
+    fn glob_for(pattern: &str) -> globset::GlobSet {
+        let mut builder = globset::GlobSetBuilder::new();
+        builder.add(
+            globset::GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .build()
+                .expect("valid glob"),
+        );
+        builder.build().expect("valid globset")
+    }
+
+    #[test]
+    fn override_block_is_match_does_not_leak_into_a_sibling_directory() {
+        // CD-225: same repro at the OverrideBlock::is_match level — a
+        // rule scoped to "/repo" must not match a file under the
+        // sibling "/repo-backup" directory.
+        let block = OverrideBlock {
+            paths: vec!["legacy/**".into()],
+            globset: glob_for("legacy/**"),
+            root_key: "/repo".into(),
+            checks: BTreeMap::new(),
+        };
+        assert!(!block.is_match("/repo-backup/legacy/a.ts"));
+        assert!(block.is_match("/repo/legacy/a.ts"));
+    }
+
+    #[test]
+    fn context_suppress_rule_is_match_does_not_leak_into_a_sibling_directory() {
+        let rule = ContextSuppressRule {
+            check_id: "Context.Precedent".into(),
+            paths: vec!["legacy/**".into()],
+            globset: glob_for("legacy/**"),
+            root_key: "/repo".into(),
+            reason: None,
+        };
+        assert!(!rule.is_match("/repo-backup/legacy/a.ts"));
+        assert!(rule.is_match("/repo/legacy/a.ts"));
+    }
 
     #[test]
     fn parse_minimal_config() {

@@ -264,18 +264,20 @@ fn run_lint_knowledge(
 ) -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = knowledge::find_project_root(&cwd);
-    let load = knowledge::load_knowledge_dir(&root);
-
-    let mut failed = false;
-    for w in &load.warnings {
-        eprintln!("error: {w}");
-        failed = true;
-    }
 
     let (project_config, _resolved_path) = match resolve_and_load_config(config_path, no_config) {
         Ok(pair) => pair,
         Err(()) => return ExitCode::from(2),
     };
+    let layers = project_config.as_ref().and_then(|c| c.layers.clone());
+
+    let load = knowledge::load_knowledge_dir(&root, layers.as_ref());
+
+    let mut failed = false;
+    for (_, w) in &load.warnings {
+        eprintln!("error: {w}");
+        failed = true;
+    }
 
     let mut opts = DiscoveryOptions {
         respect_ignore: !no_ignore,
@@ -306,8 +308,6 @@ fn run_lint_knowledge(
                 .replace('\\', "/")
         })
         .collect();
-
-    let layers = project_config.as_ref().and_then(|c| c.layers.clone());
 
     if load.notes.is_empty() {
         println!(

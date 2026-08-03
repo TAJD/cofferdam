@@ -122,7 +122,9 @@ const SIMILARITY_THRESHOLD: f64 = 0.75;
 /// monorepo can have low-thousands of them. A convention inferred from
 /// hundreds of unrelated same-named files isn't a useful signal anyway
 /// (precision over recall), so past this size the fallback simply
-/// yields nothing for that kind rather than paying the scan.
+/// yields nothing for that kind rather than paying the scan. CD-228:
+/// the skip is not silent — [`build_capped_kinds_item`] surfaces every
+/// capped kind in one advisory digest item per run.
 const MAX_KIND_GROUP_SIZE: usize = 200;
 
 /// Deliberately low and constant — `relevance::FLOOR` (CD-210). Per
@@ -294,6 +296,13 @@ impl Check for Precedent {
         let mut emitted_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         let mut emitted_kinds: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // CD-228: kinds whose shaped-member count exceeded
+        // `MAX_KIND_GROUP_SIZE` and so had their Jaccard scan skipped
+        // (CD-223) — surfaced as a single advisory item below so the
+        // cap's effect isn't silently invisible, per this repo's "warn
+        // loudly, never silently match nothing" policy.
+        let mut capped_kinds: BTreeMap<String, usize> = BTreeMap::new();
+
         let mut items = Vec::new();
         for changed in &changeset.files {
             let Some(dir) = changed.parent() else {
@@ -364,6 +373,7 @@ impl Check for Precedent {
                 // singleton cluster, so `largest_cluster_excluding`
                 // naturally yields `None` below.
                 let edges = if shaped.len() > MAX_KIND_GROUP_SIZE {
+                    capped_kinds.insert(kind.clone(), shaped.len());
                     Vec::new()
                 } else {
                     shape_edges(&shaped)
@@ -398,6 +408,9 @@ impl Check for Precedent {
             if emitted_kinds.insert(kind.clone()) {
                 items.push(build_kind_item(&kind, &exemplars));
             }
+        }
+        if !capped_kinds.is_empty() {
+            items.push(build_capped_kinds_item(&capped_kinds));
         }
         items
     }
@@ -610,6 +623,37 @@ fn build_kind_item(kind: &str, exemplars: &[&FileRecord]) -> ContextItem {
             "{} file(s) named `{kind}` share a field-shape pattern across directories \
              (Jaccard >= {SIMILARITY_THRESHOLD:.2})",
             exemplars.len()
+        )),
+    }
+}
+
+/// CD-228: one advisory item summarizing every "kind" group this run
+/// skipped the Jaccard scan for because it exceeded
+/// `MAX_KIND_GROUP_SIZE` (CD-223). Not anchored to any file (there is
+/// no single changed file this speaks about) — `related` is
+/// deliberately empty, same as `Context.Findings::fresh_summary_item`.
+fn build_capped_kinds_item(capped_kinds: &BTreeMap<String, usize>) -> ContextItem {
+    let mut body = format!(
+        "The following file-name groups exceeded the {MAX_KIND_GROUP_SIZE}-file cap on \
+         cross-directory kind matching (CD-223) and were skipped rather than scanned:\n\n"
+    );
+    for (kind, count) in capped_kinds {
+        body.push_str(&format!("- `{kind}`: {count} files\n"));
+    }
+    let kinds: Vec<&str> = capped_kinds.keys().map(String::as_str).collect();
+    ContextItem {
+        check_id: META.id.to_string(),
+        title: format!(
+            "Cross-directory kind matching skipped for {} oversized group(s)",
+            capped_kinds.len()
+        ),
+        body,
+        score: SCORE,
+        pinned: false,
+        related: Vec::new(),
+        explain: Some(format!(
+            "kind group(s) over {MAX_KIND_GROUP_SIZE} files: {}",
+            kinds.join(", ")
         )),
     }
 }
@@ -890,12 +934,14 @@ mod tests {
     }
 
     #[test]
-    fn kind_group_larger_than_the_cap_yields_no_item_instead_of_running_the_full_scan() {
+    fn kind_group_larger_than_the_cap_yields_a_capped_summary_item_not_a_convention_match() {
         // CD-223: a kind group larger than MAX_KIND_GROUP_SIZE skips the
         // O(k^2) Jaccard scan entirely, so even a genuine shared shape
-        // across every member produces nothing — precision over recall,
-        // and avoids an unbounded pairwise scan on a monorepo full of
-        // e.g. `index.ts`.
+        // across every member produces no convention match — precision
+        // over recall, and avoids an unbounded pairwise scan on a
+        // monorepo full of e.g. `index.ts`. CD-228: the skip itself is
+        // surfaced as a single advisory item rather than silently
+        // producing nothing.
         let shape_src =
             "export interface RouteResponse { data: string; status: string; error: string; }";
         let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_KIND_GROUP_SIZE)
@@ -915,9 +961,19 @@ mod tests {
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         let items = Precedent.context_items(&changeset, &mut finalize_ctx);
 
+        assert_eq!(
+            items.len(),
+            1,
+            "kind group over the cap must yield exactly the capped-summary item; got {items:?}"
+        );
         assert!(
-            items.is_empty(),
-            "kind group over the cap must yield nothing; got {items:?}"
+            items[0].title.contains("oversized group"),
+            "expected the capped-kinds summary item; got {:?}",
+            items[0]
+        );
+        assert!(
+            items[0].related.is_empty(),
+            "capped-summary item isn't anchored to any single file"
         );
     }
 

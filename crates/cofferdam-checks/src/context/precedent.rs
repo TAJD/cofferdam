@@ -714,17 +714,41 @@ fn build_capped_groups_item(
     // fallback chain (directory capped, or kind capped — CD-213
     // "directory first" means both only co-occur across different
     // changed files in one changeset).
+    //
+    // CD-240: reuse the same MAX_CAPPED_GROUPS_LISTED cap and
+    // biggest-count-first `entries` ordering as `body` above — before
+    // this, `explain` joined every capped directory/kind unconditionally
+    // (directory entries as full, uncapped paths, even worse per-entry
+    // than the body line it replaced), on an item that's `pinned: true`
+    // and therefore never evicted: an unbounded field on an unevictable
+    // item is a hard floor on digest size. Deriving both halves from the
+    // same capped `entries` slice keeps them naming the same groups.
+    let listed = entries.iter().take(MAX_CAPPED_GROUPS_LISTED);
     let mut explain_parts = Vec::new();
-    if !capped_dirs.is_empty() {
-        let dirs: Vec<String> = capped_dirs
-            .keys()
-            .map(|d| d.display().to_string())
-            .collect();
-        explain_parts.push(format!("directories [{}]", dirs.join(", ")));
+    let listed_dirs: Vec<&str> = listed
+        .clone()
+        .filter(|(_, _, is_dir)| *is_dir)
+        .map(|(label, _, _)| label.as_str())
+        .collect();
+    if !listed_dirs.is_empty() {
+        explain_parts.push(format!("directories [{}]", listed_dirs.join(", ")));
     }
-    if !capped_kinds.is_empty() {
-        let kinds: Vec<&str> = capped_kinds.keys().map(String::as_str).collect();
-        explain_parts.push(format!("kinds [{}]", kinds.join(", ")));
+    let listed_kinds: Vec<&str> = listed
+        .filter(|(_, _, is_dir)| !is_dir)
+        .map(|(label, _, _)| label.as_str())
+        .collect();
+    if !listed_kinds.is_empty() {
+        explain_parts.push(format!("kinds [{}]", listed_kinds.join(", ")));
+    }
+    let mut explain = format!(
+        "group(s) over {MAX_GROUP_SIZE} files: {}",
+        explain_parts.join(", ")
+    );
+    if total > MAX_CAPPED_GROUPS_LISTED {
+        explain.push_str(&format!(
+            " (…and {} more)",
+            total - MAX_CAPPED_GROUPS_LISTED
+        ));
     }
 
     ContextItem {
@@ -734,10 +758,7 @@ fn build_capped_groups_item(
         score: SCORE,
         pinned: true,
         related: Vec::new(),
-        explain: Some(format!(
-            "group(s) over {MAX_GROUP_SIZE} files: {}",
-            explain_parts.join(", ")
-        )),
+        explain: Some(explain),
     }
 }
 
@@ -1257,6 +1278,21 @@ mod tests {
             item.body.contains("and 5 more"),
             "expected a truncation tail for the remaining 5 groups; got body={:?}",
             item.body
+        );
+
+        // CD-240: explain must be capped the same way as body — before
+        // the fix it unconditionally joined every capped kind/directory
+        // with no truncation, on an item that's pinned and therefore
+        // never evicted.
+        let explain = item.explain.expect("explain is set");
+        assert_eq!(
+            explain.matches(".ts").count(),
+            MAX_CAPPED_GROUPS_LISTED,
+            "explain must list at most MAX_CAPPED_GROUPS_LISTED kinds; got explain={explain:?}"
+        );
+        assert!(
+            explain.contains("and 5 more"),
+            "expected a truncation tail in explain for the remaining 5 groups; got explain={explain:?}"
         );
     }
 

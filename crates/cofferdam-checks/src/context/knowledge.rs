@@ -32,6 +32,14 @@ use cofferdam_core::{
     RelatedSpan, Severity, SourceFile, Span,
 };
 
+/// Cap on a knowledge note's body length (CD-204): without one, a
+/// single `priority: high` note (pinned — never evicted by the digest
+/// budget, see `context_digest::assemble`) can silently blow any
+/// `--budget`. Truncated bodies get a visible `[truncated, ...]`
+/// marker plus a load warning, per this module's "warn loudly, never
+/// silently match nothing" policy.
+const MAX_NOTE_BODY_CHARS: usize = 8_000;
+
 const META: CheckMeta = CheckMeta {
     id: "Context.Knowledge",
     category: Category::Context,
@@ -423,10 +431,23 @@ fn load_note(path: &Path) -> Result<(Option<KnowledgeNote>, Vec<String>), String
         ));
     }
 
+    let trimmed_body = body.trim();
+    let char_count = trimmed_body.chars().count();
+    let note_body = if char_count > MAX_NOTE_BODY_CHARS {
+        warnings.push(format!(
+            "{}: note body is {char_count} chars, exceeds the {}k char limit and will be truncated",
+            path.display(),
+            MAX_NOTE_BODY_CHARS / 1000
+        ));
+        truncate_body(trimmed_body)
+    } else {
+        trimmed_body.to_string()
+    };
+
     let note = KnowledgeNote {
         source_path: path.to_path_buf(),
         title: fm.title,
-        body: body.trim().to_string(),
+        body: note_body,
         priority,
         raw_paths: fm.match_spec.paths,
         raw_layers: fm.match_spec.layers,
@@ -467,6 +488,20 @@ fn combined_predicate(
     let mut iter = parts.into_iter();
     let first = iter.next()?;
     Some(iter.fold(first, |acc, p| Predicate::Or(Box::new(acc), Box::new(p))))
+}
+
+/// Truncates a note body to `MAX_NOTE_BODY_CHARS`, appending a visible
+/// marker so truncation is never silent (the digest budget already
+/// discloses omissions elsewhere; this is the equivalent for a single
+/// oversized note).
+fn truncate_body(body: &str) -> String {
+    let char_count = body.chars().count();
+    let kept: String = body.chars().take(MAX_NOTE_BODY_CHARS).collect();
+    let over = char_count - MAX_NOTE_BODY_CHARS;
+    format!(
+        "{kept}\n\n[truncated, {over} chars over {}k char limit]",
+        MAX_NOTE_BODY_CHARS / 1000
+    )
 }
 
 /// Splits a leading `---\n ... \n---\n` YAML block from the markdown
@@ -640,6 +675,49 @@ Body.
         let load = load_knowledge_dir(td.path());
         assert_eq!(load.notes[0].priority, NotePriority::Normal);
         assert!(load.warnings.iter().any(|w| w.contains("unknown priority")));
+    }
+
+    #[test]
+    fn oversized_note_body_is_truncated_with_visible_marker_and_warns() {
+        let td = tempdir().unwrap();
+        let knowledge = knowledge_dir_path(td.path());
+        let huge_body = "x".repeat(MAX_NOTE_BODY_CHARS + 500);
+        write_note(
+            &knowledge,
+            "huge.md",
+            &format!("---\ntitle: Huge\nmatch:\n  paths: [\"src/**\"]\n---\n{huge_body}\n"),
+        );
+        let load = load_knowledge_dir(td.path());
+        assert_eq!(load.notes.len(), 1);
+        let note = &load.notes[0];
+        assert!(note
+            .body
+            .contains("[truncated, 500 chars over 8k char limit]"));
+        assert_eq!(
+            note.body.chars().count(),
+            MAX_NOTE_BODY_CHARS
+                + "\n\n[truncated, 500 chars over 8k char limit]"
+                    .chars()
+                    .count()
+        );
+        assert!(load
+            .warnings
+            .iter()
+            .any(|w| w.contains("exceeds the 8k char limit")));
+    }
+
+    #[test]
+    fn note_body_within_limit_is_not_truncated() {
+        let td = tempdir().unwrap();
+        let knowledge = knowledge_dir_path(td.path());
+        write_note(
+            &knowledge,
+            "small.md",
+            "---\ntitle: Small\nmatch:\n  paths: [\"src/**\"]\n---\nShort body.\n",
+        );
+        let load = load_knowledge_dir(td.path());
+        assert_eq!(load.notes[0].body, "Short body.");
+        assert!(!load.warnings.iter().any(|w| w.contains("truncat")));
     }
 
     #[test]

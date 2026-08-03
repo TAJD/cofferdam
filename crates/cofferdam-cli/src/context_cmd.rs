@@ -285,15 +285,16 @@ fn resolve_and_load_config(
 /// discovered repo is almost certainly stale — the files it was
 /// written to target moved, were renamed, or were deleted — per this
 /// repo's "warn loudly, never silently match nothing" policy (CD-150).
-/// A rule with an empty `paths` list is exempt from this check: since
-/// CD-227 that's the deliberate "suppress every item this check_id
-/// emits" wildcard, not an empty/stale glob, so there's no file-match
-/// signal to validate it against. Mirrors `--lint-knowledge`'s
-/// file-existence check; unlike `--lint-knowledge` this can't validate
-/// that the rule's `check_id` is a real `Context.*` provider without
-/// hardcoding the provider list here, so a typo'd `check_id` is left
-/// to simply suppress nothing at runtime rather than being caught by
-/// this lint.
+/// A rule with an empty `paths` list is exempt from the file-match
+/// check: since CD-227 that's the deliberate "suppress every item this
+/// check_id emits" wildcard, not an empty/stale glob, so there's no
+/// file-match signal to validate it against. Mirrors `--lint-knowledge`'s
+/// file-existence check. CD-233: every rule (wildcard or path-scoped)
+/// is also validated against `all_context_providers()`'s real id set —
+/// a typo'd `check_id` (`Context.Finding`, trailing whitespace, ...)
+/// used to suppress nothing at runtime with no diagnostic anywhere,
+/// which was the one gap CD-227's wildcard exemption otherwise left in
+/// this lint for wildcard rules specifically.
 fn run_lint_context_suppress(
     hidden: bool,
     no_ignore: bool,
@@ -336,9 +337,20 @@ fn run_lint_context_suppress(
         }
     };
     let file_keys: Vec<String> = files.iter().map(|f| cfg::path_key(f)).collect();
+    let known_ids: std::collections::HashSet<&str> = all_context_providers()
+        .iter()
+        .map(|p| p.meta().id)
+        .collect();
 
     let mut failed = false;
     for rule in &rules {
+        if !known_ids.contains(rule.check_id.as_str()) {
+            eprintln!(
+                "error: [[context_suppress]] rule for `{}`: not a known Context.* provider id",
+                rule.check_id
+            );
+            failed = true;
+        }
         if rule.paths.is_empty() {
             continue;
         }

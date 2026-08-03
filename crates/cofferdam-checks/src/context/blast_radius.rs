@@ -330,7 +330,7 @@ fn compute_blast_radius(
                             && !existing.symbol_match)
                         || (info.depth == existing.depth
                             && info.symbol_match == existing.symbol_match
-                            && info.chain.last() < existing.chain.last())
+                            && info.chain.first() < existing.chain.first())
                 }
             };
             if better {

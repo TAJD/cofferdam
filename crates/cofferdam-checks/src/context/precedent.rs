@@ -292,8 +292,11 @@ impl Dsu {
 /// Clusters `shaped` siblings (index-aligned pairs of file + its
 /// primary shape) by pairwise Jaccard similarity and returns the
 /// largest component of size >= 2, or `None` when no such component
-/// exists. Ties on size break on the lowest member index, so the
-/// result is deterministic regardless of hash-map iteration order.
+/// exists. Clusters are sorted by their lowest member index before
+/// the size comparison, and `max_by_key` keeps the *last* maximum on
+/// ties, so ties on size break on the highest min member index. The
+/// result is still deterministic regardless of hash-map iteration
+/// order — just not "lowest index wins".
 fn largest_shape_cluster(shaped: &[(&FileRecord, &ExportedSymbol)]) -> Option<Vec<usize>> {
     let mut dsu = Dsu::new(shaped.len());
     for i in 0..shaped.len() {

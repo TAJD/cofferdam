@@ -41,7 +41,7 @@ use std::path::Path;
 
 use cofferdam_core::{
     relevance, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext,
-    Issue, Severity, SourceFile, ALL_PRE_FILTER_FINDINGS,
+    Issue, Location, RelatedSpan, Severity, SourceFile, Uri, ALL_PRE_FILTER_FINDINGS,
 };
 
 pub struct Findings;
@@ -146,7 +146,15 @@ fn legacy_item(file: &Path, count: u32) -> ContextItem {
         body: format!("This file carries {count} baselined {noun} outside the changed lines."),
         score: relevance::INDIRECT,
         pinned: true,
-        related: vec![],
+        // CD-220: a whole-file pointer (no specific span — `count` rolls
+        // up findings across the file) so `[[context_suppress]]` rules
+        // scoped by path can actually match this item; previously
+        // `related: vec![]` made path-scoped suppression of legacy-debt
+        // items a permanent no-op.
+        related: vec![RelatedSpan {
+            file: file.to_path_buf(),
+            location: Location::bytes(Uri::from_path(file), 0, 0, 1, 1),
+        }],
         explain: Some(format!(
             "{count} pre-existing finding(s) in {} outside the lines the diff changed",
             file.display()
@@ -252,6 +260,28 @@ mod tests {
         assert!(item.body.contains("3 baselined findings"), "{}", item.body);
         // No individual check ids leaked into the rollup body.
         assert!(!item.body.contains("Warning.TripleEquals"));
+    }
+
+    #[test]
+    fn legacy_item_related_points_at_its_own_file() {
+        // CD-220: a path-scoped `[[context_suppress]]` rule matches an
+        // item via `item.related` — a legacy-debt item with no related
+        // spans could never be suppressed by path.
+        let corpus = setup_corpus(&[("/a.ts", "Warning.TripleEquals", 50)]);
+        let cs = ChangeSet {
+            files: [PathBuf::from("/a.ts")].into_iter().collect(),
+            line_ranges: [(
+                PathBuf::from("/a.ts"),
+                vec![LineRange { start: 1, end: 10 }],
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let mut fctx = FinalizeContext::new(&corpus);
+        let items = Findings.context_items(&cs, &mut fctx);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].related.len(), 1);
+        assert_eq!(items[0].related[0].file, PathBuf::from("/a.ts"));
     }
 
     #[test]

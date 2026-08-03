@@ -616,6 +616,38 @@ fn lint_context_suppress_exempts_a_wildcard_rule_with_no_paths() {
     assert!(stdout.contains("1 rule(s) OK"), "got stdout={stdout}");
 }
 
+/// CD-233: a wildcard rule's `check_id` is validated against the real
+/// `Context.*` provider set even though it's exempt from the
+/// file-match staleness check — otherwise a typo'd id suppressed
+/// nothing at runtime with no diagnostic anywhere in the tool.
+#[test]
+fn lint_context_suppress_flags_a_wildcard_rule_with_an_unknown_check_id() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    std::fs::write(dir.join("real.ts"), "export const x = 1;\n").expect("write real.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Percedent\"\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--lint-context-suppress"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        !out.status.success(),
+        "expected nonzero exit for an unknown check_id"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not a known Context.* provider id"),
+        "expected an unknown-check_id diagnostic; got stderr={stderr}"
+    );
+}
+
 /// CD-164 criterion 2: `cofferdam context` digests must be deterministic
 /// (golden-snapshot precondition) — two runs over the same changeset
 /// produce byte-identical JSON, including item ordering.

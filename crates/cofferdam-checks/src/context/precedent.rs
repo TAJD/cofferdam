@@ -88,6 +88,18 @@ const MIN_FIELDS: usize = 2;
 /// merged duplicate.
 const SIMILARITY_THRESHOLD: f64 = 0.75;
 
+/// CD-223: upper bound on a kind group's *shaped* member count before
+/// `shape_edges`' O(k^2) all-pairs Jaccard scan is skipped for that
+/// group. The same-directory group this scan was originally sized for
+/// is naturally bounded (tens of files); CD-213's kind fallback groups
+/// by bare filename across the *whole corpus*, and common names
+/// (`index.ts`, `types.ts`, `route.ts`) aren't bounded that way — a
+/// monorepo can have low-thousands of them. A convention inferred from
+/// hundreds of unrelated same-named files isn't a useful signal anyway
+/// (precision over recall), so past this size the fallback simply
+/// yields nothing for that kind rather than paying the scan.
+const MAX_KIND_GROUP_SIZE: usize = 200;
+
 /// Deliberately low and constant — `relevance::FLOOR` (CD-210). Per
 /// the product spec, `Context.Precedent` has the lowest source
 /// priority of every provider class: it's a sibling-file convention
@@ -322,7 +334,15 @@ impl Check for Precedent {
                     .iter()
                     .filter_map(|r| primary_shape(r).map(|s| (*r, s)))
                     .collect();
-                let edges = shape_edges(&shaped);
+                // CD-223: skip the O(k²) scan for an oversized kind group
+                // — an empty edge set makes every member its own
+                // singleton cluster, so `largest_cluster_excluding`
+                // naturally yields `None` below.
+                let edges = if shaped.len() > MAX_KIND_GROUP_SIZE {
+                    Vec::new()
+                } else {
+                    shape_edges(&shaped)
+                };
                 DirShapes { shaped, edges }
             });
 
@@ -838,6 +858,38 @@ mod tests {
         assert!(
             items.is_empty(),
             "a and b must not be bridged into a false precedent via c; got {items:?}"
+        );
+    }
+
+    #[test]
+    fn kind_group_larger_than_the_cap_yields_no_item_instead_of_running_the_full_scan() {
+        // CD-223: a kind group larger than MAX_KIND_GROUP_SIZE skips the
+        // O(k^2) Jaccard scan entirely, so even a genuine shared shape
+        // across every member produces nothing — precision over recall,
+        // and avoids an unbounded pairwise scan on a monorepo full of
+        // e.g. `index.ts`.
+        let shape_src =
+            "export interface RouteResponse { data: string; status: string; error: string; }";
+        let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_KIND_GROUP_SIZE)
+            .map(|i| (PathBuf::from(format!("/p/mod{i}/route.ts")), shape_src))
+            .collect();
+        let changed = PathBuf::from("/p/changed_mod/route.ts");
+        fixtures.push((
+            changed.clone(),
+            "export async function GET(): Promise<void> {}",
+        ));
+
+        let fixture_refs: Vec<(&Path, &str)> =
+            fixtures.iter().map(|(p, s)| (p.as_path(), *s)).collect();
+        let corpus = run_precedent(&fixture_refs);
+
+        let changeset = ChangeSet::from_files([changed]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert!(
+            items.is_empty(),
+            "kind group over the cap must yield nothing; got {items:?}"
         );
     }
 

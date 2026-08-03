@@ -389,29 +389,63 @@ const DRAIN_CHUNK_SIZE: usize = 8 * 1024;
 /// buffer holds a lossy diagnostic tail with no invariant a panicking
 /// holder (`Worker::request_nullable`'s CD-238 error path) could
 /// corrupt, so honouring the poison and giving up on draining forever
-/// is strictly worse than reading through it. Read errors other than a
-/// bounded number of transient ones (retried with a short backoff) also
-/// end the loop — anything indefinitely retried here would itself risk
-/// spinning forever on a truly dead pipe.
+/// is strictly worse than reading through it.
+///
+/// CD-270: this arm is for errors that *might* be transient on some
+/// `R: Read` — `WouldBlock`/`TimedOut` — not "any error that isn't
+/// `Interrupted`". The real reader this runs against (`ChildStderr`, a
+/// blocking OS pipe) can't actually produce those; what it produces on
+/// failure is permanent errors (`BrokenPipe`, `EIO`, ...), which now
+/// break immediately instead of paying a pointless sleep first. That
+/// sleep used to delay the `done_tx` signal
+/// `Worker::request_nullable`'s CD-254 join waits on — harmless while
+/// the retry budget is small relative to that timeout, but a latent
+/// coupling between two unrelated constants. The bound exists for a
+/// hypothetical future non-`ChildStderr` reader (this helper is a
+/// generic `R: Read`, tested directly against synthetic readers) where
+/// `WouldBlock` is real.
 const MAX_TRANSIENT_READ_RETRIES: u32 = 8;
+
+/// CD-270: `Interrupted` (EINTR) is retried unconditionally — matching
+/// `std`'s own `read_to_end` — but must still be bounded. An unbounded
+/// retry here is exactly the "spin forever on a dead reader" risk this
+/// function exists to avoid, just relocated to a different error kind:
+/// a signal handler installed without `SA_RESTART` firing repeatedly
+/// would otherwise busy-spin this thread at 100% CPU forever and never
+/// send `done_tx`. Large (not `MAX_TRANSIENT_READ_RETRIES`-sized)
+/// because genuine EINTR storms under real interrupt load can
+/// legitimately recur far more than 8 times; still finite.
+const MAX_INTERRUPTED_RETRIES: u32 = 10_000;
 
 fn drain_into<R: Read>(mut reader: R, buf: &Mutex<Vec<u8>>) {
     let mut chunk = [0u8; DRAIN_CHUNK_SIZE];
-    let mut retries_left = MAX_TRANSIENT_READ_RETRIES;
+    let mut transient_retries_left = MAX_TRANSIENT_READ_RETRIES;
+    let mut interrupted_retries_left = MAX_INTERRUPTED_RETRIES;
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
-                retries_left = MAX_TRANSIENT_READ_RETRIES;
+                transient_retries_left = MAX_TRANSIENT_READ_RETRIES;
+                interrupted_retries_left = MAX_INTERRUPTED_RETRIES;
                 let mut bytes = buf.lock().unwrap_or_else(PoisonError::into_inner);
                 append_capped(&mut bytes, &chunk[..n]);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                // Doesn't count against the retry budget — not actually
-                // a failure, just "try the syscall again".
+                if interrupted_retries_left == 0 {
+                    break;
+                }
+                interrupted_retries_left -= 1;
+                // No sleep — EINTR means "the syscall didn't run at
+                // all, try again immediately", not "wait for something
+                // to change".
             }
-            Err(_) if retries_left > 0 => {
-                retries_left -= 1;
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) && transient_retries_left > 0 =>
+            {
+                transient_retries_left -= 1;
                 std::thread::sleep(Duration::from_millis(5));
             }
             Err(_) => break,
@@ -1107,6 +1141,54 @@ mod tests {
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "should give up after bounded retries, not hang"
+        );
+    }
+
+    /// CD-270: a permanent error kind (anything that isn't `Interrupted`,
+    /// `WouldBlock`, or `TimedOut` — e.g. `BrokenPipe`, what a real
+    /// `ChildStderr` actually returns on failure) must break immediately,
+    /// not pay the `MAX_TRANSIENT_READ_RETRIES` sleep budget first. That
+    /// budget exists for a hypothetical non-blocking reader; wasting it
+    /// on an error class it can never fix just delays the `done_tx`
+    /// signal `Worker::request_nullable`'s CD-254 join is waiting on.
+    #[test]
+    fn drain_into_breaks_immediately_on_a_permanent_error_kind_without_retry_delay() {
+        struct AlwaysBrokenPipe;
+        impl Read for AlwaysBrokenPipe {
+            fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+        let buf = Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        drain_into(AlwaysBrokenPipe, &buf);
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "a permanent error kind should not be retried at all, took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// CD-270: `Interrupted` is retried unconditionally (matching
+    /// `std::io::Read::read_to_end`'s own behaviour) but must still be
+    /// bounded — an EINTR storm from a misbehaving signal handler must
+    /// not busy-spin the drain thread forever. Uses a reader that always
+    /// returns `Interrupted` and asserts `drain_into` still returns.
+    #[test]
+    fn drain_into_bounds_unconditional_interrupted_retries() {
+        struct AlwaysInterrupted;
+        impl Read for AlwaysInterrupted {
+            fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+            }
+        }
+        let buf = Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        drain_into(AlwaysInterrupted, &buf);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "an EINTR storm should still be bounded, not spin forever; took {:?}",
+            start.elapsed()
         );
     }
 

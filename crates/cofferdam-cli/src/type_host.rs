@@ -427,6 +427,12 @@ fn drain_into<R: Read>(mut reader: R, buf: &Mutex<Vec<u8>>) {
 /// CD-244's "never block indefinitely" property still holds.
 const STDERR_DRAIN_JOIN_TIMEOUT: Duration = Duration::from_millis(200);
 
+/// CD-261: bound on how many stray (non-matching-id) stdout lines
+/// `Worker::request_nullable` will skip while resyncing before giving
+/// up and returning an error. Bounded so a worker stuck emitting
+/// endless non-RPC stdout output can't hang the caller reading forever.
+const MAX_RESPONSE_RESYNC_ATTEMPTS: u32 = 32;
+
 /// Append `chunk` to `buf`, trimming from the front once `buf` exceeds
 /// `STDERR_BUF_CAP`. Byte-indexed, not char-boundary-aware — `buf`
 /// holds raw stderr bytes of unknown/possibly-invalid encoding, so
@@ -506,71 +512,8 @@ impl Worker {
             .flush()
             .map_err(|e| TypeHostError::Io(format!("flush request: {e}")))?;
 
-        // Read one NDJSON line. cp2 is synchronous: one request, one
-        // response, in order, so we don't need an out-of-order pairing
-        // layer yet. Batched type queries (a follow-up) will switch to
-        // a request-id index.
-        let mut buf = String::new();
-        let n = self
-            .stdout
-            .read_line(&mut buf)
-            .map_err(|e| TypeHostError::Io(format!("read response: {e}")))?;
-        if n == 0 {
-            // CD-238: the worker's stdout closed without a response —
-            // almost always because the child process already exited.
-            // Surface its exit status and any stderr output (a Node
-            // stack trace, an ESM resolution error, ...) rather than
-            // the bare "closed before response", which gave zero
-            // diagnostic signal for the flake this was originally
-            // reported as (CI-only "worker stdout closed before
-            // response" with no visible cause).
-            let status = self
-                .child
-                .try_wait()
-                .ok()
-                .flatten()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "still running".to_string());
-            // CD-254: give the drain thread a short bounded window to
-            // finish reading whatever the child already wrote before we
-            // snapshot — otherwise the last few lines still sitting in
-            // the OS pipe when we observed stdout EOF may not have been
-            // drained yet, and the diagnostic below nondeterministically
-            // comes back empty for the common "short trace, then exit"
-            // failure shape.
-            let _ = self
-                .stderr_drain_done
-                .recv_timeout(STDERR_DRAIN_JOIN_TIMEOUT);
-            // CD-244: read from the drain thread's buffer rather than
-            // the pipe directly — a direct `read_to_string` here blocks
-            // until the child closes stderr, which (per the `status`
-            // computed above) may never happen if the child is still
-            // running.
-            //
-            // CD-260: a poisoned lock (this call is itself the only
-            // realistic panic site touching this mutex) is read through
-            // rather than treated as "no diagnostics" — see
-            // `drain_into`'s CD-260 doc for why honouring poison here
-            // would be strictly worse than ignoring it.
-            let bytes = self
-                .stderr_buf
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let stderr_text = String::from_utf8_lossy(&bytes).trim().to_string();
-            let stderr_text = stderr_text.as_str();
-            return Err(TypeHostError::Io(format!(
-                "worker stdout closed before response (exit status: {status}){}",
-                if stderr_text.is_empty() {
-                    String::new()
-                } else {
-                    format!("; stderr: {stderr_text}")
-                }
-            )));
-        }
-
         #[derive(Deserialize)]
         struct ResponseEnvelope<R> {
-            #[allow(dead_code)]
             id: String,
             #[serde(default)]
             ok: bool,
@@ -582,8 +525,113 @@ impl Worker {
             code: String,
             message: String,
         }
-        let env: ResponseEnvelope<R> = serde_json::from_str(buf.trim_end())
-            .map_err(|e| TypeHostError::BadResponse(format!("{e}: {}", buf.trim_end())))?;
+
+        // CD-261: cp2 is synchronous (one request, one response, in
+        // order) but only for a *well-behaved* worker — a stray line on
+        // stdout (a `console.log` reached through user config, a Node
+        // loader/deprecation notice, ...) desyncs purely-positional
+        // pairing permanently: every later response answers the wrong
+        // request, silently attributing type facts to the wrong span
+        // for the worker's remaining lifetime. `next_id()` already
+        // generates unique ids; check them. On a mismatch, skip the
+        // stray line and keep reading (bounded) rather than trust it —
+        // resync, don't resign.
+        let mut resync_attempts = 0u32;
+        let env: ResponseEnvelope<R> = loop {
+            // Read one NDJSON line.
+            let mut buf = String::new();
+            let n = self
+                .stdout
+                .read_line(&mut buf)
+                .map_err(|e| TypeHostError::Io(format!("read response: {e}")))?;
+            if n == 0 {
+                // CD-238: the worker's stdout closed without a response —
+                // almost always because the child process already exited.
+                // Surface its exit status and any stderr output (a Node
+                // stack trace, an ESM resolution error, ...) rather than
+                // the bare "closed before response", which gave zero
+                // diagnostic signal for the flake this was originally
+                // reported as (CI-only "worker stdout closed before
+                // response" with no visible cause).
+                let status = self
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "still running".to_string());
+                // CD-254: give the drain thread a short bounded window to
+                // finish reading whatever the child already wrote before we
+                // snapshot — otherwise the last few lines still sitting in
+                // the OS pipe when we observed stdout EOF may not have been
+                // drained yet, and the diagnostic below nondeterministically
+                // comes back empty for the common "short trace, then exit"
+                // failure shape.
+                let _ = self
+                    .stderr_drain_done
+                    .recv_timeout(STDERR_DRAIN_JOIN_TIMEOUT);
+                // CD-244: read from the drain thread's buffer rather than
+                // the pipe directly — a direct `read_to_string` here blocks
+                // until the child closes stderr, which (per the `status`
+                // computed above) may never happen if the child is still
+                // running.
+                //
+                // CD-260: a poisoned lock (this call is itself the only
+                // realistic panic site touching this mutex) is read through
+                // rather than treated as "no diagnostics" — see
+                // `drain_into`'s CD-260 doc for why honouring poison here
+                // would be strictly worse than ignoring it.
+                let bytes = self
+                    .stderr_buf
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let stderr_text = String::from_utf8_lossy(&bytes).trim().to_string();
+                let stderr_text = stderr_text.as_str();
+                return Err(TypeHostError::Io(format!(
+                    "worker stdout closed before response (exit status: {status}){}",
+                    if stderr_text.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; stderr: {stderr_text}")
+                    }
+                )));
+            }
+
+            // A stray line — one that isn't valid JSON at all, or is
+            // valid JSON but answers a different request id — is
+            // discarded and reading continues, up to a bounded number
+            // of attempts. Both shapes count against the same budget:
+            // either one is evidence stdout is (or was, transiently)
+            // carrying something other than this request's response.
+            let candidate: ResponseEnvelope<R> = match serde_json::from_str(buf.trim_end()) {
+                Ok(env) => env,
+                Err(e) => {
+                    resync_attempts += 1;
+                    if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
+                        return Err(TypeHostError::BadResponse(format!(
+                            "{e}: {} (gave up resyncing after {resync_attempts} \
+                             stray/malformed line(s))",
+                            buf.trim_end()
+                        )));
+                    }
+                    continue;
+                }
+            };
+            if candidate.id == id {
+                break candidate;
+            }
+            resync_attempts += 1;
+            if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
+                return Err(TypeHostError::BadResponse(format!(
+                    "response id mismatch: expected {id:?}, got {:?} \
+                     (gave up resyncing after {resync_attempts} stray line(s) — \
+                     worker stdout may be permanently desynced)",
+                    candidate.id
+                )));
+            }
+            // Stray line that doesn't answer this request — discard it
+            // and keep reading for the real response.
+        };
         if env.ok {
             Ok(env.result)
         } else {
@@ -1164,6 +1212,112 @@ mod tests {
             }
             let _ = worker.close();
         }
+    }
+
+    /// CD-261: a stray line on the worker's stdout — malformed JSON, or
+    /// valid JSON that answers a different request id — must not
+    /// permanently desync purely-positional response pairing. Uses a
+    /// bare `node -e` "worker" (not the real type-host script) that
+    /// emits one non-JSON line before responding to each request over a
+    /// readline-framed stdin/stdout protocol, matching what
+    /// `Worker::request_nullable` speaks.
+    #[test]
+    fn request_nullable_resyncs_past_a_stray_stdout_line_instead_of_desyncing() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 console.log('stray line not json'); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', (line) => { \
+                   const req = JSON.parse(line); \
+                   process.stdout.write(JSON.stringify({ id: req.id, ok: true, result: null }) + '\\n'); \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        match result {
+            Ok(None) => {}
+            other => panic!("expected Ok(None) after resyncing past the stray line, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
+
+    /// CD-261: a response whose id never matches (a permanently desynced
+    /// worker, or a genuinely different in-flight request that will
+    /// never arrive) must give up after `MAX_RESPONSE_RESYNC_ATTEMPTS`
+    /// rather than block the caller forever reading stray lines.
+    #[test]
+    fn request_nullable_gives_up_resyncing_after_the_bounded_attempt_limit() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', () => { \
+                   for (let i = 0; i < 64; i++) { \
+                     process.stdout.write(JSON.stringify({ id: 'never-matches', ok: true, result: null }) + '\\n'); \
+                   } \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let start = std::time::Instant::now();
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "should give up after bounded resync attempts, not block; took {elapsed:?}"
+        );
+        match result {
+            Err(TypeHostError::BadResponse(msg)) => {
+                assert!(
+                    msg.contains("resyncing"),
+                    "expected a resync-exhausted error, got: {msg}"
+                );
+            }
+            other => panic!("expected TypeHostError::BadResponse, got {other:?}"),
+        }
+        let _ = worker.close();
     }
 
     /// CD-172: the Rust-side pre-check must agree with what

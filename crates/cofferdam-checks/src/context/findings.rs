@@ -123,6 +123,7 @@ fn fresh_summary_item(total: u32, counts: &BTreeMap<String, u32>) -> ContextItem
         .collect::<Vec<_>>()
         .join(", ");
     let noun = if total == 1 { "finding" } else { "findings" };
+    let check_ids: Vec<&str> = counts.keys().map(String::as_str).collect();
     ContextItem {
         check_id: META.id.into(),
         title: format!("{total} {noun} in changed lines"),
@@ -130,7 +131,10 @@ fn fresh_summary_item(total: u32, counts: &BTreeMap<String, u32>) -> ContextItem
         score: 100,
         pinned: true,
         related: vec![],
-        explain: None,
+        explain: Some(format!(
+            "{total} finding(s) from {} on line(s) the diff changed",
+            check_ids.join(", ")
+        )),
     }
 }
 
@@ -143,7 +147,10 @@ fn legacy_item(file: &Path, count: u32) -> ContextItem {
         score: 50,
         pinned: true,
         related: vec![],
-        explain: None,
+        explain: Some(format!(
+            "{count} pre-existing finding(s) in {} outside the lines the diff changed",
+            file.display()
+        )),
     }
 }
 
@@ -318,6 +325,30 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(items.iter().any(|i| i.title.ends_with("a.ts")));
         assert!(items.iter().any(|i| i.title.ends_with("b.ts")));
+    }
+
+    #[test]
+    fn all_context_provider_items_populate_explain() {
+        let corpus = setup_corpus(&[
+            ("/a.ts", "Warning.TripleEquals", 5),
+            ("/a.ts", "Warning.NoConsoleLog", 99),
+        ]);
+        let cs = ChangeSet {
+            files: [PathBuf::from("/a.ts")].into_iter().collect(),
+            line_ranges: [(
+                PathBuf::from("/a.ts"),
+                vec![LineRange { start: 1, end: 10 }],
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let mut fctx = FinalizeContext::new(&corpus);
+        let items = Findings.context_items(&cs, &mut fctx);
+        assert_eq!(items.len(), 2);
+        assert!(
+            items.iter().all(|i| i.explain.is_some()),
+            "items: {items:?}"
+        );
     }
 
     #[test]

@@ -15,8 +15,13 @@ pub struct ContextItem {
     pub title: String,
     /// Markdown body.
     pub body: String,
-    /// Relevance — higher sorts earlier. Provider-relative; the
-    /// assembly pipeline multiplies in source priority.
+    /// Relevance — higher sorts earlier. Compared directly against
+    /// every other provider's `score` by `context_digest::assemble`
+    /// (in `cofferdam-cli`) to decide what survives `--budget`
+    /// truncation, so it is NOT provider-relative: every provider
+    /// must map its own confidence onto the shared scale in
+    /// [`crate::relevance`] (CD-210) rather than inventing its own
+    /// numbers.
     pub score: i32,
     /// Pinned items are never evicted by budget truncation
     /// (findings summaries, high-priority knowledge notes).

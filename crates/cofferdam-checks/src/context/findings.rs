@@ -40,8 +40,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use cofferdam_core::{
-    Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext, Issue,
-    Severity, SourceFile, ALL_PRE_FILTER_FINDINGS,
+    relevance, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext,
+    Issue, Severity, SourceFile, ALL_PRE_FILTER_FINDINGS,
 };
 
 pub struct Findings;
@@ -128,7 +128,7 @@ fn fresh_summary_item(total: u32, counts: &BTreeMap<String, u32>) -> ContextItem
         check_id: META.id.into(),
         title: format!("{total} {noun} in changed lines"),
         body: format!("{breakdown} \u{2014} run `cofferdam check` for detail."),
-        score: 100,
+        score: relevance::VERIFIED,
         pinned: true,
         related: vec![],
         explain: Some(format!(
@@ -144,7 +144,7 @@ fn legacy_item(file: &Path, count: u32) -> ContextItem {
         check_id: META.id.into(),
         title: format!("Legacy debt: {}", file.display()),
         body: format!("This file carries {count} baselined {noun} outside the changed lines."),
-        score: 50,
+        score: relevance::INDIRECT,
         pinned: true,
         related: vec![],
         explain: Some(format!(

@@ -27,6 +27,7 @@ use cofferdam_core::graph::{
     ExportRecord, ImportRecord, InvariantsRuntime, LayersConfig, EXPORTS as GRAPH_EXPORTS,
     IMPORTS as GRAPH_IMPORTS, INVARIANTS as GRAPH_INVARIANTS, LAYERS as GRAPH_LAYERS,
 };
+use cofferdam_core::relevance;
 use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, Priority,
     RelatedSpan, Severity, SourceFile, Span,
@@ -253,9 +254,9 @@ pub enum NotePriority {
 impl NotePriority {
     fn score(self) -> i32 {
         match self {
-            NotePriority::High => 100,
-            NotePriority::Normal => 50,
-            NotePriority::Low => 10,
+            NotePriority::High => relevance::VERIFIED,
+            NotePriority::Normal => relevance::DIRECT,
+            NotePriority::Low => relevance::INFERRED,
         }
     }
 

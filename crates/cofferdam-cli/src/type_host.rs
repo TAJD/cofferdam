@@ -311,30 +311,49 @@ const STDERR_BUF_CAP: usize = 64 * 1024;
 /// CD-238 stdout-EOF error path a non-blocking source of diagnostics
 /// (previously it did a blocking `read_to_string`, which could hang
 /// forever if the child was still alive — CD-244).
-fn spawn_stderr_drain(stderr: ChildStderr) -> Arc<Mutex<String>> {
-    let buf = Arc::new(Mutex::new(String::new()));
+///
+/// CD-253: buffered as raw bytes rather than `String`. A worker's
+/// stderr isn't guaranteed to be valid UTF-8 or to break cleanly on
+/// character boundaries at the `STDERR_BUF_CAP` trim point — reading
+/// via `read_line`/`String` panicked `replace_range` on a multi-byte
+/// char straddling the cut, and `read_line` itself errors (treated as
+/// EOF, permanently stopping the drain) on invalid UTF-8. `read_until`
+/// has no such encoding concerns; decoding is deferred to
+/// [`Worker::request_nullable`]'s error path via `from_utf8_lossy`.
+fn spawn_stderr_drain(stderr: ChildStderr) -> Arc<Mutex<Vec<u8>>> {
+    let buf = Arc::new(Mutex::new(Vec::new()));
     let buf_writer = Arc::clone(&buf);
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
+        let mut line = Vec::new();
         loop {
             line.clear();
-            match reader.read_line(&mut line) {
+            match reader.read_until(b'\n', &mut line) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    let Ok(mut text) = buf_writer.lock() else {
+                    let Ok(mut bytes) = buf_writer.lock() else {
                         break;
                     };
-                    text.push_str(&line);
-                    if text.len() > STDERR_BUF_CAP {
-                        let excess = text.len() - STDERR_BUF_CAP;
-                        text.replace_range(0..excess, "");
-                    }
+                    append_capped(&mut bytes, &line);
                 }
             }
         }
     });
     buf
+}
+
+/// Append `chunk` to `buf`, trimming from the front once `buf` exceeds
+/// `STDERR_BUF_CAP`. Byte-indexed, not char-boundary-aware — `buf`
+/// holds raw stderr bytes of unknown/possibly-invalid encoding, so
+/// there is no "boundary" to respect (see [`spawn_stderr_drain`]'s
+/// CD-253 doc). Split out from the drain loop so it's unit-testable
+/// without a real child process.
+fn append_capped(buf: &mut Vec<u8>, chunk: &[u8]) {
+    buf.extend_from_slice(chunk);
+    if buf.len() > STDERR_BUF_CAP {
+        let excess = buf.len() - STDERR_BUF_CAP;
+        buf.drain(0..excess);
+    }
 }
 
 /// One running type-host process. Keeps stdin/stdout open so callers
@@ -345,10 +364,10 @@ pub struct Worker {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
-    /// Tail of the worker's stderr output, kept current by a background
-    /// drain thread spawned in [`spawn_worker`] — see
-    /// [`spawn_stderr_drain`].
-    stderr_buf: Arc<Mutex<String>>,
+    /// Tail of the worker's stderr output (raw bytes — CD-253), kept
+    /// current by a background drain thread spawned in [`spawn_worker`]
+    /// — see [`spawn_stderr_drain`].
+    stderr_buf: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Worker {
@@ -432,7 +451,7 @@ impl Worker {
             let stderr_text = self
                 .stderr_buf
                 .lock()
-                .map(|text| text.trim().to_string())
+                .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
                 .unwrap_or_default();
             let stderr_text = stderr_text.as_str();
             return Err(TypeHostError::Io(format!(
@@ -566,7 +585,7 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
         .ok_or_else(|| TypeHostError::Io("no worker stdout".into()))?;
     let stderr_buf = match child.stderr.take() {
         Some(stderr) => spawn_stderr_drain(stderr),
-        None => Arc::new(Mutex::new(String::new())),
+        None => Arc::new(Mutex::new(Vec::new())),
     };
     Ok(Worker {
         child,
@@ -788,6 +807,45 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    /// CD-253: a multi-byte UTF-8 character straddling the
+    /// `STDERR_BUF_CAP` cut point must not panic — the old
+    /// `String::replace_range` implementation panicked here because
+    /// its trim index wasn't guaranteed to land on a char boundary.
+    #[test]
+    fn append_capped_does_not_panic_when_the_cap_lands_mid_char() {
+        // A 3-byte UTF-8 char (e.g. '€') repeated so the cap boundary
+        // is very likely to fall inside one of its bytes for at least
+        // some cap/length combination; assert over a spread of chunk
+        // sizes so the test doesn't depend on hitting one exact offset.
+        for pad in 0..3 {
+            let mut buf = vec![b'x'; STDERR_BUF_CAP - 1 + pad];
+            let chunk = "€€€€€".as_bytes(); // 5 * 3 = 15 bytes, multi-byte throughout
+            append_capped(&mut buf, chunk);
+            assert!(buf.len() <= STDERR_BUF_CAP);
+            // Must not panic, and the lossy decode used at the actual
+            // call site must also not panic on a boundary-split lead
+            // byte.
+            let _ = String::from_utf8_lossy(&buf);
+        }
+    }
+
+    /// CD-253: invalid UTF-8 bytes must not stop the drain — the old
+    /// `read_line`-based loop treated a `read` returning `Err` (which
+    /// `BufRead::read_line` does on invalid UTF-8) the same as EOF,
+    /// silently and permanently ending the drain for the worker's
+    /// remaining lifetime. `append_capped` operates on raw bytes with
+    /// no encoding validation, so this is really a proof that invalid
+    /// UTF-8 round-trips harmlessly through it and its `from_utf8_lossy`
+    /// consumer.
+    #[test]
+    fn append_capped_tolerates_invalid_utf8() {
+        let mut buf = Vec::new();
+        let invalid = [0xFF, 0xFE, b'h', b'i', b'\n'];
+        append_capped(&mut buf, &invalid);
+        assert_eq!(buf, invalid);
+        assert!(String::from_utf8_lossy(&buf).contains("hi"));
     }
 
     /// CD-244/CD-245: a worker that writes more than one OS pipe buffer

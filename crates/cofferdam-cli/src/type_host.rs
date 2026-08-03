@@ -20,7 +20,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle, UnionFacts};
@@ -341,6 +341,11 @@ const STDERR_BUF_CAP: usize = 64 * 1024;
 /// OOM the whole CLI in a code path whose entire purpose is defensive
 /// robustness. A fixed chunk size bounds the transient allocation
 /// regardless of whether the input ever contains a newline.
+///
+/// CD-260: the loop no longer treats every `Err` or a poisoned lock as
+/// a reason to stop draining for the worker's remaining lifetime — both
+/// silently reopened the CD-245 deadlock this thread exists to prevent.
+/// See [`drain_into`].
 fn spawn_stderr_drain(stderr: ChildStderr) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let buf_writer = Arc::clone(&buf);
@@ -358,17 +363,37 @@ fn spawn_stderr_drain(stderr: ChildStderr) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiv
 /// reader without a real child process.
 const DRAIN_CHUNK_SIZE: usize = 8 * 1024;
 
+/// CD-260: a genuine EOF (`Ok(0)`) is the only intended way out of the
+/// loop. A poisoned lock is ignored rather than treated as fatal — this
+/// buffer holds a lossy diagnostic tail with no invariant a panicking
+/// holder (`Worker::request_nullable`'s CD-238 error path) could
+/// corrupt, so honouring the poison and giving up on draining forever
+/// is strictly worse than reading through it. Read errors other than a
+/// bounded number of transient ones (retried with a short backoff) also
+/// end the loop — anything indefinitely retried here would itself risk
+/// spinning forever on a truly dead pipe.
+const MAX_TRANSIENT_READ_RETRIES: u32 = 8;
+
 fn drain_into<R: Read>(mut reader: R, buf: &Mutex<Vec<u8>>) {
     let mut chunk = [0u8; DRAIN_CHUNK_SIZE];
+    let mut retries_left = MAX_TRANSIENT_READ_RETRIES;
     loop {
         match reader.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(n) => {
-                let Ok(mut bytes) = buf.lock() else {
-                    break;
-                };
+                retries_left = MAX_TRANSIENT_READ_RETRIES;
+                let mut bytes = buf.lock().unwrap_or_else(PoisonError::into_inner);
                 append_capped(&mut bytes, &chunk[..n]);
             }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                // Doesn't count against the retry budget — not actually
+                // a failure, just "try the syscall again".
+            }
+            Err(_) if retries_left > 0 => {
+                retries_left -= 1;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break,
         }
     }
 }
@@ -500,11 +525,17 @@ impl Worker {
             // until the child closes stderr, which (per the `status`
             // computed above) may never happen if the child is still
             // running.
-            let stderr_text = self
+            //
+            // CD-260: a poisoned lock (this call is itself the only
+            // realistic panic site touching this mutex) is read through
+            // rather than treated as "no diagnostics" — see
+            // `drain_into`'s CD-260 doc for why honouring poison here
+            // would be strictly worse than ignoring it.
+            let bytes = self
                 .stderr_buf
                 .lock()
-                .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
-                .unwrap_or_default();
+                .unwrap_or_else(PoisonError::into_inner);
+            let stderr_text = String::from_utf8_lossy(&bytes).trim().to_string();
             let stderr_text = stderr_text.as_str();
             return Err(TypeHostError::Io(format!(
                 "worker stdout closed before response (exit status: {status}){}",
@@ -928,6 +959,85 @@ mod tests {
             bytes.len() <= STDERR_BUF_CAP,
             "expected the buffer to stay capped at {STDERR_BUF_CAP}, got {}",
             bytes.len()
+        );
+    }
+
+    /// CD-260: a panic while `stderr_buf` is locked elsewhere (the only
+    /// realistic site is `Worker::request_nullable`'s CD-238 error path)
+    /// must not permanently stop the drain — the buffer holds a lossy
+    /// diagnostic tail with no invariant a panic could corrupt, so
+    /// honouring the poison and giving up forever is strictly worse
+    /// than reading through it.
+    #[test]
+    fn drain_into_recovers_from_a_poisoned_lock() {
+        let buf = Mutex::new(Vec::new());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = buf.lock().expect("lock");
+            panic!("simulate a panic while holding the lock");
+        }));
+        assert!(poisoned.is_err());
+        assert!(buf.is_poisoned());
+
+        drain_into(std::io::Cursor::new(b"after poison\n".to_vec()), &buf);
+
+        let bytes = buf.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(&*bytes, b"after poison\n");
+    }
+
+    /// CD-260: a transient read error (e.g. `WouldBlock`) must not end
+    /// the drain permanently — before the fix, `Err(_) => break` treated
+    /// every error the same as EOF.
+    #[test]
+    fn drain_into_retries_transient_read_errors_instead_of_giving_up() {
+        struct FlakyThenData {
+            errors_left: u32,
+            payload: Option<Vec<u8>>,
+        }
+        impl Read for FlakyThenData {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.errors_left > 0 {
+                    self.errors_left -= 1;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "simulated transient error",
+                    ));
+                }
+                match self.payload.take() {
+                    Some(payload) => {
+                        out[..payload.len()].copy_from_slice(&payload);
+                        Ok(payload.len())
+                    }
+                    None => Ok(0),
+                }
+            }
+        }
+
+        let reader = FlakyThenData {
+            errors_left: MAX_TRANSIENT_READ_RETRIES - 1,
+            payload: Some(b"hi\n".to_vec()),
+        };
+        let buf = Mutex::new(Vec::new());
+        drain_into(reader, &buf);
+        let bytes = buf.lock().expect("lock");
+        assert_eq!(&*bytes, b"hi\n");
+    }
+
+    /// CD-260: a reader that errors forever must still make `drain_into`
+    /// return promptly (bounded retries) rather than hang the thread.
+    #[test]
+    fn drain_into_gives_up_after_exhausting_retries_on_a_persistently_erroring_reader() {
+        struct AlwaysErrors;
+        impl Read for AlwaysErrors {
+            fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("simulated persistent error"))
+            }
+        }
+        let buf = Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        drain_into(AlwaysErrors, &buf);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "should give up after bounded retries, not hang"
         );
     }
 

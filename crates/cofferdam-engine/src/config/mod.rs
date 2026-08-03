@@ -160,7 +160,11 @@ pub struct OverrideCheck {
 
 /// Reduce an absolute, engine-promoted `file_key` to the
 /// project-relative form globs are written against: strip the absolute
-/// `root_key` prefix (or a leading `./`). Shared by
+/// `root_key` prefix. Returns `None` when `file_key` isn't under
+/// `root_key` at all — callers must treat that as "does not match"
+/// rather than falling back to matching the raw (still-absolute) path,
+/// since a `**/…` pattern would otherwise match straight through an
+/// absolute-path prefix it was never meant to see (CD-226). Shared by
 /// [`OverrideBlock::is_match`] and [`ContextSuppressRule::is_match`].
 /// CD-225: the naive `file_key.strip_prefix(root_key)` this used to fall
 /// back to (without requiring a separator after the match) mis-strips a
@@ -170,19 +174,26 @@ pub struct OverrideCheck {
 /// now reads as project-relative to the globset. The only case that
 /// fallback needs beyond the separator-anchored `with_slash` match above
 /// is `file_key == root_key` exactly (a directory, not a file, so no
-/// real caller passes it) — so it's handled explicitly instead.
-fn relativize<'a>(root_key: &str, file_key: &'a str) -> &'a str {
+/// real caller passes it) — so it's handled explicitly instead. A
+/// leading `./` on `file_key` (a relative, non-engine-promoted path) is
+/// always project-relative already and is returned as-is.
+fn relativize<'a>(root_key: &str, file_key: &'a str) -> Option<&'a str> {
+    if let Some(stripped) = file_key.strip_prefix("./") {
+        return Some(stripped);
+    }
     let with_slash = if root_key.ends_with('/') {
         root_key.to_string()
     } else {
         format!("{root_key}/")
     };
     if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
-        stripped
+        Some(stripped)
     } else if file_key == root_key {
-        ""
+        Some("")
+    } else if file_key.starts_with('/') || file_key.starts_with("\\") {
+        None
     } else {
-        file_key.trim_start_matches("./")
+        Some(file_key)
     }
 }
 
@@ -191,9 +202,14 @@ impl OverrideBlock {
     /// be absolute or relative) is matched by this block's globs.
     /// Mirrors `public_api`'s matcher: strip the absolute root prefix
     /// (or a leading `./`) so root-relative patterns match an absolute
-    /// engine-promoted path.
+    /// engine-promoted path. A `file_key` outside `root_key` never
+    /// matches (CD-226) — it is not relativized and handed to the
+    /// globset as-is.
     pub fn is_match(&self, file_key: &str) -> bool {
-        self.globset.is_match(relativize(&self.root_key, file_key))
+        match relativize(&self.root_key, file_key) {
+            Some(relative) => self.globset.is_match(relative),
+            None => false,
+        }
     }
 }
 
@@ -220,7 +236,10 @@ impl ContextSuppressRule {
     /// Test whether `file_key` (a forward-slash, normalised path) is
     /// matched by this rule's globs. See [`OverrideBlock::is_match`].
     pub fn is_match(&self, file_key: &str) -> bool {
-        self.globset.is_match(relativize(&self.root_key, file_key))
+        match relativize(&self.root_key, file_key) {
+            Some(relative) => self.globset.is_match(relative),
+            None => false,
+        }
     }
 }
 
@@ -313,20 +332,18 @@ mod tests {
 
     #[test]
     fn relativize_does_not_strip_a_root_key_that_is_only_a_string_prefix() {
-        // CD-225 regression: `/repo-backup/...` must not be mistaken for
-        // a path under `/repo` just because "/repo" is a string prefix
-        // of "/repo-backup" — the missing separator means it's really a
-        // sibling directory.
-        assert_eq!(
-            relativize("/repo", "/repo-backup/src/legacy/a.ts"),
-            "/repo-backup/src/legacy/a.ts"
-        );
+        // CD-225/CD-226 regression: `/repo-backup/...` must not be
+        // mistaken for a path under `/repo` just because "/repo" is a
+        // string prefix of "/repo-backup" — the missing separator means
+        // it's really a sibling directory, so relativize now returns
+        // `None` (not the untouched absolute path) for it.
+        assert_eq!(relativize("/repo", "/repo-backup/src/legacy/a.ts"), None);
         // The genuinely-nested case still strips correctly.
         assert_eq!(
             relativize("/repo", "/repo/src/legacy/a.ts"),
-            "src/legacy/a.ts"
+            Some("src/legacy/a.ts")
         );
-        assert_eq!(relativize("/repo", "/repo"), "");
+        assert_eq!(relativize("/repo", "/repo"), Some(""));
     }
 
     fn glob_for(pattern: &str) -> globset::GlobSet {
@@ -356,6 +373,22 @@ mod tests {
     }
 
     #[test]
+    fn override_block_is_match_does_not_leak_into_a_sibling_directory_via_leading_glob() {
+        // CD-226: a `**/…` pattern must not match straight through the
+        // out-of-root absolute-path prefix that CD-225 stopped stripping
+        // into a relative path but didn't stop from reaching the
+        // globset unmodified.
+        let block = OverrideBlock {
+            paths: vec!["**/legacy/**".into()],
+            globset: glob_for("**/legacy/**"),
+            root_key: "/repo".into(),
+            checks: BTreeMap::new(),
+        };
+        assert!(!block.is_match("/repo-backup/legacy/a.ts"));
+        assert!(block.is_match("/repo/src/legacy/a.ts"));
+    }
+
+    #[test]
     fn context_suppress_rule_is_match_does_not_leak_into_a_sibling_directory() {
         let rule = ContextSuppressRule {
             check_id: "Context.Precedent".into(),
@@ -366,6 +399,20 @@ mod tests {
         };
         assert!(!rule.is_match("/repo-backup/legacy/a.ts"));
         assert!(rule.is_match("/repo/legacy/a.ts"));
+    }
+
+    #[test]
+    fn context_suppress_rule_is_match_does_not_leak_into_a_sibling_directory_via_leading_glob() {
+        // CD-226: same repro as the OverrideBlock case above.
+        let rule = ContextSuppressRule {
+            check_id: "Context.Precedent".into(),
+            paths: vec!["**/legacy/**".into()],
+            globset: glob_for("**/legacy/**"),
+            root_key: "/repo".into(),
+            reason: None,
+        };
+        assert!(!rule.is_match("/repo-backup/legacy/a.ts"));
+        assert!(rule.is_match("/repo/src/legacy/a.ts"));
     }
 
     #[test]

@@ -29,8 +29,8 @@ use cofferdam_core::graph::{
 };
 use cofferdam_core::relevance;
 use cofferdam_core::{
-    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Location, Priority,
-    RelatedSpan, Severity, SourceFile, Span,
+    Category, Check, CheckContext, CheckMeta, FinalizeContext, Issue, Priority, RelatedSpan,
+    Severity, SourceFile,
 };
 
 /// Cap on a knowledge note's body length (CD-204): without one, a
@@ -83,7 +83,7 @@ impl Check for Knowledge {
             .map(|(file, message)| Issue {
                 check_id: META.id.to_string(),
                 message,
-                location: Location::from_span(&file, zero_span()),
+                location: super::whole_file_location(&file),
                 file,
                 priority: Priority(META.base_priority),
                 severity: META.default_severity,
@@ -160,7 +160,7 @@ impl Check for Knowledge {
                 .iter()
                 .map(|f| RelatedSpan {
                     file: f.clone(),
-                    location: Location::from_span(f, zero_span()),
+                    location: super::whole_file_location(f),
                 })
                 .collect();
             items.push(ContextItem {
@@ -180,15 +180,6 @@ impl Check for Knowledge {
             });
         }
         items
-    }
-}
-
-fn zero_span() -> Span {
-    Span {
-        start_byte: 0,
-        end_byte: 0,
-        line: 1,
-        column: 1,
     }
 }
 

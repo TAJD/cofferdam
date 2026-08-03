@@ -31,8 +31,15 @@
 //! flag, so the cheaper metric is the right tradeoff. The optimized
 //! prefix-filtering join from CD-193 isn't reused either: candidate
 //! sets here are a handful of same-directory siblings, not a
-//! whole-project bucket, so an all-pairs scan is already O(1) in
-//! practice.
+//! whole-project bucket, so an all-pairs scan is cheap in practice —
+//! but it must run at most once per directory, not once per changed
+//! file (CD-203): the cluster depends only on directory membership,
+//! so `context_items` caches the per-directory shape list and its
+//! all-pairs Jaccard edge set the first time a changed file lands in
+//! that directory, and reuses it for every other changed file in the
+//! same directory. The changed file itself is excluded only at
+//! cluster-selection time (by dropping edges that touch it before
+//! running union-find), not by re-running the Jaccard scan.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -189,6 +196,17 @@ impl Check for Precedent {
             siblings.sort_by(|a, b| a.file.cmp(&b.file));
         }
 
+        // Per-directory shape list + all-pairs Jaccard edges, computed at
+        // most once per directory regardless of how many changed files
+        // land in it (CD-203). Keyed by owned PathBuf since `dir` below
+        // borrows from `changeset`, a different lifetime than the
+        // `FileRecord` refs borrowed from `records`.
+        struct DirShapes<'r> {
+            shaped: Vec<(&'r FileRecord, &'r ExportedSymbol)>,
+            edges: Vec<(usize, usize)>,
+        }
+        let mut dir_cache: HashMap<PathBuf, DirShapes<'_>> = HashMap::new();
+
         let mut items = Vec::new();
         for changed in &changeset.files {
             let Some(dir) = changed.parent() else {
@@ -198,20 +216,36 @@ impl Check for Precedent {
                 continue;
             };
 
-            let shaped: Vec<(&FileRecord, &ExportedSymbol)> = dir_records
+            let dir_shapes = dir_cache.entry(dir.to_path_buf()).or_insert_with(|| {
+                let shaped: Vec<(&FileRecord, &ExportedSymbol)> = dir_records
+                    .iter()
+                    .filter_map(|r| primary_shape(r).map(|s| (*r, s)))
+                    .collect();
+                let edges = shape_edges(&shaped);
+                DirShapes { shaped, edges }
+            });
+
+            // The changed file is excluded from consideration, but only at
+            // selection time: drop its index from the effective-count check
+            // and skip any precomputed edge touching it before clustering,
+            // rather than recomputing the O(siblings²) Jaccard scan.
+            let excluded_idx = dir_shapes
+                .shaped
                 .iter()
-                .filter(|r| r.file != *changed)
-                .filter_map(|r| primary_shape(r).map(|s| (*r, s)))
-                .collect();
-            if shaped.len() < 2 {
+                .position(|(r, _)| r.file == *changed);
+            let effective_len = dir_shapes.shaped.len() - excluded_idx.map_or(0, |_| 1);
+            if effective_len < 2 {
                 continue;
             }
 
-            let Some(cluster) = largest_shape_cluster(&shaped) else {
+            let Some(cluster) =
+                largest_cluster_excluding(dir_shapes.shaped.len(), &dir_shapes.edges, excluded_idx)
+            else {
                 continue;
             };
 
-            let mut exemplars: Vec<&FileRecord> = cluster.iter().map(|&i| shaped[i].0).collect();
+            let mut exemplars: Vec<&FileRecord> =
+                cluster.iter().map(|&i| dir_shapes.shaped[i].0).collect();
             exemplars.sort_by(|a, b| a.file.cmp(&b.file));
 
             items.push(build_item(dir, &exemplars));
@@ -289,26 +323,54 @@ impl Dsu {
     }
 }
 
-/// Clusters `shaped` siblings (index-aligned pairs of file + its
-/// primary shape) by pairwise Jaccard similarity and returns the
-/// largest component of size >= 2, or `None` when no such component
-/// exists. Clusters are sorted by their lowest member index before
-/// the size comparison, and `max_by_key` keeps the *last* maximum on
-/// ties, so ties on size break on the highest min member index. The
-/// result is still deterministic regardless of hash-map iteration
-/// order — just not "lowest index wins".
-fn largest_shape_cluster(shaped: &[(&FileRecord, &ExportedSymbol)]) -> Option<Vec<usize>> {
-    let mut dsu = Dsu::new(shaped.len());
+/// All index pairs `(i, j)` with `i < j` whose primary shapes meet
+/// `SIMILARITY_THRESHOLD`. This is the O(siblings²) all-pairs Jaccard
+/// scan — callers compute it once per directory (CD-203) and reuse it
+/// for every changed file in that directory via
+/// [`largest_cluster_excluding`].
+fn shape_edges(shaped: &[(&FileRecord, &ExportedSymbol)]) -> Vec<(usize, usize)> {
+    let mut edges = Vec::new();
     for i in 0..shaped.len() {
         for j in (i + 1)..shaped.len() {
             if jaccard(fields_of(shaped[i].1), fields_of(shaped[j].1)) >= SIMILARITY_THRESHOLD {
-                dsu.union(i, j);
+                edges.push((i, j));
             }
         }
     }
+    edges
+}
+
+/// Clusters `n` siblings by the precomputed `edges` (pairs meeting
+/// `SIMILARITY_THRESHOLD`) and returns the largest component of size
+/// two or more, or `None` when no such component exists. `excluded`,
+/// when present, is dropped before clustering: any edge touching it
+/// is skipped, so it never joins a component (equivalent to
+/// recomputing the Jaccard scan over the sibling set with that file
+/// removed, but without re-running the expensive pairwise comparison
+/// — Jaccard between two other siblings doesn't depend on whether a
+/// third file is present). Clusters are sorted by their lowest member
+/// index before the size comparison, and `max_by_key` keeps the
+/// *last* maximum on ties, so ties on size break on the highest min
+/// member index. The result is still deterministic regardless of
+/// hash-map iteration order — just not "lowest index wins".
+fn largest_cluster_excluding(
+    n: usize,
+    edges: &[(usize, usize)],
+    excluded: Option<usize>,
+) -> Option<Vec<usize>> {
+    let mut dsu = Dsu::new(n);
+    for &(i, j) in edges {
+        if Some(i) == excluded || Some(j) == excluded {
+            continue;
+        }
+        dsu.union(i, j);
+    }
 
     let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
-    for i in 0..shaped.len() {
+    for i in 0..n {
+        if Some(i) == excluded {
+            continue;
+        }
         by_root.entry(dsu.find(i)).or_default().push(i);
     }
 
@@ -588,6 +650,47 @@ mod tests {
         let items = Precedent.context_items(&changeset, &mut finalize_ctx);
 
         assert!(items.is_empty(), "expected no items; got {items:?}");
+    }
+
+    #[test]
+    fn excluding_changed_file_does_not_bridge_a_false_cluster() {
+        // CD-203 regression: the changed file (c) is similar enough to
+        // BOTH a and b individually to sit in the same connected
+        // component as each of them, but a and b are not similar enough
+        // to each other. The directory-wide cluster cache must exclude
+        // c's edges before clustering — not just drop c from an
+        // already-computed {a, b, c} component — or a and b would be
+        // wrongly bridged into a false precedent via c.
+        let a = PathBuf::from("/p/bridge/a.ts");
+        let b = PathBuf::from("/p/bridge/b.ts");
+        let c = PathBuf::from("/p/bridge/c.ts");
+
+        let corpus = run_precedent(&[
+            (
+                &a,
+                "export interface A { id: string; name: string; email: string; role: string; \
+                 orgId: string; status: string; createdAt: string; updatedAt: string; }",
+            ),
+            (
+                &b,
+                "export interface B { id: string; name: string; email: string; role: string; \
+                 orgId: string; status: string; deletedAt: string; archivedAt: string; }",
+            ),
+            (
+                &c,
+                "export interface C { id: string; name: string; email: string; role: string; \
+                 orgId: string; status: string; createdAt: string; deletedAt: string; }",
+            ),
+        ]);
+
+        let changeset = ChangeSet::from_files([c.clone()]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert!(
+            items.is_empty(),
+            "a and b must not be bridged into a false precedent via c; got {items:?}"
+        );
     }
 
     #[test]

@@ -18,12 +18,17 @@ pub struct Digest {
     pub included: Vec<ContextItem>,
     pub omitted: usize,
     pub budget: usize,
+    /// Actual tokens spent on `included` — can exceed `budget` when
+    /// pinned items (which are never evicted) push the total over.
+    pub spent: usize,
 }
 
 /// Sort pinned-first, then score desc, then (check_id, title) for
 /// deterministic ties; greedily include until the budget is spent.
 /// Pinned items are always included (spec: findings + high-priority
-/// knowledge can never be evicted by filler).
+/// knowledge can never be evicted by filler) — `spent` tracks the
+/// resulting actual total so callers can tell how much a pinned
+/// overrun cost instead of only knowing `omitted`.
 pub fn assemble(mut items: Vec<ContextItem>, budget: usize) -> Digest {
     items.sort_by(|a, b| {
         b.pinned
@@ -48,6 +53,7 @@ pub fn assemble(mut items: Vec<ContextItem>, budget: usize) -> Digest {
         included,
         omitted,
         budget,
+        spent,
     }
 }
 
@@ -71,6 +77,14 @@ pub fn render_markdown(digest: &Digest, changed_file_count: usize) -> String {
             digest.omitted, digest.budget
         ));
     }
+    if digest.spent > digest.budget {
+        let pinned_count = digest.included.iter().filter(|i| i.pinned).count();
+        out.push_str(&format!(
+            "_{} pinned item(s) exceeded the budget by {} tokens._\n",
+            pinned_count,
+            digest.spent - digest.budget
+        ));
+    }
     out
 }
 
@@ -82,6 +96,10 @@ pub fn render_json(digest: &Digest, changeset: &ChangeSet, pretty: bool) -> Stri
         items: &'a [ContextItem],
         omitted: usize,
         budget: usize,
+        /// Actual tokens spent on `items` — additive field (CD-204) so
+        /// JSON consumers can detect a pinned-item budget overrun
+        /// (`spent > budget`) without re-deriving it from `items`.
+        spent: usize,
     }
     let payload = Payload {
         schema_version: 1,
@@ -89,6 +107,7 @@ pub fn render_json(digest: &Digest, changeset: &ChangeSet, pretty: bool) -> Stri
         items: &digest.included,
         omitted: digest.omitted,
         budget: digest.budget,
+        spent: digest.spent,
     };
     if pretty {
         serde_json::to_string_pretty(&payload).expect("digest serializes")
@@ -173,9 +192,31 @@ mod tests {
             included: vec![item("Context.A", "a", 9, false, 4)],
             omitted: 7,
             budget: 2000,
+            spent: 3,
         };
         let md = render_markdown(&d, 1);
         assert!(md.contains("7 item(s) omitted"));
         assert!(md.contains("--budget"));
+    }
+
+    #[test]
+    fn render_markdown_discloses_pinned_overrun() {
+        let d = assemble(
+            vec![
+                item("Context.P", "p", 1, true, 4000),
+                item("Context.A", "a", 99, false, 100),
+            ],
+            10,
+        );
+        assert!(d.spent > d.budget);
+        let md = render_markdown(&d, 1);
+        assert!(md.contains("pinned item(s) exceeded the budget"));
+    }
+
+    #[test]
+    fn render_markdown_no_overrun_disclosure_when_within_budget() {
+        let d = assemble(vec![item("Context.A", "a", 9, false, 4)], 2000);
+        let md = render_markdown(&d, 1);
+        assert!(!md.contains("exceeded the budget"));
     }
 }

@@ -237,6 +237,38 @@ mod tests {
         assert!(d.included.iter().any(|i| i.check_id == "Context.P"));
     }
 
+    /// CD-234: a pinned advisory item sharing both `check_id` and score
+    /// with the ordinary items it competes against (as
+    /// `Context.Precedent`'s capped-groups summary item does — all
+    /// Precedent items share `relevance::FLOOR`) must still survive
+    /// budget eviction that drops its unpinned same-score siblings.
+    /// Before CD-234 this item was unpinned and had no privileged
+    /// position over ordinary Precedent items, so a budget-saturated
+    /// digest (exactly the scenario that triggers the cap in the first
+    /// place — a monorepo big enough to have 200+ same-kind files) could
+    /// silently drop the one item meant to disclose that analysis was
+    /// skipped.
+    #[test]
+    fn a_pinned_same_check_id_same_score_item_survives_when_its_unpinned_siblings_are_evicted() {
+        let d = assemble(
+            vec![
+                item("Context.Precedent", "advisory", 5, true, 100),
+                item("Context.Precedent", "convention a", 5, false, 4000),
+                item("Context.Precedent", "convention b", 5, false, 4000),
+            ],
+            50,
+        );
+        assert!(
+            d.included.iter().any(|i| i.title == "advisory"),
+            "pinned advisory must survive; got {:?}",
+            d.included
+        );
+        assert!(
+            !d.included.iter().any(|i| i.title == "convention a"),
+            "unpinned same-score sibling should have been evicted"
+        );
+    }
+
     /// CD-216: round-robin governs *selection*, not presentation —
     /// once several providers each contribute multiple items, the
     /// resulting digest must still read in strict relevance order, not

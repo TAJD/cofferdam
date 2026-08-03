@@ -645,6 +645,20 @@ fn build_kind_item(kind: &str, exemplars: &[&FileRecord]) -> ContextItem {
 /// exceeded `MAX_GROUP_SIZE` (CD-223/CD-229). Not anchored to any file
 /// (there is no single changed file this speaks about) — `related` is
 /// deliberately empty, same as `Context.Findings::fresh_summary_item`.
+///
+/// CD-234: `pinned: true` (unlike every other item this provider
+/// emits) so `context_digest::assemble` never evicts it under budget
+/// pressure. Without this it shared `SCORE` (`relevance::FLOOR`) with
+/// every ordinary Precedent item and lost every eviction tie-break —
+/// exactly backwards, since the scenario that triggers the cap (a
+/// monorepo big enough to have 200+ same-kind or same-directory files)
+/// is also the scenario most likely to produce a budget-saturated
+/// digest. CD-228's "the skip is not silent" guarantee needs this item
+/// to actually survive, not just exist. Safe to pin unconditionally:
+/// at most one is emitted per run (see the `if !capped_kinds.is_empty()
+/// || !capped_dirs.is_empty()` guard in `context_items`), so it can't
+/// crowd out other providers' budget the way an unbounded pinned set
+/// would.
 fn build_capped_groups_item(
     capped_kinds: &BTreeMap<String, usize>,
     capped_dirs: &BTreeMap<PathBuf, usize>,
@@ -672,7 +686,7 @@ fn build_capped_groups_item(
         ),
         body,
         score: SCORE,
-        pinned: false,
+        pinned: true,
         related: Vec::new(),
         explain: Some(format!(
             "group(s) over {MAX_GROUP_SIZE} files: directories [{}], kinds [{}]",
@@ -999,6 +1013,10 @@ mod tests {
             items[0].related.is_empty(),
             "capped-summary item isn't anchored to any single file"
         );
+        assert!(
+            items[0].pinned,
+            "CD-234: the capped-summary item must be pinned so budget eviction can't drop it"
+        );
     }
 
     #[test]
@@ -1039,6 +1057,10 @@ mod tests {
         assert!(
             items[0].related.is_empty(),
             "capped-summary item isn't anchored to any single file"
+        );
+        assert!(
+            items[0].pinned,
+            "CD-234: the capped-summary item must be pinned so budget eviction can't drop it"
         );
     }
 

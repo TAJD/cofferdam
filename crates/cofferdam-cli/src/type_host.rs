@@ -16,11 +16,11 @@
 //!   - Worker dies mid-run → `type_at` returns `None`, silently
 //!     disabling type findings for the rest of the run.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle, UnionFacts};
@@ -293,6 +293,50 @@ pub fn ping(project_root: &Path, params: PingParams) -> Result<PingResult, TypeH
     Ok(result)
 }
 
+/// Cap on retained stderr text (CD-245): a worker that dumps a large
+/// diagnostic (deprecation spam, a `console.error` in a big project)
+/// shouldn't grow this unboundedly for the lifetime of the worker —
+/// only the tail is useful for the CD-238 error message anyway.
+const STDERR_BUF_CAP: usize = 64 * 1024;
+
+/// CD-245: drain `stderr` on a background thread into a bounded shared
+/// buffer for the worker's whole lifetime, rather than leaving the pipe
+/// unread. An unread `Stdio::piped()` stderr fills its OS pipe buffer
+/// (typically 8-64 KB) once the worker writes past it — Node
+/// deprecation warnings, a ts-morph diagnostic dump, a stray
+/// `console.error` — at which point the worker blocks in `write(2)`
+/// and never produces its NDJSON response, hanging `Worker::request`
+/// (which has no read timeout). Draining continuously keeps the pipe
+/// empty so the worker can't wedge itself this way, and gives the
+/// CD-238 stdout-EOF error path a non-blocking source of diagnostics
+/// (previously it did a blocking `read_to_string`, which could hang
+/// forever if the child was still alive — CD-244).
+fn spawn_stderr_drain(stderr: ChildStderr) -> Arc<Mutex<String>> {
+    let buf = Arc::new(Mutex::new(String::new()));
+    let buf_writer = Arc::clone(&buf);
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let Ok(mut text) = buf_writer.lock() else {
+                        break;
+                    };
+                    text.push_str(&line);
+                    if text.len() > STDERR_BUF_CAP {
+                        let excess = text.len() - STDERR_BUF_CAP;
+                        text.replace_range(0..excess, "");
+                    }
+                }
+            }
+        }
+    });
+    buf
+}
+
 /// One running type-host process. Keeps stdin/stdout open so callers
 /// can issue multiple requests against a warm worker. Always drop via
 /// `close()` to flush stdin and reap the child; `Drop` falls back to
@@ -301,7 +345,10 @@ pub struct Worker {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
-    stderr: Option<ChildStderr>,
+    /// Tail of the worker's stderr output, kept current by a background
+    /// drain thread spawned in [`spawn_worker`] — see
+    /// [`spawn_stderr_drain`].
+    stderr_buf: Arc<Mutex<String>>,
 }
 
 impl Worker {
@@ -377,11 +424,17 @@ impl Worker {
                 .flatten()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "still running".to_string());
-            let mut stderr_text = String::new();
-            if let Some(stderr) = self.stderr.as_mut() {
-                let _ = stderr.read_to_string(&mut stderr_text);
-            }
-            let stderr_text = stderr_text.trim();
+            // CD-244: read from the drain thread's buffer rather than
+            // the pipe directly — a direct `read_to_string` here blocks
+            // until the child closes stderr, which (per the `status`
+            // computed above) may never happen if the child is still
+            // running.
+            let stderr_text = self
+                .stderr_buf
+                .lock()
+                .map(|text| text.trim().to_string())
+                .unwrap_or_default();
+            let stderr_text = stderr_text.as_str();
             return Err(TypeHostError::Io(format!(
                 "worker stdout closed before response (exit status: {status}){}",
                 if stderr_text.is_empty() {
@@ -511,12 +564,15 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
         .stdout
         .take()
         .ok_or_else(|| TypeHostError::Io("no worker stdout".into()))?;
-    let stderr = child.stderr.take();
+    let stderr_buf = match child.stderr.take() {
+        Some(stderr) => spawn_stderr_drain(stderr),
+        None => Arc::new(Mutex::new(String::new())),
+    };
     Ok(Worker {
         child,
         stdin: Some(stdin),
         stdout: BufReader::new(stdout),
-        stderr,
+        stderr_buf,
     })
 }
 
@@ -725,6 +781,68 @@ fn build_type_oracle_with_pool_size(
 mod tests {
     use super::*;
     use cofferdam_core::TypeOracle;
+
+    fn node_present() -> bool {
+        Command::new("node")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// CD-244/CD-245: a worker that writes more than one OS pipe buffer
+    /// (typically 8-64 KB) to stderr and then exits without ever
+    /// producing a stdout response must not hang `request_nullable` —
+    /// before the drain thread existed, an unread stderr pipe would
+    /// block the child in `write(2)`, so it would never close stdout
+    /// and the read on line ~362 would block forever. Also proves the
+    /// EOF error message carries stderr diagnostics without doing a
+    /// blocking read on the (now already-drained) pipe (CD-244).
+    #[test]
+    fn stderr_drain_prevents_deadlock_and_surfaces_diagnostics_on_stdout_eof() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "for (let i = 0; i < 20000; i++) { console.error('x'.repeat(100)); } \
+                 process.exit(1);",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let stderr_buf = spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+        };
+
+        let start = std::time::Instant::now();
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("t", "ping", &());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "request_nullable should not block on the undrained stderr pipe; took {elapsed:?}"
+        );
+        match result {
+            Err(TypeHostError::Io(msg)) => {
+                assert!(
+                    msg.contains("stderr: "),
+                    "expected the drained stderr tail in the error message, got: {msg}"
+                );
+            }
+            other => panic!("expected TypeHostError::Io with stderr, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
 
     /// CD-172: the Rust-side pre-check must agree with what
     /// `type-host-core.mjs`'s JS walk would find, in both directions —

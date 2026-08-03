@@ -26,7 +26,7 @@ use cofferdam_core::graph::{
 use cofferdam_core::path_key;
 use cofferdam_core::{
     relevance, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext,
-    Issue, Location, RelatedSpan, Severity, SourceFile, Span,
+    Issue, RelatedSpan, Severity, SourceFile,
 };
 use cofferdam_graph::{normalized_file_path, EdgeKind, Graph, NodeId, Value, CANONICAL_GRAPH};
 use smol_str::SmolStr;
@@ -90,19 +90,6 @@ impl Check for BlastRadius {
         ctx.corpus.with_slot(&CANONICAL_GRAPH, |graph| {
             compute_blast_radius(graph, &exports, &imports, changeset)
         })
-    }
-}
-
-/// Zero-span placeholder for reporting a whole-file relation where no
-/// specific declaration site is being pointed at. Mirrors the same
-/// fallback pattern `Design.ImportCycle` uses when a cycle-member's
-/// import span can't be resolved.
-fn zero_span() -> Span {
-    Span {
-        start_byte: 0,
-        end_byte: 0,
-        line: 1,
-        column: 1,
     }
 }
 
@@ -371,11 +358,11 @@ fn compute_blast_radius(
                 pinned: false,
                 related: vec![
                     RelatedSpan {
-                        location: Location::from_span(&path, zero_span()),
+                        location: super::whole_file_location(&path),
                         file: path,
                     },
                     RelatedSpan {
-                        location: Location::from_span(&changed_root, zero_span()),
+                        location: super::whole_file_location(&changed_root),
                         file: changed_root,
                     },
                 ],
@@ -397,7 +384,7 @@ fn compute_blast_radius(
 mod tests {
     use super::*;
     use cofferdam_core::graph::{ExportKind, ImportKind, ImportedName};
-    use cofferdam_core::LineRange;
+    use cofferdam_core::{LineRange, Span};
     use cofferdam_graph::build_canonical_graph;
 
     fn span_at(line: u32) -> Span {

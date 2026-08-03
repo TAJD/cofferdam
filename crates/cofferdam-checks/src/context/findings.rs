@@ -41,7 +41,7 @@ use std::path::Path;
 
 use cofferdam_core::{
     relevance, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext,
-    Issue, Location, RelatedSpan, Severity, SourceFile, Uri, ALL_PRE_FILTER_FINDINGS,
+    Issue, RelatedSpan, Severity, SourceFile, ALL_PRE_FILTER_FINDINGS,
 };
 
 pub struct Findings;
@@ -153,7 +153,7 @@ fn legacy_item(file: &Path, count: u32) -> ContextItem {
         // items a permanent no-op.
         related: vec![RelatedSpan {
             file: file.to_path_buf(),
-            location: Location::bytes(Uri::from_path(file), 0, 0, 1, 1),
+            location: super::whole_file_location(file),
         }],
         explain: Some(format!(
             "{count} pre-existing finding(s) in {} outside the lines the diff changed",

@@ -546,10 +546,25 @@ impl Worker {
             .flush()
             .map_err(|e| TypeHostError::Io(format!("flush request: {e}")))?;
 
+        // CD-281: the id is checked against a *raw* envelope (result/error
+        // left as `serde_json::Value`) before ever attempting to deserialise
+        // into `R`/`HostErrorBody`. Deserialising those typed fields first
+        // meant a response that matched our id but didn't parse cleanly
+        // (e.g. an `ok:false` whose `error` body was missing `code`/
+        // `message`) fell into the "stray/malformed line" arm below and was
+        // discarded — silently consuming *our own* response and looping
+        // back into a `read_line` for a reply that will never come, since
+        // the worker already sent it.
         #[derive(Deserialize)]
-        struct ResponseEnvelope<R> {
+        struct RawResponseEnvelope {
             id: String,
             #[serde(default)]
+            ok: bool,
+            result: Option<serde_json::Value>,
+            error: Option<serde_json::Value>,
+        }
+        #[derive(Deserialize)]
+        struct ResponseEnvelope<R> {
             ok: bool,
             result: Option<R>,
             error: Option<HostErrorBody>,
@@ -637,8 +652,8 @@ impl Worker {
             // of attempts. Both shapes count against the same budget:
             // either one is evidence stdout is (or was, transiently)
             // carrying something other than this request's response.
-            let candidate: ResponseEnvelope<R> = match serde_json::from_str(buf.trim_end()) {
-                Ok(env) => env,
+            let raw: RawResponseEnvelope = match serde_json::from_str(buf.trim_end()) {
+                Ok(raw) => raw,
                 Err(e) => {
                     resync_attempts += 1;
                     if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
@@ -651,20 +666,39 @@ impl Worker {
                     continue;
                 }
             };
-            if candidate.id == id {
-                break candidate;
+            if raw.id != id {
+                resync_attempts += 1;
+                if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
+                    return Err(TypeHostError::BadResponse(format!(
+                        "response id mismatch: expected {id:?}, got {:?} \
+                         (gave up resyncing after {resync_attempts} stray line(s) — \
+                         worker stdout may be permanently desynced)",
+                        raw.id
+                    )));
+                }
+                // Stray line that doesn't answer this request — discard it
+                // and keep reading for the real response.
+                continue;
             }
-            resync_attempts += 1;
-            if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
-                return Err(TypeHostError::BadResponse(format!(
-                    "response id mismatch: expected {id:?}, got {:?} \
-                     (gave up resyncing after {resync_attempts} stray line(s) — \
-                     worker stdout may be permanently desynced)",
-                    candidate.id
-                )));
-            }
-            // Stray line that doesn't answer this request — discard it
-            // and keep reading for the real response.
+            // The id matches — this is our response. From here a parse
+            // failure is a real protocol error, not a stray line, so it
+            // must surface as `BadResponse` rather than being silently
+            // skipped.
+            let result = raw
+                .result
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| TypeHostError::BadResponse(format!("response {id:?} result: {e}")))?;
+            let error = raw
+                .error
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| TypeHostError::BadResponse(format!("response {id:?} error: {e}")))?;
+            break ResponseEnvelope {
+                ok: raw.ok,
+                result,
+                error,
+            };
         };
         if env.ok {
             Ok(env.result)
@@ -1395,6 +1429,67 @@ mod tests {
                 assert!(
                     msg.contains("resyncing"),
                     "expected a resync-exhausted error, got: {msg}"
+                );
+            }
+            other => panic!("expected TypeHostError::BadResponse, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
+
+    /// CD-281: a response that matches our request id but fails to
+    /// deserialise its typed fields (here, an `ok:false` whose `error`
+    /// body is missing the required `code`/`message`) must surface as
+    /// `BadResponse` immediately — not be discarded as a "stray line" and
+    /// leave the caller blocked reading for a response the worker already
+    /// sent. Regression test for the id-vs-parse ordering bug: the id
+    /// must be checked on a raw envelope before attempting to deserialise
+    /// `result`/`error` into their typed shapes.
+    #[test]
+    fn request_nullable_surfaces_a_malformed_response_for_our_own_id_instead_of_treating_it_as_stray(
+    ) {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', (line) => { \
+                   const req = JSON.parse(line); \
+                   process.stdout.write(JSON.stringify({ id: req.id, ok: false, error: {} }) + '\\n'); \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let start = std::time::Instant::now();
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "must fail fast on our own malformed response, not block; took {elapsed:?}"
+        );
+        match result {
+            Err(TypeHostError::BadResponse(msg)) => {
+                assert!(
+                    msg.contains("expected-id"),
+                    "expected the response id in the error message, got: {msg}"
                 );
             }
             other => panic!("expected TypeHostError::BadResponse, got {other:?}"),

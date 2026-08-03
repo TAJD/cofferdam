@@ -20,7 +20,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle, UnionFacts};
@@ -320,9 +320,21 @@ const STDERR_BUF_CAP: usize = 64 * 1024;
 /// EOF, permanently stopping the drain) on invalid UTF-8. `read_until`
 /// has no such encoding concerns; decoding is deferred to
 /// [`Worker::request_nullable`]'s error path via `from_utf8_lossy`.
-fn spawn_stderr_drain(stderr: ChildStderr) -> Arc<Mutex<Vec<u8>>> {
+///
+/// CD-254: also returns a `Receiver` that fires once when the drain
+/// loop exits (i.e. the child's stderr pipe has closed and everything
+/// written to it has been drained into the buffer). Nothing previously
+/// synchronised with this thread, so the stdout-EOF error path could
+/// snapshot the buffer before the last few already-written lines had
+/// been read out of the OS pipe — for the common "prints one stack
+/// trace and exits" failure shape, that raced the CD-238 diagnostic
+/// message back down to no stderr tail at all, nondeterministically.
+/// [`Worker::request_nullable`]'s EOF branch does a short bounded
+/// `recv_timeout` on this before snapshotting.
+fn spawn_stderr_drain(stderr: ChildStderr) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let buf_writer = Arc::clone(&buf);
+    let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut line = Vec::new();
@@ -338,9 +350,18 @@ fn spawn_stderr_drain(stderr: ChildStderr) -> Arc<Mutex<Vec<u8>>> {
                 }
             }
         }
+        let _ = done_tx.send(());
     });
-    buf
+    (buf, done_rx)
 }
+
+/// Bounded wait for the stderr drain thread to finish, used only on the
+/// stdout-EOF path (CD-254) — the child has just exited (or is about
+/// to), so its stderr pipe closes promptly; this exists to close the
+/// race, not to wait indefinitely. If the thread hasn't finished within
+/// the bound, snapshot whatever is buffered so far rather than block —
+/// CD-244's "never block indefinitely" property still holds.
+const STDERR_DRAIN_JOIN_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Append `chunk` to `buf`, trimming from the front once `buf` exceeds
 /// `STDERR_BUF_CAP`. Byte-indexed, not char-boundary-aware — `buf`
@@ -368,6 +389,9 @@ pub struct Worker {
     /// current by a background drain thread spawned in [`spawn_worker`]
     /// — see [`spawn_stderr_drain`].
     stderr_buf: Arc<Mutex<Vec<u8>>>,
+    /// Fires once when the drain thread exits (CD-254) — see
+    /// [`spawn_stderr_drain`] and [`STDERR_DRAIN_JOIN_TIMEOUT`].
+    stderr_drain_done: mpsc::Receiver<()>,
 }
 
 impl Worker {
@@ -443,6 +467,16 @@ impl Worker {
                 .flatten()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "still running".to_string());
+            // CD-254: give the drain thread a short bounded window to
+            // finish reading whatever the child already wrote before we
+            // snapshot — otherwise the last few lines still sitting in
+            // the OS pipe when we observed stdout EOF may not have been
+            // drained yet, and the diagnostic below nondeterministically
+            // comes back empty for the common "short trace, then exit"
+            // failure shape.
+            let _ = self
+                .stderr_drain_done
+                .recv_timeout(STDERR_DRAIN_JOIN_TIMEOUT);
             // CD-244: read from the drain thread's buffer rather than
             // the pipe directly — a direct `read_to_string` here blocks
             // until the child closes stderr, which (per the `status`
@@ -583,15 +617,24 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
         .stdout
         .take()
         .ok_or_else(|| TypeHostError::Io("no worker stdout".into()))?;
-    let stderr_buf = match child.stderr.take() {
+    let (stderr_buf, stderr_drain_done) = match child.stderr.take() {
         Some(stderr) => spawn_stderr_drain(stderr),
-        None => Arc::new(Mutex::new(Vec::new())),
+        None => {
+            // No stderr pipe to drain — synthesize an already-closed
+            // channel so `recv_timeout` in the EOF path returns
+            // immediately (`Disconnected`) instead of waiting out the
+            // full timeout for a thread that was never spawned.
+            let (tx, rx) = mpsc::channel();
+            drop(tx);
+            (Arc::new(Mutex::new(Vec::new())), rx)
+        }
     };
     Ok(Worker {
         child,
         stdin: Some(stdin),
         stdout: BufReader::new(stdout),
         stderr_buf,
+        stderr_drain_done,
     })
 }
 
@@ -874,12 +917,14 @@ mod tests {
             .expect("spawn node");
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
-        let stderr_buf = spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
         let mut worker = Worker {
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             stderr_buf,
+            stderr_drain_done,
         };
 
         let start = std::time::Instant::now();
@@ -900,6 +945,54 @@ mod tests {
             other => panic!("expected TypeHostError::Io with stderr, got {other:?}"),
         }
         let _ = worker.close();
+    }
+
+    /// CD-254: a worker that writes a single short line to stderr and
+    /// exits immediately — nothing here comes close to filling an OS
+    /// pipe buffer, so before the CD-254 fix this raced the drain
+    /// thread: the main thread could observe stdout EOF and snapshot
+    /// `stderr_buf` before the drain thread had scheduled at all,
+    /// nondeterministically losing the diagnostic. Run several times to
+    /// make a reintroduced race very likely to surface as a flake.
+    #[test]
+    fn stderr_drain_join_makes_short_lived_failure_diagnostics_deterministic() {
+        if !node_present() {
+            return;
+        }
+        for _ in 0..20 {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg("console.error('boom: short trace'); process.exit(1);")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn node");
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            let mut worker = Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            };
+
+            let result: Result<Option<PingResult>, TypeHostError> =
+                worker.request_nullable("t", "ping", &());
+            match result {
+                Err(TypeHostError::Io(msg)) => {
+                    assert!(
+                        msg.contains("boom: short trace"),
+                        "expected the short stderr line in the error message every time, got: {msg}"
+                    );
+                }
+                other => panic!("expected TypeHostError::Io with stderr, got {other:?}"),
+            }
+            let _ = worker.close();
+        }
     }
 
     /// CD-172: the Rust-side pre-check must agree with what

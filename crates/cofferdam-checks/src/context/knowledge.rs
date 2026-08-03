@@ -75,15 +75,15 @@ impl Check for Knowledge {
     /// comment for why the duplicate (cheap) load is the simpler design.
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         let root = resolve_project_root(ctx);
-        let load = load_knowledge_dir(&root);
-        let knowledge_dir = knowledge_dir_path(&root);
+        let layers: Option<LayersConfig> = ctx.corpus.with_slot(&GRAPH_LAYERS, |s| s.clone());
+        let load = load_knowledge_dir(&root, layers.as_ref());
         load.warnings
             .into_iter()
-            .map(|message| Issue {
+            .map(|(file, message)| Issue {
                 check_id: META.id.to_string(),
                 message,
-                file: knowledge_dir.clone(),
-                location: Location::from_span(&knowledge_dir, zero_span()),
+                location: Location::from_span(&file, zero_span()),
+                file,
                 priority: Priority(META.base_priority),
                 severity: META.default_severity,
                 related: Vec::new(),
@@ -103,14 +103,14 @@ impl Check for Knowledge {
         ctx: &mut FinalizeContext<'_>,
     ) -> Vec<ContextItem> {
         let root = resolve_project_root(ctx);
-        let load = load_knowledge_dir(&root);
+        let layers: Option<LayersConfig> = ctx.corpus.with_slot(&GRAPH_LAYERS, |s| s.clone());
+        let load = load_knowledge_dir(&root, layers.as_ref());
         if load.notes.is_empty() {
             return Vec::new();
         }
 
         let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |s| s.clone());
         let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |s| s.clone());
-        let layers: Option<LayersConfig> = ctx.corpus.with_slot(&GRAPH_LAYERS, |s| s.clone());
 
         let mut imports_by_file: HashMap<PathBuf, Vec<ImportRecord>> = HashMap::new();
         for imp in imports {
@@ -304,15 +304,24 @@ impl KnowledgeNote {
 
 pub struct LoadResult {
     pub notes: Vec<KnowledgeNote>,
-    pub warnings: Vec<String>,
+    /// `(source note path, message)` — the path is always the specific
+    /// note file the warning is about (every warning today originates
+    /// inside the per-note `load_note` pass; a missing/unreadable
+    /// knowledge directory returns an empty `LoadResult` with no
+    /// warning at all, so there is currently no genuinely
+    /// directory-scoped warning to attribute to `dir` instead).
+    pub warnings: Vec<(PathBuf, String)>,
 }
 
 /// Load and validate every `.cofferdam/knowledge/*.md` file under
 /// `project_root`. A missing (or unreadable) knowledge directory is
 /// not an error — projects without curated knowledge get an empty
 /// result, per the product spec's zero-config bar. Sorted by filename
-/// for deterministic digest ordering.
-pub fn load_knowledge_dir(project_root: &Path) -> LoadResult {
+/// for deterministic digest ordering. `layers` is the project's
+/// configured layers (when available) — used to catch `match.layers`
+/// selectors that name an undeclared layer (CD-207); pass `None` when
+/// no layers config is available and that validation is skipped.
+pub fn load_knowledge_dir(project_root: &Path, layers: Option<&LayersConfig>) -> LoadResult {
     let dir = knowledge_dir_path(project_root);
     let mut result = LoadResult {
         notes: Vec::new(),
@@ -330,14 +339,16 @@ pub fn load_knowledge_dir(project_root: &Path) -> LoadResult {
     paths.sort();
 
     for path in paths {
-        match load_note(&path) {
-            Ok((note, mut warnings)) => {
-                result.warnings.append(&mut warnings);
+        match load_note(&path, layers) {
+            Ok((note, warnings)) => {
+                result
+                    .warnings
+                    .extend(warnings.into_iter().map(|msg| (path.clone(), msg)));
                 if let Some(n) = note {
                     result.notes.push(n);
                 }
             }
-            Err(msg) => result.warnings.push(msg),
+            Err(msg) => result.warnings.push((path.clone(), msg)),
         }
     }
     result
@@ -367,7 +378,10 @@ struct Frontmatter {
 /// frontmatter block, unparseable YAML, missing `title`); everything
 /// else degrades to a `Some(note)` plus warnings so one bad selector
 /// doesn't take out the whole note.
-fn load_note(path: &Path) -> Result<(Option<KnowledgeNote>, Vec<String>), String> {
+fn load_note(
+    path: &Path,
+    layers: Option<&LayersConfig>,
+) -> Result<(Option<KnowledgeNote>, Vec<String>), String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("{}: failed to read: {e}", path.display()))?;
     let Some((yaml, body)) = split_frontmatter(&text) else {
@@ -391,6 +405,30 @@ fn load_note(path: &Path) -> Result<(Option<KnowledgeNote>, Vec<String>), String
             )),
         }
     }
+
+    // Validate `match.layers` names against the project's declared
+    // layers (CD-207): an undeclared/typo'd layer name must not be
+    // allowed to silently produce a selector that matches nothing,
+    // per this module's "warn loudly, never silently match nothing"
+    // policy. Skipped (all names pass through unchanged) when no
+    // layers config is available to validate against.
+    let valid_layers: Vec<String> = match layers {
+        Some(layers_cfg) => {
+            let mut valid = Vec::new();
+            for layer_name in &fm.match_spec.layers {
+                if layers_cfg.layers.contains_key(layer_name) {
+                    valid.push(layer_name.clone());
+                } else {
+                    warnings.push(format!(
+                        "{}: undeclared layer `{layer_name}` in match.layers, ignoring this selector: not found in the configured layers",
+                        path.display()
+                    ));
+                }
+            }
+            valid
+        }
+        None => fm.match_spec.layers.clone(),
+    };
 
     let predicate = match &fm.match_spec.predicate {
         Some(src) => match parse_predicate(src) {
@@ -422,7 +460,7 @@ fn load_note(path: &Path) -> Result<(Option<KnowledgeNote>, Vec<String>), String
         },
     };
 
-    let combined = combined_predicate(&valid_paths, &fm.match_spec.layers, predicate);
+    let combined = combined_predicate(&valid_paths, &valid_layers, predicate);
     if combined.is_none() {
         warnings.push(format!(
             "{}: note `{}` has no valid selectors after validation and will never fire",
@@ -527,6 +565,7 @@ fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cofferdam_core::CorpusIndex;
     use tempfile::tempdir;
 
     fn write_note(dir: &Path, name: &str, contents: &str) {
@@ -565,7 +604,7 @@ priority: high
 Billing code must never round intermediate values.
 "#,
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert!(load.warnings.is_empty(), "{:?}", load.warnings);
         assert_eq!(load.notes.len(), 1);
         let note = &load.notes[0];
@@ -579,7 +618,7 @@ Billing code must never round intermediate values.
     #[test]
     fn missing_knowledge_dir_yields_empty_result() {
         let td = tempdir().unwrap();
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert!(load.notes.is_empty());
         assert!(load.warnings.is_empty());
     }
@@ -600,9 +639,12 @@ match:
 Body.
 "#,
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes.len(), 1);
-        assert!(load.warnings.iter().any(|w| w.contains("invalid glob")));
+        assert!(load
+            .warnings
+            .iter()
+            .any(|(_, w)| w.contains("invalid glob")));
         // The layers selector still compiled, so the note isn't orphaned.
         assert!(load.notes[0].combined.is_some());
     }
@@ -623,12 +665,12 @@ match:
 Body.
 "#,
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes.len(), 1);
         assert!(load
             .warnings
             .iter()
-            .any(|w| w.contains("invalid predicate")));
+            .any(|(_, w)| w.contains("invalid predicate")));
         assert!(load.notes[0].combined.is_some());
     }
 
@@ -641,13 +683,13 @@ Body.
             "no_selectors.md",
             "---\ntitle: Orphan\n---\nBody.\n",
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes.len(), 1);
         assert!(load.notes[0].combined.is_none());
         assert!(load
             .warnings
             .iter()
-            .any(|w| w.contains("has no valid selectors")));
+            .any(|(_, w)| w.contains("has no valid selectors")));
     }
 
     #[test]
@@ -655,12 +697,12 @@ Body.
         let td = tempdir().unwrap();
         let knowledge = knowledge_dir_path(td.path());
         write_note(&knowledge, "plain.md", "just markdown, no frontmatter\n");
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert!(load.notes.is_empty());
         assert!(load
             .warnings
             .iter()
-            .any(|w| w.contains("missing YAML frontmatter")));
+            .any(|(_, w)| w.contains("missing YAML frontmatter")));
     }
 
     #[test]
@@ -672,9 +714,12 @@ Body.
             "weird_priority.md",
             "---\ntitle: X\npriority: extreme\nmatch:\n  paths: [\"src/**\"]\n---\nBody.\n",
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes[0].priority, NotePriority::Normal);
-        assert!(load.warnings.iter().any(|w| w.contains("unknown priority")));
+        assert!(load
+            .warnings
+            .iter()
+            .any(|(_, w)| w.contains("unknown priority")));
     }
 
     #[test]
@@ -687,7 +732,7 @@ Body.
             "huge.md",
             &format!("---\ntitle: Huge\nmatch:\n  paths: [\"src/**\"]\n---\n{huge_body}\n"),
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes.len(), 1);
         let note = &load.notes[0];
         assert!(note
@@ -703,7 +748,7 @@ Body.
         assert!(load
             .warnings
             .iter()
-            .any(|w| w.contains("exceeds the 8k char limit")));
+            .any(|(_, w)| w.contains("exceeds the 8k char limit")));
     }
 
     #[test]
@@ -715,9 +760,9 @@ Body.
             "small.md",
             "---\ntitle: Small\nmatch:\n  paths: [\"src/**\"]\n---\nShort body.\n",
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes[0].body, "Short body.");
-        assert!(!load.warnings.iter().any(|w| w.contains("truncat")));
+        assert!(!load.warnings.iter().any(|(_, w)| w.contains("truncat")));
     }
 
     #[test]
@@ -737,5 +782,84 @@ Body.
         // No .git anywhere above `nested` inside the tempdir; the walk
         // continues past filesystem root and falls back to `start`.
         assert_eq!(find_project_root(&nested), nested);
+    }
+
+    #[test]
+    fn undeclared_layer_warns_and_note_never_fires() {
+        let td = tempdir().unwrap();
+        let knowledge = knowledge_dir_path(td.path());
+        write_note(
+            &knowledge,
+            "typo_layer.md",
+            "---\ntitle: Typo layer note\nmatch:\n  layers: [\"biling\"]\n---\nBody.\n",
+        );
+        let mut declared = std::collections::BTreeMap::new();
+        declared.insert("billing".to_string(), vec!["src/billing/**".to_string()]);
+        let layers = LayersConfig {
+            project_root: td.path().to_path_buf(),
+            layers: declared,
+            allow: std::collections::BTreeMap::new(),
+        };
+        let load = load_knowledge_dir(td.path(), Some(&layers));
+        assert_eq!(load.notes.len(), 1);
+        // The only selector was the undeclared layer name, so the note
+        // is left with no valid selector and would otherwise silently
+        // never fire — must warn per the CD-150 policy.
+        assert!(load.notes[0].combined.is_none());
+        assert!(load
+            .warnings
+            .iter()
+            .any(|(_, w)| w.contains("undeclared layer")));
+    }
+
+    #[test]
+    fn declared_layer_passes_validation_without_warning() {
+        let td = tempdir().unwrap();
+        let knowledge = knowledge_dir_path(td.path());
+        write_note(
+            &knowledge,
+            "billing.md",
+            "---\ntitle: Billing note\nmatch:\n  layers: [\"billing\"]\n---\nBody.\n",
+        );
+        let mut declared = std::collections::BTreeMap::new();
+        declared.insert("billing".to_string(), vec!["src/billing/**".to_string()]);
+        let layers = LayersConfig {
+            project_root: td.path().to_path_buf(),
+            layers: declared,
+            allow: std::collections::BTreeMap::new(),
+        };
+        let load = load_knowledge_dir(td.path(), Some(&layers));
+        assert_eq!(load.notes.len(), 1);
+        assert!(load.notes[0].combined.is_some());
+        assert!(load.warnings.is_empty(), "{:?}", load.warnings);
+    }
+
+    #[test]
+    fn finalize_issue_uses_the_specific_note_path_not_the_knowledge_dir() {
+        let td = tempdir().unwrap();
+        let knowledge = knowledge_dir_path(td.path());
+        write_note(
+            &knowledge,
+            "broken.md",
+            "---\ntitle: Broken glob note\nmatch:\n  paths: [\"src/[unterminated\"]\n---\nBody.\n",
+        );
+        let layers = LayersConfig {
+            project_root: td.path().to_path_buf(),
+            layers: std::collections::BTreeMap::new(),
+            allow: std::collections::BTreeMap::new(),
+        };
+        let corpus = CorpusIndex::default();
+        corpus.with_slot(&GRAPH_LAYERS, |s| *s = Some(layers));
+        let mut ctx = FinalizeContext::new(&corpus);
+
+        let issues = Knowledge.finalize(&mut ctx);
+        // The invalid glob leaves the note with no valid selector at
+        // all, so both the "invalid glob" and the "no valid selectors"
+        // warnings fire — both must point at the note file, not the dir.
+        assert_eq!(issues.len(), 2);
+        for issue in &issues {
+            assert_eq!(issue.file, knowledge.join("broken.md"));
+            assert_ne!(issue.file, knowledge, "must not be the directory");
+        }
     }
 }

@@ -732,7 +732,7 @@ Body.
             "huge.md",
             &format!("---\ntitle: Huge\nmatch:\n  paths: [\"src/**\"]\n---\n{huge_body}\n"),
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes.len(), 1);
         let note = &load.notes[0];
         assert!(note
@@ -748,7 +748,7 @@ Body.
         assert!(load
             .warnings
             .iter()
-            .any(|w| w.contains("exceeds the 8k char limit")));
+            .any(|(_, w)| w.contains("exceeds the 8k char limit")));
     }
 
     #[test]
@@ -760,9 +760,9 @@ Body.
             "small.md",
             "---\ntitle: Small\nmatch:\n  paths: [\"src/**\"]\n---\nShort body.\n",
         );
-        let load = load_knowledge_dir(td.path());
+        let load = load_knowledge_dir(td.path(), None);
         assert_eq!(load.notes[0].body, "Short body.");
-        assert!(!load.warnings.iter().any(|w| w.contains("truncat")));
+        assert!(!load.warnings.iter().any(|(_, w)| w.contains("truncat")));
     }
 
     #[test]

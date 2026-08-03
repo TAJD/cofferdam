@@ -305,18 +305,26 @@ pub fn compile_overrides(
 /// Compile `[[context_suppress]]` tables into matchable
 /// [`ContextSuppressRule`]s (CD-212). Same glob-compilation convention
 /// as [`compile_overrides`]: an invalid glob is skipped rather than
-/// failing the whole config. A block with an empty (or entirely
-/// invalid) `paths` list compiles to an empty globset, which simply
-/// suppresses nothing — `cofferdam context --lint-context-suppress`
-/// (see `context_cmd.rs`) flags a rule as likely-stale when its glob
-/// matches zero *repo files*, per this repo's "warn loudly, never
-/// silently match nothing" policy. Note that's a proxy for "matches
-/// zero digest items", not the thing itself (CD-220): the lint doesn't
-/// run the Context providers, so a rule can pass this check yet still
-/// never fire against an actual digest — e.g. before CD-220, every
-/// `Context.Findings` item carried no `related` spans at all, so a
-/// path-scoped rule against it matched files on disk but could never
-/// match an item in practice.
+/// failing the whole config. A block with an entirely invalid `paths`
+/// list (every glob failed to compile) ends up with an empty globset
+/// but a non-empty `paths` field, so it's treated the same as any
+/// other non-matching path-scoped rule.
+///
+/// A block with `paths` genuinely omitted/empty in the TOML is
+/// different: `ContextSuppressRule::paths.is_empty()` is read by
+/// `context_cmd::suppress_items` (CD-227) as an explicit wildcard —
+/// "suppress every item this `check_id` emits", including items with
+/// no `related` spans that a path-scoped rule could never target at
+/// all (the CD-220 failure mode). `cofferdam context
+/// --lint-context-suppress` (see `context_cmd.rs`) exempts these
+/// wildcard rules from its "matches zero repo files" staleness check,
+/// since there's no file-match signal to validate them against; every
+/// other rule is still flagged when its glob matches zero *repo
+/// files*, per this repo's "warn loudly, never silently match
+/// nothing" policy. Note that's a proxy for "matches zero digest
+/// items", not the thing itself (CD-220): the lint doesn't run the
+/// Context providers, so a path-scoped rule can pass this check yet
+/// still never fire against an actual digest.
 pub fn compile_context_suppress(
     path: &Path,
     tables: Vec<ContextSuppressTable>,

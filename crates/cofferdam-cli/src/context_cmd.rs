@@ -220,8 +220,12 @@ pub fn run(args: ContextArgs) -> ExitCode {
 /// `[[context_suppress]]` filtering (CD-212): drops a `ContextItem`
 /// when some rule's `check_id` matches and at least one of the item's
 /// `related` anchor files matches the rule's `paths` globs. An item
-/// with no `related` spans can never be suppressed by a path-scoped
-/// rule — there's nothing to match against.
+/// with no `related` spans can never be targeted by a path-scoped
+/// rule — there's nothing to match against — but CD-227 gives a rule
+/// with an empty `paths` list a dedicated wildcard meaning: suppress
+/// every item this `check_id` emits, related or not, since "no globs"
+/// is otherwise indistinguishable from a stale/misconfigured rule that
+/// happens to match nothing.
 fn suppress_items(items: Vec<ContextItem>, rules: &[cfg::ContextSuppressRule]) -> Vec<ContextItem> {
     if rules.is_empty() {
         return items;
@@ -230,11 +234,15 @@ fn suppress_items(items: Vec<ContextItem>, rules: &[cfg::ContextSuppressRule]) -
         .into_iter()
         .filter(|item| {
             !rules.iter().any(|rule| {
-                rule.check_id == item.check_id
-                    && item
-                        .related
-                        .iter()
-                        .any(|r| rule.is_match(&cfg::path_key(&r.file)))
+                if rule.check_id != item.check_id {
+                    return false;
+                }
+                if rule.paths.is_empty() {
+                    return true;
+                }
+                item.related
+                    .iter()
+                    .any(|r| rule.is_match(&cfg::path_key(&r.file)))
             })
         })
         .collect()
@@ -277,11 +285,15 @@ fn resolve_and_load_config(
 /// discovered repo is almost certainly stale — the files it was
 /// written to target moved, were renamed, or were deleted — per this
 /// repo's "warn loudly, never silently match nothing" policy (CD-150).
-/// Mirrors `--lint-knowledge`'s file-existence check; unlike
-/// `--lint-knowledge` this can't validate that the rule's `check_id`
-/// is a real `Context.*` provider without hardcoding the provider
-/// list here, so a typo'd `check_id` is left to simply suppress
-/// nothing at runtime rather than being caught by this lint.
+/// A rule with an empty `paths` list is exempt from this check: since
+/// CD-227 that's the deliberate "suppress every item this check_id
+/// emits" wildcard, not an empty/stale glob, so there's no file-match
+/// signal to validate it against. Mirrors `--lint-knowledge`'s
+/// file-existence check; unlike `--lint-knowledge` this can't validate
+/// that the rule's `check_id` is a real `Context.*` provider without
+/// hardcoding the provider list here, so a typo'd `check_id` is left
+/// to simply suppress nothing at runtime rather than being caught by
+/// this lint.
 fn run_lint_context_suppress(
     hidden: bool,
     no_ignore: bool,
@@ -327,6 +339,9 @@ fn run_lint_context_suppress(
 
     let mut failed = false;
     for rule in &rules {
+        if rule.paths.is_empty() {
+            continue;
+        }
         if !file_keys.iter().any(|k| rule.is_match(k)) {
             let reason = rule
                 .reason

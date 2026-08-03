@@ -484,6 +484,51 @@ fn context_suppress_rule_drops_a_legacy_debt_item_by_path() {
     );
 }
 
+/// CD-227: a `[[context_suppress]]` rule with `paths` genuinely
+/// omitted is a wildcard — it suppresses every item of its `check_id`,
+/// including `fresh_summary_item`'s project-wide "N findings in
+/// changed lines" item, which carries no `related` spans and so could
+/// never be targeted by a path-scoped rule at all.
+#[test]
+fn context_suppress_rule_with_no_paths_drops_the_relatedless_fresh_summary_item() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    std::fs::write(dir.join("fresh.ts"), "export const marker = 1;\n").expect("write fresh.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Findings\"\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    // Freshly-changed line with a `==` finding lands in the diff, so
+    // fresh_summary_item fires.
+    std::fs::write(
+        dir.join("fresh.ts"),
+        "export function cmp(a: number, b: number): boolean {\n  return a == b;\n}\n",
+    )
+    .expect("edit fresh.ts");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--format", "json"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let items = json["items"].as_array().expect("items array");
+    assert!(
+        !items
+            .iter()
+            .any(|i| i["title"].as_str().is_some_and(|t| t.contains("finding"))),
+        "wildcard context_suppress rule should have dropped the relatedless fresh_summary_item; got {items:?}"
+    );
+}
+
 /// CD-212: `--lint-context-suppress` flags a rule whose `paths` globs
 /// match zero files in the current repo as likely-stale, and exits 0
 /// when every rule matches at least one file.
@@ -536,6 +581,35 @@ fn lint_context_suppress_passes_when_every_rule_matches_a_file() {
     assert!(
         out.status.success(),
         "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1 rule(s) OK"), "got stdout={stdout}");
+}
+
+/// CD-227: a wildcard rule (`paths` omitted) has no file-match signal
+/// to validate, so `--lint-context-suppress` exempts it from the
+/// "matches 0 files" staleness check instead of always flagging it.
+#[test]
+fn lint_context_suppress_exempts_a_wildcard_rule_with_no_paths() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    std::fs::write(dir.join("real.ts"), "export const x = 1;\n").expect("write real.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Findings\"\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--lint-context-suppress"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        out.status.success(),
+        "expected exit 0 for a wildcard rule; stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);

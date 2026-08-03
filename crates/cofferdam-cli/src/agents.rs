@@ -111,6 +111,12 @@ pub fn hooks_fragment() -> String {
     r#"# cofferdam hook recipes — paste the relevant block into your tool's config.
 #
 # ---- Claude Code: .claude/settings.json ----
+# UserPromptSubmit fires when you submit a prompt, i.e. at the start of a
+# task — which is when `cofferdam context` is meant to run, before or right
+# after the first edit rather than at the end. Unlike PreToolUse, a
+# UserPromptSubmit hook's plain stdout IS prepended to the agent's context,
+# so no jq wrapping is needed. `context` is advisory and exits 0 (usage/git
+# errors excepted), so it can never block a prompt.
 # PreToolUse fires before Edit/Write/MultiEdit; the hook reads the target
 # file path from the event JSON on stdin (`tool_input.file_path`), runs
 # `advise` on it, and wraps the output in `hookSpecificOutput.additionalContext`
@@ -127,6 +133,16 @@ pub fn hooks_fragment() -> String {
 # `advise --diff HEAD` as a pre-commit-style pre-flight check.
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cofferdam context"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",

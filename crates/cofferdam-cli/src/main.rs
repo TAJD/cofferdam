@@ -484,12 +484,13 @@ enum Cmd {
         #[arg(long)]
         analyze: bool,
     },
-    /// Post-edit context digest (CD-156) — given the current diff,
-    /// consult the knowledge graph and emit a token-budgeted advisory
-    /// digest: delta-scoped findings, blast radius, precedent, and
-    /// curated knowledge. Advisory only: always exits 0 (usage/git
-    /// errors excepted). Markdown by default; `--format json` for
-    /// harness integration.
+    /// Start here — the default entrypoint into project context you
+    /// don't already have. Run it first, before or right after making
+    /// a change: it resolves the current diff, consults the knowledge
+    /// graph, and emits a token-budgeted advisory digest — delta-scoped
+    /// findings, blast radius, precedent, and curated knowledge.
+    /// Advisory only: always exits 0 (usage/git errors excepted).
+    /// Markdown by default; `--format json` for harness integration.
     Context {
         /// Explicit changed files (no git required). Empty → resolve
         /// from git (staged + unstaged vs HEAD by default).
@@ -526,7 +527,7 @@ enum Cmd {
         #[arg(long)]
         no_ignore: bool,
         /// Validate every `.cofferdam/knowledge/*.md` file instead of
-        /// producing a digest (CD-162): selectors must parse, and every
+        /// producing a digest: selectors must parse, and every
         /// selector must match at least one file in the current repo
         /// (catches broken globs and orphan selectors). The one
         /// deliberate nonzero-exit carve-out for `cofferdam context` —

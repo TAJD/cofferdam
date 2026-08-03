@@ -4,6 +4,10 @@
 
 TypeScript code-quality analyzer. Rust workspace at the repo root + planned `@cofferdam/*` npm packages. Five-category model (Consistency, Design, Readability, Refactor, Warning), priority-sorted within each. Inspired by Elixir's [Credo](https://github.com/rrrene/credo); see README for design context.
 
+## Start of task
+
+Run `cargo run -p cofferdam-cli -- context` (or `cofferdam context` if installed) before you start editing. It resolves your working-tree diff and prints a token-budgeted digest — delta-scoped findings, blast radius, sibling-file precedent, `.cofferdam/knowledge/*.md` notes, and inline `// @cofferdam-context:` annotations. Advisory only, always exits 0. We ship it as the default agent entrypoint, so dogfood it here.
+
 ## Build / toolchain
 
 ```bash

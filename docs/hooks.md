@@ -1,17 +1,21 @@
 # Agent hooks
 
-Recipes for wiring `cofferdam advise` into an agent's edit loop, so constraints surface
+Recipes for wiring `cofferdam context` and `cofferdam advise` into an agent's task and edit
+loops, so context and constraints surface
 automatically instead of depending on the agent remembering to run the CLI. Rules arrive by
 plumbing, not by hoping the agent read AGENTS.md:
 
 ```mermaid
 flowchart TB
+    U["you submit a prompt"] --> UP["UserPromptSubmit hook"]
+    UP -- "cofferdam context → digest prepended to the task" --> T
     T["Edit / Write / MultiEdit tool call"] --> P["PreToolUse hook"]
     P -- "advise $FILE → hookSpecificOutput.additionalContext" --> W["agent writes code<br/>(layer, invariants, boundary, budget already in context)"]
     W --> S["Claude finishes responding"]
     S --> H["Stop hook"]
     H -- "cofferdam advise --diff HEAD --pretty" --> D["would_fire empty or justified<br/>before you ask for a commit"]
 
+    style UP fill:#6366f1,color:#fff,stroke:#4338ca
     style P fill:#6366f1,color:#fff,stroke:#4338ca
     style H fill:#6366f1,color:#fff,stroke:#4338ca
 ```
@@ -23,6 +27,12 @@ cofferdam agents --hooks
 ```
 
 ## Claude Code (`.claude/settings.json`)
+
+`UserPromptSubmit` fires when you submit a prompt — the start of a task, which is exactly when
+[`cofferdam context`](/reference/context) is meant to run (before or right after the first
+edit, not at the end). Unlike `PreToolUse`, a `UserPromptSubmit` hook's plain stdout **is**
+prepended to the agent's context, so no `jq` wrapping is needed. `context` is advisory and
+exits 0 apart from usage/git errors, so it can never block a prompt.
 
 `PreToolUse` fires before `Edit`/`Write`/`MultiEdit` tool calls. The hook receives the tool
 call as JSON on stdin — `tool_input.file_path` is the target file — runs `advise` on it, and
@@ -39,6 +49,16 @@ pre-commit-style pre-flight check that catches regressions before you ask for a 
 ```json
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cofferdam context"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",

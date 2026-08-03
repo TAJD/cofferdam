@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `cofferdam context` — a new subcommand positioned as the default entrypoint an AI coding agent runs at the start of a task, answering "what does this change touch, and what do I need to know before I touch it?" without a prior conversation. It resolves the changed set (working tree by default, or `--staged`, `--base <ref>`, or explicit paths with no git required) and emits a single token-budgeted digest — `--budget` defaults to 2000 tokens — assembled from five providers, each a check in the new `Category::Context`: `Context.Findings` (findings scoped to the lines the diff actually touched, not the whole repo), `Context.BlastRadius` (files that import what you changed, via the canonical cross-file graph), `Context.Precedent` (sibling-file conventions the change should probably follow), `Context.Knowledge` (curated `.cofferdam/knowledge/*.md` notes selected by path/layer selectors), and `Context.Annotations` (inline `// @cofferdam-context: ...` comments on the code you're near). Markdown by default, `--format json` / `--robot` for harness integration, `--pretty` to indent. Advisory by design: it always exits 0 apart from usage/git errors, so there is no reason not to run it on every task. The one deliberate nonzero-exit mode is `--lint-knowledge`, which validates every knowledge note (selectors must parse, and every selector must match at least one file) so CI can gate on broken globs and orphan selectors. Underneath, the diff is modelled by a reusable `ChangeSet` and the digest is deterministic for a given input, with a warm-cache perf gate in CI (p50 ≤ 2s, p95 ≤ 5s on a 5000-file corpus). Docs: `docs/reference/context.md` and `docs/knowledge-notes.md`; the `cofferdam agents` onboarding prompt now leads with it (CD-156 through CD-164).
+
 ## [0.4.0] - 2026-08-02
 
 ### Changed

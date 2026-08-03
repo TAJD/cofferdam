@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use cofferdam_checks::context::knowledge;
 use cofferdam_checks::{all_builtins, all_context_providers};
-use cofferdam_core::ChangeSet;
+use cofferdam_core::{ChangeSet, ContextItem};
 use cofferdam_engine::config::{self as cfg};
 use cofferdam_engine::since;
 use cofferdam_engine::{discover, DiscoveryOptions, Engine, ProjectConfig};
@@ -37,6 +37,7 @@ pub struct ContextArgs {
     pub hidden: bool,
     pub no_ignore: bool,
     pub lint_knowledge: bool,
+    pub lint_context_suppress: bool,
 }
 
 pub fn run(args: ContextArgs) -> ExitCode {
@@ -53,10 +54,14 @@ pub fn run(args: ContextArgs) -> ExitCode {
         hidden,
         no_ignore,
         lint_knowledge,
+        lint_context_suppress,
     } = args;
 
     if lint_knowledge {
         return run_lint_knowledge(hidden, no_ignore, config_path.as_deref(), no_config);
+    }
+    if lint_context_suppress {
+        return run_lint_context_suppress(hidden, no_ignore, config_path.as_deref(), no_config);
     }
 
     let format = format.unwrap_or(if robot {
@@ -201,10 +206,38 @@ pub fn run(args: ContextArgs) -> ExitCode {
         }
     }
 
-    // 6-7. Assemble digest and render.
-    let digest = assemble(out.items, budget);
+    // 6-7. Suppress, assemble digest, render.
+    let rules = project_config
+        .as_ref()
+        .map(|c| c.context_suppress.as_slice())
+        .unwrap_or(&[]);
+    let items = suppress_items(out.items, rules);
+    let digest = assemble(items, budget);
     print_digest(&digest, &changeset, format, pretty);
     ExitCode::SUCCESS
+}
+
+/// `[[context_suppress]]` filtering (CD-212): drops a `ContextItem`
+/// when some rule's `check_id` matches and at least one of the item's
+/// `related` anchor files matches the rule's `paths` globs. An item
+/// with no `related` spans can never be suppressed by a path-scoped
+/// rule — there's nothing to match against.
+fn suppress_items(items: Vec<ContextItem>, rules: &[cfg::ContextSuppressRule]) -> Vec<ContextItem> {
+    if rules.is_empty() {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| {
+            !rules.iter().any(|rule| {
+                rule.check_id == item.check_id
+                    && item
+                        .related
+                        .iter()
+                        .any(|r| rule.is_match(&cfg::path_key(&r.file)))
+            })
+        })
+        .collect()
 }
 
 fn print_digest(
@@ -235,6 +268,87 @@ fn resolve_and_load_config(
             eprintln!("error: {e}");
             Err(())
         }
+    }
+}
+
+/// `cofferdam context --lint-context-suppress` (CD-212): validates
+/// every `[[context_suppress]]` rule instead of producing a digest.
+/// A rule whose `paths` globs match zero files in the currently
+/// discovered repo is almost certainly stale — the files it was
+/// written to target moved, were renamed, or were deleted — per this
+/// repo's "warn loudly, never silently match nothing" policy (CD-150).
+/// Mirrors `--lint-knowledge`'s file-existence check; unlike
+/// `--lint-knowledge` this can't validate that the rule's `check_id`
+/// is a real `Context.*` provider without hardcoding the provider
+/// list here, so a typo'd `check_id` is left to simply suppress
+/// nothing at runtime rather than being caught by this lint.
+fn run_lint_context_suppress(
+    hidden: bool,
+    no_ignore: bool,
+    config_path: Option<&Path>,
+    no_config: bool,
+) -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = knowledge::find_project_root(&cwd);
+
+    let (project_config, _resolved_path) = match resolve_and_load_config(config_path, no_config) {
+        Ok(pair) => pair,
+        Err(()) => return ExitCode::from(2),
+    };
+    let rules: Vec<cfg::ContextSuppressRule> = project_config
+        .as_ref()
+        .map(|c| c.context_suppress.clone())
+        .unwrap_or_default();
+
+    if rules.is_empty() {
+        println!(
+            "cofferdam context --lint-context-suppress: no [[context_suppress]] rules declared"
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let mut opts = DiscoveryOptions {
+        respect_ignore: !no_ignore,
+        include_hidden: hidden,
+        ..DiscoveryOptions::default()
+    };
+    if let Some(cfg) = project_config.as_ref() {
+        opts.extensions
+            .extend(cfg.engine_extra_extensions.iter().cloned());
+    }
+    let files = match discover(std::slice::from_ref(&root), &opts) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("cofferdam context --lint-context-suppress: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let file_keys: Vec<String> = files.iter().map(|f| cfg::path_key(f)).collect();
+
+    let mut failed = false;
+    for rule in &rules {
+        if !file_keys.iter().any(|k| rule.is_match(k)) {
+            let reason = rule
+                .reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default();
+            eprintln!(
+                "error: [[context_suppress]] rule for `{}` (paths={:?}){reason}: matches 0 files in the current repo, likely stale",
+                rule.check_id, rule.paths
+            );
+            failed = true;
+        }
+    }
+
+    if failed {
+        ExitCode::from(1)
+    } else {
+        println!(
+            "cofferdam context --lint-context-suppress: {} rule(s) OK",
+            rules.len()
+        );
+        ExitCode::SUCCESS
     }
 }
 

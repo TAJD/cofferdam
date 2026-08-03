@@ -535,6 +535,15 @@ enum Cmd {
         /// Ignores `paths`/`staged`/`base`/`budget`/`format`.
         #[arg(long)]
         lint_knowledge: bool,
+        /// Validate every `[[context_suppress]]` rule in cofferdam.toml
+        /// instead of producing a digest: each rule's `paths` globs
+        /// must match at least one file in the current repo (catches
+        /// stale suppression rules left behind after the files they
+        /// targeted moved or were deleted). Same nonzero-exit carve-out
+        /// as `--lint-knowledge`. Ignores
+        /// `paths`/`staged`/`base`/`budget`/`format`.
+        #[arg(long)]
+        lint_context_suppress: bool,
     },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
@@ -1097,6 +1106,7 @@ fn run() -> ExitCode {
             hidden,
             no_ignore,
             lint_knowledge,
+            lint_context_suppress,
         } => context_cmd::run(context_cmd::ContextArgs {
             paths,
             staged,
@@ -1113,6 +1123,7 @@ fn run() -> ExitCode {
             hidden,
             no_ignore,
             lint_knowledge,
+            lint_context_suppress,
         }),
         Cmd::GenDocs { out, check } => gen_docs::run::<Cli>(out, check),
         Cmd::Lsp => run_lsp(),

@@ -49,7 +49,7 @@ use cofferdam_core::invariants::InvariantsError;
 use cofferdam_core::OptionsError;
 
 // Re-export all public types and functions from submodules
-pub use loader::{discover, load, FILE_NAME};
+pub use loader::{discover, load, path_key, FILE_NAME};
 pub use options::{options_for, options_for_raw, unknown_check_ids};
 pub use resolution::{
     resolve_for_targets, resolve_with_invariants, target_anchor, LoadDiagnostics,
@@ -112,6 +112,13 @@ pub struct ProjectConfig {
     /// check`; `cofferdam baseline ratchet` lowers (never raises) these
     /// values to match the current finding count.
     pub budgets: BTreeMap<String, u32>,
+    /// `[[context_suppress]]` blocks (CD-212) — per-`check_id` path-glob
+    /// suppression for `cofferdam context` digest items. Unlike
+    /// `[[overrides]]`, these don't scope check *options*; they drop
+    /// matching `ContextItem`s from the digest entirely, advisory-only
+    /// (never fails `cofferdam context`, which always exits 0 outside
+    /// usage errors). Empty when none are declared.
+    pub context_suppress: Vec<ContextSuppressRule>,
 }
 
 /// One `[[overrides]]` block: a set of path globs plus the per-check
@@ -151,6 +158,25 @@ pub struct OverrideCheck {
     pub disabled: Option<bool>,
 }
 
+/// Reduce an absolute, engine-promoted `file_key` to the
+/// project-relative form globs are written against: strip the absolute
+/// `root_key` prefix (or a leading `./`). Shared by
+/// [`OverrideBlock::is_match`] and [`ContextSuppressRule::is_match`].
+fn relativize<'a>(root_key: &str, file_key: &'a str) -> &'a str {
+    let with_slash = if root_key.ends_with('/') {
+        root_key.to_string()
+    } else {
+        format!("{root_key}/")
+    };
+    if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
+        stripped
+    } else if let Some(stripped) = file_key.strip_prefix(root_key) {
+        stripped.trim_start_matches('/')
+    } else {
+        file_key.trim_start_matches("./")
+    }
+}
+
 impl OverrideBlock {
     /// Test whether `file_key` (a forward-slash, normalised path — may
     /// be absolute or relative) is matched by this block's globs.
@@ -158,21 +184,34 @@ impl OverrideBlock {
     /// (or a leading `./`) so root-relative patterns match an absolute
     /// engine-promoted path.
     pub fn is_match(&self, file_key: &str) -> bool {
-        let rel = {
-            let with_slash = if self.root_key.ends_with('/') {
-                self.root_key.clone()
-            } else {
-                format!("{}/", self.root_key)
-            };
-            if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
-                stripped
-            } else if let Some(stripped) = file_key.strip_prefix(&self.root_key) {
-                stripped.trim_start_matches('/')
-            } else {
-                file_key.trim_start_matches("./")
-            }
-        };
-        self.globset.is_match(rel)
+        self.globset.is_match(relativize(&self.root_key, file_key))
+    }
+}
+
+/// One `[[context_suppress]]` block (CD-212): drop `cofferdam context`
+/// digest items for `check_id` whose anchor file(s) match `paths`.
+#[derive(Debug, Clone)]
+pub struct ContextSuppressRule {
+    /// The `Context.*` provider this rule applies to (e.g.
+    /// `"Context.Precedent"`).
+    pub check_id: String,
+    /// Raw glob patterns as written, kept for diagnostics and hashing.
+    pub paths: Vec<String>,
+    /// Compiled matcher over `paths`.
+    pub globset: globset::GlobSet,
+    /// Normalised absolute root prefix, same convention as
+    /// [`OverrideBlock::root_key`].
+    pub root_key: String,
+    /// Optional human-readable justification, surfaced in diagnostics
+    /// only — not matched against.
+    pub reason: Option<String>,
+}
+
+impl ContextSuppressRule {
+    /// Test whether `file_key` (a forward-slash, normalised path) is
+    /// matched by this rule's globs. See [`OverrideBlock::is_match`].
+    pub fn is_match(&self, file_key: &str) -> bool {
+        self.globset.is_match(relativize(&self.root_key, file_key))
     }
 }
 
@@ -363,6 +402,46 @@ enabled = true
     }
 
     #[test]
+    fn parse_context_suppress_block() {
+        let raw = r#"
+[[context_suppress]]
+check_id = "Context.Precedent"
+paths = ["src/legacy/**"]
+reason = "known false convention, see CD-999"
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.context_suppress.len(), 1);
+        let rule = &cfg.context_suppress[0];
+        assert_eq!(rule.check_id, "Context.Precedent");
+        assert_eq!(rule.paths, vec!["src/legacy/**"]);
+        assert_eq!(
+            rule.reason.as_deref(),
+            Some("known false convention, see CD-999")
+        );
+
+        let root = &rule.root_key;
+        assert!(rule.is_match(&format!("{root}/src/legacy/foo.ts")));
+        assert!(!rule.is_match(&format!("{root}/src/current/foo.ts")));
+    }
+
+    #[test]
+    fn no_context_suppress_yields_empty_vec() {
+        let cfg = loader::parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(cfg.context_suppress.is_empty());
+    }
+
+    #[test]
+    fn context_suppress_reason_is_optional() {
+        let raw = r#"
+[[context_suppress]]
+check_id = "Context.Knowledge"
+paths = ["docs/**"]
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.context_suppress[0].reason, None);
+    }
+
+    #[test]
     fn parse_overrides_block() {
         let raw = r#"
 [[overrides]]
@@ -516,6 +595,7 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
         };
 
         let opts = options_for(
@@ -553,6 +633,7 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -575,6 +656,7 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -654,6 +736,7 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

@@ -376,6 +376,124 @@ fn precedent_score_ranks_below_every_other_provider_in_the_same_digest() {
     );
 }
 
+/// CD-212: a `[[context_suppress]]` rule targeting `Context.Precedent`
+/// over a directory must drop that provider's item from the digest,
+/// even though the underlying sibling-convention inference still
+/// fires (the provider itself is untouched; suppression is a
+/// post-filter).
+#[test]
+fn context_suppress_rule_drops_matching_provider_items_from_the_digest() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    let handlers = dir.join("handlers");
+    std::fs::create_dir(&handlers).expect("mkdir handlers");
+    std::fs::write(
+        handlers.join("create_user.ts"),
+        "export interface CreateUserRequest { name: string; email: string; role: string; orgId: string; }\n\
+         export async function createUser(req: CreateUserRequest): Promise<string> { return req.name; }\n",
+    )
+    .expect("write create_user.ts");
+    std::fs::write(
+        handlers.join("update_user.ts"),
+        "export interface UpdateUserRequest { id: string; name: string; email: string; role: string; orgId: string; }\n\
+         export async function updateUser(req: UpdateUserRequest): Promise<string> { return req.id; }\n",
+    )
+    .expect("write update_user.ts");
+    std::fs::write(
+        handlers.join("list_users.ts"),
+        "export interface ListUsersRequest { orgId: string; role: string; name: string; email: string; }\n\
+         export async function listUsers(req: ListUsersRequest): Promise<string[]> { return []; }\n",
+    )
+    .expect("write list_users.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Precedent\"\npaths = [\"handlers/**\"]\nreason = \"noise for this fixture\"\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    std::fs::write(
+        handlers.join("delete_user.ts"),
+        "export async function deleteUser(id: string): Promise<void> {}\n",
+    )
+    .expect("write delete_user.ts");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--format", "json"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let items = json["items"].as_array().expect("items array");
+    assert!(
+        !items.iter().any(|i| i["check_id"] == "Context.Precedent"),
+        "context_suppress rule should have dropped the Context.Precedent item; got {items:?}"
+    );
+}
+
+/// CD-212: `--lint-context-suppress` flags a rule whose `paths` globs
+/// match zero files in the current repo as likely-stale, and exits 0
+/// when every rule matches at least one file.
+#[test]
+fn lint_context_suppress_flags_a_rule_matching_zero_files() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    std::fs::write(dir.join("real.ts"), "export const x = 1;\n").expect("write real.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Precedent\"\npaths = [\"src/nonexistent/**\"]\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--lint-context-suppress"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        !out.status.success(),
+        "expected nonzero exit for a stale rule"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("matches 0 files"),
+        "expected a stale-rule diagnostic; got stderr={stderr}"
+    );
+}
+
+#[test]
+fn lint_context_suppress_passes_when_every_rule_matches_a_file() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    std::fs::create_dir(dir.join("src")).expect("mkdir src");
+    std::fs::write(dir.join("src/real.ts"), "export const x = 1;\n").expect("write real.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Precedent\"\npaths = [\"src/**\"]\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--lint-context-suppress"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1 rule(s) OK"), "got stdout={stdout}");
+}
+
 /// CD-164 criterion 2: `cofferdam context` digests must be deterministic
 /// (golden-snapshot precondition) — two runs over the same changeset
 /// produce byte-identical JSON, including item ordering.

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use cofferdam_core::{RawOptionValue, Severity};
 use serde::Deserialize;
 
-use super::{ConfigError, OverrideBlock, OverrideCheck, ProjectConfig};
+use super::{ConfigError, ContextSuppressRule, OverrideBlock, OverrideCheck, ProjectConfig};
 
 /// Filename loaders look for during walk-up discovery.
 pub const FILE_NAME: &str = "cofferdam.toml";
@@ -47,6 +47,20 @@ pub struct TomlDoc {
     /// ratchet`; enforced by `cofferdam check`.
     #[serde(default)]
     pub budgets: BTreeMap<String, u32>,
+    /// `[[context_suppress]]` — per-`check_id` path-glob suppression of
+    /// `cofferdam context` digest items (CD-212).
+    #[serde(default)]
+    pub context_suppress: Vec<ContextSuppressTable>,
+}
+
+/// Raw `[[context_suppress]]` element.
+#[derive(Debug, Deserialize, Default)]
+pub struct ContextSuppressTable {
+    pub check_id: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Raw `[[overrides]]` element. `checks` keys are check ids; each value
@@ -190,6 +204,7 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         .collect();
 
     let overrides = compile_overrides(path, doc.overrides)?;
+    let context_suppress = compile_context_suppress(path, doc.context_suppress);
 
     let engine_extra_extensions = doc
         .engine
@@ -211,13 +226,17 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         overrides,
         budgets: doc.budgets,
         engine_extra_extensions,
+        context_suppress,
     })
 }
 
 /// Forward-slash, lowercase-on-Windows path key. Mirrors the
 /// `path_key` helpers in the checks crate so override globs match the
-/// engine's absolute, forward-slashed file keys.
-fn path_key(p: &Path) -> String {
+/// engine's absolute, forward-slashed file keys. Public so callers
+/// outside this crate (e.g. `cofferdam-cli`'s `--context_suppress`
+/// filtering, CD-212) can build a matching key without duplicating
+/// this normalisation a fourth time.
+pub fn path_key(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
         s.to_lowercase()
@@ -281,6 +300,55 @@ pub fn compile_overrides(
         });
     }
     Ok(out)
+}
+
+/// Compile `[[context_suppress]]` tables into matchable
+/// [`ContextSuppressRule`]s (CD-212). Same glob-compilation convention
+/// as [`compile_overrides`]: an invalid glob is skipped rather than
+/// failing the whole config. A block with an empty (or entirely
+/// invalid) `paths` list compiles to an empty globset, which simply
+/// suppresses nothing — `cofferdam context --lint-context-suppress`
+/// (see `context_cmd.rs`) is where a rule matching zero digest items
+/// gets flagged as likely-stale, per this repo's "warn loudly, never
+/// silently match nothing" policy.
+pub fn compile_context_suppress(
+    path: &Path,
+    tables: Vec<ContextSuppressTable>,
+) -> Vec<ContextSuppressRule> {
+    use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+
+    if tables.is_empty() {
+        return Vec::new();
+    }
+    let config_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let root_abs = std::path::absolute(&config_dir).unwrap_or(config_dir);
+    let root_key = path_key(&root_abs);
+
+    let mut out = Vec::with_capacity(tables.len());
+    for table in tables {
+        let mut builder = GlobSetBuilder::new();
+        for raw in &table.paths {
+            let normalised = raw.trim_start_matches("./").replace('\\', "/");
+            if let Ok(g) = GlobBuilder::new(&normalised)
+                .literal_separator(true)
+                .build()
+            {
+                builder.add(g);
+            }
+        }
+        let globset = builder.build().unwrap_or_else(|_| GlobSet::empty());
+        out.push(ContextSuppressRule {
+            check_id: table.check_id,
+            paths: table.paths,
+            globset,
+            root_key: root_key.clone(),
+            reason: table.reason,
+        });
+    }
+    out
 }
 
 /// Parse one `[overrides.checks."X"]` sub-table into an

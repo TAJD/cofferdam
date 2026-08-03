@@ -53,6 +53,14 @@
 //! and the cache differ. Directory precedent is preferred when both
 //! would fire, since same-directory co-location is the stronger,
 //! lower-noise signal.
+//!
+//! CD-221: a group (directory or kind) emits at most one `ContextItem`
+//! per `context_items` call, not one per changed file that lands in
+//! it — every changed file belonging to a group is excluded from that
+//! group's own clustering (not just whichever one the outer loop
+//! happens to be visiting), so a changeset touching several files of
+//! the same directory or kind doesn't produce several near-duplicate
+//! items differing only in which single file was excluded.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -237,6 +245,18 @@ impl Check for Precedent {
         let mut dir_cache: HashMap<PathBuf, DirShapes<'_>> = HashMap::new();
         let mut kind_cache: HashMap<String, DirShapes<'_>> = HashMap::new();
 
+        // CD-221: every changed file in a group (directory, or kind) is
+        // excluded from that group's clustering — not just "whichever
+        // changed file the outer loop happens to be on" — and each group
+        // produces at most one item, not one per changed file that lands
+        // in it. Without this, N changed files sharing a directory or
+        // kind each re-run (a cheap, cached) clustering pass and each
+        // push a near-duplicate item differing only in which single file
+        // was excluded from its own exemplar list.
+        let changed_set: std::collections::HashSet<&PathBuf> = changeset.files.iter().collect();
+        let mut emitted_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut emitted_kinds: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         let mut items = Vec::new();
         for changed in &changeset.files {
             let Some(dir) = changed.parent() else {
@@ -253,36 +273,42 @@ impl Check for Precedent {
                     DirShapes { shaped, edges }
                 });
 
-                // The changed file is excluded from consideration, but only at
-                // selection time: drop its index from the effective-count check
-                // and skip any precomputed edge touching it before clustering,
-                // rather than recomputing the O(siblings²) Jaccard scan.
-                let excluded_idx = dir_shapes
+                // Every changed file that landed in this directory's shape
+                // list is excluded from consideration, but only at
+                // selection time: drop their indices from the
+                // effective-count check and skip any precomputed edge
+                // touching them before clustering, rather than
+                // recomputing the O(siblings²) Jaccard scan.
+                let excluded_idx: Vec<usize> = dir_shapes
                     .shaped
                     .iter()
-                    .position(|(r, _)| r.file == *changed);
-                let effective_len = dir_shapes.shaped.len() - excluded_idx.map_or(0, |_| 1);
+                    .enumerate()
+                    .filter(|(_, (r, _))| changed_set.contains(&r.file))
+                    .map(|(i, _)| i)
+                    .collect();
+                let effective_len = dir_shapes.shaped.len() - excluded_idx.len();
                 if effective_len >= 2 {
                     if let Some(cluster) = largest_cluster_excluding(
                         dir_shapes.shaped.len(),
                         &dir_shapes.edges,
-                        excluded_idx,
+                        &excluded_idx,
                     ) {
                         let mut exemplars: Vec<&FileRecord> =
                             cluster.iter().map(|&i| dir_shapes.shaped[i].0).collect();
                         exemplars.sort_by(|a, b| a.file.cmp(&b.file));
-                        items.push(build_item(dir, &exemplars));
+                        if emitted_dirs.insert(dir.to_path_buf()) {
+                            items.push(build_item(dir, &exemplars));
+                        }
                         continue;
                     }
                 }
             }
 
             // CD-213 fallback: same-directory matching found nothing for
-            // this changed file (no siblings, or none clustered) — try
-            // grouping by filename ("kind") across the whole corpus
-            // instead, so a convention scattered one-per-directory (e.g.
-            // `route.ts` under many `app/api/**` subdirectories) can still
-            // surface.
+            // this directory — try grouping by filename ("kind") across
+            // the whole corpus instead, so a convention scattered
+            // one-per-directory (e.g. `route.ts` under many
+            // `app/api/**` subdirectories) can still surface.
             let kind = file_label(changed);
             let Some(kind_records) = by_kind.get(&kind) else {
                 continue;
@@ -300,11 +326,14 @@ impl Check for Precedent {
                 DirShapes { shaped, edges }
             });
 
-            let excluded_idx = kind_shapes
+            let excluded_idx: Vec<usize> = kind_shapes
                 .shaped
                 .iter()
-                .position(|(r, _)| r.file == *changed);
-            let effective_len = kind_shapes.shaped.len() - excluded_idx.map_or(0, |_| 1);
+                .enumerate()
+                .filter(|(_, (r, _))| changed_set.contains(&r.file))
+                .map(|(i, _)| i)
+                .collect();
+            let effective_len = kind_shapes.shaped.len() - excluded_idx.len();
             if effective_len < 2 {
                 continue;
             }
@@ -312,7 +341,7 @@ impl Check for Precedent {
             let Some(cluster) = largest_cluster_excluding(
                 kind_shapes.shaped.len(),
                 &kind_shapes.edges,
-                excluded_idx,
+                &excluded_idx,
             ) else {
                 continue;
             };
@@ -321,7 +350,9 @@ impl Check for Precedent {
                 cluster.iter().map(|&i| kind_shapes.shaped[i].0).collect();
             exemplars.sort_by(|a, b| a.file.cmp(&b.file));
 
-            items.push(build_kind_item(&kind, &exemplars));
+            if emitted_kinds.insert(kind.clone()) {
+                items.push(build_kind_item(&kind, &exemplars));
+            }
         }
         items
     }
@@ -415,25 +446,31 @@ fn shape_edges(shaped: &[(&FileRecord, &ExportedSymbol)]) -> Vec<(usize, usize)>
 
 /// Clusters `n` siblings by the precomputed `edges` (pairs meeting
 /// `SIMILARITY_THRESHOLD`) and returns the largest component of size
-/// two or more, or `None` when no such component exists. `excluded`,
-/// when present, is dropped before clustering: any edge touching it
+/// two or more, or `None` when no such component exists. Every index
+/// in `excluded` is dropped before clustering: any edge touching one
 /// is skipped, so it never joins a component (equivalent to
-/// recomputing the Jaccard scan over the sibling set with that file
+/// recomputing the Jaccard scan over the sibling set with those files
 /// removed, but without re-running the expensive pairwise comparison
 /// — Jaccard between two other siblings doesn't depend on whether a
-/// third file is present). Clusters are sorted by their lowest member
-/// index before the size comparison, and `max_by_key` keeps the
-/// *last* maximum on ties, so ties on size break on the highest min
-/// member index. The result is still deterministic regardless of
-/// hash-map iteration order — just not "lowest index wins".
+/// third file is present). CD-221: callers pass every *changed* file's
+/// index here, not just one — per the module's "sourced entirely from
+/// unchanged members" invariant, a changed file must never be cited
+/// back as its own precedent's exemplar, whether it's the one caller
+/// is currently reporting on or a sibling change in the same
+/// changeset. Clusters are sorted by their lowest member index before
+/// the size comparison, and `max_by_key` keeps the *last* maximum on
+/// ties, so ties on size break on the highest min member index. The
+/// result is still deterministic regardless of hash-map iteration
+/// order — just not "lowest index wins".
 fn largest_cluster_excluding(
     n: usize,
     edges: &[(usize, usize)],
-    excluded: Option<usize>,
+    excluded: &[usize],
 ) -> Option<Vec<usize>> {
+    let excluded: BTreeSet<usize> = excluded.iter().copied().collect();
     let mut dsu = Dsu::new(n);
     for &(i, j) in edges {
-        if Some(i) == excluded || Some(j) == excluded {
+        if excluded.contains(&i) || excluded.contains(&j) {
             continue;
         }
         dsu.union(i, j);
@@ -441,7 +478,7 @@ fn largest_cluster_excluding(
 
     let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
     for i in 0..n {
-        if Some(i) == excluded {
+        if excluded.contains(&i) {
             continue;
         }
         by_root.entry(dsu.find(i)).or_default().push(i);
@@ -875,6 +912,81 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert!(items[0].title.starts_with("Sibling convention"));
+    }
+
+    #[test]
+    fn multiple_changed_files_of_the_same_kind_produce_one_item_not_one_per_file() {
+        // CD-221 regression: 5 `route.ts` files sharing a shape, spread
+        // one-per-directory (own-directory clustering can't see them),
+        // with 2 of them landing in the same changeset. Must produce
+        // exactly one cross-directory item, and neither changed file may
+        // appear as its own exemplar.
+        let dirs = ["users", "orgs", "teams", "invites", "bots"];
+        let files: Vec<PathBuf> = dirs
+            .iter()
+            .map(|d| PathBuf::from(format!("/p/app/api/{d}/route.ts")))
+            .collect();
+        let fixtures: Vec<(&Path, &str)> = files
+            .iter()
+            .map(|f| {
+                (
+                    f.as_path(),
+                    "export interface RouteResponse { data: string; status: string; error: string; }",
+                )
+            })
+            .collect();
+        let corpus = run_precedent(&fixtures);
+
+        let changeset = ChangeSet::from_files([files[3].clone(), files[4].clone()]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(
+            items.len(),
+            1,
+            "expected exactly one dedup'd item; got {items:?}"
+        );
+        assert!(!items[0].body.contains("invites"));
+        assert!(!items[0].body.contains("bots"));
+    }
+
+    #[test]
+    fn multiple_changed_files_in_same_directory_produce_one_item_not_one_per_file() {
+        // Milder pre-existing version of CD-221, for the directory path:
+        // two changed files landing in the same directory that also has
+        // an established convention must not each independently cite the
+        // other back as its own exemplar. Needs two *unchanged* siblings
+        // remaining after excluding both changed files, or no cluster is
+        // even possible (that's the pre-existing "< 2 shaped siblings"
+        // rule, unrelated to this fix).
+        let a = PathBuf::from("/p/handlers/create_user.ts");
+        let b = PathBuf::from("/p/handlers/update_user.ts");
+        let c = PathBuf::from("/p/handlers/list_users.ts");
+        let d = PathBuf::from("/p/handlers/get_user.ts");
+
+        let get_user_src = "export interface GetUserRequest { id: string; name: string; email: string; role: string; orgId: string; }\n\
+             export async function getUser(req: GetUserRequest): Promise<string> { return req.id; }";
+
+        let corpus = run_precedent(&[
+            (&a, create_user_src()),
+            (&b, update_user_src()),
+            (&c, list_users_src()),
+            (&d, get_user_src),
+        ]);
+
+        let changeset = ChangeSet::from_files([a.clone(), b.clone()]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(
+            items.len(),
+            1,
+            "expected exactly one dedup'd item; got {items:?}"
+        );
+        assert!(!items[0].body.contains("create_user.ts"));
+        assert!(!items[0].body.contains("update_user.ts"));
+        assert!(items[0].body.contains("list_users.ts"));
+        assert!(items[0].body.contains("get_user.ts"));
     }
 
     #[test]

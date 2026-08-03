@@ -16,9 +16,9 @@
 //!   - Worker dies mid-run → `type_at` returns `None`, silently
 //!     disabling type findings for the rest of the run.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -301,6 +301,7 @@ pub struct Worker {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    stderr: Option<ChildStderr>,
 }
 
 impl Worker {
@@ -361,9 +362,34 @@ impl Worker {
             .read_line(&mut buf)
             .map_err(|e| TypeHostError::Io(format!("read response: {e}")))?;
         if n == 0 {
-            return Err(TypeHostError::Io(
-                "worker stdout closed before response".into(),
-            ));
+            // CD-238: the worker's stdout closed without a response —
+            // almost always because the child process already exited.
+            // Surface its exit status and any stderr output (a Node
+            // stack trace, an ESM resolution error, ...) rather than
+            // the bare "closed before response", which gave zero
+            // diagnostic signal for the flake this was originally
+            // reported as (CI-only "worker stdout closed before
+            // response" with no visible cause).
+            let status = self
+                .child
+                .try_wait()
+                .ok()
+                .flatten()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "still running".to_string());
+            let mut stderr_text = String::new();
+            if let Some(stderr) = self.stderr.as_mut() {
+                let _ = stderr.read_to_string(&mut stderr_text);
+            }
+            let stderr_text = stderr_text.trim();
+            return Err(TypeHostError::Io(format!(
+                "worker stdout closed before response (exit status: {status}){}",
+                if stderr_text.is_empty() {
+                    String::new()
+                } else {
+                    format!("; stderr: {stderr_text}")
+                }
+            )));
         }
 
         #[derive(Deserialize)]
@@ -485,10 +511,12 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
         .stdout
         .take()
         .ok_or_else(|| TypeHostError::Io("no worker stdout".into()))?;
+    let stderr = child.stderr.take();
     Ok(Worker {
         child,
         stdin: Some(stdin),
         stdout: BufReader::new(stdout),
+        stderr,
     })
 }
 

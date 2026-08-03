@@ -49,7 +49,14 @@ pub fn repo_root(cwd: &Path) -> Result<PathBuf, SinceError> {
         });
     }
     let raw = std::str::from_utf8(&out.stdout).map_err(|_| SinceError::NonUtf8Output)?;
-    Ok(PathBuf::from(raw.trim()))
+    let root = PathBuf::from(raw.trim());
+    // Git prints the toplevel with forward slashes even on Windows;
+    // `std::path::absolute` renormalizes separators to native (via
+    // GetFullPathNameW) so paths joined onto this root use the same
+    // separator style as every other absolute path the CLI builds
+    // (`std::fs::canonicalize`, `std::env::current_dir`), keeping
+    // raw-`PathBuf` comparisons against the ChangeSet meaningful.
+    Ok(std::path::absolute(&root).unwrap_or(root))
 }
 
 /// List the files changed in `<git_ref>...HEAD` (added, modified, or

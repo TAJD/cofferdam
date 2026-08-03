@@ -162,6 +162,78 @@ fn context_explicit_files_work_without_git() {
     assert!(stdout.contains("1 changed file(s)"), "got: {stdout}");
 }
 
+/// CD-202: explicit-path mode must resolve the same absolute paths the
+/// engine's discovery pass produces, and must discover from the repo
+/// root (not cwd) so the cross-file graph the `Context.BlastRadius`
+/// provider needs is actually built. Regression test: before the fix,
+/// `std::fs::canonicalize` on Windows produced `\\?\`-prefixed paths
+/// that never equalled the (unprefixed) discovered paths, so explicit-
+/// path mode silently returned zero items while git-diff mode — same
+/// file, same repo — returned the real digest.
+#[test]
+fn context_explicit_path_matches_git_diff_mode_on_blast_radius_fixture() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+
+    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join("blast_radius");
+    for entry in std::fs::read_dir(&fixture_dir).expect("read fixture dir") {
+        let entry = entry.expect("dir entry");
+        let name = entry.file_name();
+        std::fs::copy(entry.path(), dir.join(&name)).expect("copy fixture file");
+    }
+    commit_all(dir, "init");
+
+    // Synthetic signature change to `doThing`, matching the blast-radius
+    // fixture's documented scenario (see examples/blast_radius/lib.ts).
+    std::fs::write(
+        dir.join("lib.ts"),
+        "export function doThing(x: number, y: number): string {\n  return String(x + y);\n}\n",
+    )
+    .expect("edit lib.ts");
+
+    let git_diff_out = cofferdam_cmd(dir)
+        .args(["context", "--format", "json"])
+        .output()
+        .expect("invoke cofferdam (git-diff mode)");
+    assert!(
+        git_diff_out.status.success(),
+        "git-diff mode: expected exit 0; stderr={}",
+        String::from_utf8_lossy(&git_diff_out.stderr)
+    );
+
+    let explicit_out = cofferdam_cmd(dir)
+        .args(["context", "lib.ts", "--format", "json"])
+        .output()
+        .expect("invoke cofferdam (explicit-path mode)");
+    assert!(
+        explicit_out.status.success(),
+        "explicit-path mode: expected exit 0; stderr={}",
+        String::from_utf8_lossy(&explicit_out.stderr)
+    );
+
+    let git_diff_json: serde_json::Value =
+        serde_json::from_slice(&git_diff_out.stdout).expect("valid JSON (git-diff mode)");
+    let explicit_json: serde_json::Value =
+        serde_json::from_slice(&explicit_out.stdout).expect("valid JSON (explicit-path mode)");
+
+    let git_diff_items = git_diff_json["items"].as_array().expect("items array");
+    assert!(
+        !git_diff_items.is_empty(),
+        "expected non-empty items in git-diff mode; got {git_diff_json}"
+    );
+    assert_eq!(
+        git_diff_json["items"], explicit_json["items"],
+        "explicit-path mode must yield the same items as git-diff mode for the same change"
+    );
+}
+
 #[test]
 fn context_bad_base_ref_is_a_usage_error() {
     let tmp = TempDir::new().expect("temp dir");

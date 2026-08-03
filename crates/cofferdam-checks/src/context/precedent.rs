@@ -69,13 +69,18 @@ const SIMILARITY_THRESHOLD: f64 = 0.75;
 
 /// Deliberately low and constant — `relevance::FLOOR` (CD-210). Per
 /// the product spec, `Context.Precedent` has the lowest source
-/// priority of every provider class and is the first evicted under a
-/// tight `--budget`: it's a sibling-file convention *inference*, not
-/// anything traced through the import graph or authored by a human.
-/// Every other provider's scoring is required to clamp no lower than
+/// priority of every provider class: it's a sibling-file convention
+/// *inference*, not anything traced through the import graph or
+/// authored by a human, so it always sorts last (and loses every
+/// score tie-break) among items included in the same digest. Every
+/// other provider's scoring is required to clamp no lower than
 /// `relevance::INFERRED_MIN`, strictly above this constant, so that
-/// ordering holds by construction — see `relevance::FLOOR`'s doc
-/// comment.
+/// ordering holds by construction. Note this governs presentation
+/// order, not eviction odds — `context_digest::assemble`'s round-robin
+/// fairness (CD-211) guarantees Precedent a minimum share of the
+/// budget alongside every other provider, so it is not literally
+/// "first evicted" under budget pressure — see `relevance::FLOOR`'s
+/// doc comment (CD-217).
 const SCORE: i32 = relevance::FLOOR;
 
 /// What a single exported top-level symbol looks like, for the

@@ -453,6 +453,7 @@ Start here — the default entrypoint into project context you don't already hav
 * `--hidden` — Walk hidden files (default: skip)
 * `--no-ignore` — Disable .gitignore/.cofferdamignore filtering
 * `--lint-knowledge` — Validate every `.cofferdam/knowledge/*.md` file instead of producing a digest: selectors must parse, and every selector must match at least one file in the current repo (catches broken globs and orphan selectors). The one deliberate nonzero-exit carve-out for `cofferdam context` — exits nonzero when validation fails, so CI can gate on it. Ignores `paths`/`staged`/`base`/`budget`/`format`
+* `--lint-context-suppress` — Validate every `[[context_suppress]]` rule in cofferdam.toml instead of producing a digest: each rule's `paths` globs must match at least one file in the current repo (catches stale suppression rules left behind after the files they targeted moved or were deleted). Same nonzero-exit carve-out as `--lint-knowledge`. Ignores `paths`/`staged`/`base`/`budget`/`format`
 
 
 

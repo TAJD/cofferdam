@@ -79,17 +79,38 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
         // See `plugins.rs::materialise_host_script` — both host scripts
         // share this file and each ensures it's present so either one
         // can be spawned independently of the other.
+        //
+        // CD-266: `write_atomic`, not `fs::write` directly. `scripts_dir`
+        // is scoped by version and user (CD-89) but not by process — two
+        // same-version `cofferdam` invocations racing (a CI matrix
+        // sharing a runner, a watch-mode rebuild overlapping a manual
+        // run) could have one process's non-atomic truncate-then-write
+        // caught mid-write by another process's `node` opening the same
+        // path, producing a `SyntaxError` from a torn `.mjs` file that
+        // looks exactly like the class of flake CD-238 was filed for.
         let core_path = dir.join(CORE_SCRIPT_NAME);
-        std::fs::write(&core_path, CORE_SCRIPT)?;
+        write_atomic(&core_path, CORE_SCRIPT)?;
 
         let path = dir.join(HOST_SCRIPT_NAME);
-        std::fs::write(&path, HOST_SCRIPT)?;
+        write_atomic(&path, HOST_SCRIPT)?;
         Ok(path)
     });
     match result {
         Ok(p) => Ok(p.clone()),
         Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
     }
+}
+
+/// Write `contents` to `path` without a window where a concurrent
+/// reader could observe a truncated/partial file — write to a
+/// process-unique sibling path, then `rename` into place. `rename` is
+/// atomic on both POSIX and Windows for a same-directory replace.
+/// Mirrors `plugins.rs::write_atomic`.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&tmp_path, contents)?;
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
 }
 
 /// Wall-clock budget for one type-host request. Default 60s; override
@@ -1199,6 +1220,78 @@ mod tests {
             Err(other) => panic!("expected HostError{{code: ts_morph_unavailable}}, got {other}"),
             Ok(_) => panic!("no node_modules/ts-morph anywhere under a fresh tempdir"),
         }
+    }
+
+    /// CD-266: `write_atomic` must leave the destination path either
+    /// absent or fully written — never a torn/partial file, since
+    /// that's exactly what a concurrent `node` process opening the
+    /// destination mid-write would otherwise observe (`SyntaxError:
+    /// Unexpected end of input`). Also asserts the temp sibling is
+    /// cleaned up (renamed away, not left behind).
+    #[test]
+    fn write_atomic_overwrite_leaves_no_partial_or_leftover_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("script.mjs");
+
+        write_atomic(&path, "short").expect("first write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "short");
+
+        let longer = "much longer content than before, to prove overwrite isn't append";
+        write_atomic(&path, longer).expect("second write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), longer);
+
+        let leftover_tmp: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|name| name != "script.mjs")
+            .collect();
+        assert!(
+            leftover_tmp.is_empty(),
+            "expected the tmp sibling to be renamed away, found: {leftover_tmp:?}"
+        );
+    }
+
+    /// CD-266: a reader polling the destination path while many writers
+    /// race `write_atomic` against it (the real production scenario —
+    /// concurrent same-version `cofferdam` processes materialising the
+    /// byte-identical embedded script) must never observe a prefix of
+    /// the content; only "doesn't exist yet" or "fully written" are
+    /// valid observations. Before the fix (`fs::write` directly, no
+    /// rename), a reader could open the file mid-truncate-and-write.
+    #[test]
+    fn write_atomic_never_exposes_a_torn_file_to_a_concurrent_reader() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("script.mjs");
+        let expected = "x".repeat(200_000); // large enough that a torn read is likely if unprotected
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader_path = path.clone();
+        let reader_expected = expected.clone();
+        let reader_stop = Arc::clone(&stop);
+        let reader = std::thread::spawn(move || {
+            let mut torn = None;
+            while !reader_stop.load(Ordering::Relaxed) {
+                if let Ok(contents) = std::fs::read_to_string(&reader_path) {
+                    if contents != reader_expected {
+                        torn = Some(contents.len());
+                        break;
+                    }
+                }
+            }
+            torn
+        });
+
+        for _ in 0..50 {
+            write_atomic(&path, &expected).expect("write");
+        }
+        stop.store(true, Ordering::Relaxed);
+        let torn_len = reader.join().expect("reader thread");
+        assert!(
+            torn_len.is_none(),
+            "reader observed a torn file of length {torn_len:?}, expected {}",
+            expected.len()
+        );
     }
 
     /// Real worker end-to-end test (cd-9hp.2 cp2). Gated on a ts-morph

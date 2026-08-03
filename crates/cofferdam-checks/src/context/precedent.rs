@@ -40,6 +40,19 @@
 //! same directory. The changed file itself is excluded only at
 //! cluster-selection time (by dropping edges that touch it before
 //! running union-find), not by re-running the Jaccard scan.
+//!
+//! CD-213: same-directory matching structurally can't see a convention
+//! that holds across a *kind* of file scattered over many directories
+//! (e.g. every `route.ts` under `app/api/**` sharing a response shape)
+//! when any single directory only has one or two members of that kind.
+//! As a fallback, tried only when a changed file's own directory
+//! yields no cluster, files are grouped by exact filename ("kind")
+//! across the whole corpus and the same Jaccard clustering runs within
+//! that group. This reuses `shape_edges`/`largest_cluster_excluding`
+//! unchanged; only the grouping key (filename vs. parent directory)
+//! and the cache differ. Directory precedent is preferred when both
+//! would fire, since same-directory co-location is the stronger,
+//! lower-noise signal.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -195,13 +208,21 @@ impl Check for Precedent {
             .with_slot(&PRECEDENT_EXPORTS, |slot| slot.clone());
 
         let mut by_dir: BTreeMap<PathBuf, Vec<&FileRecord>> = BTreeMap::new();
+        let mut by_kind: BTreeMap<String, Vec<&FileRecord>> = BTreeMap::new();
         for record in &records {
             if let Some(dir) = record.file.parent() {
                 by_dir.entry(dir.to_path_buf()).or_default().push(record);
             }
+            by_kind
+                .entry(file_label(&record.file))
+                .or_default()
+                .push(record);
         }
         for siblings in by_dir.values_mut() {
             siblings.sort_by(|a, b| a.file.cmp(&b.file));
+        }
+        for kind_members in by_kind.values_mut() {
+            kind_members.sort_by(|a, b| a.file.cmp(&b.file));
         }
 
         // Per-directory shape list + all-pairs Jaccard edges, computed at
@@ -214,18 +235,64 @@ impl Check for Precedent {
             edges: Vec<(usize, usize)>,
         }
         let mut dir_cache: HashMap<PathBuf, DirShapes<'_>> = HashMap::new();
+        let mut kind_cache: HashMap<String, DirShapes<'_>> = HashMap::new();
 
         let mut items = Vec::new();
         for changed in &changeset.files {
             let Some(dir) = changed.parent() else {
                 continue;
             };
-            let Some(dir_records) = by_dir.get(dir) else {
+
+            if let Some(dir_records) = by_dir.get(dir) {
+                let dir_shapes = dir_cache.entry(dir.to_path_buf()).or_insert_with(|| {
+                    let shaped: Vec<(&FileRecord, &ExportedSymbol)> = dir_records
+                        .iter()
+                        .filter_map(|r| primary_shape(r).map(|s| (*r, s)))
+                        .collect();
+                    let edges = shape_edges(&shaped);
+                    DirShapes { shaped, edges }
+                });
+
+                // The changed file is excluded from consideration, but only at
+                // selection time: drop its index from the effective-count check
+                // and skip any precomputed edge touching it before clustering,
+                // rather than recomputing the O(siblings²) Jaccard scan.
+                let excluded_idx = dir_shapes
+                    .shaped
+                    .iter()
+                    .position(|(r, _)| r.file == *changed);
+                let effective_len = dir_shapes.shaped.len() - excluded_idx.map_or(0, |_| 1);
+                if effective_len >= 2 {
+                    if let Some(cluster) = largest_cluster_excluding(
+                        dir_shapes.shaped.len(),
+                        &dir_shapes.edges,
+                        excluded_idx,
+                    ) {
+                        let mut exemplars: Vec<&FileRecord> =
+                            cluster.iter().map(|&i| dir_shapes.shaped[i].0).collect();
+                        exemplars.sort_by(|a, b| a.file.cmp(&b.file));
+                        items.push(build_item(dir, &exemplars));
+                        continue;
+                    }
+                }
+            }
+
+            // CD-213 fallback: same-directory matching found nothing for
+            // this changed file (no siblings, or none clustered) — try
+            // grouping by filename ("kind") across the whole corpus
+            // instead, so a convention scattered one-per-directory (e.g.
+            // `route.ts` under many `app/api/**` subdirectories) can still
+            // surface.
+            let kind = file_label(changed);
+            let Some(kind_records) = by_kind.get(&kind) else {
                 continue;
             };
+            if kind_records.len() < 2 {
+                continue;
+            }
 
-            let dir_shapes = dir_cache.entry(dir.to_path_buf()).or_insert_with(|| {
-                let shaped: Vec<(&FileRecord, &ExportedSymbol)> = dir_records
+            let kind_shapes = kind_cache.entry(kind.clone()).or_insert_with(|| {
+                let shaped: Vec<(&FileRecord, &ExportedSymbol)> = kind_records
                     .iter()
                     .filter_map(|r| primary_shape(r).map(|s| (*r, s)))
                     .collect();
@@ -233,30 +300,28 @@ impl Check for Precedent {
                 DirShapes { shaped, edges }
             });
 
-            // The changed file is excluded from consideration, but only at
-            // selection time: drop its index from the effective-count check
-            // and skip any precomputed edge touching it before clustering,
-            // rather than recomputing the O(siblings²) Jaccard scan.
-            let excluded_idx = dir_shapes
+            let excluded_idx = kind_shapes
                 .shaped
                 .iter()
                 .position(|(r, _)| r.file == *changed);
-            let effective_len = dir_shapes.shaped.len() - excluded_idx.map_or(0, |_| 1);
+            let effective_len = kind_shapes.shaped.len() - excluded_idx.map_or(0, |_| 1);
             if effective_len < 2 {
                 continue;
             }
 
-            let Some(cluster) =
-                largest_cluster_excluding(dir_shapes.shaped.len(), &dir_shapes.edges, excluded_idx)
-            else {
+            let Some(cluster) = largest_cluster_excluding(
+                kind_shapes.shaped.len(),
+                &kind_shapes.edges,
+                excluded_idx,
+            ) else {
                 continue;
             };
 
             let mut exemplars: Vec<&FileRecord> =
-                cluster.iter().map(|&i| dir_shapes.shaped[i].0).collect();
+                cluster.iter().map(|&i| kind_shapes.shaped[i].0).collect();
             exemplars.sort_by(|a, b| a.file.cmp(&b.file));
 
-            items.push(build_item(dir, &exemplars));
+            items.push(build_kind_item(&kind, &exemplars));
         }
         items
     }
@@ -421,6 +486,44 @@ fn build_item(dir: &Path, exemplars: &[&FileRecord]) -> ContextItem {
         explain: Some(format!(
             "{} sibling file(s) in `{dir_display}` share a field-shape pattern (Jaccard >= \
              {SIMILARITY_THRESHOLD:.2})",
+            exemplars.len()
+        )),
+    }
+}
+
+/// CD-213: same as [`build_item`] but for a cross-directory "kind"
+/// match — exemplars live in different directories, so the item lists
+/// each exemplar's full path rather than just its filename, and the
+/// title/explain text is worded to distinguish it from a same-directory
+/// finding.
+fn build_kind_item(kind: &str, exemplars: &[&FileRecord]) -> ContextItem {
+    let mut body =
+        format!("Files named `{kind}` across the project establish a shared export shape:\n\n");
+    let mut related = Vec::new();
+    for record in exemplars {
+        let names: Vec<&str> = record.exports.iter().map(|e| e.name.as_str()).collect();
+        body.push_str(&format!(
+            "- `{}` exports {}\n",
+            record.file.display(),
+            names.join(", ")
+        ));
+        if let Some(shape_sym) = primary_shape(record) {
+            related.push(RelatedSpan {
+                file: record.file.clone(),
+                location: Location::from_span(&record.file, shape_sym.span),
+            });
+        }
+    }
+    ContextItem {
+        check_id: META.id.to_string(),
+        title: format!("Cross-directory convention for {kind}"),
+        body,
+        score: SCORE,
+        pinned: false,
+        related,
+        explain: Some(format!(
+            "{} file(s) named `{kind}` share a field-shape pattern across directories \
+             (Jaccard >= {SIMILARITY_THRESHOLD:.2})",
             exemplars.len()
         )),
     }
@@ -699,6 +802,79 @@ mod tests {
             items.is_empty(),
             "a and b must not be bridged into a false precedent via c; got {items:?}"
         );
+    }
+
+    #[test]
+    fn cross_directory_kind_match_surfaces_when_own_directory_has_no_siblings() {
+        // CD-213: three `route.ts` files, one per directory (so
+        // same-directory matching sees no siblings anywhere), sharing a
+        // response shape. The changed file is a 4th `route.ts` in yet
+        // another lone directory with no shape of its own.
+        let a = PathBuf::from("/p/app/api/users/route.ts");
+        let b = PathBuf::from("/p/app/api/orgs/route.ts");
+        let c = PathBuf::from("/p/app/api/teams/route.ts");
+        let changed = PathBuf::from("/p/app/api/invites/route.ts");
+
+        let corpus = run_precedent(&[
+            (
+                &a,
+                "export interface RouteResponse { data: string; status: string; error: string; }",
+            ),
+            (
+                &b,
+                "export interface RouteResponse { data: string; status: string; error: string; }",
+            ),
+            (
+                &c,
+                "export interface RouteResponse { data: string; status: string; error: string; }",
+            ),
+            (&changed, "export async function GET(): Promise<void> {}"),
+        ]);
+
+        let changeset = ChangeSet::from_files([changed.clone()]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(
+            items.len(),
+            1,
+            "expected one cross-directory item; got {items:?}"
+        );
+        let item = &items[0];
+        assert_eq!(item.check_id, "Context.Precedent");
+        assert!(item.title.contains("route.ts"));
+        assert!(
+            item.body.contains("app/api/users/route.ts")
+                || item.body.contains("app\\api\\users\\route.ts")
+        );
+        // The changed file itself must never appear as an exemplar.
+        assert!(!item.body.contains("invites"));
+    }
+
+    #[test]
+    fn same_directory_match_is_preferred_over_cross_directory_kind_match() {
+        // A changed file whose own directory already has an established
+        // convention must use that, not fall through to the (here,
+        // absent) kind-based grouping.
+        let a = PathBuf::from("/p/handlers/create_user.ts");
+        let b = PathBuf::from("/p/handlers/update_user.ts");
+        let changed = PathBuf::from("/p/handlers/delete_user.ts");
+
+        let corpus = run_precedent(&[
+            (&a, create_user_src()),
+            (&b, update_user_src()),
+            (
+                &changed,
+                "export async function deleteUser(id: string): Promise<void> {}",
+            ),
+        ]);
+
+        let changeset = ChangeSet::from_files([changed.clone()]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(items.len(), 1);
+        assert!(items[0].title.starts_with("Sibling convention"));
     }
 
     #[test]

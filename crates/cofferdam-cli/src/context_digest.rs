@@ -11,8 +11,28 @@ pub fn estimate_tokens(s: &str) -> usize {
     s.chars().count().div_ceil(4)
 }
 
+/// CD-239: every field actually rendered must be counted, not just the
+/// three original ones — `render_markdown` appends `_why: {explain}_`
+/// for every included item, and `render_json` serializes `explain` and
+/// `related` (a `{file, location}` pair per entry) along with the rest
+/// of the `ContextItem`. Omitting them let real digests cost roughly
+/// 3x their accounted budget on an item with even a single `related`
+/// span, defeating `--budget`'s purpose and under-reporting
+/// `Digest.spent`. `related` is serialized to JSON to estimate its
+/// cost since a `Vec<RelatedSpan>` has no single string field to
+/// measure directly — this over-counts slightly for the markdown
+/// path (which doesn't render `related` at all), but an over-estimate
+/// here means the digest budgets conservatively rather than silently
+/// exceeding `--budget` again.
 fn item_tokens(i: &ContextItem) -> usize {
-    estimate_tokens(&i.title) + estimate_tokens(&i.body) + estimate_tokens(&i.check_id)
+    let related_tokens = serde_json::to_string(&i.related)
+        .map(|s| estimate_tokens(&s))
+        .unwrap_or(0);
+    estimate_tokens(&i.title)
+        + estimate_tokens(&i.body)
+        + estimate_tokens(&i.check_id)
+        + i.explain.as_deref().map(estimate_tokens).unwrap_or(0)
+        + related_tokens
 }
 
 /// Total order for presenting items: score desc, then `(check_id,
@@ -341,6 +361,40 @@ mod tests {
             d.included.iter().any(|i| i.check_id == "Context.Precedent"),
             "Precedent must get a slot before BlastRadius consumes the whole budget; included={:?}",
             d.included.iter().map(|i| &i.check_id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn item_tokens_counts_explain_and_related() {
+        // CD-239: an item with only a title/body/check_id must cost
+        // strictly less than the same item once `explain` and
+        // `related` are populated — both are actually rendered
+        // (markdown appends `_why: {explain}_`; JSON serializes both),
+        // so both must be charged.
+        let bare = item("Context.A", "a", 5, false, 4);
+        let mut with_explain = bare.clone();
+        with_explain.explain = Some("a".repeat(200));
+        assert!(
+            item_tokens(&with_explain) > item_tokens(&bare),
+            "a populated explain must increase the item's token cost"
+        );
+
+        let mut with_related = bare.clone();
+        with_related.related = vec![cofferdam_core::RelatedSpan {
+            file: std::path::PathBuf::from("/p/some/file.ts"),
+            location: cofferdam_core::Location::from_span(
+                std::path::Path::new("/p/some/file.ts"),
+                cofferdam_core::Span {
+                    start_byte: 0,
+                    end_byte: 0,
+                    line: 1,
+                    column: 1,
+                },
+            ),
+        }];
+        assert!(
+            item_tokens(&with_related) > item_tokens(&bare),
+            "a populated related list must increase the item's token cost"
         );
     }
 

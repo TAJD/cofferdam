@@ -37,6 +37,18 @@ pub fn estimate_tokens(s: &str) -> usize {
     s.chars().count().div_ceil(4)
 }
 
+/// CD-246: fixed per-item overhead the field-value sum in
+/// [`item_tokens`] doesn't capture — `render_json`'s object
+/// punctuation and keys (`{"check_id":...,"title":...,"score":...,
+/// "pinned":...}` plus braces/quotes/commas) run to 70+ chars (~18
+/// tokens) before `--pretty` indentation roughly doubles it;
+/// `render_markdown`'s `## {title}  \`{check_id}\`\n\n...\n\n_why:
+/// ..._\n\n` wrapper is smaller. Charging the larger (JSON) estimate
+/// unconditionally keeps the markdown path conservatively over-counted
+/// rather than the JSON path under-counted, matching CD-239's
+/// established policy.
+const ITEM_ENVELOPE_TOKENS: usize = 20;
+
 /// CD-239: every field actually rendered must be counted, not just the
 /// three original ones — `render_markdown` appends `_why: {explain}_`
 /// for every included item, and `render_json` serializes `explain` and
@@ -54,7 +66,8 @@ fn item_tokens(i: &ContextItem) -> usize {
     let related_tokens = serde_json::to_string(&i.related)
         .map(|s| estimate_tokens(&s))
         .unwrap_or(0);
-    estimate_tokens(&i.title)
+    ITEM_ENVELOPE_TOKENS
+        + estimate_tokens(&i.title)
         + estimate_tokens(&i.body)
         + estimate_tokens(&i.check_id)
         + i.explain.as_deref().map(estimate_tokens).unwrap_or(0)
@@ -456,6 +469,19 @@ mod tests {
             item_tokens(&with_related) > item_tokens(&bare),
             "a populated related list must increase the item's token cost"
         );
+    }
+
+    #[test]
+    fn item_tokens_charges_a_fixed_envelope_even_for_an_empty_item() {
+        // CD-246: field values alone (title/body/check_id/explain/
+        // related) don't capture render_json's object punctuation and
+        // keys or render_markdown's heading/wrapper text — an item
+        // with empty title/body must still cost ITEM_ENVELOPE_TOKENS
+        // plus its non-empty fields (check_id, and `related`'s "[]"),
+        // not just the field-length sum a pre-CD-246 formula gave it.
+        let bare = item("Context.A", "", 5, false, 0);
+        let expected = ITEM_ENVELOPE_TOKENS + estimate_tokens("Context.A") + estimate_tokens("[]");
+        assert_eq!(item_tokens(&bare), expected);
     }
 
     #[test]

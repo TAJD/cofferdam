@@ -134,7 +134,7 @@ Envelope:
 | `items` | array | The digest, after budget truncation — see `ContextItem` below. |
 | `omitted` | integer | Count of items that scored/ranked below the cutoff and were dropped for budget. `0` means nothing was cut. |
 | `budget` | integer | The `--budget` value used. |
-| `spent` | integer | Actual tokens spent on `items`. Can exceed `budget` when pinned items push the total over — pinned items are never evicted. |
+| `spent` | integer | Actual tokens spent on `items` (each item's field content plus a fixed per-item rendering overhead, CD-246). Can exceed `budget` when pinned items push the total over — pinned items are never evicted. Does **not** include `changed_files` — a very large changeset adds unbudgeted output to the JSON payload (CD-246). |
 
 Per `ContextItem`:
 

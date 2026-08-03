@@ -16,7 +16,7 @@
 //!   - Worker dies mid-run → `type_at` returns `None`, silently
 //!     disabling type findings for the rest of the run.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -331,28 +331,46 @@ const STDERR_BUF_CAP: usize = 64 * 1024;
 /// message back down to no stderr tail at all, nondeterministically.
 /// [`Worker::request_nullable`]'s EOF branch does a short bounded
 /// `recv_timeout` on this before snapshotting.
+///
+/// CD-259: reads fixed-size chunks via [`Read::read`] rather than
+/// line-framing via `read_until(b'\n', ...)`. `read_until` grows its
+/// destination `Vec` without limit until it finds the delimiter —
+/// `STDERR_BUF_CAP` was only ever applied *after* a full line had
+/// accumulated, so newline-free output (a `\r`-only progress bar, a
+/// `console.error` of one huge JSON blob) grew unboundedly and could
+/// OOM the whole CLI in a code path whose entire purpose is defensive
+/// robustness. A fixed chunk size bounds the transient allocation
+/// regardless of whether the input ever contains a newline.
 fn spawn_stderr_drain(stderr: ChildStderr) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let buf_writer = Arc::clone(&buf);
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let Ok(mut bytes) = buf_writer.lock() else {
-                        break;
-                    };
-                    append_capped(&mut bytes, &line);
-                }
-            }
-        }
+        drain_into(stderr, &buf_writer);
         let _ = done_tx.send(());
     });
     (buf, done_rx)
+}
+
+/// Read `reader` to EOF in fixed-size chunks, appending each into `buf`
+/// via [`append_capped`]. Split out from [`spawn_stderr_drain`] so the
+/// CD-259 bounded-memory behaviour is testable against a plain in-memory
+/// reader without a real child process.
+const DRAIN_CHUNK_SIZE: usize = 8 * 1024;
+
+fn drain_into<R: Read>(mut reader: R, buf: &Mutex<Vec<u8>>) {
+    let mut chunk = [0u8; DRAIN_CHUNK_SIZE];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let Ok(mut bytes) = buf.lock() else {
+                    break;
+                };
+                append_capped(&mut bytes, &chunk[..n]);
+            }
+        }
+    }
 }
 
 /// Bounded wait for the stderr drain thread to finish, used only on the
@@ -889,6 +907,28 @@ mod tests {
         append_capped(&mut buf, &invalid);
         assert_eq!(buf, invalid);
         assert!(String::from_utf8_lossy(&buf).contains("hi"));
+    }
+
+    /// CD-259: newline-free input must not grow the drain's transient
+    /// buffer past `DRAIN_CHUNK_SIZE` per read — before the fix,
+    /// `read_until(b'\n', ...)` accumulated the entire input into one
+    /// `Vec` before ever calling `append_capped`, so output with no `\n`
+    /// (a `\r`-only progress bar, one huge `console.error` blob) grew
+    /// unboundedly regardless of `STDERR_BUF_CAP`. Feeds several times
+    /// `STDERR_BUF_CAP` worth of newline-free bytes through the drain
+    /// helper directly (no child process needed) and asserts the final
+    /// buffer still respects the cap.
+    #[test]
+    fn drain_into_bounds_memory_on_newline_free_input() {
+        let data = vec![b'x'; STDERR_BUF_CAP * 4];
+        let buf = Mutex::new(Vec::new());
+        drain_into(std::io::Cursor::new(data), &buf);
+        let bytes = buf.lock().expect("lock");
+        assert!(
+            bytes.len() <= STDERR_BUF_CAP,
+            "expected the buffer to stay capped at {STDERR_BUF_CAP}, got {}",
+            bytes.len()
+        );
     }
 
     /// CD-244/CD-245: a worker that writes more than one OS pipe buffer

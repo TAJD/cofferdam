@@ -61,6 +61,31 @@
 //! happens to be visiting), so a changeset touching several files of
 //! the same directory or kind doesn't produce several near-duplicate
 //! items differing only in which single file was excluded.
+//!
+//! CD-224: directory and kind items intentionally score identically
+//! (both `SCORE`, i.e. `relevance::FLOOR` — see its doc comment, which
+//! reserves that value for this provider's single constant score).
+//! Combined with "directory first, kind as fallback, first match
+//! wins" (CD-213), this means a strong cross-directory kind
+//! convention is invisible whenever the changed file's own directory
+//! happens to produce *any* cluster, even a weak/borderline one — the
+//! provider has no way to prefer the stronger signal when both would
+//! fire, because it never computes the kind cluster to compare against
+//! once a directory cluster exists. This is an accepted
+//! precision-over-recall tradeoff (same rationale as the product
+//! spec's "nothing is emitted below threshold" default), not an
+//! oversight: introducing a score gradient between `FLOOR` and
+//! `relevance::INFERRED_MIN` to rank one above the other would violate
+//! `FLOOR`'s documented invariant of being reserved for this single
+//! constant. Revisit only alongside a broader relevance-scale change.
+//!
+//! CD-224: [`file_label`]'s "kind" grouping key is the bare filename
+//! with no language/extension partitioning — a `types.ts` in one
+//! adapter and a `types.py` in another (or two unrelated `types.ts`
+//! files that happen to share a name by coincidence) bucket into the
+//! same kind group. Accepted as a v1 simplification: false-positive
+//! kind matches still require the Jaccard field-shape clustering to
+//! agree before an item is emitted, which bounds the damage.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -489,6 +514,8 @@ fn largest_cluster_excluding(
     clusters.into_iter().max_by_key(|c| c.len())
 }
 
+/// Bare filename only, no extension/language partitioning — see the
+/// module doc's CD-224 note on the "kind" grouping key.
 fn file_label(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -532,7 +559,8 @@ fn build_item(dir: &Path, exemplars: &[&FileRecord]) -> ContextItem {
 /// match — exemplars live in different directories, so the item lists
 /// each exemplar's full path rather than just its filename, and the
 /// title/explain text is worded to distinguish it from a same-directory
-/// finding.
+/// finding. Scores identically to [`build_item`] (both `SCORE`) —
+/// see the module doc's CD-224 note on why that's intentional.
 fn build_kind_item(kind: &str, exemplars: &[&FileRecord]) -> ContextItem {
     let mut body =
         format!("Files named `{kind}` across the project establish a shared export shape:\n\n");

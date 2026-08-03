@@ -126,22 +126,41 @@ pub fn host_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// CD-282: each worker opens a full ts-morph `Project` (parses the whole
+/// TS program), so the default pool size is capped here rather than left
+/// to track `available_parallelism()` unbounded — a 64-core CI runner
+/// would otherwise spawn 64 concurrent full-project parses, a plausible
+/// OOM. The per-file engine loop is still single-threaded (CD-30 open),
+/// so today every worker past the first buys no throughput anyway; 4 is
+/// enough to keep a few requests in flight without the unbounded blast
+/// radius. `COFFERDAM_TYPE_HOST_POOL_SIZE` still overrides this
+/// unconditionally for anyone who has measured their own workload.
+const DEFAULT_POOL_SIZE_CAP: usize = 4;
+
 /// Number of Node workers in the type-host pool (CD-31). Default is the
-/// host's available parallelism (falling back to 1); override via
-/// `COFFERDAM_TYPE_HOST_POOL_SIZE=<n>`. Tying the default to core count
-/// means the pool roughly matches the eventual rayon thread count
-/// without hard-coding a dependency on the engine crate (which owns the
-/// actual rayon setup — CD-30).
+/// host's available parallelism, capped at [`DEFAULT_POOL_SIZE_CAP`]
+/// (falling back to 1 if parallelism can't be determined); override via
+/// `COFFERDAM_TYPE_HOST_POOL_SIZE=<n>`, which is not capped.
 pub fn pool_size() -> usize {
     std::env::var("COFFERDAM_TYPE_HOST_POOL_SIZE")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1)
+            default_pool_size(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+            )
         })
+}
+
+/// Pure capping logic behind [`pool_size`]'s uncapped-env-var-absent
+/// branch, split out so it's unit-testable without mutating process-wide
+/// env state (forbidden by the workspace's no-`unsafe` lint, which
+/// `std::env::set_var` requires since Rust 2024).
+fn default_pool_size(available_parallelism: usize) -> usize {
+    available_parallelism.min(DEFAULT_POOL_SIZE_CAP)
 }
 
 #[derive(Debug, Serialize)]
@@ -1434,6 +1453,20 @@ mod tests {
             other => panic!("expected TypeHostError::BadResponse, got {other:?}"),
         }
         let _ = worker.close();
+    }
+
+    /// CD-282: the default pool size must never exceed the cap, even on
+    /// a high-core-count host, but should stay under it on a low-core
+    /// host rather than always saturating the cap.
+    #[test]
+    fn default_pool_size_caps_high_parallelism_but_passes_through_low_parallelism() {
+        assert_eq!(default_pool_size(1), 1);
+        assert_eq!(default_pool_size(2), 2);
+        assert_eq!(
+            default_pool_size(DEFAULT_POOL_SIZE_CAP),
+            DEFAULT_POOL_SIZE_CAP
+        );
+        assert_eq!(default_pool_size(64), DEFAULT_POOL_SIZE_CAP);
     }
 
     /// CD-281: a response that matches our request id but fails to

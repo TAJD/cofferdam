@@ -181,14 +181,17 @@ fn relativize<'a>(root_key: &str, file_key: &'a str) -> Option<&'a str> {
     if let Some(stripped) = file_key.strip_prefix("./") {
         return Some(stripped);
     }
-    let with_slash = if root_key.ends_with('/') {
-        root_key.to_string()
-    } else {
-        format!("{root_key}/")
-    };
+    // CD-231: trim any trailing slash on `root_key` before deriving
+    // both the prefix-with-slash and the exact-match comparison, so a
+    // caller-supplied `root_key` of "/repo/" behaves identically to
+    // "/repo" — without this, `file_key == root_key` never matched the
+    // trailing-slash form (it compared "/repo" against "/repo/"),
+    // silently falling through to `None` instead of `Some("")`.
+    let root_trimmed = root_key.trim_end_matches('/');
+    let with_slash = format!("{root_trimmed}/");
     if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
         Some(stripped)
-    } else if file_key == root_key {
+    } else if file_key == root_trimmed {
         Some("")
     } else if file_key.starts_with('/') || file_key.starts_with("\\") {
         None
@@ -344,6 +347,17 @@ mod tests {
             Some("src/legacy/a.ts")
         );
         assert_eq!(relativize("/repo", "/repo"), Some(""));
+    }
+
+    #[test]
+    fn relativize_treats_a_trailing_slash_root_key_the_same_as_no_trailing_slash() {
+        // CD-231: a root_key of "/repo/" must relativize identically to
+        // "/repo" — both the exact-root match and a nested file.
+        assert_eq!(relativize("/repo/", "/repo"), Some(""));
+        assert_eq!(
+            relativize("/repo/", "/repo/src/legacy/a.ts"),
+            Some("src/legacy/a.ts")
+        );
     }
 
     fn glob_for(pattern: &str) -> globset::GlobSet {

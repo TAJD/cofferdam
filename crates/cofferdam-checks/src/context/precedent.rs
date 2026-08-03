@@ -1191,6 +1191,70 @@ mod tests {
     }
 
     #[test]
+    fn a_changeset_producing_both_a_directory_and_a_kind_item_emits_both() {
+        // CD-231: a changeset can trigger a same-directory match for one
+        // changed file and a cross-directory kind match for another,
+        // independent, changed file in the same `context_items` call —
+        // CD-221's per-group dedup (emitted_dirs / emitted_kinds) must
+        // not interfere with the unrelated group's item.
+        let handler_a = PathBuf::from("/p/handlers/create_user.ts");
+        let handler_b = PathBuf::from("/p/handlers/update_user.ts");
+        let handler_changed = PathBuf::from("/p/handlers/delete_user.ts");
+
+        let route_a = PathBuf::from("/p/app/api/users/route.ts");
+        let route_b = PathBuf::from("/p/app/api/orgs/route.ts");
+        let route_c = PathBuf::from("/p/app/api/teams/route.ts");
+        let route_changed = PathBuf::from("/p/app/api/invites/route.ts");
+
+        let corpus = run_precedent(&[
+            (&handler_a, create_user_src()),
+            (&handler_b, update_user_src()),
+            (
+                &handler_changed,
+                "export async function deleteUser(id: string): Promise<void> {}",
+            ),
+            (
+                &route_a,
+                "export interface RouteResponse { data: string; status: string; error: string; }",
+            ),
+            (
+                &route_b,
+                "export interface RouteResponse { data: string; status: string; error: string; }",
+            ),
+            (
+                &route_c,
+                "export interface RouteResponse { data: string; status: string; error: string; }",
+            ),
+            (
+                &route_changed,
+                "export async function GET(): Promise<void> {}",
+            ),
+        ]);
+
+        let changeset = ChangeSet::from_files([handler_changed.clone(), route_changed.clone()]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(
+            items.len(),
+            2,
+            "expected one directory item and one kind item; got {items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i.title.starts_with("Sibling convention")),
+            "missing the same-directory item; got {items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i.title.starts_with("Cross-directory convention")),
+            "missing the cross-directory kind item; got {items:?}"
+        );
+    }
+
+    #[test]
     fn jaccard_matches_known_values() {
         let a: BTreeSet<String> = ["x", "y", "z"].iter().map(|s| s.to_string()).collect();
         let b: BTreeSet<String> = ["x", "y"].iter().map(|s| s.to_string()).collect();

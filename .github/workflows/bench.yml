@@ -100,6 +100,16 @@ jobs:
               body,
             });
 
+  context-perf-gate:
+    name: cofferdam context perf gate (CD-164)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run cofferdam context perf gate (warm-cache p50 <= 2s, p95 <= 5s on a synthetic 5k-file corpus)
+        run: cargo test --release -p cofferdam-engine --test context_perf_gate -- --ignored --nocapture
+
   memory-gate:
     name: memory gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

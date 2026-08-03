@@ -113,19 +113,23 @@ const MIN_FIELDS: usize = 2;
 /// merged duplicate.
 const SIMILARITY_THRESHOLD: f64 = 0.75;
 
-/// CD-223: upper bound on a kind group's *shaped* member count before
-/// `shape_edges`' O(k^2) all-pairs Jaccard scan is skipped for that
-/// group. The same-directory group this scan was originally sized for
-/// is naturally bounded (tens of files); CD-213's kind fallback groups
-/// by bare filename across the *whole corpus*, and common names
-/// (`index.ts`, `types.ts`, `route.ts`) aren't bounded that way — a
-/// monorepo can have low-thousands of them. A convention inferred from
-/// hundreds of unrelated same-named files isn't a useful signal anyway
-/// (precision over recall), so past this size the fallback simply
-/// yields nothing for that kind rather than paying the scan. CD-228:
-/// the skip is not silent — [`build_capped_kinds_item`] surfaces every
-/// capped kind in one advisory digest item per run.
-const MAX_KIND_GROUP_SIZE: usize = 200;
+/// CD-223: upper bound on a directory or kind group's *shaped* member
+/// count before `shape_edges`' O(k^2) all-pairs Jaccard scan is
+/// skipped for that group. Originally sized only for the same-
+/// directory grouping, on the assumption directories are naturally
+/// bounded (tens of files) — CD-229 found that assumption doesn't
+/// hold universally (generated/model directories with hundreds of
+/// flat sibling files exist in real monorepos), so the cap now
+/// applies to both groupings. CD-213's kind fallback groups by bare
+/// filename across the *whole corpus*, where common names (`index.ts`,
+/// `types.ts`, `route.ts`) are even less bounded — a monorepo can have
+/// low-thousands of them. A convention inferred from hundreds of
+/// unrelated same-named (or same-directory) files isn't a useful
+/// signal anyway (precision over recall), so past this size the
+/// grouping simply yields nothing rather than paying the scan. CD-228:
+/// the skip is not silent — [`build_capped_groups_item`] surfaces every
+/// capped kind or directory group in one advisory digest item per run.
+const MAX_GROUP_SIZE: usize = 200;
 
 /// Deliberately low and constant — `relevance::FLOOR` (CD-210). Per
 /// the product spec, `Context.Precedent` has the lowest source
@@ -296,12 +300,13 @@ impl Check for Precedent {
         let mut emitted_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         let mut emitted_kinds: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // CD-228: kinds whose shaped-member count exceeded
-        // `MAX_KIND_GROUP_SIZE` and so had their Jaccard scan skipped
-        // (CD-223) — surfaced as a single advisory item below so the
-        // cap's effect isn't silently invisible, per this repo's "warn
-        // loudly, never silently match nothing" policy.
+        // CD-228: directories and kinds whose shaped-member count
+        // exceeded `MAX_GROUP_SIZE` and so had their Jaccard scan
+        // skipped (CD-223/CD-229) — surfaced as a single advisory item
+        // below so the cap's effect isn't silently invisible, per this
+        // repo's "warn loudly, never silently match nothing" policy.
         let mut capped_kinds: BTreeMap<String, usize> = BTreeMap::new();
+        let mut capped_dirs: BTreeMap<PathBuf, usize> = BTreeMap::new();
 
         let mut items = Vec::new();
         for changed in &changeset.files {
@@ -315,7 +320,15 @@ impl Check for Precedent {
                         .iter()
                         .filter_map(|r| primary_shape(r).map(|s| (*r, s)))
                         .collect();
-                    let edges = shape_edges(&shaped);
+                    // CD-229: same cap as the kind fallback (CD-223) —
+                    // a directory can also have an unbounded flat file
+                    // count in generated/model directories.
+                    let edges = if shaped.len() > MAX_GROUP_SIZE {
+                        capped_dirs.insert(dir.to_path_buf(), shaped.len());
+                        Vec::new()
+                    } else {
+                        shape_edges(&shaped)
+                    };
                     DirShapes { shaped, edges }
                 });
 
@@ -372,7 +385,7 @@ impl Check for Precedent {
                 // — an empty edge set makes every member its own
                 // singleton cluster, so `largest_cluster_excluding`
                 // naturally yields `None` below.
-                let edges = if shaped.len() > MAX_KIND_GROUP_SIZE {
+                let edges = if shaped.len() > MAX_GROUP_SIZE {
                     capped_kinds.insert(kind.clone(), shaped.len());
                     Vec::new()
                 } else {
@@ -409,8 +422,8 @@ impl Check for Precedent {
                 items.push(build_kind_item(&kind, &exemplars));
             }
         }
-        if !capped_kinds.is_empty() {
-            items.push(build_capped_kinds_item(&capped_kinds));
+        if !capped_kinds.is_empty() || !capped_dirs.is_empty() {
+            items.push(build_capped_groups_item(&capped_kinds, &capped_dirs));
         }
         items
     }
@@ -627,32 +640,43 @@ fn build_kind_item(kind: &str, exemplars: &[&FileRecord]) -> ContextItem {
     }
 }
 
-/// CD-228: one advisory item summarizing every "kind" group this run
-/// skipped the Jaccard scan for because it exceeded
-/// `MAX_KIND_GROUP_SIZE` (CD-223). Not anchored to any file (there is
-/// no single changed file this speaks about) — `related` is
+/// CD-228/CD-229: one advisory item summarizing every directory or
+/// "kind" group this run skipped the Jaccard scan for because it
+/// exceeded `MAX_GROUP_SIZE` (CD-223/CD-229). Not anchored to any file
+/// (there is no single changed file this speaks about) — `related` is
 /// deliberately empty, same as `Context.Findings::fresh_summary_item`.
-fn build_capped_kinds_item(capped_kinds: &BTreeMap<String, usize>) -> ContextItem {
+fn build_capped_groups_item(
+    capped_kinds: &BTreeMap<String, usize>,
+    capped_dirs: &BTreeMap<PathBuf, usize>,
+) -> ContextItem {
     let mut body = format!(
-        "The following file-name groups exceeded the {MAX_KIND_GROUP_SIZE}-file cap on \
-         cross-directory kind matching (CD-223) and were skipped rather than scanned:\n\n"
+        "The following groups exceeded the {MAX_GROUP_SIZE}-file cap on precedent matching \
+         (CD-223/CD-229) and were skipped rather than scanned:\n\n"
     );
-    for (kind, count) in capped_kinds {
-        body.push_str(&format!("- `{kind}`: {count} files\n"));
+    for (dir, count) in capped_dirs {
+        body.push_str(&format!("- directory `{}`: {count} files\n", dir.display()));
     }
+    for (kind, count) in capped_kinds {
+        body.push_str(&format!("- kind `{kind}`: {count} files\n"));
+    }
+    let dirs: Vec<String> = capped_dirs
+        .keys()
+        .map(|d| d.display().to_string())
+        .collect();
     let kinds: Vec<&str> = capped_kinds.keys().map(String::as_str).collect();
     ContextItem {
         check_id: META.id.to_string(),
         title: format!(
-            "Cross-directory kind matching skipped for {} oversized group(s)",
-            capped_kinds.len()
+            "Precedent matching skipped for {} oversized group(s)",
+            capped_dirs.len() + capped_kinds.len()
         ),
         body,
         score: SCORE,
         pinned: false,
         related: Vec::new(),
         explain: Some(format!(
-            "kind group(s) over {MAX_KIND_GROUP_SIZE} files: {}",
+            "group(s) over {MAX_GROUP_SIZE} files: directories [{}], kinds [{}]",
+            dirs.join(", "),
             kinds.join(", ")
         )),
     }
@@ -935,7 +959,7 @@ mod tests {
 
     #[test]
     fn kind_group_larger_than_the_cap_yields_a_capped_summary_item_not_a_convention_match() {
-        // CD-223: a kind group larger than MAX_KIND_GROUP_SIZE skips the
+        // CD-223: a kind group larger than MAX_GROUP_SIZE skips the
         // O(k^2) Jaccard scan entirely, so even a genuine shared shape
         // across every member produces no convention match — precision
         // over recall, and avoids an unbounded pairwise scan on a
@@ -944,7 +968,7 @@ mod tests {
         // producing nothing.
         let shape_src =
             "export interface RouteResponse { data: string; status: string; error: string; }";
-        let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_KIND_GROUP_SIZE)
+        let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_GROUP_SIZE)
             .map(|i| (PathBuf::from(format!("/p/mod{i}/route.ts")), shape_src))
             .collect();
         let changed = PathBuf::from("/p/changed_mod/route.ts");
@@ -969,6 +993,47 @@ mod tests {
         assert!(
             items[0].title.contains("oversized group"),
             "expected the capped-kinds summary item; got {:?}",
+            items[0]
+        );
+        assert!(
+            items[0].related.is_empty(),
+            "capped-summary item isn't anchored to any single file"
+        );
+    }
+
+    #[test]
+    fn directory_group_larger_than_the_cap_yields_a_capped_summary_item_not_a_convention_match() {
+        // CD-229: the same cap CD-223 applied to kind groups also
+        // applies to same-directory groups — a generated/model
+        // directory can have hundreds of flat sibling files, not just
+        // "tens" as originally assumed.
+        let shape_src =
+            "export interface RouteResponse { data: string; status: string; error: string; }";
+        let mut fixtures: Vec<(PathBuf, &str)> = (0..=MAX_GROUP_SIZE)
+            .map(|i| (PathBuf::from(format!("/p/bigdir/sibling{i}.ts")), shape_src))
+            .collect();
+        let changed = PathBuf::from("/p/bigdir/changed.ts");
+        fixtures.push((
+            changed.clone(),
+            "export async function GET(): Promise<void> {}",
+        ));
+
+        let fixture_refs: Vec<(&Path, &str)> =
+            fixtures.iter().map(|(p, s)| (p.as_path(), *s)).collect();
+        let corpus = run_precedent(&fixture_refs);
+
+        let changeset = ChangeSet::from_files([changed]);
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        let items = Precedent.context_items(&changeset, &mut finalize_ctx);
+
+        assert_eq!(
+            items.len(),
+            1,
+            "directory group over the cap must yield exactly the capped-summary item; got {items:?}"
+        );
+        assert!(
+            items[0].title.contains("oversized group"),
+            "expected the capped-groups summary item; got {:?}",
             items[0]
         );
         assert!(

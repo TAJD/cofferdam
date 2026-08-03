@@ -436,6 +436,54 @@ fn context_suppress_rule_drops_matching_provider_items_from_the_digest() {
     );
 }
 
+/// CD-220: a `[[context_suppress]]` rule against `Context.Findings` must
+/// be able to drop a legacy-debt item by path — before CD-220,
+/// `legacy_item` carried no `related` spans at all, so a path-scoped
+/// rule against `Context.Findings` could never match it.
+#[test]
+fn context_suppress_rule_drops_a_legacy_debt_item_by_path() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    std::fs::write(
+        dir.join("legacy.ts"),
+        "export function cmp(a: number, b: number): boolean {\n  return a == b;\n}\n\nexport const marker = 1;\n",
+    )
+    .expect("write legacy.ts");
+    std::fs::write(
+        dir.join("cofferdam.toml"),
+        "[[context_suppress]]\ncheck_id = \"Context.Findings\"\npaths = [\"legacy.ts\"]\nreason = \"pre-existing debt, tracked elsewhere\"\n",
+    )
+    .expect("write cofferdam.toml");
+    commit_all(dir, "init");
+
+    // Touch a line far from the `==` finding so it lands outside the
+    // diff's changed lines and becomes "legacy", not "fresh".
+    std::fs::write(
+        dir.join("legacy.ts"),
+        "export function cmp(a: number, b: number): boolean {\n  return a == b;\n}\n\nexport const marker = 2;\n",
+    )
+    .expect("edit legacy.ts");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--format", "json"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let items = json["items"].as_array().expect("items array");
+    assert!(
+        !items.iter().any(|i| i["title"]
+            .as_str()
+            .is_some_and(|t| t.contains("Legacy debt"))),
+        "context_suppress rule should have dropped the legacy-debt item; got {items:?}"
+    );
+}
+
 /// CD-212: `--lint-context-suppress` flags a rule whose `paths` globs
 /// match zero files in the current repo as likely-stale, and exits 0
 /// when every rule matches at least one file.

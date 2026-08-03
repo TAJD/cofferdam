@@ -308,9 +308,15 @@ pub fn compile_overrides(
 /// failing the whole config. A block with an empty (or entirely
 /// invalid) `paths` list compiles to an empty globset, which simply
 /// suppresses nothing — `cofferdam context --lint-context-suppress`
-/// (see `context_cmd.rs`) is where a rule matching zero digest items
-/// gets flagged as likely-stale, per this repo's "warn loudly, never
-/// silently match nothing" policy.
+/// (see `context_cmd.rs`) flags a rule as likely-stale when its glob
+/// matches zero *repo files*, per this repo's "warn loudly, never
+/// silently match nothing" policy. Note that's a proxy for "matches
+/// zero digest items", not the thing itself (CD-220): the lint doesn't
+/// run the Context providers, so a rule can pass this check yet still
+/// never fire against an actual digest — e.g. before CD-220, every
+/// `Context.Findings` item carried no `related` spans at all, so a
+/// path-scoped rule against it matched files on disk but could never
+/// match an item in practice.
 pub fn compile_context_suppress(
     path: &Path,
     tables: Vec<ContextSuppressTable>,

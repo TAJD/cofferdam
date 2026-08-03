@@ -536,12 +536,16 @@ enum Cmd {
         #[arg(long)]
         lint_knowledge: bool,
         /// Validate every `[[context_suppress]]` rule in cofferdam.toml
-        /// instead of producing a digest: each rule's `paths` globs
-        /// must match at least one file in the current repo (catches
-        /// stale suppression rules left behind after the files they
-        /// targeted moved or were deleted). Same nonzero-exit carve-out
-        /// as `--lint-knowledge`. Ignores
-        /// `paths`/`staged`/`base`/`budget`/`format`.
+        /// instead of producing a digest: `check_id` must be a real
+        /// `Context.*` provider id, and (unless `paths` is omitted — the
+        /// wildcard "suppress everything this check_id emits" form)
+        /// `paths` globs must match at least one file in the current
+        /// repo (catches stale suppression rules left behind after the
+        /// files they targeted moved or were deleted). Same nonzero-exit
+        /// carve-out as `--lint-knowledge`. Ignores
+        /// `paths`/`staged`/`base`/`budget`/`format`. See
+        /// `docs/reference/context.md#context_suppress--suppressing-noisy-digest-items`
+        /// for the block's schema.
         #[arg(long)]
         lint_context_suppress: bool,
     },

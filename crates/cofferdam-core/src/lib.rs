@@ -21,6 +21,7 @@ pub mod location;
 pub mod options;
 pub mod parser;
 pub mod public_api;
+pub mod relevance;
 pub mod source;
 pub mod span_util;
 pub mod types;

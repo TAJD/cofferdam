@@ -17,21 +17,25 @@ use std::path::{Path, PathBuf};
 
 use cofferdam_core::graph::{ImportRecord, IMPORTS as GRAPH_IMPORTS};
 use cofferdam_core::{
-    path_key, span_from_bytes, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem,
-    CorpusKey, FinalizeContext, Issue, Location, RelatedSpan, Severity, SourceFile, Span,
+    path_key, relevance, span_from_bytes, Category, ChangeSet, Check, CheckContext, CheckMeta,
+    ContextItem, CorpusKey, FinalizeContext, Issue, Location, RelatedSpan, Severity, SourceFile,
+    Span,
 };
 use oxc_ast::ast::{Class, Function};
 use oxc_ast_visit::Visit;
 
 /// Score for an annotation whose own scope is directly touched by the
-/// changeset. Below `Context.BlastRadius`'s direct-caller score (100) and
-/// direct-importer score (70) — an author-written annotation is a strong
-/// signal but this provider can't verify it's still accurate the way a
-/// graph-derived relation can.
-const SCORE_DIRECT: i32 = 65;
-/// Score when the annotation fires because a direct importer of its file
-/// was changed rather than the annotated scope itself.
-const SCORE_VIA_IMPORTER: i32 = 40;
+/// changeset. Maps just below `relevance::DIRECT` (CD-210): an
+/// author-written annotation is a strong signal, but — unlike
+/// `Context.BlastRadius`'s direct-importer relation, which sits
+/// exactly at `DIRECT` because it's traced through the import graph —
+/// this provider can't verify the annotation is still accurate, so it
+/// ranks a notch below a verified graph edge.
+const SCORE_DIRECT: i32 = relevance::DIRECT - 5;
+/// Score when the annotation fires because a direct importer of its
+/// file was changed rather than the annotated scope itself — one hop
+/// further removed, so it maps to `relevance::INDIRECT`.
+const SCORE_VIA_IMPORTER: i32 = relevance::INDIRECT;
 
 static ANNOTATIONS: CorpusKey<Vec<AnnotationRecord>> =
     CorpusKey::new("Context.Annotations.records");

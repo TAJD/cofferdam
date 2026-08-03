@@ -275,6 +275,107 @@ fn check_output_is_byte_for_byte_unaffected_by_context_providers() {
     );
 }
 
+/// CD-210: `Context.Precedent`'s score must rank strictly below every
+/// other provider's, always — the shared `cofferdam_core::relevance`
+/// scale is supposed to guarantee this by construction (see
+/// `relevance::FLOOR`'s doc comment), not by coincidence. This fixture
+/// deliberately triggers both `Context.BlastRadius` (a direct importer
+/// of the changed file) and `Context.Precedent` (two shape-sharing
+/// siblings in the same directory as the changed file) in one
+/// changeset, so the two providers' items land in the same digest and
+/// the invariant is checked against real, end-to-end output rather
+/// than unit-level constants alone.
+#[test]
+fn precedent_score_ranks_below_every_other_provider_in_the_same_digest() {
+    let tmp = TempDir::new().expect("temp dir");
+    let dir = tmp.path();
+    init_repo(dir);
+    let handlers = dir.join("handlers");
+    std::fs::create_dir(&handlers).expect("mkdir handlers");
+
+    std::fs::write(
+        handlers.join("create_user.ts"),
+        "export interface CreateUserRequest { name: string; email: string; role: string; orgId: string; }\n\
+         export async function createUser(req: CreateUserRequest): Promise<string> { return req.name; }\n",
+    )
+    .expect("write create_user.ts");
+    std::fs::write(
+        handlers.join("update_user.ts"),
+        "export interface UpdateUserRequest { id: string; name: string; email: string; role: string; orgId: string; }\n\
+         export async function updateUser(req: UpdateUserRequest): Promise<string> { return req.id; }\n",
+    )
+    .expect("write update_user.ts");
+    std::fs::write(
+        handlers.join("list_users.ts"),
+        "export interface ListUsersRequest { orgId: string; role: string; name: string; email: string; }\n\
+         export async function listUsers(req: ListUsersRequest): Promise<string[]> { return []; }\n",
+    )
+    .expect("write list_users.ts");
+    std::fs::write(
+        handlers.join("consumer.ts"),
+        "import { createUser } from './create_user';\nexport async function handle() { await createUser({ name: 'a', email: 'b', role: 'c', orgId: 'd' }); }\n",
+    )
+    .expect("write consumer.ts");
+    commit_all(dir, "init");
+
+    // Edit create_user.ts without changing its export shape, so the
+    // Precedent cluster (update_user.ts + list_users.ts) still applies
+    // to it, while also making it a changed file that consumer.ts
+    // directly imports (BlastRadius).
+    std::fs::write(
+        handlers.join("create_user.ts"),
+        "export interface CreateUserRequest { name: string; email: string; role: string; orgId: string; }\n\
+         export async function createUser(req: CreateUserRequest): Promise<string> {\n  return req.name;\n}\n",
+    )
+    .expect("edit create_user.ts");
+
+    let out = cofferdam_cmd(dir)
+        .args(["context", "--format", "json"])
+        .output()
+        .expect("invoke cofferdam");
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let items = json["items"].as_array().expect("items array");
+
+    let precedent_scores: Vec<i64> = items
+        .iter()
+        .filter(|i| i["check_id"] == "Context.Precedent")
+        .map(|i| i["score"].as_i64().expect("score is an integer"))
+        .collect();
+    let other_scores: Vec<i64> = items
+        .iter()
+        .filter(|i| i["check_id"] != "Context.Precedent")
+        .map(|i| i["score"].as_i64().expect("score is an integer"))
+        .collect();
+
+    assert!(
+        !precedent_scores.is_empty(),
+        "expected the fixture to trigger a Context.Precedent item; got {items:?}"
+    );
+    assert!(
+        !other_scores.is_empty(),
+        "expected the fixture to trigger at least one non-Precedent item (e.g. BlastRadius); got {items:?}"
+    );
+
+    let precedent_max = precedent_scores.iter().max().copied().unwrap();
+    let others_min = other_scores.iter().min().copied().unwrap();
+    assert!(
+        precedent_max < others_min,
+        "Context.Precedent's highest score ({precedent_max}) must rank strictly below every \
+         other provider's lowest score ({others_min}) in the same digest; got items {items:?}"
+    );
+    assert_eq!(
+        precedent_max,
+        i64::from(cofferdam_core::relevance::FLOOR),
+        "Context.Precedent must emit exactly relevance::FLOOR"
+    );
+}
+
 /// CD-164 criterion 2: `cofferdam context` digests must be deterministic
 /// (golden-snapshot precondition) — two runs over the same changeset
 /// produce byte-identical JSON, including item ordering.

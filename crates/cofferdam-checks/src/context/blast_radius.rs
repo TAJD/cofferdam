@@ -25,8 +25,8 @@ use cofferdam_core::graph::{
 };
 use cofferdam_core::path_key;
 use cofferdam_core::{
-    Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext, Issue,
-    Location, RelatedSpan, Severity, SourceFile, Span,
+    relevance, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, FinalizeContext,
+    Issue, Location, RelatedSpan, Severity, SourceFile, Span,
 };
 use cofferdam_graph::{normalized_file_path, EdgeKind, Graph, NodeId, Value, CANONICAL_GRAPH};
 use smol_str::SmolStr;
@@ -267,11 +267,23 @@ fn relation_label(depth: usize, symbol_match: bool) -> String {
     }
 }
 
+/// Maps onto the shared `cofferdam_core::relevance` scale (CD-210): a
+/// direct symbol-level call is `VERIFIED`-anchored, a plain import
+/// edge is `DIRECT`-anchored, and each additional hop decays toward
+/// `INDIRECT`/`INFERRED`. Clamped at `INFERRED_MIN`, not `FLOOR` —
+/// `FLOOR` is reserved for `Context.Precedent`'s constant, and a
+/// maximally-decayed graph-derived signal must never collide with it
+/// (see `relevance::FLOOR`'s doc comment for why that ordering has to
+/// hold).
 fn score_for(depth: usize, symbol_match: bool, is_test: bool) -> i32 {
-    let base = if symbol_match { 100 } else { 70 };
+    let base = if symbol_match {
+        relevance::VERIFIED
+    } else {
+        relevance::DIRECT
+    };
     let decay = i32::try_from(depth.saturating_sub(1)).unwrap_or(0) * 15;
     let test_bonus = if is_test { 5 } else { 0 };
-    (base - decay + test_bonus).max(5)
+    (base - decay + test_bonus).max(relevance::INFERRED_MIN)
 }
 
 fn explain_for(chain: &[PathBuf]) -> String {

@@ -46,8 +46,8 @@ use std::path::{Path, PathBuf};
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
-    Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, CorpusKey, FinalizeContext,
-    Issue, Location, RelatedSpan, Severity, SourceFile, Span,
+    relevance, Category, ChangeSet, Check, CheckContext, CheckMeta, ContextItem, CorpusKey,
+    FinalizeContext, Issue, Location, RelatedSpan, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{
     Declaration, ExportNamedDeclaration, Expression, PropertyKey, TSSignature, TSType,
@@ -67,13 +67,16 @@ const MIN_FIELDS: usize = 2;
 /// merged duplicate.
 const SIMILARITY_THRESHOLD: f64 = 0.75;
 
-/// Deliberately low and constant. Per the product spec,
-/// `Context.Precedent` has the lowest source priority of the four
-/// provider classes (Findings, BlastRadius, Precedent, Knowledge) and
-/// is the first evicted under a tight `--budget`. When the other three
-/// providers land they should use materially higher scores; this value
-/// only needs to stay below theirs, not carry any other meaning.
-const SCORE: i32 = 5;
+/// Deliberately low and constant — `relevance::FLOOR` (CD-210). Per
+/// the product spec, `Context.Precedent` has the lowest source
+/// priority of every provider class and is the first evicted under a
+/// tight `--budget`: it's a sibling-file convention *inference*, not
+/// anything traced through the import graph or authored by a human.
+/// Every other provider's scoring is required to clamp no lower than
+/// `relevance::INFERRED_MIN`, strictly above this constant, so that
+/// ordering holds by construction — see `relevance::FLOOR`'s doc
+/// comment.
+const SCORE: i32 = relevance::FLOOR;
 
 /// What a single exported top-level symbol looks like, for the
 /// purposes of "do these two files follow the same convention".

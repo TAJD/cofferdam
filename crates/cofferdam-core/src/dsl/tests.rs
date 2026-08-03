@@ -611,4 +611,38 @@ mod dsl_parser_tests {
             other => panic!("expected Comparison, got {other:?}"),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // CD-206: deeply nested predicates must error, not stack-overflow.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn deeply_nested_parens_returns_parse_error_not_overflow() {
+        // 250 levels of parens around a trivial comparison — well past
+        // MAX_PREDICATE_DEPTH. Before CD-206 this crashed the process with a
+        // stack overflow instead of returning a `Result::Err`.
+        let inner = "file matches 'x'";
+        let nesting = 250;
+        let src = format!("{}{}{}", "(".repeat(nesting), inner, ")".repeat(nesting));
+        let err = expect_err(&src);
+        assert!(
+            matches!(err, DslParseError::MaxDepthExceeded { .. }),
+            "expected MaxDepthExceeded, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_concat_returns_parse_error_not_overflow() {
+        // A single operand with hundreds of `+` concatenations bypasses the
+        // parser's recursive-descent stack (it's parsed iteratively) but
+        // still builds a deeply left-nested `Operand::Concat` tree, which the
+        // evaluator walks recursively. Must also be capped.
+        let terms = 250;
+        let src = format!("file == {}", "'a' + ".repeat(terms) + "'a'");
+        let err = expect_err(&src);
+        assert!(
+            matches!(err, DslParseError::MaxDepthExceeded { .. }),
+            "expected MaxDepthExceeded, got {err:?}"
+        );
+    }
 }

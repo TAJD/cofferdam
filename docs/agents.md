@@ -25,6 +25,12 @@ cofferdam agents > AGENTS.md
 
 ## What the prompt covers
 
+- `cofferdam context` — the default entrypoint into project context an agent
+  doesn't already have: a token-budgeted digest of fresh findings, blast
+  radius, sibling-file precedent, curated knowledge notes, and inline
+  `@cofferdam-context` annotations for whatever the current diff touches.
+  Advisory only (never fails the build) — run it at the start of a task or
+  right after making a change.
 - `cofferdam advise <file>` — layer membership and per-file constraints to read
   **before** editing.
 - `cofferdam advise --diff <git-ref>` — pre-flight a proposed change
@@ -137,6 +143,8 @@ Full tool list and scope: [`docs/mcp.md`](mcp.md).
 
 ## Related
 
+- [`cofferdam context`](reference/context.md) — post-edit knowledge digest;
+  the default entrypoint into project context for an agent.
 - [`cofferdam advise`](reference/advise.md) — JIT
   per-file advisory used before edits.
 - [`cofferdam check --robot`](output-formats.md) — machine-readable findings.

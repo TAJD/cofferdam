@@ -46,11 +46,13 @@ export default withMermaid(defineConfig({
           { text: 'Budgets & ratchet', link: '/budgets' },
           { text: 'Type-aware checks', link: '/type-aware-checks' },
           { text: 'Verifying built output (verify --dist)', link: '/verify-dist' },
+          { text: 'Authoring knowledge notes', link: '/knowledge-notes' },
         ],
       },
       {
         text: 'Reference',
         items: [
+          { text: 'cofferdam context (agent entrypoint)', link: '/reference/context' },
           { text: 'Output formats', link: '/output-formats' },
           { text: 'CI recipes', link: '/ci-recipes' },
           { text: 'Doctor', link: '/doctor' },

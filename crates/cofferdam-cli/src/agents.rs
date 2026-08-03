@@ -13,6 +13,29 @@ pub fn prompt() -> String {
 Use cofferdam **before** editing to understand constraints, and **after** to
 verify your change is clean. This is the canonical workflow for AI coding agents.
 
+## Start here: what does this change touch?
+
+```sh
+cofferdam context
+```
+
+Run this first, before or right after making a change — it is the default
+entrypoint into project context you don't already have. It resolves your
+working-tree diff (or `git diff --staged`, or explicit paths) and prints a
+token-budgeted digest: fresh findings on the lines you touched, files that
+import what you changed (blast radius), sibling-file conventions your change
+should probably follow (precedent), relevant `.cofferdam/knowledge/*.md`
+notes, and any `// @cofferdam-context: ...` annotations on the code you're
+near. It never fails the build — advisory only, exit 0 except on a usage
+error — so there's no reason not to run it on every task, even ones that
+start with no prior conversation context at all.
+
+```sh
+cofferdam context --robot              # JSON — stable schema, for agents
+cofferdam context --base main          # diff against a ref instead of the working tree
+cofferdam context src/domain/order.ts  # explicit path, no git required
+```
+
 ## Before editing a file
 
 ```sh
@@ -190,6 +213,19 @@ mod tests {
         assert!(
             p.contains("https://github.com/TAJD/cofferdam/issues"),
             "must contain the GitHub issues URL"
+        );
+    }
+
+    #[test]
+    fn prompt_mentions_context_as_the_default_entrypoint() {
+        let p = prompt();
+        assert!(
+            p.contains("cofferdam context"),
+            "must mention the context command"
+        );
+        assert!(
+            p.contains("Start here"),
+            "context must be positioned as the default entrypoint, not buried"
         );
     }
 

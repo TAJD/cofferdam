@@ -51,7 +51,7 @@ TypeScript code-quality analyzer
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
 * `agents` — Print the agent-onboarding prompt — a ready-to-paste markdown block that tells an AI coding agent how to use cofferdam in this repository. Covers `advise`, `advise --diff`, `check --robot`, and the `cofferdam.invariants.toml` contract. Output is version-pinned so AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a file to create or refresh an agent context fragment:
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
-* `context` — Post-edit context digest (CD-156) — given the current diff, consult the knowledge graph and emit a token-budgeted advisory digest: delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
+* `context` — Start here — the default entrypoint into project context you don't already have. Run it first, before or right after making a change: it resolves the current diff, consults the knowledge graph, and emits a token-budgeted advisory digest — delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
 * `lsp` — Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
 * `typst` — Lint a Typst package directory for Typst Universe submission hygiene (manifest fields, license, naming, README, bundle hygiene). Standalone from the AST engine — the unit of analysis is the package directory (`typst.toml` + `LICENSE` + `README.md` + bundle), not individual `.typ` files
@@ -427,7 +427,7 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
 
 ## `cofferdam context`
 
-Post-edit context digest (CD-156) — given the current diff, consult the knowledge graph and emit a token-budgeted advisory digest: delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
+Start here — the default entrypoint into project context you don't already have. Run it first, before or right after making a change: it resolves the current diff, consults the knowledge graph, and emits a token-budgeted advisory digest — delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
 
 **Usage:** `cofferdam context [OPTIONS] [PATHS]...`
 
@@ -452,7 +452,7 @@ Post-edit context digest (CD-156) — given the current diff, consult the knowle
 * `--no-config` — Disable config discovery
 * `--hidden` — Walk hidden files (default: skip)
 * `--no-ignore` — Disable .gitignore/.cofferdamignore filtering
-* `--lint-knowledge` — Validate every `.cofferdam/knowledge/*.md` file instead of producing a digest (CD-162): selectors must parse, and every selector must match at least one file in the current repo (catches broken globs and orphan selectors). The one deliberate nonzero-exit carve-out for `cofferdam context` — exits nonzero when validation fails, so CI can gate on it. Ignores `paths`/`staged`/`base`/`budget`/`format`
+* `--lint-knowledge` — Validate every `.cofferdam/knowledge/*.md` file instead of producing a digest: selectors must parse, and every selector must match at least one file in the current repo (catches broken globs and orphan selectors). The one deliberate nonzero-exit carve-out for `cofferdam context` — exits nonzero when validation fails, so CI can gate on it. Ignores `paths`/`staged`/`base`/`budget`/`format`
 
 
 

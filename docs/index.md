@@ -40,7 +40,8 @@ flowchart TB
         D["Biome / Prettier<br/>formatting"]
         A --- B --- C --- D
     end
-    agent(["agent"]) -- "advise &lt;file&gt; (before edit)" --> A
+    agent(["agent"]) -- "context (start of task)" --> A
+    agent -- "advise &lt;file&gt; (before edit)" --> A
     A -- "advise --diff (before commit)" --> agent
 
     style A fill:#6366f1,color:#fff,stroke:#4338ca
@@ -49,9 +50,9 @@ flowchart TB
     style D fill:#cbd5e1,color:#1e293b,stroke:#94a3b8
 ```
 
-The agent arrow touches only the top layer: `cofferdam advise` before the
-edit, `cofferdam advise --diff` before the commit. Everything below is
-someone else's job, done well already.
+The agent arrows touch only the top layer: `cofferdam context` at the start
+of the task, `cofferdam advise` before the edit, `cofferdam advise --diff`
+before the commit. Everything below is someone else's job, done well already.
 
 ## The two loops
 
@@ -138,6 +139,10 @@ combination.)
 
 ## Built for agents, not bolted on
 
+- **`cofferdam context`** — the first thing an agent runs on a task. One
+  token-budgeted digest of what the current diff touches: delta-scoped
+  findings, blast radius, sibling-file precedent, and curated knowledge
+  notes. Advisory only, always exits 0. [Context reference →](/reference/context)
 - **`llms.txt` + `checks.json`** — machine-readable everything, versioned
   schemas. [llms.txt →](/cofferdam/llms.txt) · [checks.json →](/cofferdam/checks.json)
 - **MCP server** — `advise`, `advise_diff`, `check`, `explain`, and

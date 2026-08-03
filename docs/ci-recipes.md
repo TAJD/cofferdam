@@ -13,6 +13,7 @@ Drop-in workflows for the major CI systems. Each recipe runs `cofferdam check`, 
 | Faster builds via caching | [§5 Caching](#5-caching) |
 | Findings on the PR + Security tab via SARIF | [§6 SARIF upload](#6-sarif-upload-to-github-code-scanning) |
 | Catching regressions in built HTML output | [§7 verify --dist](#_7-verifying-build-output-verify-dist) |
+| Validating `.cofferdam/knowledge/*.md` notes | [§8 context --lint-knowledge](#_8-validating-knowledge-notes-context---lint-knowledge) |
 
 Each recipe is shown for GitHub Actions first because it's the most common; GitLab / CircleCI / Drone equivalents are at the bottom.
 
@@ -216,6 +217,26 @@ It only runs checks explicitly tagged output-mode-eligible (see
 [Verifying built output](/verify-dist)), so it's safe to add alongside a
 normal `cofferdam check` step without double-reporting the same finding
 twice.
+
+### 8. Validating knowledge notes (`context --lint-knowledge`)
+
+[`cofferdam context`](/reference/context) is advisory and always exits 0 —
+with one deliberate exception. `--lint-knowledge` validates every
+`.cofferdam/knowledge/*.md` note instead of producing a digest: selectors
+must parse, and every selector must match at least one file in the repo.
+It exits nonzero when they don't, which catches a broken glob or an orphan
+selector left behind by a refactor — a note that silently stops being
+surfaced to agents is worse than no note at all.
+
+```yaml
+      - name: Validate knowledge notes
+        run: npx --yes @cofferdam/cofferdam context --lint-knowledge
+```
+
+It ignores `paths` / `--staged` / `--base` / `--budget` / `--format`, needs
+no git history, and is fast enough to run as its own step next to
+`cofferdam check`. See [knowledge notes](/knowledge-notes) for the note
+format.
 
 ## GitLab CI
 

@@ -131,6 +131,11 @@ const SIMILARITY_THRESHOLD: f64 = 0.75;
 /// capped kind or directory group in one advisory digest item per run.
 const MAX_GROUP_SIZE: usize = 200;
 
+/// CD-235: upper bound on how many individual capped groups
+/// [`build_capped_groups_item`] names in its body before falling back
+/// to a "…and N more" tail. See that function's doc comment.
+const MAX_CAPPED_GROUPS_LISTED: usize = 20;
+
 /// Deliberately low and constant — `relevance::FLOOR` (CD-210). Per
 /// the product spec, `Context.Precedent` has the lowest source
 /// priority of every provider class: it's a sibling-file convention
@@ -663,35 +668,75 @@ fn build_capped_groups_item(
     capped_kinds: &BTreeMap<String, usize>,
     capped_dirs: &BTreeMap<PathBuf, usize>,
 ) -> ContextItem {
+    let total = capped_dirs.len() + capped_kinds.len();
+
+    // CD-235: list the MAX_CAPPED_GROUPS_LISTED largest groups (biggest
+    // count first, alphabetical tie-break for determinism) with a
+    // "…and N more" tail rather than every group unconditionally —
+    // without a cap, a changeset spanning hundreds of distinct
+    // generated-code directories/kinds could produce a body long enough
+    // to crowd out the rest of the digest budget on its own
+    // (`item_tokens` is roughly `body.len() / 4`), the same failure
+    // mode CD-204 truncated oversized knowledge-note bodies for.
+    let mut entries: Vec<(String, usize, bool)> = capped_dirs
+        .iter()
+        .map(|(dir, &count)| (dir.display().to_string(), count, true))
+        .chain(
+            capped_kinds
+                .iter()
+                .map(|(kind, &count)| (kind.clone(), count, false)),
+        )
+        .collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
     let mut body = format!(
         "The following groups exceeded the {MAX_GROUP_SIZE}-file cap on precedent matching \
          (CD-223/CD-229) and were skipped rather than scanned:\n\n"
     );
-    for (dir, count) in capped_dirs {
-        body.push_str(&format!("- directory `{}`: {count} files\n", dir.display()));
+    for (label, count, is_dir) in entries.iter().take(MAX_CAPPED_GROUPS_LISTED) {
+        if *is_dir {
+            body.push_str(&format!("- directory `{label}`: {count} files\n"));
+        } else {
+            body.push_str(&format!("- kind `{label}`: {count} files\n"));
+        }
     }
-    for (kind, count) in capped_kinds {
-        body.push_str(&format!("- kind `{kind}`: {count} files\n"));
+    if total > MAX_CAPPED_GROUPS_LISTED {
+        body.push_str(&format!(
+            "\n…and {} more\n",
+            total - MAX_CAPPED_GROUPS_LISTED
+        ));
     }
-    let dirs: Vec<String> = capped_dirs
-        .keys()
-        .map(|d| d.display().to_string())
-        .collect();
-    let kinds: Vec<&str> = capped_kinds.keys().map(String::as_str).collect();
+
+    // CD-235: only render the half(s) that are actually populated — the
+    // unconditional two-slot format previously left a visible empty
+    // `directories []` or `kinds []` on every run, since only one of
+    // the two maps is ever non-empty for a single changed file's
+    // fallback chain (directory capped, or kind capped — CD-213
+    // "directory first" means both only co-occur across different
+    // changed files in one changeset).
+    let mut explain_parts = Vec::new();
+    if !capped_dirs.is_empty() {
+        let dirs: Vec<String> = capped_dirs
+            .keys()
+            .map(|d| d.display().to_string())
+            .collect();
+        explain_parts.push(format!("directories [{}]", dirs.join(", ")));
+    }
+    if !capped_kinds.is_empty() {
+        let kinds: Vec<&str> = capped_kinds.keys().map(String::as_str).collect();
+        explain_parts.push(format!("kinds [{}]", kinds.join(", ")));
+    }
+
     ContextItem {
         check_id: META.id.to_string(),
-        title: format!(
-            "Precedent matching skipped for {} oversized group(s)",
-            capped_dirs.len() + capped_kinds.len()
-        ),
+        title: format!("Precedent matching skipped for {total} oversized group(s)"),
         body,
         score: SCORE,
         pinned: true,
         related: Vec::new(),
         explain: Some(format!(
-            "group(s) over {MAX_GROUP_SIZE} files: directories [{}], kinds [{}]",
-            dirs.join(", "),
-            kinds.join(", ")
+            "group(s) over {MAX_GROUP_SIZE} files: {}",
+            explain_parts.join(", ")
         )),
     }
 }
@@ -1062,6 +1107,53 @@ mod tests {
             items[0].pinned,
             "CD-234: the capped-summary item must be pinned so budget eviction can't drop it"
         );
+    }
+
+    #[test]
+    fn capped_groups_item_truncates_the_body_when_more_groups_than_the_listing_cap() {
+        // CD-235: unit-tests build_capped_groups_item directly with
+        // synthetic counts rather than driving thousands of fixture
+        // files through the full context_items pipeline.
+        let capped_kinds: BTreeMap<String, usize> = (0..MAX_CAPPED_GROUPS_LISTED + 5)
+            .map(|i| (format!("kind{i}.ts"), MAX_GROUP_SIZE + 1))
+            .collect();
+        let capped_dirs: BTreeMap<PathBuf, usize> = BTreeMap::new();
+
+        let item = build_capped_groups_item(&capped_kinds, &capped_dirs);
+
+        assert_eq!(
+            item.body.matches("- kind `").count(),
+            MAX_CAPPED_GROUPS_LISTED,
+            "body must list at most MAX_CAPPED_GROUPS_LISTED groups; got body={:?}",
+            item.body
+        );
+        assert!(
+            item.body.contains("and 5 more"),
+            "expected a truncation tail for the remaining 5 groups; got body={:?}",
+            item.body
+        );
+    }
+
+    #[test]
+    fn capped_groups_item_explain_omits_the_empty_half() {
+        // CD-235: the unconditional two-slot explain format used to
+        // render a visible `directories []` or `kinds []` whenever only
+        // one map was populated — only the non-empty half should appear.
+        let mut only_kinds: BTreeMap<String, usize> = BTreeMap::new();
+        only_kinds.insert("route.ts".to_string(), MAX_GROUP_SIZE + 1);
+        let no_dirs: BTreeMap<PathBuf, usize> = BTreeMap::new();
+        let kinds_only_item = build_capped_groups_item(&only_kinds, &no_dirs);
+        let kinds_explain = kinds_only_item.explain.expect("explain is set");
+        assert!(kinds_explain.contains("kinds [route.ts]"));
+        assert!(!kinds_explain.contains("directories"));
+
+        let mut only_dirs: BTreeMap<PathBuf, usize> = BTreeMap::new();
+        only_dirs.insert(PathBuf::from("/p/bigdir"), MAX_GROUP_SIZE + 1);
+        let no_kinds: BTreeMap<String, usize> = BTreeMap::new();
+        let dirs_only_item = build_capped_groups_item(&no_kinds, &only_dirs);
+        let dirs_explain = dirs_only_item.explain.expect("explain is set");
+        assert!(dirs_explain.contains("directories ["));
+        assert!(!dirs_explain.contains("kinds"));
     }
 
     #[test]

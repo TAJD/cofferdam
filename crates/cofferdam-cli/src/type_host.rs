@@ -202,9 +202,16 @@ fn read_response_line_bounded(
         buf.extend_from_slice(available);
         reader.consume(n);
         if buf.len() - start_len > MAX_RESPONSE_LINE_BYTES {
-            return Err(std::io::Error::other(format!(
-                "response line exceeded {MAX_RESPONSE_LINE_BYTES} bytes without a newline"
-            )));
+            // CD-278: the oversized bytes are already `consume`d above
+            // with no newline found, so the stream is left mid-frame —
+            // the same desync shape as a resync-budget exhaustion, not a
+            // generic I/O failure. `InvalidData` (never produced by a
+            // real transport error from `fill_buf`) lets the caller tell
+            // the two apart and retire the worker rather than reuse it.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("response line exceeded {MAX_RESPONSE_LINE_BYTES} bytes without a newline"),
+            ));
         }
     }
 }
@@ -362,6 +369,14 @@ pub enum TypeHostError {
     Io(String),
     #[error("type-host returned malformed JSON: {0}")]
     BadResponse(String),
+    /// CD-278/CD-285: the resync loop in [`Worker::request_nullable`] gave
+    /// up after [`MAX_RESPONSE_RESYNC_ATTEMPTS`] stray/mismatched lines.
+    /// Distinct from [`TypeHostError::BadResponse`] so callers can tell
+    /// "this response was malformed" (worker is otherwise fine) apart
+    /// from "this worker's stdout is desynced and will keep failing"
+    /// (worker must be retired, not reused).
+    #[error("type-host worker stdout desynced: {0}")]
+    Desynced(String),
     #[error("type-host request timed out after {0:?}")]
     Timeout(Duration),
     #[error("type-host error [{code}]: {message}")]
@@ -657,8 +672,19 @@ impl Worker {
             // discards the already-consumed bytes) on invalid UTF-8,
             // leaving the stream mid-frame for every subsequent read.
             let mut raw_buf = Vec::new();
-            let n = read_response_line_bounded(&mut self.stdout, &mut raw_buf)
-                .map_err(|e| TypeHostError::Io(format!("read response: {e}")))?;
+            let n = read_response_line_bounded(&mut self.stdout, &mut raw_buf).map_err(|e| {
+                // CD-278: a line over `MAX_RESPONSE_LINE_BYTES` leaves the
+                // stream mid-frame (bytes already consumed, no newline
+                // found) — that's a desync, not a transient I/O failure,
+                // so it must retire the worker via the same path as a
+                // resync-budget exhaustion rather than being swallowed
+                // into `None` by `.ok()?` and reused forever.
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    TypeHostError::Desynced(format!("read response: {e}"))
+                } else {
+                    TypeHostError::Io(format!("read response: {e}"))
+                }
+            })?;
             let buf = String::from_utf8_lossy(&raw_buf);
             if n == 0 {
                 // CD-238: the worker's stdout closed without a response —
@@ -724,7 +750,7 @@ impl Worker {
                 Err(e) => {
                     resync_attempts += 1;
                     if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
-                        return Err(TypeHostError::BadResponse(format!(
+                        return Err(TypeHostError::Desynced(format!(
                             "{e}: {} (gave up resyncing after {resync_attempts} \
                              stray/malformed line(s))",
                             buf.trim_end()
@@ -736,7 +762,7 @@ impl Worker {
             if raw.id != id {
                 resync_attempts += 1;
                 if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
-                    return Err(TypeHostError::BadResponse(format!(
+                    return Err(TypeHostError::Desynced(format!(
                         "response id mismatch: expected {id:?}, got {:?} \
                          (gave up resyncing after {resync_attempts} stray line(s) — \
                          worker stdout may be permanently desynced)",
@@ -965,6 +991,28 @@ impl WorkerTypeOracle {
             );
         }
     }
+
+    /// CD-278/CD-285: a worker whose resync budget was exhausted
+    /// ([`TypeHostError::Desynced`]) is left mid-stream out of alignment
+    /// with its own stdout — every later request routed to it would pay
+    /// up to [`MAX_RESPONSE_RESYNC_ATTEMPTS`] blocking reads only to fail
+    /// again, forever. Retire it the same way CD-271 retires a
+    /// poisoned-mutex worker, via the same `alive` bitmap and `mark_dead`
+    /// log line, rather than returning it to `next_worker`'s rotation.
+    /// Any other error (a malformed-but-in-sync response, a transport
+    /// error, ...) passes through unchanged — those don't imply the
+    /// worker's stream is misaligned, so retiring it would discard a
+    /// worker that's still perfectly usable.
+    fn retire_on_desync<T>(
+        &self,
+        idx: usize,
+        result: Result<T, TypeHostError>,
+    ) -> Result<T, TypeHostError> {
+        if let Err(TypeHostError::Desynced(_)) = &result {
+            self.mark_dead(idx);
+        }
+        result
+    }
 }
 
 impl TypeOracle for WorkerTypeOracle {
@@ -985,7 +1033,9 @@ impl TypeOracle for WorkerTypeOracle {
                 return None;
             }
         };
-        let wire: Option<TypeFactsWire> = worker.request_nullable(&id, "typeAt", &params).ok()?;
+        let wire: Option<TypeFactsWire> = self
+            .retire_on_desync(idx, worker.request_nullable(&id, "typeAt", &params))
+            .ok()?;
         wire.map(Into::into)
     }
 
@@ -1006,8 +1056,8 @@ impl TypeOracle for WorkerTypeOracle {
                 return None;
             }
         };
-        let wire: Option<LiteralFactsWire> = worker
-            .request_nullable(&id, "resolveLiteral", &params)
+        let wire: Option<LiteralFactsWire> = self
+            .retire_on_desync(idx, worker.request_nullable(&id, "resolveLiteral", &params))
             .ok()?;
         wire.map(Into::into)
     }
@@ -1029,8 +1079,9 @@ impl TypeOracle for WorkerTypeOracle {
                 return None;
             }
         };
-        let wire: Option<UnionFactsWire> =
-            worker.request_nullable(&id, "unionMembers", &params).ok()?;
+        let wire: Option<UnionFactsWire> = self
+            .retire_on_desync(idx, worker.request_nullable(&id, "unionMembers", &params))
+            .ok()?;
         wire.map(Into::into)
     }
 }
@@ -1641,13 +1692,13 @@ mod tests {
             "should give up after bounded resync attempts, not block; took {elapsed:?}"
         );
         match result {
-            Err(TypeHostError::BadResponse(msg)) => {
+            Err(TypeHostError::Desynced(msg)) => {
                 assert!(
                     msg.contains("resyncing"),
                     "expected a resync-exhausted error, got: {msg}"
                 );
             }
-            other => panic!("expected TypeHostError::BadResponse, got {other:?}"),
+            other => panic!("expected TypeHostError::Desynced, got {other:?}"),
         }
         let _ = worker.close();
     }
@@ -1846,6 +1897,102 @@ mod tests {
         );
 
         // Subsequent round-robin picks must skip the retired worker.
+        for _ in 0..10 {
+            let (idx, _) = oracle.next_worker();
+            assert_ne!(idx, 0, "round robin must skip the retired worker");
+        }
+
+        for w in oracle.workers {
+            let _ = w
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .close();
+        }
+    }
+
+    /// CD-278/CD-285: a worker that exhausts its resync budget
+    /// ([`TypeHostError::Desynced`]) must be retired from round-robin
+    /// rotation, the same as a poisoned-mutex worker (CD-271) — otherwise
+    /// it keeps claiming 1/N of all later queries and paying
+    /// `MAX_RESPONSE_RESYNC_ATTEMPTS` blocking reads on each one, only to
+    /// fail again every time.
+    #[test]
+    fn desynced_worker_is_retired_from_round_robin_rotation() {
+        if !node_present() {
+            return;
+        }
+        let spawn_desynced = || -> Worker {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg(
+                    "const readline = require('readline'); \
+                     const rl = readline.createInterface({ input: process.stdin }); \
+                     rl.on('line', () => { \
+                       for (let i = 0; i < 64; i++) { \
+                         process.stdout.write(JSON.stringify({ id: 'never-matches', ok: true, result: null }) + '\\n'); \
+                       } \
+                     });",
+                )
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn desynced worker");
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            }
+        };
+        let spawn_healthy = || -> Worker {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg("process.exit(0)")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn healthy worker");
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            }
+        };
+
+        let workers: Vec<Worker> = vec![spawn_desynced(), spawn_healthy(), spawn_healthy()];
+        let oracle = WorkerTypeOracle {
+            alive: workers.iter().map(|_| AtomicBool::new(true)).collect(),
+            workers: workers.into_iter().map(Mutex::new).collect(),
+            tsconfig_path: String::new(),
+            next_id: AtomicU64::new(0),
+            next_worker: AtomicUsize::new(0),
+        };
+
+        // Round-robin starts at index 0 (the desynced worker), so this
+        // query is the one that exhausts its resync budget.
+        let result = oracle.type_at(Path::new("dummy.ts"), 0, 1);
+        assert!(result.is_none(), "desynced worker must degrade to None");
+        assert!(
+            !oracle.alive[0].load(Ordering::Relaxed),
+            "worker 0 must be marked dead after exhausting its resync budget"
+        );
+
+        // Subsequent round-robin picks must skip the retired worker —
+        // without this, every later query pays the full resync budget
+        // against worker 0 again before failing.
         for _ in 0..10 {
             let (idx, _) = oracle.next_worker();
             assert_ne!(idx, 0, "round robin must skip the retired worker");

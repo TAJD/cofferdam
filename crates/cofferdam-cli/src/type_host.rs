@@ -70,35 +70,50 @@ fn current_user_tag() -> String {
 /// Materialise the embedded host script to the OS temp dir on first
 /// call, reuse the path on subsequent calls in this process. Same
 /// pattern as `plugins.rs::materialise_host_script`.
+///
+/// CD-277: only the success path is cached — `OnceLock<PathBuf>` rather
+/// than `OnceLock<io::Result<PathBuf>>`. Caching an `Err` disabled the
+/// type host for the rest of the process on the first failure, even a
+/// momentary one (a full/restrictive temp dir, an antivirus scanner
+/// holding the file, a `rename` racing a reader — see CD-266/CD-276).
+/// `INIT_LOCK` reproduces `OnceLock::get_or_init`'s "only one caller
+/// does the work, the rest wait" behaviour for the retry-on-failure
+/// case, which `get_or_try_init` would give for free but is still
+/// unstable (`once_cell_try`, rust-lang/rust#109737).
 fn materialise_host_script() -> std::io::Result<PathBuf> {
-    static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
-    let result = CACHED.get_or_init(|| {
-        let dir = scripts_dir();
-        std::fs::create_dir_all(&dir)?;
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
 
-        // See `plugins.rs::materialise_host_script` — both host scripts
-        // share this file and each ensures it's present so either one
-        // can be spawned independently of the other.
-        //
-        // CD-266: `write_atomic`, not `fs::write` directly. `scripts_dir`
-        // is scoped by version and user (CD-89) but not by process — two
-        // same-version `cofferdam` invocations racing (a CI matrix
-        // sharing a runner, a watch-mode rebuild overlapping a manual
-        // run) could have one process's non-atomic truncate-then-write
-        // caught mid-write by another process's `node` opening the same
-        // path, producing a `SyntaxError` from a torn `.mjs` file that
-        // looks exactly like the class of flake CD-238 was filed for.
-        let core_path = dir.join(CORE_SCRIPT_NAME);
-        write_atomic(&core_path, CORE_SCRIPT)?;
-
-        let path = dir.join(HOST_SCRIPT_NAME);
-        write_atomic(&path, HOST_SCRIPT)?;
-        Ok(path)
-    });
-    match result {
-        Ok(p) => Ok(p.clone()),
-        Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
     }
+    let _guard = INIT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
+    }
+
+    let dir = scripts_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    // See `plugins.rs::materialise_host_script` — both host scripts
+    // share this file and each ensures it's present so either one
+    // can be spawned independently of the other.
+    //
+    // CD-266: `write_atomic`, not `fs::write` directly. `scripts_dir`
+    // is scoped by version and user (CD-89) but not by process — two
+    // same-version `cofferdam` invocations racing (a CI matrix
+    // sharing a runner, a watch-mode rebuild overlapping a manual
+    // run) could have one process's non-atomic truncate-then-write
+    // caught mid-write by another process's `node` opening the same
+    // path, producing a `SyntaxError` from a torn `.mjs` file that
+    // looks exactly like the class of flake CD-238 was filed for.
+    let core_path = dir.join(CORE_SCRIPT_NAME);
+    write_atomic(&core_path, CORE_SCRIPT)?;
+
+    let path = dir.join(HOST_SCRIPT_NAME);
+    write_atomic(&path, HOST_SCRIPT)?;
+    let _ = CACHED.set(path.clone());
+    Ok(path)
 }
 
 /// Write `contents` to `path` without a window where a concurrent

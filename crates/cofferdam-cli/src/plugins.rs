@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1194,31 +1194,46 @@ pub fn run_plugins_with_sources(
 /// invocations share the file (deterministic name); the content is
 /// version-stamped via the build's compile-time string so a stale copy
 /// from a previous build gets overwritten on the next first-call.
+///
+/// CD-277: only the success path is cached — `OnceLock<PathBuf>` rather
+/// than `OnceLock<io::Result<PathBuf>>`. Caching an `Err` disabled
+/// every plugin for the rest of the process on the first failure, even
+/// a momentary one (a full/restrictive temp dir, an antivirus scanner
+/// holding the file, a `rename` racing a reader — see CD-266/CD-276).
+/// `INIT_LOCK` reproduces `OnceLock::get_or_init`'s "only one caller
+/// does the work, the rest wait" behaviour for the retry-on-failure
+/// case; see `type_host.rs::materialise_host_script`'s twin for why
+/// this isn't `get_or_try_init` (still unstable).
 fn materialise_host_script() -> std::io::Result<PathBuf> {
-    static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
-    let result = CACHED.get_or_init(|| {
-        let dir = scripts_dir();
-        std::fs::create_dir_all(&dir)?;
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
 
-        // Write the shared core module first — plugin-host.mjs's
-        // `import "./type-host-core.mjs"` must resolve by the time the
-        // host script is spawned. The version-scoped directory (CD-89)
-        // keeps this from colliding with another cofferdam build's copy;
-        // always overwritten for the same reason the host script is.
-        let core_path = dir.join(CORE_SCRIPT_NAME);
-        write_atomic(&core_path, CORE_SCRIPT)?;
-
-        let path = dir.join(HOST_SCRIPT_NAME);
-        // Always overwrite — the embedded script changes when the CLI
-        // is rebuilt. Compared to file-content-hash-named caching, this
-        // is one extra write per process. Fine for a multi-second run.
-        write_atomic(&path, HOST_SCRIPT)?;
-        Ok(path)
-    });
-    match result {
-        Ok(p) => Ok(p.clone()),
-        Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
     }
+    let _guard = INIT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
+    }
+
+    let dir = scripts_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    // Write the shared core module first — plugin-host.mjs's
+    // `import "./type-host-core.mjs"` must resolve by the time the
+    // host script is spawned. The version-scoped directory (CD-89)
+    // keeps this from colliding with another cofferdam build's copy;
+    // always overwritten for the same reason the host script is.
+    let core_path = dir.join(CORE_SCRIPT_NAME);
+    write_atomic(&core_path, CORE_SCRIPT)?;
+
+    let path = dir.join(HOST_SCRIPT_NAME);
+    // Always overwrite — the embedded script changes when the CLI
+    // is rebuilt. Compared to file-content-hash-named caching, this
+    // is one extra write per process. Fine for a multi-second run.
+    write_atomic(&path, HOST_SCRIPT)?;
+    let _ = CACHED.set(path.clone());
+    Ok(path)
 }
 
 /// Write `contents` to `path` via a process-unique temp file + rename.

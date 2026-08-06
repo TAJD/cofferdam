@@ -163,6 +163,52 @@ fn default_pool_size(available_parallelism: usize) -> usize {
     available_parallelism.min(DEFAULT_POOL_SIZE_CAP)
 }
 
+/// CD-262: bound on a single NDJSON response line read from a worker's
+/// stdout. Generous headroom for a legitimately large type-facts payload
+/// (a union with many literal members, say), but bounds worst-case
+/// memory if the worker ever writes to stdout without a trailing
+/// newline — the stdout twin of CD-259's stderr-drain bound.
+const MAX_RESPONSE_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read one NDJSON line from `reader` as raw bytes, bounded at
+/// [`MAX_RESPONSE_LINE_BYTES`] (CD-262). Mirrors `BufRead::read_line`'s
+/// EOF contract (`Ok(0)` only when nothing at all was read) but never
+/// hands ownership of unvalidated bytes to `String`'s UTF-8 check —
+/// unlike `read_line`, which on invalid UTF-8 returns `Err` with the
+/// already-consumed bytes discarded and the stream left mid-frame,
+/// desyncing every subsequent read. Bytes here are always returned to
+/// the caller (via `buf`) regardless of their encoding; validation is
+/// the caller's job (`String::from_utf8_lossy`).
+fn read_response_line_bounded(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<usize> {
+    let start_len = buf.len();
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            return Ok(buf.len() - start_len); // EOF
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&available[..=pos]);
+            reader.consume(pos + 1);
+            return Ok(buf.len() - start_len);
+        }
+        let n = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(n);
+        if buf.len() - start_len > MAX_RESPONSE_LINE_BYTES {
+            return Err(std::io::Error::other(format!(
+                "response line exceeded {MAX_RESPONSE_LINE_BYTES} bytes without a newline"
+            )));
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PingParams {
@@ -606,12 +652,14 @@ impl Worker {
         // resync, don't resign.
         let mut resync_attempts = 0u32;
         let env: ResponseEnvelope<R> = loop {
-            // Read one NDJSON line.
-            let mut buf = String::new();
-            let n = self
-                .stdout
-                .read_line(&mut buf)
+            // Read one NDJSON line. CD-262: read as raw bytes rather than
+            // `read_line` into a `String` — `read_line` errors out (and
+            // discards the already-consumed bytes) on invalid UTF-8,
+            // leaving the stream mid-frame for every subsequent read.
+            let mut raw_buf = Vec::new();
+            let n = read_response_line_bounded(&mut self.stdout, &mut raw_buf)
                 .map_err(|e| TypeHostError::Io(format!("read response: {e}")))?;
+            let buf = String::from_utf8_lossy(&raw_buf);
             if n == 0 {
                 // CD-238: the worker's stdout closed without a response —
                 // almost always because the child process already exited.
@@ -1176,6 +1224,95 @@ mod tests {
             "expected the buffer to stay capped at {STDERR_BUF_CAP}, got {}",
             bytes.len()
         );
+    }
+
+    /// CD-262: `read_response_line_bounded` must return the line's bytes
+    /// (including the trailing newline) verbatim regardless of encoding
+    /// — unlike `BufRead::read_line`, which errors out and discards the
+    /// already-consumed bytes on invalid UTF-8, desyncing the stream for
+    /// every subsequent read.
+    #[test]
+    fn read_response_line_bounded_returns_invalid_utf8_verbatim_instead_of_erroring() {
+        let mut line = vec![b'{', 0xFF, 0xFE, b'}', b'\n'];
+        let trailer = b"next-line\n".to_vec();
+        let mut input = line.clone();
+        input.extend_from_slice(&trailer);
+        let mut reader = std::io::Cursor::new(input);
+        let mut buf = Vec::new();
+        let n = read_response_line_bounded(&mut reader, &mut buf).expect("read first line");
+        assert_eq!(n, line.len());
+        assert_eq!(buf, line);
+        line.clear();
+        buf.clear();
+        let n = read_response_line_bounded(&mut reader, &mut buf).expect("read second line");
+        assert_eq!(n, trailer.len());
+        assert_eq!(buf, trailer);
+    }
+
+    /// CD-262: a response line with no newline must not grow memory
+    /// unboundedly — mirrors CD-259's stderr-drain bound, applied to the
+    /// stdout transport instead of diagnostics. Errors out once the cap
+    /// is exceeded rather than the CD-259 buffer's trim-and-keep-going,
+    /// since a truncated JSON line can never be parsed regardless.
+    #[test]
+    fn read_response_line_bounded_errors_out_on_newline_free_flood() {
+        let data = vec![b'x'; MAX_RESPONSE_LINE_BYTES + 1];
+        let mut reader = std::io::Cursor::new(data);
+        let mut buf = Vec::new();
+        let err = read_response_line_bounded(&mut reader, &mut buf)
+            .expect_err("expected the bound to be hit");
+        assert!(err.to_string().contains("exceeded"));
+    }
+
+    /// CD-262: an invalid-UTF-8 stray line on stdout (e.g. a file path
+    /// with non-UTF-8 bytes echoed into an unrelated diagnostic) must be
+    /// treated as an ordinary stray line — resynced past, not left
+    /// mid-frame corrupting every later read. Before the fix,
+    /// `read_line` erroring on the invalid bytes discarded them without
+    /// consuming the trailing newline, so the *next* read started
+    /// mid-line and desynced permanently.
+    #[test]
+    fn request_nullable_resyncs_past_an_invalid_utf8_stray_line() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 process.stdout.write(Buffer.from([0x7b, 0xff, 0xfe, 0x7d, 0x0a])); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', (line) => { \
+                   const req = JSON.parse(line); \
+                   process.stdout.write(JSON.stringify({ id: req.id, ok: true, result: null }) + '\\n'); \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        match result {
+            Ok(None) => {}
+            other => panic!(
+                "expected Ok(None) after resyncing past the invalid-UTF-8 stray line, got {other:?}"
+            ),
+        }
+        let _ = worker.close();
     }
 
     /// CD-260: a panic while `stderr_buf` is locked elsewhere (the only

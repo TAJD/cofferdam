@@ -143,6 +143,17 @@ pub fn assemble(items: Vec<ContextItem>, budget: usize) -> Digest {
         if turn_order.is_empty() {
             break;
         }
+        // CD-264: every item costs at least `ITEM_ENVELOPE_TOKENS`, so
+        // once even that much no longer fits, no remaining item —
+        // regardless of group or round — ever will either. Stop before
+        // paying a full `item_tokens()` (a `serde_json` serialization of
+        // `related`) per remaining item just to increment `omitted`, and
+        // before re-sorting `turn_order` for a round that can't select
+        // anything.
+        if spent + ITEM_ENVELOPE_TOKENS > budget {
+            omitted += groups.iter().map(VecDeque::len).sum::<usize>();
+            break;
+        }
         turn_order.sort_by(|&a, &b| {
             groups[b][0]
                 .score
@@ -211,11 +222,22 @@ pub fn render_markdown(digest: &Digest, changed_file_count: usize, root: &Path) 
     out
 }
 
+/// CD-265: `changed_files` isn't charged against `--budget` (see
+/// [`render_json`]'s doc), so on a branch touching thousands of files
+/// the field alone could dwarf the requested budget with no cap at all.
+/// Bounding the listed count keeps the blowout bounded regardless of
+/// branch size; `changed_files_truncated_from` (mirroring
+/// `cofferdam-formatters::json`'s `truncated_from` field) tells
+/// consumers the real count when capped.
+const MAX_CHANGED_FILES_LISTED: usize = 500;
+
 pub fn render_json(digest: &Digest, changeset: &ChangeSet, root: &Path, pretty: bool) -> String {
     #[derive(serde::Serialize)]
     struct Payload {
         schema_version: u32,
         changed_files: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        changed_files_truncated_from: Option<usize>,
         items: Vec<ContextItem>,
         omitted: usize,
         budget: usize,
@@ -248,13 +270,18 @@ pub fn render_json(digest: &Digest, changeset: &ChangeSet, root: &Path, pretty: 
                 .map(|e| relativize_text(e, &root_fwd)),
         })
         .collect();
+    let total_changed_files = changeset.files.len();
+    let changed_files_truncated_from =
+        (total_changed_files > MAX_CHANGED_FILES_LISTED).then_some(total_changed_files);
     let payload = Payload {
         schema_version: 1,
         changed_files: changeset
             .files
             .iter()
+            .take(MAX_CHANGED_FILES_LISTED)
             .map(|p| relativize(p, &root_fwd))
             .collect(),
+        changed_files_truncated_from,
         items,
         omitted: digest.omitted,
         budget: digest.budget,
@@ -573,5 +600,48 @@ mod tests {
         assert!(json.contains("\"body\":\"See src/a.ts for detail.\""));
         assert!(json.contains("\"explain\":\"finding in src/a.ts\""));
         assert!(json.contains("\"file\":\"src/a.ts\""));
+    }
+
+    /// CD-265: an unbounded `changed_files` list makes `--budget`
+    /// meaningless for `--format json` on a large branch diff — cap the
+    /// listed count and surface the true count via
+    /// `changed_files_truncated_from` instead of emitting every path.
+    #[test]
+    fn render_json_caps_changed_files_and_reports_the_true_count_when_over_the_cap() {
+        let d = assemble(vec![], 2000);
+        let files: std::collections::BTreeSet<PathBuf> = (0..(MAX_CHANGED_FILES_LISTED + 50))
+            .map(|i| PathBuf::from(format!("C:\\repo\\src\\file_{i:04}.ts")))
+            .collect();
+        let changeset = ChangeSet {
+            files,
+            line_ranges: Default::default(),
+        };
+        let json = render_json(&d, &changeset, Path::new("C:\\repo"), false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(
+            parsed["changed_files"].as_array().expect("array").len(),
+            MAX_CHANGED_FILES_LISTED
+        );
+        assert_eq!(
+            parsed["changed_files_truncated_from"],
+            MAX_CHANGED_FILES_LISTED + 50
+        );
+    }
+
+    /// The common case (a changeset under the cap) must not emit
+    /// `changed_files_truncated_from` at all — an agent parsing the
+    /// envelope shouldn't have to distinguish "absent" from "false"/`0`.
+    #[test]
+    fn render_json_omits_changed_files_truncated_from_when_under_the_cap() {
+        let d = assemble(vec![], 2000);
+        let changeset = ChangeSet {
+            files: [PathBuf::from("C:\\repo\\src\\a.ts")].into_iter().collect(),
+            line_ranges: Default::default(),
+        };
+        let json = render_json(&d, &changeset, Path::new("C:\\repo"), false);
+        assert!(
+            !json.contains("changed_files_truncated_from"),
+            "must be omitted, not null, when nothing was truncated: {json}"
+        );
     }
 }

@@ -42,7 +42,7 @@ cofferdam-checks = { workspace = true }
 cofferdam-formatters = { workspace = true }
 cofferdam-html = { workspace = true }
 # cd-9hp.4 cp5 — `cofferdam lsp` subcommand routes here.
-cofferdam-lsp = { path = "../cofferdam-lsp", version = "0.4.0" }
+cofferdam-lsp = { path = "../cofferdam-lsp", version = "0.4.1" }
 cofferdam-typst = { workspace = true }
 # CD-84: HTML plugin AST wire builder walks tree-sitter-html nodes
 # directly. Pin mirrors cofferdam-html's own tree-sitter pin — bump

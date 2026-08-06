@@ -130,11 +130,12 @@ Envelope:
 | Key | Type | Notes |
 |---|---|---|
 | `schema_version` | integer | `1` today. |
-| `changed_files` | string[] | The resolved `ChangeSet`'s file paths, relative to the project root and forward-slashed (CD-241) — path-bearing fields on `items` (`title`, `body`, `explain`, `related[].file`) are relativized the same way. |
+| `changed_files` | string[] | The resolved `ChangeSet`'s file paths, relative to the project root and forward-slashed (CD-241) — path-bearing fields on `items` (`title`, `body`, `explain`, `related[].file`) are relativized the same way. Capped at 500 entries (CD-265); see `changed_files_truncated_from`. |
+| `changed_files_truncated_from` | integer | Present only when `changed_files` was capped — the true (pre-cap) file count. Omitted entirely when nothing was cut. |
 | `items` | array | The digest, after budget truncation — see `ContextItem` below. |
 | `omitted` | integer | Count of items that scored/ranked below the cutoff and were dropped for budget. `0` means nothing was cut. |
 | `budget` | integer | The `--budget` value used. |
-| `spent` | integer | Actual tokens spent on `items` (each item's field content plus a fixed per-item rendering overhead, CD-246). Can exceed `budget` when pinned items push the total over — pinned items are never evicted. Does **not** include `changed_files` — a very large changeset adds unbudgeted output to the JSON payload (CD-246). |
+| `spent` | integer | Actual tokens spent on `items` (each item's field content plus a fixed per-item rendering overhead, CD-246). Can exceed `budget` when pinned items push the total over — pinned items are never evicted. Does **not** include `changed_files` — CD-265 bounds `changed_files` to 500 entries so it can no longer dwarf `spent`, but its own token cost still isn't charged against `budget`. |
 
 Per `ContextItem`:
 

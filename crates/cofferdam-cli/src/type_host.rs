@@ -978,16 +978,17 @@ impl WorkerTypeOracle {
         (idx, &self.workers[idx])
     }
 
-    /// Retire a worker from rotation after its mutex was found poisoned.
-    /// Logs once per worker (the `swap` guards against re-logging on
-    /// every subsequent query that happens to land on an already-dead
-    /// index) so a run that lost a share of its type coverage says so,
-    /// per the CD-271 finding — the prior behaviour was fully silent.
-    fn mark_dead(&self, idx: usize) {
+    /// Retire a worker from rotation, e.g. after its mutex was found
+    /// poisoned or its stdout stream desynced. Logs once per worker (the
+    /// `swap` guards against re-logging on every subsequent query that
+    /// happens to land on an already-dead index) so a run that lost a
+    /// share of its type coverage says so, per the CD-271 finding — the
+    /// prior behaviour was fully silent.
+    fn mark_dead(&self, idx: usize, reason: &str) {
         if self.alive[idx].swap(false, Ordering::Relaxed) {
             eprintln!(
-                "cofferdam: type-host worker {idx} poisoned by a prior panic — retiring it \
-                 from the pool; type-aware findings from its share of the run may be reduced"
+                "cofferdam: type-host worker {idx} {reason} — retiring it from the pool; \
+                 type-aware findings from its share of the run may be reduced"
             );
         }
     }
@@ -1009,7 +1010,7 @@ impl WorkerTypeOracle {
         result: Result<T, TypeHostError>,
     ) -> Result<T, TypeHostError> {
         if let Err(TypeHostError::Desynced(_)) = &result {
-            self.mark_dead(idx);
+            self.mark_dead(idx, "lost sync with its stdout stream");
         }
         result
     }
@@ -1029,7 +1030,7 @@ impl TypeOracle for WorkerTypeOracle {
         let mut worker = match worker_mutex.lock() {
             Ok(w) => w,
             Err(_) => {
-                self.mark_dead(idx);
+                self.mark_dead(idx, "poisoned by a prior panic");
                 return None;
             }
         };
@@ -1052,7 +1053,7 @@ impl TypeOracle for WorkerTypeOracle {
         let mut worker = match worker_mutex.lock() {
             Ok(w) => w,
             Err(_) => {
-                self.mark_dead(idx);
+                self.mark_dead(idx, "poisoned by a prior panic");
                 return None;
             }
         };
@@ -1075,7 +1076,7 @@ impl TypeOracle for WorkerTypeOracle {
         let mut worker = match worker_mutex.lock() {
             Ok(w) => w,
             Err(_) => {
-                self.mark_dead(idx);
+                self.mark_dead(idx, "poisoned by a prior panic");
                 return None;
             }
         };

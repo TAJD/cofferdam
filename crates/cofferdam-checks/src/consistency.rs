@@ -66,6 +66,14 @@ impl Check for QuoteStyle {
         });
     }
 
+    /// `pass2` below reads only `QUOTE_STATS[file.path]` — the entry
+    /// this same file's own `run()` wrote — never another file's
+    /// entry, so an unchanged file's verdict can't be affected by an
+    /// edit elsewhere (CD-40 lever 4).
+    fn pass2_is_file_local(&self) -> bool {
+        true
+    }
+
     /// Pass 1: walk AST and collect per-file quote-usage statistics.
     /// Skips JSX attribute string values (they have different style rules)
     /// and strings whose content forces the alternate quote (e.g. `"don't"`).

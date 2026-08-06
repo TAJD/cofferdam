@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `Engine::analyze_incremental` re-analyzes single-file edits faster (CD-40, lever 4 of the CD-28/CD-32 tail): pass-2 consistency-check output is now cached per file in `AnalysisState`, and skipped for unchanged files, when every registered consistency check declares its verdict depends only on that file's own pass-1 evidence (`Check::pass2_is_file_local`, opted into by `Consistency.QuoteStyle`). A check whose pass2 aggregates across files keeps the always-recompute path. Measured ~7% faster on a real-world corpus (243 files); CD-40 stays open for lever 5 (incremental cross-file finalize emitters), the remaining, highest-effort work needed to reach the ticket's >=10x target.
+
 ## [0.4.1] - 2026-08-06
 
 ### Added

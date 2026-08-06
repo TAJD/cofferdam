@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - `crates/cofferdam-cli/src/type_host.rs`: the type-host worker's stdout response line was read with `BufRead::read_line` into a `String`, which returns `Err(InvalidData)` — with the bytes already consumed but unspecified — the moment a line isn't valid UTF-8 (a file path containing invalid UTF-8 echoed back in an error message, on Windows or Linux). That left the worker's stream mid-frame and every later response desynced. Responses are now read as bounded raw bytes and decoded lossily before parsing, so a non-UTF-8 line degrades to a parseable (if lossy) response instead of corrupting the stream, and an unbounded read (a response line with no newline) is capped rather than growing forever (CD-262).
+- `crates/cofferdam-cli/src/type_host.rs`: a worker that exhausted CD-261's resync budget was returned to the round-robin pool still desynced on its stdout stream, so 1/N of every later request paid up to 32 blocking reads only to fail again, forever, silently dropping that share of type-aware findings. It's now retired from rotation the same way CD-271 retires a poisoned-mutex worker, via the same `alive` bitmap, with a log line naming the actual retirement reason (CD-278, CD-285).
 
 ## [0.4.0] - 2026-08-02
 

@@ -1234,11 +1234,24 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
 /// both POSIX (rename(2)) and Windows (Rust's std uses
 /// `MOVEFILE_REPLACE_EXISTING`), so readers only ever see the old
 /// complete file or the new complete file, never a torn one.
+/// CD-276/CD-283: the `-plugins` suffix keeps this call site's tmp path
+/// distinct from `type_host.rs::write_atomic`'s `-type-host` one — both
+/// materialise the same `CORE_SCRIPT_NAME` into the same `scripts_dir`
+/// (see that function's doc for the full torn-file scenario this
+/// prevents), and `path.with_extension(format!("tmp-{pid}"))` alone
+/// would let them collide on the identical tmp path within one process.
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let tmp_path = tmp_sibling(path);
     std::fs::write(&tmp_path, contents)?;
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+/// Pure helper behind [`write_atomic`]'s tmp-path computation, split out
+/// so the call-site discriminator (CD-276/CD-283) is unit-testable
+/// without depending on filesystem write timing.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    path.with_extension(format!("tmp-{}-plugins", std::process::id()))
 }
 
 pub fn capitalize_category(wire: &str) -> Option<&'static str> {
@@ -1537,6 +1550,27 @@ mod scope_prefilter_tests {
             filtered.len(),
             1,
             "a `./`-relative path under the `web` layer must still match a `files.layers: ['web']` scope"
+        );
+    }
+
+    /// CD-276/CD-283: this module's tmp path must carry a discriminator
+    /// distinguishing it from `type_host.rs::write_atomic`'s (asserted
+    /// by the mirror-image test there), since both materialise the
+    /// identical `CORE_SCRIPT_NAME` into the identical `scripts_dir` —
+    /// without a distinct suffix per call site, a same-process run using
+    /// both plugins and type-aware checks could have the two computed
+    /// tmp paths collide on the same destination.
+    #[test]
+    fn tmp_sibling_is_discriminated_from_the_type_host_call_site() {
+        let path = Path::new("/scripts/type-host-core.mjs");
+        let tmp = tmp_sibling(path).to_string_lossy().into_owned();
+        assert!(
+            tmp.contains("-plugins"),
+            "tmp sibling {tmp:?} must carry the plugins call-site discriminator"
+        );
+        assert!(
+            !tmp.contains("-type-host"),
+            "tmp sibling {tmp:?} must not collide with type_host.rs's discriminator"
         );
     }
 }

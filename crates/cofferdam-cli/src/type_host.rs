@@ -103,14 +103,31 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
 
 /// Write `contents` to `path` without a window where a concurrent
 /// reader could observe a truncated/partial file — write to a
-/// process-unique sibling path, then `rename` into place. `rename` is
-/// atomic on both POSIX and Windows for a same-directory replace.
-/// Mirrors `plugins.rs::write_atomic`.
+/// process- and call-site-unique sibling path, then `rename` into
+/// place. `rename` is atomic on both POSIX and Windows for a
+/// same-directory replace. Mirrors `plugins.rs::write_atomic`.
+///
+/// CD-276/CD-283: `path.with_extension(format!("tmp-{pid}"))` alone is
+/// unique per *process* but not per *call site* — `materialise_host_script`
+/// here and its twin in `plugins.rs` both write `CORE_SCRIPT_NAME` into
+/// the same `scripts_dir`, so a same-process run using both type-aware
+/// checks and plugins would have both compute the identical tmp path
+/// with no serialisation between them, reopening the torn-file window
+/// this function exists to close. The `-type-host` suffix keeps this
+/// call site's tmp path distinct from `plugins.rs`'s `-plugins` one even
+/// when both target the same destination.
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let tmp_path = tmp_sibling(path);
     std::fs::write(&tmp_path, contents)?;
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+/// Pure helper behind [`write_atomic`]'s tmp-path computation, split out
+/// so the call-site discriminator (CD-276/CD-283) is unit-testable
+/// without depending on filesystem write timing.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    path.with_extension(format!("tmp-{}-type-host", std::process::id()))
 }
 
 /// Wall-clock budget for one type-host request. Default 60s; override
@@ -2034,6 +2051,27 @@ mod tests {
         assert!(
             leftover_tmp.is_empty(),
             "expected the tmp sibling to be renamed away, found: {leftover_tmp:?}"
+        );
+    }
+
+    /// CD-276/CD-283: this module's tmp path must carry a discriminator
+    /// distinguishing it from `plugins.rs::write_atomic`'s (asserted by
+    /// the mirror-image test in `plugins.rs`), since both materialise
+    /// the identical `CORE_SCRIPT_NAME` into the identical `scripts_dir`
+    /// — without a distinct suffix per call site, a same-process run
+    /// using both type-aware checks and plugins could have the two
+    /// computed tmp paths collide on the same destination.
+    #[test]
+    fn tmp_sibling_is_discriminated_from_the_plugins_call_site() {
+        let path = Path::new("/scripts/type-host-core.mjs");
+        let tmp = tmp_sibling(path).to_string_lossy().into_owned();
+        assert!(
+            tmp.contains("-type-host"),
+            "tmp sibling {tmp:?} must carry the type_host call-site discriminator"
+        );
+        assert!(
+            !tmp.contains("-plugins"),
+            "tmp sibling {tmp:?} must not collide with plugins.rs's discriminator"
         );
     }
 

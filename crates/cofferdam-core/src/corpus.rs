@@ -88,6 +88,31 @@ impl<T> PerFile<T> {
         self.by_file.values().flatten()
     }
 
+    /// Total record count across every file.
+    pub fn len(&self) -> usize {
+        self.by_file.values().map(Vec::len).sum()
+    }
+
+    /// True when no file has contributed any records. `replace_file` never
+    /// leaves an empty bucket behind, so this is just "no buckets at all".
+    pub fn is_empty(&self) -> bool {
+        self.by_file.is_empty()
+    }
+
+    /// Flatten every file's bucket into one `Vec`, pre-sized via
+    /// [`Self::len`] so the from-scratch analyze path (which needs the
+    /// full flat view every call) doesn't pay `Vec`'s doubling-growth
+    /// cost on top of a `HashMap::values().flatten()` iterator whose
+    /// `size_hint` can't see through the nested structure.
+    pub fn to_vec(&self) -> Vec<T>
+    where
+        T: Clone,
+    {
+        let mut out = Vec::with_capacity(self.len());
+        out.extend(self.records().cloned());
+        out
+    }
+
     /// Test/fixture convenience: bucket `items` by a caller-supplied key
     /// extractor, appending to each bucket rather than replacing it.
     /// Production pass-1 code should prefer [`Self::replace_file`], which

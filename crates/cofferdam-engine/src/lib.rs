@@ -910,8 +910,8 @@ impl Engine {
                 GraphUpdate::Rebuild => {
                     corpus.with_slot(&IMPORTS, |imports| {
                         corpus.with_slot(&EXPORTS, |exports| {
-                            let all_imports: Vec<_> = imports.records().cloned().collect();
-                            let all_exports: Vec<_> = exports.records().cloned().collect();
+                            let all_imports = imports.to_vec();
+                            let all_exports = exports.to_vec();
                             let graph = build_canonical_graph(&all_imports, &all_exports);
                             corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
                         });

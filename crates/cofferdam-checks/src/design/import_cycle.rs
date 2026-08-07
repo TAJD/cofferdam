@@ -49,12 +49,8 @@ impl Check for ImportCycle {
         // Honour user-supplied option override (cd-3uj). Default mirrors
         // the schema (true) when the key is missing.
         let ignore_type_only = ctx.options.get_bool("ignore_type_only").unwrap_or(true);
-        let imports: Vec<ImportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
-        let exports: Vec<ExportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
+        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.to_vec());
+        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.to_vec());
         compute_cycles(&imports, &exports, ignore_type_only)
     }
 }

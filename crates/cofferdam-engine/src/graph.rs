@@ -725,7 +725,7 @@ mod extension_alias_tests {
         let builder = GraphBuilder::new();
         builder.collect(&file, &parsed, &corpus);
 
-        let imports: Vec<_> = corpus.with_slot(&IMPORTS, |slot| slot.records().cloned().collect());
+        let imports: Vec<_> = corpus.with_slot(&IMPORTS, |slot| slot.to_vec());
         assert_eq!(imports.len(), 1, "expected exactly one import: {imports:?}");
         (dir, imports[0].resolved.clone())
     }
@@ -843,7 +843,7 @@ mod astro_tests {
         let builder = GraphBuilder::new();
         builder.collect_astro(&file, &corpus);
 
-        let imports: Vec<_> = corpus.with_slot(&IMPORTS, |slot| slot.records().cloned().collect());
+        let imports: Vec<_> = corpus.with_slot(&IMPORTS, |slot| slot.to_vec());
         assert_eq!(imports.len(), 1, "expected one import record: {imports:?}");
         assert_eq!(imports[0].resolved.as_deref(), Some(island.as_path()));
         assert!(
@@ -852,7 +852,7 @@ mod astro_tests {
              to the frontmatter parse, so Refactor.DeadExport must not flag them: {imports:?}"
         );
 
-        let exports: Vec<_> = corpus.with_slot(&EXPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<_> = corpus.with_slot(&EXPORTS, |slot| slot.to_vec());
         assert!(
             exports.is_empty(),
             "frontmatter exports must not be recorded: {exports:?}"

@@ -208,12 +208,8 @@ impl Check for MissingTestFile {
             .map(|xs| xs.to_vec())
             .unwrap_or_default();
 
-        let imports: Vec<ImportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
-        let exports: Vec<ExportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
+        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.to_vec());
+        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.to_vec());
         let type_asserted = ctx
             .corpus
             .with_slot(&TYPE_ASSERTED_NAMES, |slot| slot.clone());

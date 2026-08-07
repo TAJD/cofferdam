@@ -68,9 +68,7 @@ impl Check for BarrelReexportBloat {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        let exports: Vec<ExportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.to_vec());
         compute_bloated_barrels(&exports)
     }
 }

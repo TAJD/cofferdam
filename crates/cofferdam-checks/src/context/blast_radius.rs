@@ -85,12 +85,8 @@ impl Check for BlastRadius {
         changeset: &ChangeSet,
         ctx: &mut FinalizeContext<'_>,
     ) -> Vec<ContextItem> {
-        let exports: Vec<ExportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
-        let imports: Vec<ImportRecord> = ctx
-            .corpus
-            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.to_vec());
+        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.to_vec());
         ctx.corpus.with_slot(&CANONICAL_GRAPH, |graph| {
             compute_blast_radius(graph, &exports, &imports, changeset)
         })

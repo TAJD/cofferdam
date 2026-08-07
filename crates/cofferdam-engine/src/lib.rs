@@ -24,7 +24,7 @@ pub use config::{ConfigError, ProjectConfig};
 pub use discover::{discover, DiscoveryOptions, DEFAULT_EXTENSIONS};
 pub use timing::TimingCollector;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -1607,8 +1607,11 @@ impl Engine {
             let cacheable = consistency_checks
                 .iter()
                 .all(|(_, c)| c.pass2_is_file_local());
-            let changed_paths_set: HashSet<&Path> =
-                changed.iter().map(|(p, _)| p.as_path()).collect();
+            // A linear scan, not a `HashSet`: `changed` is almost always
+            // a single file (the common single-edit call this lever
+            // targets), where hashing costs more than it saves. Only
+            // built/consulted at all when `cacheable`.
+            let is_changed = |path: &Path| changed.iter().any(|(p, _)| p.as_path() == path);
 
             for (path, file) in &state.source_files {
                 if file.language != Language::TypeScript {
@@ -1621,7 +1624,7 @@ impl Engine {
                 // rather than treating a miss as "zero issues" keeps
                 // that unsupported case merely stale instead of silently
                 // dropping findings.
-                if cacheable && !changed_paths_set.contains(path.as_path()) {
+                if cacheable && !is_changed(path) {
                     if let Some(cached) = state.pass2_issues.get(path) {
                         issues.extend(cached.iter().cloned());
                         continue;

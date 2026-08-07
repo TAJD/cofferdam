@@ -628,8 +628,10 @@ impl Check for UnusedImport {
             IMPORTS as G_IMPORTS, INVARIANTS as G_INVARIANTS,
         };
 
-        let imports: Vec<GImportRecord> = ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.clone());
-        let exports: Vec<GExportRecord> = ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.clone());
+        let imports: std::sync::Arc<Vec<GImportRecord>> =
+            ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.to_vec());
+        let exports: std::sync::Arc<Vec<GExportRecord>> =
+            ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.to_vec());
         // [public_api] from cofferdam.invariants.toml. Re-exports from
         // files matched by `[public_api].exports` ARE the published
         // surface by construction (downstream consumers live in the
@@ -648,7 +650,7 @@ impl Check for UnusedImport {
         let mut named_consumed: HashSet<(String, String)> = HashSet::new();
         let mut default_consumed: HashSet<String> = HashSet::new();
         let mut ns_consumed: HashSet<String> = HashSet::new();
-        for imp in &imports {
+        for imp in imports.iter() {
             let Some(resolved) = &imp.resolved else {
                 continue;
             };
@@ -669,7 +671,7 @@ impl Check for UnusedImport {
         }
 
         let mut issues = Vec::new();
-        for exp in &exports {
+        for exp in exports.iter() {
             if !matches!(exp.kind, GExportKind::ReExport) {
                 continue;
             }

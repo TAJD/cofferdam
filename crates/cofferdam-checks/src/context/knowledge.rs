@@ -110,22 +110,24 @@ impl Check for Knowledge {
             return Vec::new();
         }
 
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |s| s.clone());
-        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |s| s.clone());
+        let imports: std::sync::Arc<Vec<ImportRecord>> =
+            ctx.corpus.with_slot(&GRAPH_IMPORTS, |s| s.to_vec());
+        let exports: std::sync::Arc<Vec<ExportRecord>> =
+            ctx.corpus.with_slot(&GRAPH_EXPORTS, |s| s.to_vec());
 
         let mut imports_by_file: HashMap<PathBuf, Vec<ImportRecord>> = HashMap::new();
-        for imp in imports {
+        for imp in imports.iter() {
             imports_by_file
                 .entry(imp.from_file.clone())
                 .or_default()
-                .push(imp);
+                .push(imp.clone());
         }
         let mut exports_by_file: HashMap<PathBuf, Vec<ExportRecord>> = HashMap::new();
-        for exp in exports {
+        for exp in exports.iter() {
             exports_by_file
                 .entry(exp.file.clone())
                 .or_default()
-                .push(exp);
+                .push(exp.clone());
         }
 
         let glob_cache = GlobCache::new();

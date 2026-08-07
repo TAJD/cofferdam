@@ -154,8 +154,8 @@ fn graph_build_overhead_within_budget() {
         extract_total_ns += t1.elapsed().as_nanos();
     }
 
-    let imports: Vec<ImportRecord> = corpus.with_slot(&IMPORTS, |s| s.clone());
-    let exports: Vec<ExportRecord> = corpus.with_slot(&EXPORTS, |s| s.clone());
+    let imports: std::sync::Arc<Vec<ImportRecord>> = corpus.with_slot(&IMPORTS, |s| s.to_vec());
+    let exports: std::sync::Arc<Vec<ExportRecord>> = corpus.with_slot(&EXPORTS, |s| s.to_vec());
 
     // Warm-up + best-of-three for the translation step. It's a few-ms
     // computation; the first run pays page-fault / allocator costs we

@@ -1172,7 +1172,9 @@ function total(items) {
                 .with_corpus(&corpus);
             EffectLeakage.run(&file, &mut ctx);
         }
-        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(extra_imports));
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| {
+            slot.extend_by(extra_imports, |r| &r.from_file)
+        });
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         EffectLeakage.finalize(&mut finalize_ctx)
     }
@@ -1682,7 +1684,9 @@ export function computeTotal(items: number[]): number {
     /// `imports` as the shared import graph.
     fn run_fan_out_outlier(imports: Vec<ImportRecord>) -> Vec<CoreIssue> {
         let corpus = CorpusIndex::new();
-        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(imports));
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| {
+            slot.extend_by(imports, |r| &r.from_file)
+        });
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         ImportFanOutOutlier.finalize(&mut finalize_ctx)
     }
@@ -1844,7 +1848,9 @@ export function computeTotal(items: number[]): number {
         let imports = god_and_leaves_imports(&god, "leaf", 14);
 
         let corpus = CorpusIndex::new();
-        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(imports));
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| {
+            slot.extend_by(imports, |r| &r.from_file)
+        });
         for i in 0..5 {
             let path = PathBuf::from(format!("/p/isolated{i}.ts"));
             let file = SourceFile::new(path, String::new());
@@ -1881,7 +1887,7 @@ export function computeTotal(items: number[]): number {
 
     fn run_barrel_reexport_bloat(exports: Vec<ExportRecord>) -> Vec<CoreIssue> {
         let corpus = CorpusIndex::new();
-        corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.extend(exports));
+        corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.extend_by(exports, |r| &r.file));
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         BarrelReexportBloat.finalize(&mut finalize_ctx)
     }

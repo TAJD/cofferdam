@@ -30,7 +30,7 @@ use std::time::Instant;
 
 use std::collections::BTreeMap;
 
-use cofferdam_core::graph::{EXPORTS, IMPORTS};
+use cofferdam_core::graph::{FinalizeScope, EXPORTS, FINALIZE_SCOPE, IMPORTS};
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
     validate_options, Allocator, Category, ChangeSet, Check, CheckContext, CheckOptions,
@@ -195,7 +195,10 @@ impl AnalysisState {
 }
 
 /// How [`Engine::finalize_and_filter`] should get the `CANONICAL_GRAPH`
-/// corpus slot to its post-this-call state (CD-40 lever 3).
+/// corpus slot to its post-this-call state (CD-40 lever 3). Also drives
+/// the `FINALIZE_SCOPE` corpus slot published for finalize-stage checks
+/// (CD-40 lever 5 PR 2).
+#[derive(Clone, Copy)]
 enum GraphUpdate<'a> {
     /// Build a fresh graph from every IMPORTS/EXPORTS record in the
     /// corpus. Used by every from-scratch `analyze_*` entry point,
@@ -208,7 +211,10 @@ enum GraphUpdate<'a> {
     /// called `corpus.remove_file` earlier in the same call; only
     /// `changed`'s freshly re-populated records still need replaying
     /// in via `apply_records`.
-    Incremental { changed: &'a [PathBuf] },
+    Incremental {
+        changed: &'a [PathBuf],
+        removed: &'a [PathBuf],
+    },
 }
 
 impl Engine {
@@ -904,12 +910,14 @@ impl Engine {
                 GraphUpdate::Rebuild => {
                     corpus.with_slot(&IMPORTS, |imports| {
                         corpus.with_slot(&EXPORTS, |exports| {
-                            let graph = build_canonical_graph(imports, exports);
+                            let all_imports = imports.to_vec();
+                            let all_exports = exports.to_vec();
+                            let graph = build_canonical_graph(&all_imports, &all_exports);
                             corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
                         });
                     });
                 }
-                GraphUpdate::Incremental { changed } => {
+                GraphUpdate::Incremental { changed, .. } => {
                     // `removed`/stale-`changed` contributions were
                     // already dropped from the persisted
                     // `CANONICAL_GRAPH` slot by the registered
@@ -922,16 +930,21 @@ impl Engine {
                     // the live graph, exactly like
                     // `Graph::remove_file`'s own doc comment describes
                     // for incremental callers.
+                    //
+                    // Per-file storage (CD-40 lever 5 PR 2) turns this
+                    // into O(|changed|) direct lookups instead of an
+                    // O(total records) scan filtered by
+                    // `changed.contains(..)` per record.
                     corpus.with_slot(&IMPORTS, |imports| {
                         corpus.with_slot(&EXPORTS, |exports| {
-                            let filtered_imports: Vec<_> = imports
+                            let filtered_imports: Vec<_> = changed
                                 .iter()
-                                .filter(|r| changed.contains(&r.from_file))
+                                .flat_map(|f| imports.for_file(f))
                                 .cloned()
                                 .collect();
-                            let filtered_exports: Vec<_> = exports
+                            let filtered_exports: Vec<_> = changed
                                 .iter()
-                                .filter(|r| changed.contains(&r.file))
+                                .flat_map(|f| exports.for_file(f))
                                 .cloned()
                                 .collect();
                             corpus.with_slot(&CANONICAL_GRAPH, |graph| {
@@ -945,6 +958,16 @@ impl Engine {
                 t.record_phase("graph_build", graph_build_start.elapsed());
             }
         }
+
+        corpus.with_slot(&FINALIZE_SCOPE, |scope| {
+            *scope = match graph_update {
+                GraphUpdate::Rebuild => FinalizeScope::Full,
+                GraphUpdate::Incremental { changed, removed } => FinalizeScope::Delta {
+                    changed: changed.to_vec(),
+                    removed: removed.to_vec(),
+                },
+            };
+        });
 
         // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):
         //
@@ -1486,8 +1509,8 @@ impl Engine {
     /// — those differ on Windows (case-folding), and a mismatch here
     /// would silently no-op the removal, leaking stale graph nodes/edges.
     fn register_removers(&self, corpus: &CorpusIndex) {
-        corpus.register_removable(&IMPORTS, |slot, path| slot.retain(|r| r.from_file != path));
-        corpus.register_removable(&EXPORTS, |slot, path| slot.retain(|r| r.file != path));
+        corpus.register_removable(&IMPORTS, |slot, path| slot.remove_file(path));
+        corpus.register_removable(&EXPORTS, |slot, path| slot.remove_file(path));
         corpus.register_removable(&CANONICAL_GRAPH, |graph, path| {
             graph.remove_file(&cofferdam_graph::normalized_file_path(path));
         });
@@ -1657,6 +1680,7 @@ impl Engine {
             None,
             GraphUpdate::Incremental {
                 changed: &changed_paths,
+                removed: &removed,
             },
             None,
         )

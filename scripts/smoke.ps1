@@ -18,7 +18,10 @@ Run the CD-35 memory baseline gate instead of the findings-count smoke
 test: launch the binary against the checked-in `examples/` corpus (portable
 to CI, unlike the -repos corpus below which lives on the dev machine only),
 capture peak RSS, and fail if it grew more than the baseline's tolerance.
-Combine with -Update to record a fresh baseline.
+Combine with -Update to record a fresh baseline. RAYON_NUM_THREADS is
+pinned during the run (CD-194) so the measurement is comparable across
+runner hardware with different core counts, rather than conflating
+thread-pool size with a genuine memory regression.
 
 .EXAMPLE
 .\scripts\smoke.ps1 -Debug
@@ -81,6 +84,14 @@ if ($Memory) {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # CD-194: rayon defaults its worker pool to the host core count, and
+    # each worker's own allocations/bookkeeping add to peak RSS — so an
+    # unpinned run on a higher-core-count machine than the one the
+    # baseline was recorded on fails the gate for a reason unrelated to
+    # any real memory regression (confirmed: unmodified `main` measured
+    # +37.4% on a 32-core box vs +5.8% on a 4-core one). Pin to the
+    # baseline's thread count so growth measures actual behavior change.
+    $psi.EnvironmentVariables["RAYON_NUM_THREADS"] = "4"
 
     $proc = [System.Diagnostics.Process]::Start($psi)
     # Drain stdout/stderr asynchronously *before* WaitForExit — `check`

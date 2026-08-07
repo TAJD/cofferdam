@@ -434,8 +434,8 @@ fn run_one(dir: &Path) {
     );
 
     // Snapshot the corpus slices.
-    let imports: Vec<ImportRecord> = corpus.with_slot(&IMPORTS, |s| s.clone());
-    let exports: Vec<ExportRecord> = corpus.with_slot(&EXPORTS, |s| s.clone());
+    let imports: Vec<ImportRecord> = corpus.with_slot(&IMPORTS, |s| s.records().cloned().collect());
+    let exports: Vec<ExportRecord> = corpus.with_slot(&EXPORTS, |s| s.records().cloned().collect());
     println!("imports = {}, exports = {}", imports.len(), exports.len());
 
     // ===== Measurement 1: graph materialisation =====

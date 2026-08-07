@@ -29,7 +29,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::corpus::CorpusKey;
+use crate::corpus::{CorpusKey, PerFile};
 use crate::issue::Span;
 
 /// One static `import` (or `export ... from`) declaration in a source file.
@@ -137,11 +137,40 @@ pub enum ExportKind {
     ReExport,
 }
 
-/// All static imports observed during pass 1.
-pub static IMPORTS: CorpusKey<Vec<ImportRecord>> = CorpusKey::new("__cofferdam.graph.imports");
+/// All static imports observed during pass 1, bucketed per originating
+/// file (CD-40 lever 5 PR 2) so the incremental path can fetch exactly
+/// `changed`'s records without scanning every file's contributions.
+pub static IMPORTS: CorpusKey<PerFile<ImportRecord>> = CorpusKey::new("__cofferdam.graph.imports");
 
-/// All named/default/re-export declarations observed during pass 1.
-pub static EXPORTS: CorpusKey<Vec<ExportRecord>> = CorpusKey::new("__cofferdam.graph.exports");
+/// All named/default/re-export declarations observed during pass 1,
+/// bucketed per originating file (CD-40 lever 5 PR 2).
+pub static EXPORTS: CorpusKey<PerFile<ExportRecord>> = CorpusKey::new("__cofferdam.graph.exports");
+
+/// How the current `finalize` call relates to the file set (CD-40 lever 5
+/// PR 2). `Full` covers every from-scratch `analyze_*` entry point;
+/// `Delta` covers `Engine::analyze_incremental`. Consumed by lever-5
+/// checks (PR 3+) that maintain their own incremental aggregates and need
+/// to know whether this call touched the whole corpus or just a few
+/// files.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum FinalizeScope {
+    /// From-scratch analyze — every file was (re)processed this call.
+    #[default]
+    Full,
+    /// `analyze_incremental` — only `changed` was re-processed and
+    /// `removed` was dropped; every other file's evidence is unchanged
+    /// from the prior call.
+    Delta {
+        changed: Vec<PathBuf>,
+        removed: Vec<PathBuf>,
+    },
+}
+
+/// Engine-published scope of the current `finalize` call. Written by
+/// `Engine::finalize_and_filter` before Phase A finalize runs, so
+/// finalize-stage checks can read it via `ctx.corpus`.
+pub static FINALIZE_SCOPE: CorpusKey<FinalizeScope> =
+    CorpusKey::new("__cofferdam.graph.finalize_scope");
 
 /// Project-wide layer/architecture rules read from `cofferdam.toml`.
 ///

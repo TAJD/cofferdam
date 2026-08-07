@@ -31,8 +31,75 @@ use std::any::{Any, TypeId};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+
+/// Per-file bucketed storage for a corpus slot (CD-40 lever 5 PR 2).
+///
+/// Replaces a flat `Vec<T>` slot for graph-wide record tables (e.g.
+/// `cofferdam_core::graph::IMPORTS` / `EXPORTS`) where the engine's
+/// incremental path needs "give me just `changed`'s records" without an
+/// O(total records) scan over every file's contributions. Pass 1 writes
+/// one file's records at a time via [`Self::replace_file`]; finalize-stage
+/// checks that still want the flat view use [`Self::records`].
+#[derive(Debug, Clone)]
+pub struct PerFile<T> {
+    by_file: HashMap<PathBuf, Vec<T>>,
+}
+
+impl<T> Default for PerFile<T> {
+    fn default() -> Self {
+        Self {
+            by_file: HashMap::new(),
+        }
+    }
+}
+
+impl<T> PerFile<T> {
+    /// Replace `path`'s bucket wholesale. An empty `records` removes the
+    /// bucket entirely rather than leaving a stale empty entry behind —
+    /// important for the incremental path, where a file that used to have
+    /// records (e.g. an import that got deleted) must stop appearing in
+    /// [`Self::records`].
+    pub fn replace_file(&mut self, path: PathBuf, records: Vec<T>) {
+        if records.is_empty() {
+            self.by_file.remove(&path);
+        } else {
+            self.by_file.insert(path, records);
+        }
+    }
+
+    /// Drop `path`'s bucket, if any. Safe to call for a path with no
+    /// contributions — matches [`CorpusIndex::remove_file`]'s contract for
+    /// the removers it drives.
+    pub fn remove_file(&mut self, path: &Path) {
+        self.by_file.remove(path);
+    }
+
+    /// `path`'s records, or an empty slice if it contributed none.
+    pub fn for_file(&self, path: &Path) -> &[T] {
+        self.by_file.get(path).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Every record across every file, in unspecified order (bucketed by
+    /// `HashMap`, not insertion order). Callers that need a stable order
+    /// must sort.
+    pub fn records(&self) -> impl Iterator<Item = &T> {
+        self.by_file.values().flatten()
+    }
+
+    /// Test/fixture convenience: bucket `items` by a caller-supplied key
+    /// extractor, appending to each bucket rather than replacing it.
+    /// Production pass-1 code should prefer [`Self::replace_file`], which
+    /// owns the whole-file semantics; this is for tests that seed the
+    /// corpus with a flat `Vec<T>` fixture directly.
+    pub fn extend_by(&mut self, items: impl IntoIterator<Item = T>, key: impl Fn(&T) -> &Path) {
+        for item in items {
+            let path = key(&item).to_path_buf();
+            self.by_file.entry(path).or_default().push(item);
+        }
+    }
+}
 
 /// Typed handle to a corpus slot. Two checks sharing the same `CorpusKey`
 /// constant share storage. The `&'static str` name is the storage key;

@@ -52,8 +52,12 @@ impl Check for DeadExport {
         };
         use std::collections::HashSet;
 
-        let imports: Vec<GImportRecord> = ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.clone());
-        let exports: Vec<GExportRecord> = ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.clone());
+        let imports: Vec<GImportRecord> = ctx
+            .corpus
+            .with_slot(&G_IMPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<GExportRecord> = ctx
+            .corpus
+            .with_slot(&G_EXPORTS, |slot| slot.records().cloned().collect());
 
         // For each (target_path_key, source_name) collect: how many
         // consumers imported it, and how many of those consumers used it.

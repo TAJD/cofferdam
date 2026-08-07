@@ -113,8 +113,12 @@ impl Check for ImportFanOutOutlier {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
-        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
+        let imports: Vec<ImportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<ExportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
         let all_files: HashSet<PathBuf> = ctx.corpus.with_slot(&ALL_FILES, |slot| slot.clone());
         compute_outliers(&imports, &exports, &all_files)
     }

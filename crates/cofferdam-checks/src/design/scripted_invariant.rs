@@ -82,8 +82,12 @@ impl Check for ScriptedInvariant {
             return Vec::new();
         }
 
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
-        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
+        let imports: Vec<ImportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<ExportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
         let layers: Option<LayersConfig> = ctx.corpus.with_slot(&GRAPH_LAYERS, |slot| slot.clone());
 
         // Universe: files this check saw plus any file mentioned as an

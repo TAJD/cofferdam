@@ -110,8 +110,12 @@ impl Check for Knowledge {
             return Vec::new();
         }
 
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |s| s.clone());
-        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |s| s.clone());
+        let imports: Vec<ImportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_IMPORTS, |s| s.records().cloned().collect());
+        let exports: Vec<ExportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_EXPORTS, |s| s.records().cloned().collect());
 
         let mut imports_by_file: HashMap<PathBuf, Vec<ImportRecord>> = HashMap::new();
         for imp in imports {

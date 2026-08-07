@@ -47,7 +47,9 @@ impl Check for LayerViolation {
         if cfg.layers.is_empty() {
             return Vec::new();
         }
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
+        let imports: Vec<ImportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
         compute_layer_violations(&cfg, &imports)
     }
 }

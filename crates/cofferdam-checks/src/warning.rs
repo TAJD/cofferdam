@@ -628,8 +628,12 @@ impl Check for UnusedImport {
             IMPORTS as G_IMPORTS, INVARIANTS as G_INVARIANTS,
         };
 
-        let imports: Vec<GImportRecord> = ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.clone());
-        let exports: Vec<GExportRecord> = ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.clone());
+        let imports: Vec<GImportRecord> = ctx
+            .corpus
+            .with_slot(&G_IMPORTS, |slot| slot.records().cloned().collect());
+        let exports: Vec<GExportRecord> = ctx
+            .corpus
+            .with_slot(&G_EXPORTS, |slot| slot.records().cloned().collect());
         // [public_api] from cofferdam.invariants.toml. Re-exports from
         // files matched by `[public_api].exports` ARE the published
         // surface by construction (downstream consumers live in the

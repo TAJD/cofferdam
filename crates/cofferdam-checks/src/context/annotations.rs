@@ -139,7 +139,9 @@ impl Check for Annotations {
     ) -> Vec<ContextItem> {
         let records: Vec<AnnotationRecord> =
             ctx.corpus.with_slot(&ANNOTATIONS, |slot| slot.clone());
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
+        let imports: Vec<ImportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_IMPORTS, |slot| slot.records().cloned().collect());
         compute_annotation_items(&records, &imports, changeset)
     }
 }

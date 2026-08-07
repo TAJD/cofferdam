@@ -112,7 +112,9 @@ impl Check for OrphanExport {
         // per-export reporting payload (span, file, name) — the graph
         // doesn't yet carry export sites. DeadExport / ImportCycle /
         // LayerViolation will migrate behind this check.
-        let exports: Vec<ExportRecord> = ctx.corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.clone());
+        let exports: Vec<ExportRecord> = ctx
+            .corpus
+            .with_slot(&GRAPH_EXPORTS, |slot| slot.records().cloned().collect());
         // [public_api] from cofferdam.invariants.toml. None when no
         // spec was loaded — the per-export skip below becomes a no-op
         // and existing exemption logic (test_patterns,

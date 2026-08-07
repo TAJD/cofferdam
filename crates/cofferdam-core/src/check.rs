@@ -375,6 +375,31 @@ pub trait Check: Send + Sync {
     fn pass2(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
         Vec::new()
     }
+
+    /// Whether this check's `pass2` output for a given file depends
+    /// *only* on corpus evidence that file's own `run()` wrote in the
+    /// same call (CD-40 lever 4). `Engine::analyze_incremental` caches
+    /// pass-2 output per file and, when every registered consistency
+    /// check answers `true` here, skips recomputing it for files that
+    /// didn't change on that call — reusing the prior call's cached
+    /// issues instead.
+    ///
+    /// Defaults to `false`: safe for every check, since a `false`
+    /// answer only costs a skipped optimization, never a correctness
+    /// bug. Override to `true` ONLY if `pass2` reads NOTHING from the
+    /// corpus except the slot entry keyed by this file's own path,
+    /// written by this file's own `run()` in the same call — e.g. a
+    /// per-file "dominant style in this file" verdict. That excludes
+    /// reading another file's `run()` output, an engine-published
+    /// corpus slot like `ALL_PRE_FILTER_FINDINGS` (populated during
+    /// finalize, so its contents vary call to call), or any other
+    /// call-varying aggregate. A check whose `pass2` reads any of
+    /// those MUST leave this `false`, or an edit elsewhere in the
+    /// project would silently fail to update its unchanged files'
+    /// findings.
+    fn pass2_is_file_local(&self) -> bool {
+        false
+    }
     fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
         Vec::new()
     }

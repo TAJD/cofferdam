@@ -156,6 +156,12 @@ pub struct AnalysisState {
     /// plain text map so `AnalysisState::sources()`'s public shape is
     /// unaffected.
     source_files: HashMap<PathBuf, SourceFile>,
+    /// Cached pass-2 (consistency-check) issues per currently-known
+    /// file (CD-40 lever 4). Only populated/consulted when every
+    /// registered consistency check is `pass2_is_file_local` — see
+    /// `analyze_incremental`, which skips recomputing pass 2 for
+    /// unchanged files in that case and reuses this cache instead.
+    pass2_issues: HashMap<PathBuf, Vec<Issue>>,
     /// Whether `register_removers`/`publish_static_slots` have already
     /// run against this state's corpus (CD-40 lever 2). Both are
     /// idempotent overwrites of engine-derived (not per-call) data, so
@@ -1539,6 +1545,7 @@ impl Engine {
             state.sources.remove(path);
             state.source_files.remove(path);
             state.pass1_issues.remove(path);
+            state.pass2_issues.remove(path);
             state.suppressions.remove(path);
         }
 
@@ -1569,17 +1576,26 @@ impl Engine {
 
         let mut issues: Vec<Issue> = state.pass1_issues.values().flatten().cloned().collect();
 
-        // Pass 2: consistency checks re-run over every currently-known
-        // file, not just `changed` — a consistency check's pass-2
-        // verdict for an untouched file can depend on pass-1 evidence
-        // from a file that DID change (e.g. a project-wide dominant
-        // style). Parses go through `state.parse_cache`, so unchanged
-        // files are a content-hash cache hit rather than a re-parse.
-        // Each file's `SourceFile` comes from `state.source_files`
-        // (CD-40 lever 1) instead of being rebuilt here — rebuilding
-        // meant a full text clone for every currently-known file on
-        // every incremental call, dominating the per-edit floor on
-        // large corpora.
+        // Pass 2: consistency checks normally re-run over every
+        // currently-known file, not just `changed` — a consistency
+        // check's pass-2 verdict for an untouched file can in general
+        // depend on pass-1 evidence from a file that DID change (e.g.
+        // a hypothetical project-wide dominant style). Parses go
+        // through `state.parse_cache`, so unchanged files are a
+        // content-hash cache hit rather than a re-parse. Each file's
+        // `SourceFile` comes from `state.source_files` (CD-40 lever 1)
+        // instead of being rebuilt here — rebuilding meant a full text
+        // clone for every currently-known file on every incremental
+        // call, dominating the per-edit floor on large corpora.
+        //
+        // CD-40 lever 4: when every registered consistency check is
+        // `pass2_is_file_local` (its verdict provably depends only on
+        // that file's own pass-1 evidence), an unchanged file's pass-2
+        // output cannot have shifted since the last call — skip the
+        // parse-cache lookup and `pass2` dispatch entirely and reuse
+        // `state.pass2_issues` instead. A single check that reads
+        // cross-file evidence in pass2 falls back to recomputing every
+        // file on every call, same as before this lever.
         let consistency_checks: Vec<(usize, &dyn Check)> = self
             .checks
             .iter()
@@ -1588,9 +1604,31 @@ impl Engine {
             .map(|(i, c)| (i, c.as_ref()))
             .collect();
         if !consistency_checks.is_empty() {
-            for file in state.source_files.values() {
+            let cacheable = consistency_checks
+                .iter()
+                .all(|(_, c)| c.pass2_is_file_local());
+            // A linear scan, not a `HashSet`: `changed` is almost always
+            // a single file (the common single-edit call this lever
+            // targets), where hashing costs more than it saves. Only
+            // built/consulted at all when `cacheable`.
+            let is_changed = |path: &Path| changed.iter().any(|(p, _)| p.as_path() == path);
+
+            for (path, file) in &state.source_files {
                 if file.language != Language::TypeScript {
                     continue;
+                }
+                // A cache miss here means this path was never populated —
+                // only reachable by reusing `state` against a different
+                // `Engine` (see `AnalysisState`'s doc comment), a usage
+                // no current caller does. Falling through to recompute
+                // rather than treating a miss as "zero issues" keeps
+                // that unsupported case merely stale instead of silently
+                // dropping findings.
+                if cacheable && !is_changed(path) {
+                    if let Some(cached) = state.pass2_issues.get(path) {
+                        issues.extend(cached.iter().cloned());
+                        continue;
+                    }
                 }
                 let file_issues = state.parse_cache.with_parsed(file, |parsed_return| {
                     if parse_fatal(parsed_return) {
@@ -1602,6 +1640,9 @@ impl Engine {
                     };
                     self.pass2_ts_file(file, &parsed, &consistency_checks, &state.corpus, None)
                 });
+                if cacheable {
+                    state.pass2_issues.insert(path.clone(), file_issues.clone());
+                }
                 issues.extend(file_issues);
             }
         }

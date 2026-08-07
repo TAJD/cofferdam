@@ -396,6 +396,14 @@ impl<'a> DupCollector<'a> {
         if stmts.len() < self.min_statements {
             return;
         }
+        // Per-statement hash-op streams (CD-173), memoized lazily: a
+        // statement is AST-walked at most once per `scan()` call no
+        // matter how many overlapping windows it participates in
+        // (previously it was walked once per window, i.e. up to
+        // `min_statements` times). Lazy rather than eager so scopes
+        // where every window gets filtered out by `min_chars` below
+        // don't pay for op collection they'll never use.
+        let mut stmt_ops: Vec<Option<Vec<HashOp<'a>>>> = (0..stmts.len()).map(|_| None).collect();
         for i in 0..=stmts.len() - self.min_statements {
             let first = &stmts[i];
             let last = &stmts[i + self.min_statements - 1];
@@ -409,8 +417,17 @@ impl<'a> DupCollector<'a> {
             if (end - start) < self.min_chars {
                 continue;
             }
-            let window = &stmts[i..i + self.min_statements];
-            let hash = hash_ast_window(window);
+            for j in i..i + self.min_statements {
+                if stmt_ops[j].is_none() {
+                    stmt_ops[j] = Some(collect_stmt_ops(&stmts[j]));
+                }
+            }
+            let window = &stmt_ops[i..i + self.min_statements];
+            let hash = hash_ops(
+                window
+                    .iter()
+                    .flat_map(|ops| ops.as_ref().expect("just populated above").iter()),
+            );
             let span = self.line_index.span_from_bytes(start as u32, end as u32);
             self.collected.push(Fingerprint {
                 hash,
@@ -616,52 +633,116 @@ const HASH_SEPARATOR: u8 = 0x01;
 /// | `F`      | `BooleanLiteral` with value `false`                 |
 /// | `Nul`    | `NullLiteral`                                       |
 /// | `Tmpl`   | `TemplateLiteral`                                   |
-pub struct AstHashWalker {
-    hasher: std::collections::hash_map::DefaultHasher,
-    locals: HashMap<String, u32>,
-    next_local: u32,
+/// One structural emission from walking a statement's AST, deferred
+/// rather than fed straight into a hasher (CD-173). Every variant
+/// borrows straight from the oxc arena (`'a`, the parsed file's
+/// lifetime) or is `Copy` data — zero heap allocation per op, since an
+/// early version of this that owned (`Box<str>`/`Vec<u8>`) each op
+/// turned out to allocate MORE than the original per-window AST walk
+/// it replaced (measured: a real regression on `bestefforttools`, not
+/// an improvement) once every identifier occurrence — not just the
+/// first per scope — got its own heap allocation.
+/// `Ident` carries an identifier occurrence whose local index can only
+/// be resolved once the full window it belongs to is known (see
+/// `hash_ops`) — the same name may need a different index depending on
+/// what window-relative position it's first seen at.
+#[derive(Clone, Copy)]
+enum HashOp<'a> {
+    /// A plain structural tag. Every call site passes a literal byte
+    /// string or an oxc `.as_str()` result — both confirmed `&'static
+    /// str` in oxc_syntax/oxc_ast (operator/kind enums render via a
+    /// `match` over literals, never borrowing from `self`).
+    Bytes(&'static [u8]),
+    Ident {
+        prefix: &'static [u8],
+        name: &'a str,
+    },
+    /// `StringLiteral` value, borrowed from the arena.
+    Str(&'a str),
+    /// `NumericLiteral` value.
+    Num(f64),
 }
 
-impl AstHashWalker {
+/// Combine a window's worth of precomputed `HashOp`s into the final
+/// structural hash, assigning each distinct identifier name the next
+/// available index in first-occurrence order *within this window* —
+/// this window-relative (not per-statement, not per-file) numbering is
+/// exactly what `AstHashWalker`'s old single-pass `locals`/`next_local`
+/// fields did when shared across one window's worth of
+/// `visit_statement` calls; splitting collection from combination
+/// preserves it because op emission order for a given statement never
+/// depends on sibling statements' content (see `visit_*` below — every
+/// branch is on the node itself, never on accumulated hasher/locals
+/// state), so concatenating precomputed per-statement op lists in
+/// statement order reproduces the original single-pass sequence
+/// exactly.
+fn hash_ops<'a, 'i>(ops: impl Iterator<Item = &'i HashOp<'a>>) -> u64
+where
+    'a: 'i,
+{
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut locals: HashMap<&str, u32> = HashMap::new();
+    let mut next_local: u32 = 0;
+    for op in ops {
+        match *op {
+            HashOp::Bytes(bytes) => {
+                hasher.write(bytes);
+                hasher.write_u8(HASH_SEPARATOR);
+            }
+            HashOp::Ident { prefix, name } => {
+                let idx = match locals.get(name) {
+                    Some(&i) => i,
+                    None => {
+                        let i = next_local;
+                        next_local += 1;
+                        locals.insert(name, i);
+                        i
+                    }
+                };
+                hasher.write(prefix);
+                hasher.write_u32(idx);
+                hasher.write_u8(HASH_SEPARATOR);
+            }
+            HashOp::Str(value) => {
+                hasher.write(b"Str:");
+                hasher.write(value.as_bytes());
+                hasher.write_u8(HASH_SEPARATOR);
+            }
+            HashOp::Num(value) => {
+                hasher.write(b"Num:");
+                hasher.write(&value.to_le_bytes());
+                hasher.write_u8(HASH_SEPARATOR);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+pub struct AstHashWalker<'a> {
+    ops: Vec<HashOp<'a>>,
+}
+
+impl<'a> AstHashWalker<'a> {
     pub fn new() -> Self {
-        Self {
-            hasher: std::collections::hash_map::DefaultHasher::new(),
-            locals: HashMap::new(),
-            next_local: 0,
-        }
+        Self { ops: Vec::new() }
     }
 
-    fn tag(&mut self, bytes: &[u8]) {
-        use std::hash::Hasher;
-        self.hasher.write(bytes);
-        self.hasher.write_u8(HASH_SEPARATOR);
+    fn tag(&mut self, bytes: &'static [u8]) {
+        self.ops.push(HashOp::Bytes(bytes));
     }
 
-    fn ident_index(&mut self, name: &str) -> u32 {
-        if let Some(&i) = self.locals.get(name) {
-            return i;
-        }
-        let i = self.next_local;
-        self.next_local += 1;
-        self.locals.insert(name.to_string(), i);
-        i
+    fn ident_tag(&mut self, prefix: &'static [u8], name: &'a str) {
+        self.ops.push(HashOp::Ident { prefix, name });
     }
 
-    fn ident_tag(&mut self, prefix: &[u8], name: &str) {
-        use std::hash::Hasher;
-        let i = self.ident_index(name);
-        self.hasher.write(prefix);
-        self.hasher.write_u32(i);
-        self.hasher.write_u8(HASH_SEPARATOR);
-    }
-
+    #[allow(dead_code)] // exercised by refactor::tests' AST-hash canonicalisation sanity checks
     pub fn finish(self) -> u64 {
-        use std::hash::Hasher;
-        self.hasher.finish()
+        hash_ops(self.ops.iter())
     }
 }
 
-impl<'a> Visit<'a> for AstHashWalker {
+impl<'a> Visit<'a> for AstHashWalker<'a> {
     fn visit_block_statement(&mut self, node: &BlockStatement<'a>) {
         self.tag(b"Blk");
         oxc_ast_visit::walk::walk_block_statement(self, node);
@@ -823,17 +904,11 @@ impl<'a> Visit<'a> for AstHashWalker {
     }
 
     fn visit_string_literal(&mut self, lit: &StringLiteral<'a>) {
-        use std::hash::Hasher;
-        self.hasher.write(b"Str:");
-        self.hasher.write(lit.value.as_bytes());
-        self.hasher.write_u8(HASH_SEPARATOR);
+        self.ops.push(HashOp::Str(lit.value.as_str()));
     }
 
     fn visit_numeric_literal(&mut self, lit: &NumericLiteral<'a>) {
-        use std::hash::Hasher;
-        self.hasher.write(b"Num:");
-        self.hasher.write(&lit.value.to_le_bytes());
-        self.hasher.write_u8(HASH_SEPARATOR);
+        self.ops.push(HashOp::Num(lit.value));
     }
 
     fn visit_boolean_literal(&mut self, lit: &BooleanLiteral) {
@@ -850,15 +925,15 @@ impl<'a> Visit<'a> for AstHashWalker {
     }
 }
 
-/// Hash a window of consecutive statements via AST canonicalisation.
-/// Replaces the source-text + regex approach for AST-mode duplicate
-/// detection (cd-mti). Token mode still uses text canonicalisation.
-fn hash_ast_window<'a>(stmts: &[Statement<'a>]) -> u64 {
+/// Walk one statement's AST into its raw (unresolved-identifier) op
+/// stream. Called at most once per statement per `scan()` (CD-173) —
+/// callers combine a window's worth of these via `hash_ops` rather
+/// than re-walking the AST for every overlapping window a statement
+/// participates in. Token mode still uses text canonicalisation.
+fn collect_stmt_ops<'a>(stmt: &Statement<'a>) -> Vec<HashOp<'a>> {
     let mut walker = AstHashWalker::new();
-    for stmt in stmts {
-        walker.visit_statement(stmt);
-    }
-    walker.finish()
+    walker.visit_statement(stmt);
+    walker.ops
 }
 
 // ─── Token mode (cd-jdq) ───────────────────────────────────────────────────

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `Engine::analyze_incremental` re-analyzes single-file edits faster (CD-40, lever 4 of the CD-28/CD-32 tail): pass-2 consistency-check output is now cached per file in `AnalysisState`, and skipped for unchanged files, when every registered consistency check declares its verdict depends only on that file's own pass-1 evidence (`Check::pass2_is_file_local`, opted into by `Consistency.QuoteStyle`). A check whose pass2 aggregates across files keeps the always-recompute path. Measured ~7% faster on a real-world corpus (243 files); CD-40 stays open for lever 5 (incremental cross-file finalize emitters), the remaining, highest-effort work needed to reach the ticket's >=10x target.
+- `Refactor.DuplicateBlock` (CD-173) no longer re-walks a statement's AST once per overlapping sliding window it participates in (up to `min_statements`, i.e. 6x redundant). Each statement's structural hash-op stream is now computed at most once per scope and reused across every window it appears in; window-relative identifier renumbering (the mechanism that distinguishes real variable reuse from coincidentally-similar code) is unchanged, so findings are byte-identical. Measured ~11% faster on a real-world corpus (325 files, `bestefforttools`); the change is deliberately allocation-free (every hash op borrows from the AST arena rather than owning data) after an earlier owned-data version of this turned out to regress, not improve, performance.
 
 ## [0.4.1] - 2026-08-06
 

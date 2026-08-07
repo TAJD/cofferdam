@@ -45,12 +45,20 @@ use std::sync::{Arc, Mutex, RwLock};
 #[derive(Debug, Clone)]
 pub struct PerFile<T> {
     by_file: HashMap<PathBuf, Vec<T>>,
+    /// Lazily-built flattened view, invalidated on every write. Finalize
+    /// runs ~13 checks that each want the full flat `Vec<T>` from the same
+    /// unmutated corpus state; without this, every one of them re-walks
+    /// `by_file.values().flatten()` and re-clones every record. Caching
+    /// means only the first caller in an epoch pays that cost — the rest
+    /// clone the cached `Vec<T>`, matching the pre-PerFile baseline cost.
+    flat_cache: Option<Vec<T>>,
 }
 
 impl<T> Default for PerFile<T> {
     fn default() -> Self {
         Self {
             by_file: HashMap::new(),
+            flat_cache: None,
         }
     }
 }
@@ -62,6 +70,7 @@ impl<T> PerFile<T> {
     /// records (e.g. an import that got deleted) must stop appearing in
     /// [`Self::records`].
     pub fn replace_file(&mut self, path: PathBuf, records: Vec<T>) {
+        self.flat_cache = None;
         if records.is_empty() {
             self.by_file.remove(&path);
         } else {
@@ -73,6 +82,7 @@ impl<T> PerFile<T> {
     /// contributions — matches [`CorpusIndex::remove_file`]'s contract for
     /// the removers it drives.
     pub fn remove_file(&mut self, path: &Path) {
+        self.flat_cache = None;
         self.by_file.remove(path);
     }
 
@@ -99,18 +109,20 @@ impl<T> PerFile<T> {
         self.by_file.is_empty()
     }
 
-    /// Flatten every file's bucket into one `Vec`, pre-sized via
-    /// [`Self::len`] so the from-scratch analyze path (which needs the
-    /// full flat view every call) doesn't pay `Vec`'s doubling-growth
-    /// cost on top of a `HashMap::values().flatten()` iterator whose
-    /// `size_hint` can't see through the nested structure.
-    pub fn to_vec(&self) -> Vec<T>
+    /// Flatten every file's bucket into one `Vec`. The flattened view is
+    /// cached until the next write (see `flat_cache`), so only the first
+    /// call in a finalize pass pays the `HashMap::values().flatten()` +
+    /// clone cost; subsequent calls just clone the cached `Vec<T>`.
+    pub fn to_vec(&mut self) -> Vec<T>
     where
         T: Clone,
     {
-        let mut out = Vec::with_capacity(self.len());
-        out.extend(self.records().cloned());
-        out
+        if self.flat_cache.is_none() {
+            let mut built = Vec::with_capacity(self.len());
+            built.extend(self.by_file.values().flatten().cloned());
+            self.flat_cache = Some(built);
+        }
+        self.flat_cache.as_ref().expect("just populated").clone()
     }
 
     /// Test/fixture convenience: bucket `items` by a caller-supplied key
@@ -119,6 +131,7 @@ impl<T> PerFile<T> {
     /// owns the whole-file semantics; this is for tests that seed the
     /// corpus with a flat `Vec<T>` fixture directly.
     pub fn extend_by(&mut self, items: impl IntoIterator<Item = T>, key: impl Fn(&T) -> &Path) {
+        self.flat_cache = None;
         for item in items {
             let path = key(&item).to_path_buf();
             self.by_file.entry(path).or_default().push(item);

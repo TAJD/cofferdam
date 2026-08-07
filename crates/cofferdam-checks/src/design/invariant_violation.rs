@@ -49,7 +49,8 @@ impl Check for InvariantViolation {
         if runtime.invariants.is_empty() {
             return Vec::new();
         }
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.to_vec());
+        let imports: std::sync::Arc<Vec<ImportRecord>> =
+            ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.to_vec());
         let layers: Option<LayersConfig> = ctx.corpus.with_slot(&GRAPH_LAYERS, |slot| slot.clone());
         let layer_matchers = layers
             .as_ref()
@@ -64,7 +65,7 @@ impl Check for InvariantViolation {
             if spec.forbid_imports.is_empty() {
                 continue;
             }
-            for imp in &imports {
+            for imp in imports.iter() {
                 if !file_in_layers(
                     &layer_matchers,
                     &project_root,
@@ -100,7 +101,7 @@ impl Check for InvariantViolation {
             }
             // Group imports by from_file once.
             let mut by_file: HashMap<PathBuf, Vec<&ImportRecord>> = HashMap::new();
-            for imp in &imports {
+            for imp in imports.iter() {
                 by_file.entry(imp.from_file.clone()).or_default().push(imp);
             }
             // Collect the set of files that need to satisfy the rule —

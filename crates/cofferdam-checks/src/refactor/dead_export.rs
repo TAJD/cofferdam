@@ -52,8 +52,10 @@ impl Check for DeadExport {
         };
         use std::collections::HashSet;
 
-        let imports: Vec<GImportRecord> = ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.to_vec());
-        let exports: Vec<GExportRecord> = ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.to_vec());
+        let imports: std::sync::Arc<Vec<GImportRecord>> =
+            ctx.corpus.with_slot(&G_IMPORTS, |slot| slot.to_vec());
+        let exports: std::sync::Arc<Vec<GExportRecord>> =
+            ctx.corpus.with_slot(&G_EXPORTS, |slot| slot.to_vec());
 
         // For each (target_path_key, source_name) collect: how many
         // consumers imported it, and how many of those consumers used it.
@@ -67,7 +69,7 @@ impl Check for DeadExport {
         // re-exporter's barrel is the consumer.
         let mut reexport_sources: HashSet<String> = HashSet::new();
 
-        for imp in &imports {
+        for imp in imports.iter() {
             let Some(resolved) = &imp.resolved else {
                 continue;
             };
@@ -98,14 +100,14 @@ impl Check for DeadExport {
                 }
             }
         }
-        for exp in &exports {
+        for exp in exports.iter() {
             if let Some(src) = &exp.resolved_source {
                 reexport_sources.insert(path_key(src));
             }
         }
 
         let mut issues = Vec::new();
-        for exp in &exports {
+        for exp in exports.iter() {
             // Re-export forwarders aren't endpoints.
             if matches!(exp.kind, GExportKind::ReExport) {
                 continue;

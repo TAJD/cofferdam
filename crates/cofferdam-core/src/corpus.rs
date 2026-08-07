@@ -48,10 +48,12 @@ pub struct PerFile<T> {
     /// Lazily-built flattened view, invalidated on every write. Finalize
     /// runs ~13 checks that each want the full flat `Vec<T>` from the same
     /// unmutated corpus state; without this, every one of them re-walks
-    /// `by_file.values().flatten()` and re-clones every record. Caching
-    /// means only the first caller in an epoch pays that cost — the rest
-    /// clone the cached `Vec<T>`, matching the pre-PerFile baseline cost.
-    flat_cache: Option<Vec<T>>,
+    /// `by_file.values().flatten()` and re-clones every record. `Arc`
+    /// makes a cache hit a refcount bump instead of a deep clone of every
+    /// record — [`Self::to_vec`] hands callers the `Arc` directly, so only
+    /// a caller that needs an owned, independently-mutable `Vec<T>` pays a
+    /// deep clone (via `Arc::make_mut`/`(*arc).clone()`), same as before.
+    flat_cache: Option<Arc<Vec<T>>>,
 }
 
 impl<T> Default for PerFile<T> {
@@ -109,20 +111,20 @@ impl<T> PerFile<T> {
         self.by_file.is_empty()
     }
 
-    /// Flatten every file's bucket into one `Vec`. The flattened view is
-    /// cached until the next write (see `flat_cache`), so only the first
-    /// call in a finalize pass pays the `HashMap::values().flatten()` +
-    /// clone cost; subsequent calls just clone the cached `Vec<T>`.
-    pub fn to_vec(&mut self) -> Vec<T>
+    /// Flatten every file's bucket into one shared `Vec`. The flattened
+    /// view is cached until the next write (see `flat_cache`), so only the
+    /// first call in a finalize pass pays the `HashMap::values().flatten()`
+    /// + clone cost; subsequent calls just bump the `Arc`'s refcount.
+    pub fn to_vec(&mut self) -> Arc<Vec<T>>
     where
         T: Clone,
     {
         if self.flat_cache.is_none() {
             let mut built = Vec::with_capacity(self.len());
             built.extend(self.by_file.values().flatten().cloned());
-            self.flat_cache = Some(built);
+            self.flat_cache = Some(Arc::new(built));
         }
-        self.flat_cache.as_ref().expect("just populated").clone()
+        Arc::clone(self.flat_cache.as_ref().expect("just populated"))
     }
 
     /// Test/fixture convenience: bucket `items` by a caller-supplied key

@@ -414,4 +414,4 @@ Tracked by the engine; `Consistency.UnusedSuppression` flags directives that don
 
 ---
 
-*Last revised 2026-05-06. The architecture-extension epic that frames the open work is `cd-9hp`; its top-lever child bead is `cd-9hp.1` (embedded predicate DSL inside `cofferdam.invariants.toml`).*
+*The predicate DSL this page treats as open work has since shipped — see [the grammar](/dsl-grammar) and [`[invariants.scripted]`](/invariants#invariants-scripted). The `cd-*` identifiers throughout are from a retired tracker and are kept as a record of how the reasoning was sequenced, not as live references. Current work is tracked in Projektor.*

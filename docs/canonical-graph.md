@@ -28,10 +28,10 @@ ctx.corpus.with_slot(&CANONICAL_GRAPH, |graph| {
 ```
 
 Per-file `Check::run` cannot read the graph (it's populated AFTER pass 1
-finishes). All graph-aware logic lives in `Check::finalize`. Today
-`Design.OrphanExport` is the only built-in reading the slot;
-`Design.LayerViolation`, `Design.ImportCycle`, and `Design.DeadExport`
-migrate in follow-up beads.
+finishes). All graph-aware logic lives in `Check::finalize`. Two built-ins
+read the slot today: `Design.OrphanExport` and `Context.BlastRadius`.
+`Design.LayerViolation`, `Design.ImportCycle` and `Refactor.DeadExport`
+still read the flat `IMPORTS`/`EXPORTS` slots and have not migrated.
 
 ## Closed core + namespaced extensions
 

@@ -440,4 +440,4 @@ Before wiring up a new CI pipeline, run [`cofferdam doctor --robot`](doctor.md) 
 
 ## What's not yet here
 
-- **Self-hosted runner notes** — cofferdam's npm postinstall downloads a Rust binary; air-gapped runners need either a local mirror or a `cargo install` from source. Detailed recipe is a follow-up bead.
+- **Self-hosted runner notes** — cofferdam's npm postinstall downloads a Rust binary, which an air-gapped runner cannot do. The mechanism is documented under [air-gapped installs](/install#air-gapped-installs) — `COFFERDAM_SKIP_DOWNLOAD=1` plus a pre-staged binary at `COFFERDAM_BINARY_PATH`, or `cargo install` from source. What is missing here is a worked CI recipe wrapping that, not the capability.

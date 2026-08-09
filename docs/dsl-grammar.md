@@ -1,7 +1,7 @@
 # `[invariants.scripted]` predicate DSL — v1 grammar
 
 Authoritative grammar for the embedded scripting layer inside
-`cofferdam.invariants.toml` (cd-9hp.1). The parser in
+`cofferdam.invariants.toml`. The parser in
 `cofferdam_core::dsl` implements this spec exactly; deviations are
 bugs.
 
@@ -95,15 +95,12 @@ ident_cont   = ASCII letter | ASCII digit | "_" | "." ;
 | `core.import(<spec>)` | all | An import edge by module specifier |
 | `ts.declaration(<name>)` | TS-specific | A TypeScript declaration by name |
 
-Namespaces are **reserved** for forward-compat with non-TS adapters
-(cd-9hp.10). v1 implements only `core.*` and `ts.*`; an unregistered
+Namespaces are **reserved** for forward-compatibility with non-TypeScript
+adapters. v1 implements only `core.*` and `ts.*`; an unregistered
 namespace in a subject is a load-time error:
 
 ```
-error: subject 'sql.column' uses unregistered namespace 'sql'
-       (rule: 'controller-test-pair', cofferdam.invariants.toml:14)
-       known namespaces: core, ts
-       reopen cd-9hp.10 to ship a SQL adapter
+subject 'sql.column' uses unregistered namespace 'sql'; known namespaces: core, ts
 ```
 
 ## Operators
@@ -170,7 +167,7 @@ refuses to start until every rule parses.
 
 ## What the v1 grammar does NOT include
 
-Reserved for v2 (graph-substrate promotion via cd-9hp.9) or later:
+Reserved for v2 (graph-substrate promotion) or later:
 
 - **Quantifiers** (`exists`, `forall`) over corpus collections.
   Today's checks pattern-match against individual files; quantifiers
@@ -181,10 +178,9 @@ Reserved for v2 (graph-substrate promotion via cd-9hp.9) or later:
 - **User-defined functions** beyond the three built-ins.
 - **Comments inside the predicate string** — keep predicates one-line.
 
-If a real use case for any of these appears before cd-9hp.9 ships,
-raise it as a separate v1.1 / v2 bead with a concrete example. The
-grammar is designed to admit each addition through a MINOR bump
-without breaking v1 rules.
+If you have a real use case for any of these, file it in Projektor with a
+concrete example. The grammar is designed to admit each addition through a
+MINOR bump without breaking v1 rules.
 
 ## Two complete examples
 

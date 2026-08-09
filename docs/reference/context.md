@@ -65,7 +65,7 @@ cofferdam context --robot --pretty
 | `items[].pinned` | per item | `true` → this item survived budget truncation deliberately (a real finding, or a `priority: high` knowledge note); never treat a pinned item as low-signal filler. |
 | `items[].explain` | per item | Always populated — the concrete reason this item fired (a selector, an import edge, a distance). Read this before the body when deciding whether an item is relevant. |
 | `omitted` | top-level | Non-zero → real content was cut for budget; consider rerunning with `--budget` raised before concluding "nothing else matters." |
-| `spent > budget` | top-level | Pinned items pushed the digest over budget — expected behavior, not a bug. |
+| `spent > budget` | top-level | Pinned items pushed the digest over budget — expected behaviour, not a bug. |
 
 ## Flags
 
@@ -154,7 +154,7 @@ Per `ContextItem`:
 | `check_id` | Fires on | What it tells you |
 |---|---|---|
 | `Context.Findings` | Findings on lines your `ChangeSet` touches | A summary of what `cofferdam check` would already flag on the changed lines — so you don't have to run `check` separately just to see if your edit is already non-compliant. |
-| `Context.BlastRadius` | Files that import a file in your `ChangeSet` | Who else in the project depends on what you're changing — the set of files a behavior change here could silently break. |
+| `Context.BlastRadius` | Files that import a file in your `ChangeSet` | Who else in the project depends on what you're changing — the set of files a behaviour change here could silently break. |
 | `Context.Precedent` | Sibling files in the same directory as a changed file | Conventions your change should probably follow (a return-type pattern, a naming scheme) inferred from files next to it, not from a style guide. |
 | `Context.Knowledge` | `.cofferdam/knowledge/*.md` notes whose selectors match a changed file | Curated, human-written context — the "why," not derivable from the code alone. See [authoring knowledge notes](../knowledge-notes.md). |
 | `Context.Annotations` | `// @cofferdam-context: ...` comments in or near a changed file's enclosing function/class | Inline notes left directly in the code, scoped to the enclosing declaration (or the whole file, for a top-level annotation) — and surfaced too for files that import an annotated scope. |

@@ -100,7 +100,7 @@ enum Cmd {
     /// Run all checks against files or directories. With no arguments,
     /// walks the current directory.
     Check {
-        /// Files or directories to analyze. Defaults to `.`.
+        /// Files or directories to analyse. Defaults to `.`.
         paths: Vec<PathBuf>,
         /// Walk hidden files/directories (default: skip).
         #[arg(long)]
@@ -135,7 +135,7 @@ enum Cmd {
         #[arg(long)]
         fail_on_new: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -255,7 +255,7 @@ enum Cmd {
         #[arg(long)]
         quiet: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -276,7 +276,7 @@ enum Cmd {
     /// you want the rationale, default severity, configurable options, and any
     /// relevant flags without leaving the terminal. Add `--full` to also render
     /// the companion markdown body (motivation, examples, config snippets)
-    /// sourced from the check catalog.
+    /// sourced from the check catalogue.
     ///
     /// Plugin checks: `explain` discovers plugin-declared checks from
     /// `cofferdam.toml`'s `plugins = [...]` and renders their `explanation`
@@ -346,7 +346,7 @@ enum Cmd {
         #[arg(long)]
         pretty: bool,
     },
-    /// Re-analyze on file change (cd-9hp.4 cp1b). Discovers files
+    /// Re-analyse on file change (cd-9hp.4 cp1b). Discovers files
     /// once, registers a recursive filesystem watcher, and re-runs
     /// the engine on each detected change. A shared in-memory parse
     /// cache survives across iterations, so unchanged files skip
@@ -362,7 +362,7 @@ enum Cmd {
         #[arg(long)]
         no_ignore: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -445,7 +445,7 @@ enum Cmd {
         #[arg(long)]
         pretty: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -549,13 +549,13 @@ enum Cmd {
         #[arg(long)]
         lint_context_suppress: bool,
     },
-    /// Regenerate the docs catalog from CheckMeta. Writes per-check
+    /// Regenerate the docs catalogue from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
     /// index, and the CLI reference page (from clap-markdown). Use
     /// `--check` to fail when the committed files are out of date —
     /// same shape as `cargo fmt --check`.
     GenDocs {
-        /// Output directory. The catalog lands at
+        /// Output directory. The catalogue lands at
         /// `<out>/checks.json`, `<out>/checks/<id>.md`,
         /// `<out>/checks/index.md`, `<out>/llms.txt`,
         /// `<out>/reference/cli.md`.
@@ -642,12 +642,12 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum BaselineAction {
-    /// Run the analyzer and write the current set of findings to the
+    /// Run the analyser and write the current set of findings to the
     /// baseline file. Subsequent `cofferdam check` runs ignore these
     /// findings for CI-gating purposes; they still print as
     /// `[baselined]` so the team can chip away at them.
     Write {
-        /// Files or directories to analyze. Defaults to `.`.
+        /// Files or directories to analyse. Defaults to `.`.
         paths: Vec<PathBuf>,
         /// Walk hidden files/directories (default: skip).
         #[arg(long)]
@@ -660,7 +660,7 @@ enum BaselineAction {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -717,7 +717,7 @@ enum BaselineAction {
     /// the same list but exits 1 if any exist and never writes — wire
     /// into CI to keep baseline hygiene from silently drifting.
     Prune {
-        /// Files or directories to analyze. Defaults to `.`.
+        /// Files or directories to analyse. Defaults to `.`.
         paths: Vec<PathBuf>,
         /// Walk hidden files/directories (default: skip).
         #[arg(long)]
@@ -730,7 +730,7 @@ enum BaselineAction {
         #[arg(long, value_name = "PATH")]
         baseline: Option<PathBuf>,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -757,7 +757,7 @@ enum BaselineAction {
     /// findings to lock in the improvement so a regression fails CI even
     /// if it's below the old, looser budget.
     Ratchet {
-        /// Files or directories to analyze. Defaults to `.`.
+        /// Files or directories to analyse. Defaults to `.`.
         paths: Vec<PathBuf>,
         /// Walk hidden files/directories (default: skip).
         #[arg(long)]
@@ -766,7 +766,7 @@ enum BaselineAction {
         #[arg(long)]
         no_ignore: bool,
         /// Path to a `cofferdam.toml` config file. Defaults to walking
-        /// up from the analyzed target path — falling back to the
+        /// up from the analysed target path — falling back to the
         /// current directory — until one is found or a `.git` directory
         /// is reached. Conflicts with `--no-config`.
         #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -3220,7 +3220,7 @@ fn load_baseline_with_warning(path: &Path) -> BaselineLoad {
 
 /// Resolve which `cofferdam.toml` to load (if any) and parse it.
 /// Discovery is anchored on `roots` — the paths the user asked to
-/// analyze — falling back to the process CWD (CD-149). Returns
+/// analyse — falling back to the process CWD (CD-149). Returns
 /// `(config, path)` — both `None` when discovery is skipped or no file
 /// is found. Hard-errors (return `Err(())`) only when the user passed
 /// `--config <path>` to a missing or invalid file. Discovered configs

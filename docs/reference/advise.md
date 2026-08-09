@@ -94,7 +94,7 @@ are:
 | `--format <text\|json>` | Output format. Default `text`; with `--robot` and no explicit `--format`, defaults to `json`. |
 | `--robot` | Switch the default to JSON. Token-economical for AI agents. |
 | `--pretty` | Pretty-print JSON. |
-| `--config <PATH>` | Path to a config file. Defaults to walking up from the analyzed target path, falling back to CWD, until one is found. |
+| `--config <PATH>` | Path to a config file. Defaults to walking up from the analysed target path, falling back to CWD, until one is found. |
 | `--no-config` | Disable config discovery entirely — every check uses its built-in defaults. |
 | `--hidden` | Walk hidden files/directories. |
 | `--no-ignore` | Disable `.gitignore` / `.cofferdamignore` filtering. |
@@ -376,7 +376,7 @@ explicit `[paths]...` arg. Renames are counted as add+delete in v0.
 `cofferdam advise` answers "what does my next edit need to respect?"
 
 For an agent that's about to rewrite a file, the second question is the
-useful one — a rules listing is shorter than a parse-and-analyze run,
+useful one — a rules listing is shorter than a parse-and-analyse run,
 shows constraints that aren't currently violated (so the agent doesn't
 introduce them), and is cheap enough to call on every edit hop.
 

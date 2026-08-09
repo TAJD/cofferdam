@@ -15,7 +15,7 @@ of the canonical import graph), and test files that reach the change.
 ## Why
 
 An edit that compiles cleanly can still break a caller three files
-away. `cofferdam check` never sees that caller — it analyzes each file
+away. `cofferdam check` never sees that caller — it analyses each file
 independently. `Context.BlastRadius` runs the canonical cross-file
 graph's bounded-depth traversal from every changed file and reports
 who is downstream, ranked so the most directly affected files surface

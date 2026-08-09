@@ -80,7 +80,7 @@ Eleven checks ship today, all keyed to Universe's submission rules:
 | `Typst.BundleIncludesPdf` | Root-level PDFs bloating the published bundle |
 | `Typst.ChangelogMissing` | No CHANGELOG.md; not a hard Universe rule, but expected of a package people depend on |
 
-These checks are not in the [check catalog](/checks/), which is generated
+These checks are not in the [check catalogue](/checks/), which is generated
 from the engine's built-in set and does not yet reach the Typst trait
 (CD-303). Until it does, `cofferdam typst --robot` is the authoritative
 list.

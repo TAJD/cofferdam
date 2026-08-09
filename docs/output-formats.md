@@ -2,7 +2,7 @@
 
 `cofferdam check` ships four rendering modes. Pick by `--format=<text|json|compact|sarif>`.
 
-**`--robot` flag:** defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins. `--robot` does nothing else — it does not set `--quiet`, does not suppress ANSI (there is none), and does not change exit-code behavior. Its only effect is the format default. The idiomatic AI-agent invocation is `--robot --format=compact`, which combines the intent signal with the most token-economical output.
+**`--robot` flag:** defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins. `--robot` does nothing else — it does not set `--quiet`, does not suppress ANSI (there is none), and does not change exit-code behaviour. Its only effect is the format default. The idiomatic AI-agent invocation is `--robot --format=compact`, which combines the intent signal with the most token-economical output.
 
 | Format    | Audience                                | Schema                | Byte-economy* |
 |-----------|-----------------------------------------|-----------------------|---------------|
@@ -97,7 +97,7 @@ Every field listed below is **stable** — field names and types are part of the
 |-------|------|----------------|-------------|
 | `id` | `string` | Yes | Dotted check ID, e.g. `Warning.TripleEquals`. Stable — safe to use as a map key or filter. |
 | `category` | `string` | Yes | Lowercase category: `consistency` \| `design` \| `readability` \| `refactor` \| `warning`. |
-| `docs_url` | `string` | Yes | Canonical docs-catalog URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Warning.TripleEquals`. Derived from `id` — no per-check configuration needed. |
+| `docs_url` | `string` | Yes | Canonical docs-catalogue URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Warning.TripleEquals`. Derived from `id` — no per-check configuration needed. |
 | `priority` | `integer` | Yes | Computed sort priority in the range `-20..=20`. Higher value = surfaces first. Not configurable; derived by the engine. |
 | `severity` | `string` | Yes | Configured severity: `info` \| `low` \| `medium` \| `high` \| `critical`. Matches `--fail-on=<level>` threshold values. |
 | `file` | `string` | Yes | Path to the file containing the finding. Forward-slash normalized (even on Windows) so it is safe to use as an editor link or CLI argument on any platform. |

@@ -529,7 +529,7 @@ declaration order. The context exposes:
   `related` for the other implicated files.
 
 **The `file` (and every `related` entry's `file`) must be a path that
-was part of the analyzed set** — i.e. one of the paths your `run`
+was part of the analysed set** — i.e. one of the paths your `run`
 hook saw as `file.path`. The CLI rejects reports for any other path:
 the finding is dropped and replaced by one aggregated
 `Warning.PluginHostFailed` naming your check id and the offending

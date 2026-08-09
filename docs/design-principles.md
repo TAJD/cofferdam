@@ -143,7 +143,7 @@ Why it matters: the engine and the check are decoupled. A new capability is adde
 
 ### 2.5 Stable IDs as identity
 
-Check IDs are dotted (`Category.Name`), stable, and used in: suppression comments (`// cofferdam-disable-next-line Warning.TripleEquals`), baseline files, SARIF rule IDs, config keys (`[checks."Warning.TripleEquals"]`), `cofferdam advise` output, and the docs catalog filename.
+Check IDs are dotted (`Category.Name`), stable, and used in: suppression comments (`// cofferdam-disable-next-line Warning.TripleEquals`), baseline files, SARIF rule IDs, config keys (`[checks."Warning.TripleEquals"]`), `cofferdam advise` output, and the docs catalogue filename.
 
 The rule: **never rename without a deprecation window.** A user's suppression comments are durable, sometimes years old; the system must not break them silently.
 
@@ -299,7 +299,7 @@ External literature on the four traditions §3 and §4 draw from. Linked PDFs go
 
 ### 6.1 Knowledge graphs over code (the substrate idea)
 
-- Yamaguchi, Golde, Arzt, Rieck — *Modeling and Discovering Vulnerabilities with Code Property Graphs* (IEEE S&P 2014). [PDF](https://comsecuris.com/papers/06956589.pdf). Original CPG paper. **Start here if you read one thing.**
+- Yamaguchi, Golde, Arzt, Rieck — *Modelling and Discovering Vulnerabilities with Code Property Graphs* (IEEE S&P 2014). [PDF](https://comsecuris.com/papers/06956589.pdf). Original CPG paper. **Start here if you read one thing.**
 - Joern documentation — [joern.io](https://joern.io). Open-source CPG implementation; the tutorial is a fast practical intro.
 - Meta — *Indexing code at scale with Glean* (engineering blog, December 2024). [engineering.fb.com](https://engineering.fb.com/2024/12/19/developer-tools/glean-open-source-code-indexing/). Production knowledge-graph-over-code at scale; project at [glean.software](https://glean.software/).
 - Kythe — [kythe.io](https://kythe.io). Google's earlier system in this space; the schema-design notes are worth reading even if you never use Kythe itself.

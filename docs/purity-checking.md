@@ -105,7 +105,7 @@ that function's own referenced imports, not the file's.
 One deliberate limit: usage-tracking only applies to the tagged function's
 *own* body. Once the walk crosses into a different file through a
 resolved import, that downstream file's imports are followed as a whole,
-same as the old whole-file behavior — a `@pure` function that imports one
+same as the old whole-file behaviour — a `@pure` function that imports one
 helper from a file which itself imports ten other things, nine of them
 unrelated, still gets charged for whichever one of those ten is
 side-effecting. Extending usage-tracking past the first hop would mean

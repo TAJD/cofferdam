@@ -178,7 +178,7 @@ two entry points: source-adjacent `.html` files under `check`, and a
 build's rendered output under `verify --dist`.
 [`examples-plugins/seo/test/verify-dist.test.mjs`](https://github.com/TAJD/cofferdam/blob/main/examples-plugins/seo/test/verify-dist.test.mjs)
 runs `verify --dist` against the same fixture `cofferdam check` uses and
-asserts both duplicate findings come back labeled `origin: build_output`.
+asserts both duplicate findings come back labelled `origin: build_output`.
 
 ## Running the full example
 

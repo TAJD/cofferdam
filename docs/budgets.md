@@ -36,7 +36,7 @@ This is a second, independent gate from `--fail-on` — a budget overage fails t
 
 ## Ratcheting a budget down
 
-`cofferdam baseline ratchet` re-runs the analyzer, compares the current count for each budgeted key against its `cofferdam.toml` value, and rewrites any key whose current count is *lower* than its budget down to that count. It never raises a budget — a key already at or under its cap is left untouched, so ratchet can't be used to quietly relax a gate.
+`cofferdam baseline ratchet` re-runs the analyser, compares the current count for each budgeted key against its `cofferdam.toml` value, and rewrites any key whose current count is *lower* than its budget down to that count. It never raises a budget — a key already at or under its cap is left untouched, so ratchet can't be used to quietly relax a gate.
 
 ```bash
 cofferdam baseline ratchet          # rewrites cofferdam.toml in place

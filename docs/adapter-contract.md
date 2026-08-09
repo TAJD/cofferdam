@@ -60,7 +60,7 @@ type-level description of intent, not a sandbox.
   `language()` returns `Language::Html`; `file_globs()` returns
   `["*.html", "*.htm"]`; `schema_namespace()` returns `"html"`.
 
-Both impls are additive metadata: they describe existing behavior without
+Both impls are additive metadata: they describe existing behaviour without
 changing it. Neither `cofferdam-engine`'s discovery loop nor its parse/
 dispatch loop routes through these impls yet — file-extension dispatch
 still happens via `Language::from_path` exactly as before.

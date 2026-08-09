@@ -16,7 +16,7 @@ hero:
       link: /cofferdam/checks.json
 ---
 
-A software-architecture analyzer for TypeScript with a Rust core. Layer rules,
+A software-architecture analyser for TypeScript with a Rust core. Layer rules,
 frozen boundaries, import invariants and complexity budgets are declared once in
 `cofferdam.invariants.toml`, enforced in CI, and handed to AI coding agents
 just-in-time.

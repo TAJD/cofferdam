@@ -33,15 +33,16 @@
 //!    [`DslEvalError::UnsupportedNamespaceMember`].  Checkpoint 4 may wire
 //!    some in; see the bead for the planned surface.
 //!
-//! # `TransitivelyImports` v1 behaviour
+//! # `TransitivelyImports`
 //!
-//! `transitively imports` is parsed in v1 but only the direct-edge case is
-//! implemented: it falls through to the same flat-corpus logic as `imports`.
-//! The transitive closure ships with cd-9hp.9.
+//! `transitively imports` walks the whole import graph, which the caller
+//! supplies via [`EvalCtx::imports_by_file`]. A caller that leaves that
+//! field `None` gets the direct-edge answer — the only one available
+//! without a graph.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
@@ -93,6 +94,11 @@ pub struct EvalCtx<'a> {
     pub imports: &'a [ImportRecord],
     /// All export records that originated from `file_path`.
     pub exports: &'a [ExportRecord],
+    /// Every file's import records, keyed by the importing file. Only
+    /// `transitively imports` reads this, to walk past the first hop.
+    /// `None` collapses that operator onto direct edges, which is what a
+    /// caller with no project graph can honestly answer.
+    pub imports_by_file: Option<&'a HashMap<PathBuf, Vec<ImportRecord>>>,
     /// Layer configuration for the project, when available.
     pub layers: Option<&'a LayersConfig>,
     /// Shared glob compilation cache; lives for the duration of one analysis pass.
@@ -220,11 +226,14 @@ fn eval_comparison(cmp: &ast::Comparison, ctx: &EvalCtx<'_>) -> Result<bool, Dsl
             Ok(compute_layer(ctx) == Some(layer_name))
         }
 
-        Op::Imports | Op::TransitivelyImports => {
-            // cd-9hp.9 will add the transitive closure; for now both
-            // operators walk the flat corpus (direct edges only).
+        Op::Imports => {
             let pattern = eval_operand(&cmp.operand, ctx)?;
             Ok(imports_any(ctx, &pattern))
+        }
+
+        Op::TransitivelyImports => {
+            let pattern = eval_operand(&cmp.operand, ctx)?;
+            Ok(transitively_imports(ctx, &pattern))
         }
 
         Op::ImportsAsType => {
@@ -542,6 +551,51 @@ fn imports_any(ctx: &EvalCtx<'_>, pattern: &str) -> bool {
     })
 }
 
+/// Breadth-first walk of the import graph from `ctx.file_path`, true as
+/// soon as any edge on the way matches `pattern`.
+///
+/// Only edges that resolved to a file on disk extend the walk: an
+/// unresolved specifier such as `react` can be matched but not followed,
+/// because there is nothing to follow it to. Cycles are handled by the
+/// visited set, so `a -> b -> a` terminates.
+///
+/// With no project graph attached this degrades to the direct-edge
+/// answer rather than reporting a closure it cannot compute.
+fn transitively_imports(ctx: &EvalCtx<'_>, pattern: &str) -> bool {
+    let pattern_norm = pattern.replace('\\', "/");
+    let matches = |imp: &ImportRecord| {
+        specifier_matches(&imp.source_specifier, &pattern_norm, ctx.glob_cache)
+            || imp
+                .resolved
+                .as_ref()
+                .is_some_and(|r| path_matches(r, &pattern_norm, ctx.glob_cache))
+    };
+
+    let Some(graph) = ctx.imports_by_file else {
+        return ctx.imports.iter().any(matches);
+    };
+
+    let mut visited: HashSet<PathBuf> = HashSet::from([ctx.file_path.to_path_buf()]);
+    let mut queue: VecDeque<&[ImportRecord]> = VecDeque::from([ctx.imports]);
+    while let Some(edges) = queue.pop_front() {
+        for imp in edges {
+            if matches(imp) {
+                return true;
+            }
+            let Some(next) = imp.resolved.as_ref() else {
+                continue;
+            };
+            if !visited.insert(next.clone()) {
+                continue;
+            }
+            if let Some(further) = graph.get(next) {
+                queue.push_back(further);
+            }
+        }
+    }
+    false
+}
+
 /// True iff any import edge has `type_only: true` (at the statement level) or
 /// has at least one name with `type_only: true` whose specifier matches.
 fn imports_as_type(ctx: &EvalCtx<'_>, pattern: &str) -> bool {
@@ -622,7 +676,7 @@ fn path_matches(resolved: &Path, pattern: &str, cache: &GlobCache) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::{Path, PathBuf};
 
     use super::{eval_operand, eval_predicate, eval_top, DslEvalError, EvalCtx, GlobCache};
@@ -704,7 +758,31 @@ mod tests {
             project_root,
             imports,
             exports,
+            imports_by_file: None,
             layers,
+            glob_cache: cache,
+        }
+    }
+
+    /// `ctx`, plus the project-wide graph `transitively imports` needs.
+    fn ctx_with_graph<'a>(
+        file_path: &'a Path,
+        project_root: &'a Path,
+        graph: &'a HashMap<PathBuf, Vec<ImportRecord>>,
+        cache: &'a GlobCache,
+        empty_exports: &'a [ExportRecord],
+    ) -> EvalCtx<'a> {
+        static NO_IMPORTS: &[ImportRecord] = &[];
+        EvalCtx {
+            file_path,
+            project_root,
+            imports: graph
+                .get(file_path)
+                .map(Vec::as_slice)
+                .unwrap_or(NO_IMPORTS),
+            exports: empty_exports,
+            imports_by_file: Some(graph),
+            layers: None,
             glob_cache: cache,
         }
     }
@@ -961,13 +1039,85 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 12. transitively imports — currently same as imports (cd-9hp.9 closure)
+    // 12. transitively imports
     // -----------------------------------------------------------------------
 
+    /// One edge of the graph: `from` imports `to`, resolved on disk.
+    fn edge(root: &Path, from: &str, to: &str) -> ImportRecord {
+        ImportRecord {
+            from_file: root.join(from),
+            source_specifier: format!("./{to}"),
+            resolved: Some(root.join(to)),
+            names: vec![],
+            type_only: false,
+            span: dummy_span(),
+        }
+    }
+
+    fn graph_of(edges: Vec<ImportRecord>) -> HashMap<PathBuf, Vec<ImportRecord>> {
+        let mut map: HashMap<PathBuf, Vec<ImportRecord>> = HashMap::new();
+        for e in edges {
+            map.entry(e.from_file.clone()).or_default().push(e);
+        }
+        map
+    }
+
     #[test]
-    fn transitively_imports_same_as_imports_for_now() {
-        // cd-9hp.9 will add the closure; for now, transitively imports has
-        // the same flat-corpus semantics as imports.
+    fn transitively_imports_reaches_past_the_first_hop() {
+        let cache = GlobCache::new();
+        let root = PathBuf::from("/proj");
+        let graph = graph_of(vec![
+            edge(&root, "src/foo.ts", "src/mid.ts"),
+            edge(&root, "src/mid.ts", "src/db.ts"),
+        ]);
+        let file = root.join("src/foo.ts");
+        let c = ctx_with_graph(&file, &root, &graph, &cache, &[]);
+
+        assert!(eval_pred_str("file transitively imports './src/db.ts'", &c));
+        assert!(
+            !eval_pred_str("file imports './src/db.ts'", &c),
+            "the direct operator must stay direct — that is the whole distinction"
+        );
+        assert!(!eval_pred_str(
+            "file transitively imports './src/other.ts'",
+            &c
+        ));
+    }
+
+    #[test]
+    fn a_cycle_terminates() {
+        let cache = GlobCache::new();
+        let root = PathBuf::from("/proj");
+        let graph = graph_of(vec![
+            edge(&root, "src/a.ts", "src/b.ts"),
+            edge(&root, "src/b.ts", "src/a.ts"),
+        ]);
+        let file = root.join("src/a.ts");
+        let c = ctx_with_graph(&file, &root, &graph, &cache, &[]);
+
+        assert!(eval_pred_str("file transitively imports './src/b.ts'", &c));
+        assert!(!eval_pred_str("file transitively imports './src/z.ts'", &c));
+    }
+
+    /// A bare package specifier has nothing on disk to follow, so it can
+    /// be matched at the hop that names it but cannot extend the walk.
+    #[test]
+    fn an_unresolved_specifier_matches_without_extending_the_walk() {
+        let cache = GlobCache::new();
+        let root = PathBuf::from("/proj");
+        let mut react = make_import("react", false);
+        react.from_file = root.join("src/mid.ts");
+        let graph = graph_of(vec![edge(&root, "src/foo.ts", "src/mid.ts"), react]);
+        let file = root.join("src/foo.ts");
+        let c = ctx_with_graph(&file, &root, &graph, &cache, &[]);
+
+        assert!(eval_pred_str("file transitively imports 'react'", &c));
+    }
+
+    /// Without a graph the operator answers on direct edges only, rather
+    /// than claiming a closure it has no way to compute.
+    #[test]
+    fn no_graph_degrades_to_direct_edges() {
         let cache = GlobCache::new();
         let root = PathBuf::from("/proj");
         let file = root.join("src/foo.ts");

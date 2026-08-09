@@ -127,8 +127,16 @@ deprecation hint pointing at `cofferdam.toml`. Read by
   many files. Standard glob metacharacters `*`, `**`, `?`, `[…]`, and
   `{…,…}` are supported; an invalid pattern is silently skipped (the
   check still runs, the pattern just exempts nothing), or
-* a `package.json:<key>` pointer (`package.json:exports`) — schema
-  accepts it; resolution lands in a follow-up bead.
+* a `package.json:<key>` pointer (`package.json:exports`) — cofferdam
+  reads that key out of the project root's `package.json` and exempts
+  every file it names. Any key works: `main`, `module`, `types`, `bin`.
+  Nested `exports` subpaths and conditions are all followed, so one line
+  covers the whole published surface. A manifest naming built output
+  (`./dist/index.js`) matches the source it came from (`src/index.ts`) —
+  the first `dist`, `build`, `lib`, `out` or `output` path segment is
+  read as `src` and the extension is ignored. A pointer whose manifest
+  is missing or lacks the key exempts nothing; `cofferdam advise` says
+  so in `public_api_unresolved` rather than leaving you to guess.
 
 **Example — exempt a vendored UI directory:**
 

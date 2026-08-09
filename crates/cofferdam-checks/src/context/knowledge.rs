@@ -148,6 +148,7 @@ impl Check for Knowledge {
                     project_root: &root,
                     imports: file_imports,
                     exports: file_exports,
+                    imports_by_file: Some(&imports_by_file),
                     layers: layers.as_ref(),
                     glob_cache: &glob_cache,
                 };

@@ -112,7 +112,7 @@ error: subject 'sql.column' uses unregistered namespace 'sql'
 |---|---|---|---|
 | `matches` | glob string | gitignore-style match against subject's path/identifier | — |
 | `imports` | module specifier (string) | direct import edge exists from subject (a file) to that specifier | v2: routes to canonical graph |
-| `transitively imports` | module specifier | transitive-closure of `imports` over the file graph | v1: implemented; v2: shifts to graph closure |
+| `transitively imports` | module specifier | breadth-first walk of the file's import graph; matches an edge at any depth | v2: shifts to graph closure |
 | `imports as type` / `imports as value` | module specifier | type-only vs value import (TS `import type`) | edge-typed traversal reserved for graph promotion |
 | `exports` | symbol name (string) | subject file exports the named symbol | — |
 | `in` | layer name | subject file resolves to the named layer | — |

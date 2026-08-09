@@ -66,6 +66,10 @@ pub fn resolve_with_invariants(
         None => (ProjectConfig::default(), None),
     };
 
+    for unknown in &cfg.unknown_keys {
+        diags.warnings.push(unknown.to_string());
+    }
+
     // Discovery base for invariants.toml: cofferdam.toml's parent if we
     // loaded one, otherwise cwd. Mirrors how cofferdam.toml's own
     // discovery walks from cwd in the no-config case.

@@ -457,6 +457,8 @@ fn build_llms_txt() -> String {
             "- `cofferdam baseline diff`: compare two baselines (e.g. before/after a refactor).\n",
             "- `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.\n",
             "- `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.\n",
+            "- `cofferdam invariants show|validate|normalize`: inspect the resolved architectural \
+             spec — what the run actually loaded, not what you think you wrote.\n",
             "- `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.\n",
             "- `cofferdam watch [paths...]`: re-run checks on file change.\n",
             "- `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.\n",

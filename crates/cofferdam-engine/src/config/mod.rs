@@ -756,6 +756,58 @@ severity = 5
         assert!(matches!(err, ConfigError::SeverityNotString { .. }));
     }
 
+    /// CD-312: `loader::load` used to build the config with an
+    /// unconditional `layers: None`, so a `[layers]` block in
+    /// cofferdam.toml parsed, validated and was then discarded —
+    /// `Design.LayerViolation` fired only for layers declared in
+    /// cofferdam.invariants.toml. The config was accepted either way, so
+    /// the failure was silent: a green build with no enforcement.
+    #[test]
+    fn cofferdam_toml_layers_reach_the_config() {
+        let raw = r#"
+[layers]
+domain = ["src/domain/**"]
+ui = ["src/ui/**"]
+
+[layers.allow]
+domain = []
+ui = ["domain"]
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        let layers = cfg
+            .layers
+            .expect("a [layers] block in cofferdam.toml must produce a LayersConfig");
+        assert_eq!(
+            layers.layers.get("domain").map(Vec::as_slice),
+            Some(["src/domain/**".to_string()].as_slice())
+        );
+        assert_eq!(
+            layers.allow.get("domain").map(Vec::as_slice),
+            Some([].as_slice()),
+            "an empty allow list means an isolated layer, not an absent one"
+        );
+    }
+
+    /// A malformed `[layers]` block must surface the same typed error the
+    /// rest of the config does, rather than being ignored along with the
+    /// valid ones.
+    #[test]
+    fn malformed_cofferdam_toml_layers_are_rejected() {
+        let err = loader::parse(Path::new("cofferdam.toml"), "[layers]\ndomain = 1\n")
+            .expect_err("a non-array layer value is not valid");
+        assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn no_layers_block_leaves_layers_unset() {
+        let cfg = loader::parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(
+            cfg.layers.is_none(),
+            "an absent [layers] block must stay None — Design.LayerViolation is a no-op \
+             for projects that have not declared an architecture"
+        );
+    }
+
     #[test]
     fn missing_top_level_checks_yields_empty_config() {
         let cfg = loader::parse(Path::new("test.toml"), "").expect("parse");

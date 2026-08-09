@@ -215,10 +215,22 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         .map(str::to_string)
         .collect();
 
+    // CD-312: this used to be an unconditional `None`, so a `[layers]`
+    // block in cofferdam.toml parsed, validated, and was then discarded —
+    // `Design.LayerViolation` fired only for layers declared in
+    // cofferdam.invariants.toml. The config was accepted either way, so a
+    // team that declared its architecture here got a green build and no
+    // enforcement.
+    let layers = if doc.layers.is_empty() {
+        None
+    } else {
+        Some(super::options::parse_layers(path, doc.layers)?)
+    };
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
-        layers: None,
+        layers,
         plugins,
         invariants: None,
         layers_double_declaration: false,

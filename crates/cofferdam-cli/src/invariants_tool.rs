@@ -1,7 +1,11 @@
 //! Library-only helper backing `cofferdam-mcp`'s `cofferdam.invariants`
 //! tool — surfaces the parsed `cofferdam.invariants.toml` (layers,
-//! public_api, boundaries, invariants) as JSON. No CLI subcommand
-//! wraps this; the CLI has no equivalent today (CD-60).
+//! public_api, boundaries, invariants) as JSON.
+//!
+//! Reads the invariants file alone. The CLI's `cofferdam invariants`
+//! subcommand (`invariants_cmd`) reports the *resolved* spec instead —
+//! the merge of this file with `cofferdam.toml` `[layers]`, which is what
+//! a run actually uses.
 
 use std::path::Path;
 

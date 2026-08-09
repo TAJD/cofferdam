@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
     looks_like_check_id, Category, Check, CheckContext, CheckMeta, CorpusKey, FinalizeContext,
-    Issue, Location, Priority, Severity, SourceFile, Span, ALL_PRE_FILTER_FINDINGS,
-    REGISTERED_CHECK_IDS,
+    Issue, Location, OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
+    ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
 };
 use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
 use oxc_ast_visit::Visit;
@@ -1664,5 +1664,569 @@ const el = <Foo className="ignored" />;
              re-throw of the outer catch's parameter; got {issues:?}"
         );
         assert_eq!(issues[0].file, PathBuf::from("d.ts"));
+    }
+}
+
+// ─── Consistency.SpellingDialect ────────────────────────────────────────────
+
+/// British/American pairs, British form first. Deliberately a short list
+/// rather than a dictionary: every entry is a word that appears in
+/// software prose and whose two spellings mean the same thing.
+///
+/// `licence`/`license` and `programme`/`program` are absent on purpose.
+/// The first splits by part of speech in British English, and "program"
+/// is the British spelling for software, so both would flag correct prose.
+const DIALECT_PAIRS: &[(&str, &str)] = &[
+    ("analyse", "analyze"),
+    ("analysed", "analyzed"),
+    ("analyser", "analyzer"),
+    ("analysing", "analyzing"),
+    ("artefact", "artifact"),
+    ("artefacts", "artifacts"),
+    ("behaviour", "behavior"),
+    ("behaviours", "behaviors"),
+    ("cancelled", "canceled"),
+    ("cancelling", "canceling"),
+    ("catalogue", "catalog"),
+    ("catalogues", "catalogs"),
+    ("categorise", "categorize"),
+    ("categorised", "categorized"),
+    ("categorises", "categorizes"),
+    ("centre", "center"),
+    ("centred", "centered"),
+    ("colour", "color"),
+    ("coloured", "colored"),
+    ("colours", "colors"),
+    ("customise", "customize"),
+    ("customised", "customized"),
+    ("customises", "customizes"),
+    ("defence", "defense"),
+    ("deserialise", "deserialize"),
+    ("deserialised", "deserialized"),
+    ("deserialises", "deserializes"),
+    ("favourite", "favorite"),
+    ("grey", "gray"),
+    ("initialise", "initialize"),
+    ("initialised", "initialized"),
+    ("initialising", "initializing"),
+    ("initialises", "initializes"),
+    ("labelled", "labeled"),
+    ("labelling", "labeling"),
+    ("labour", "labor"),
+    ("maximise", "maximize"),
+    ("maximised", "maximized"),
+    ("maximises", "maximizes"),
+    ("minimise", "minimize"),
+    ("minimised", "minimized"),
+    ("minimises", "minimizes"),
+    ("modelling", "modeling"),
+    ("neighbour", "neighbor"),
+    ("neighbours", "neighbors"),
+    ("normalise", "normalize"),
+    ("normalised", "normalized"),
+    ("normalising", "normalizing"),
+    ("normalises", "normalizes"),
+    ("normalisation", "normalization"),
+    ("optimise", "optimize"),
+    ("optimised", "optimized"),
+    ("optimises", "optimizes"),
+    ("optimisation", "optimization"),
+    ("organise", "organize"),
+    ("organised", "organized"),
+    ("organises", "organizes"),
+    ("organisation", "organization"),
+    ("prioritise", "prioritize"),
+    ("prioritised", "prioritized"),
+    ("prioritises", "prioritizes"),
+    ("recognise", "recognize"),
+    ("recognised", "recognized"),
+    ("recognises", "recognizes"),
+    ("serialise", "serialize"),
+    ("serialised", "serialized"),
+    ("serialises", "serializes"),
+    ("serialisation", "serialization"),
+    ("summarise", "summarize"),
+    ("summarised", "summarized"),
+    ("summarises", "summarizes"),
+    ("synchronise", "synchronize"),
+    ("synchronised", "synchronized"),
+    ("synchronises", "synchronizes"),
+    ("travelling", "traveling"),
+    ("utilise", "utilize"),
+    ("utilises", "utilizes"),
+    ("visualise", "visualize"),
+    ("visualised", "visualized"),
+    ("visualises", "visualizes"),
+];
+
+/// Below this many dialect-carrying words project-wide, "the majority
+/// spelling" is not a convention, it is a coincidence.
+const MIN_DIALECT_OCCURRENCES: usize = 8;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Dialect {
+    British,
+    American,
+}
+
+impl Dialect {
+    fn label(self) -> &'static str {
+        match self {
+            Dialect::British => "British",
+            Dialect::American => "American",
+        }
+    }
+}
+
+/// One dialect-carrying word. The span is resolved during pass 1 because
+/// `FinalizeContext` carries no file text to resolve it from later.
+#[derive(Clone)]
+struct DialectHit {
+    span: Span,
+    word: String,
+    counterpart: &'static str,
+    dialect: Dialect,
+}
+
+static DIALECT_HITS: CorpusKey<HashMap<PathBuf, Vec<DialectHit>>> =
+    CorpusKey::new("Consistency.SpellingDialect.hits");
+
+const SPELLING_DIALECT_OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "dialect",
+    kind: OptionKind::String,
+    default: OptionDefault::String("infer"),
+    doc: "which dialect is correct: \"british\", \"american\", or \"infer\" (the default) to take \
+          whichever the project already uses in most cases. Under \"infer\" the check stays \
+          silent on a close split, since a project without a convention has nothing to deviate \
+          from.",
+}];
+
+const SPELLING_DIALECT_META: CheckMeta = CheckMeta {
+    id: "Consistency.SpellingDialect",
+    category: Category::Consistency,
+    base_priority: -5,
+    default_severity: Severity::Info,
+    explanation: "The project spells one way in most of its prose and another way here. Two \
+        spellings of the same word are not two conventions — they are one convention and some \
+        outliers.",
+    body: include_str!("../docs/Consistency.SpellingDialect.md"),
+    requires_types: false,
+    consistency: false,
+    options: SPELLING_DIALECT_OPTIONS,
+    autofix: false,
+    pure_run: false,
+};
+
+/// `Consistency.SpellingDialect` — tallies British against American
+/// spellings across the project in pass 1 and flags the minority in
+/// `finalize`.
+///
+/// It never reads identifiers. `normalize`, `serialize` and `initialize`
+/// are API surface here and in most TypeScript projects, and renaming a
+/// function to satisfy a prose convention is not a trade anyone would
+/// make. Only comments and prose-shaped string literals are scanned; a
+/// literal with no space in it is treated as a code token — an import
+/// specifier, a key, a check id — and skipped.
+///
+/// The check ships no opinion on which dialect is right. Under the
+/// default `dialect = "infer"` it reports the minority against whatever
+/// the project already does, and says nothing when the split is close: a
+/// project that has not chosen is not a project in violation. A team that
+/// has chosen pins the answer in options instead.
+pub struct SpellingDialect;
+
+impl Check for SpellingDialect {
+    fn meta(&self) -> &'static CheckMeta {
+        &SPELLING_DIALECT_META
+    }
+
+    fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
+        corpus.register_removable(&DIALECT_HITS, |slot, path| {
+            slot.remove(path);
+        });
+    }
+
+    fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        let Some(parsed) = ctx.parsed else {
+            return Vec::new();
+        };
+
+        let mut hits = Vec::new();
+        for comment in &parsed.program.comments {
+            let (start, end) = (comment.span.start, comment.span.end);
+            if let Some(text) = file.text.get(start as usize..end as usize) {
+                collect_dialect_hits(text, start, &file.text, &mut hits);
+            }
+        }
+
+        let mut collector = ProseLiteralCollector {
+            text: &file.text,
+            hits: &mut hits,
+        };
+        collector.visit_program(parsed.program);
+
+        ctx.corpus.with_slot(&DIALECT_HITS, |slot| {
+            if hits.is_empty() {
+                slot.remove(&file.path);
+            } else {
+                slot.insert(file.path.clone(), std::mem::take(&mut hits));
+            }
+        });
+        Vec::new()
+    }
+
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        let all: HashMap<PathBuf, Vec<DialectHit>> =
+            ctx.corpus.with_slot(&DIALECT_HITS, |slot| slot.clone());
+
+        let correct = match ctx.options.get_string("dialect") {
+            Some("british") => Dialect::British,
+            Some("american") => Dialect::American,
+            _ => {
+                let british = count_dialect(&all, Dialect::British);
+                let american = count_dialect(&all, Dialect::American);
+                let total = british + american;
+                if total < MIN_DIALECT_OCCURRENCES {
+                    return Vec::new();
+                }
+                // Strict majority, as Consistency.QuoteStyle requires. A
+                // near-even split is a project that has not chosen.
+                if british > total / 2 && british > american {
+                    Dialect::British
+                } else if american > total / 2 && american > british {
+                    Dialect::American
+                } else {
+                    return Vec::new();
+                }
+            }
+        };
+
+        let mut paths: Vec<&PathBuf> = all.keys().collect();
+        paths.sort();
+        let mut issues = Vec::new();
+        for path in paths {
+            for hit in &all[path] {
+                if hit.dialect == correct {
+                    continue;
+                }
+                issues.push(Issue {
+                    check_id: SPELLING_DIALECT_META.id.to_string(),
+                    message: format!(
+                        "`{}` is the {} spelling; the project uses {} elsewhere — write `{}`",
+                        hit.word,
+                        hit.dialect.label(),
+                        correct.label(),
+                        match_leading_case(&hit.word, hit.counterpart)
+                    ),
+                    file: path.clone(),
+                    location: Location::from_span(path, hit.span),
+                    priority: Priority(SPELLING_DIALECT_META.base_priority),
+                    severity: Severity::Info,
+                    related: Vec::new(),
+                });
+            }
+        }
+        issues
+    }
+}
+
+/// Carry the matched word's leading capital onto the suggestion, so a
+/// sentence-initial `Initializes` is answered with `Initialises` rather
+/// than a replacement the writer would have to re-case by hand.
+fn match_leading_case(matched: &str, suggestion: &str) -> String {
+    if matched.starts_with(|c: char| c.is_ascii_uppercase()) {
+        let mut out = suggestion.to_string();
+        out[..1].make_ascii_uppercase();
+        out
+    } else {
+        suggestion.to_string()
+    }
+}
+
+fn count_dialect(all: &HashMap<PathBuf, Vec<DialectHit>>, dialect: Dialect) -> usize {
+    all.values()
+        .flat_map(|hits| hits.iter())
+        .filter(|h| h.dialect == dialect)
+        .count()
+}
+
+/// Scan `text` — a comment body or a string literal — for dialect-carrying
+/// words, recording each as an absolute byte range via `base`.
+///
+/// Matching is case-insensitive and bounded on both sides by a non-word
+/// character, so `serialise` inside `deserialiseThing` is not a hit.
+fn collect_dialect_hits(text: &str, base: u32, full_text: &str, out: &mut Vec<DialectHit>) {
+    // Fold only ASCII letters: a full `to_lowercase` can change a
+    // character's byte length, which would shift every offset derived
+    // from it. Every dialect word is ASCII, so nothing is missed.
+    let lower: String = text
+        .chars()
+        .map(|c| {
+            if c.is_ascii() {
+                c.to_ascii_lowercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    scan_lowered(&lower, text, base, full_text, out);
+}
+
+fn scan_lowered(lower: &str, text: &str, base: u32, full_text: &str, out: &mut Vec<DialectHit>) {
+    for (british, american) in DIALECT_PAIRS {
+        for (word, dialect, counterpart) in [
+            (*british, Dialect::British, *american),
+            (*american, Dialect::American, *british),
+        ] {
+            let mut from = 0;
+            while let Some(offset) = lower[from..].find(word) {
+                let start = from + offset;
+                let end = start + word.len();
+                from = end;
+                let before = start.checked_sub(1).and_then(|i| lower.as_bytes().get(i));
+                if is_word_char(before.copied()) || is_word_char(lower.as_bytes().get(end).copied())
+                {
+                    continue;
+                }
+                out.push(DialectHit {
+                    span: span_from_bytes(full_text, base + start as u32, base + end as u32),
+                    word: text[start..end].to_string(),
+                    counterpart,
+                    dialect,
+                });
+            }
+        }
+    }
+}
+
+fn is_word_char(byte: Option<u8>) -> bool {
+    matches!(byte, Some(b) if b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// A string literal counts as prose only if it contains a space. Without
+/// that filter an import specifier (`./normalize`), an object key or a
+/// check id would be read as English and flagged — the identifier problem
+/// arriving by another door.
+struct ProseLiteralCollector<'a> {
+    text: &'a str,
+    hits: &'a mut Vec<DialectHit>,
+}
+
+impl<'a> Visit<'a> for ProseLiteralCollector<'_> {
+    fn visit_string_literal(&mut self, lit: &StringLiteral<'a>) {
+        if !lit.value.as_str().contains(' ') {
+            return;
+        }
+        // Scan the raw source slice rather than the cooked value so byte
+        // offsets stay true; escapes shift them otherwise.
+        let (start, end) = (lit.span.start, lit.span.end);
+        if let Some(raw) = self.text.get(start as usize..end as usize) {
+            collect_dialect_hits(raw, start, self.text, self.hits);
+        }
+    }
+}
+
+#[cfg(test)]
+mod spelling_dialect_tests {
+    use super::*;
+    use cofferdam_core::parser::{parse_into, ParsedView};
+    use cofferdam_core::{Allocator, Check, CheckContext, CorpusIndex, SourceFile};
+    use std::path::PathBuf;
+
+    // ─── Consistency.SpellingDialect ────────────────────────────────────────
+
+    /// Run the check over `files` (path, source) and return `finalize`'s
+    /// issues. `dialect` pins the option when `Some`.
+    fn run_spelling(files: &[(&str, &str)], dialect: Option<&str>) -> Vec<Issue> {
+        let corpus = CorpusIndex::new();
+        let check = SpellingDialect;
+
+        for (path, src) in files {
+            let file = SourceFile::new(PathBuf::from(path), *src);
+            let allocator = Allocator::default();
+            let parser_return = parse_into(&allocator, &file);
+            let parsed = ParsedView {
+                program: &parser_return.program,
+                diagnostics: &parser_return.errors,
+            };
+            let mut ctx = CheckContext::new(&file)
+                .with_parsed(&parsed)
+                .with_corpus(&corpus);
+            assert!(
+                check.run(&file, &mut ctx).is_empty(),
+                "pass 1 emits nothing"
+            );
+        }
+
+        let options = dialect.map(|d| {
+            let mut raw: std::collections::BTreeMap<String, cofferdam_core::RawOptionValue> =
+                std::collections::BTreeMap::new();
+            raw.insert(
+                "dialect".to_string(),
+                cofferdam_core::RawOptionValue::String(d.to_string()),
+            );
+            cofferdam_core::validate_options(
+                SPELLING_DIALECT_META.id,
+                SPELLING_DIALECT_META.options,
+                &raw,
+            )
+            .expect("valid options")
+        });
+        let mut ctx = FinalizeContext::new(&corpus);
+        if let Some(opts) = options.as_ref() {
+            ctx = ctx.with_options(opts);
+        }
+        check.finalize(&mut ctx)
+    }
+
+    /// Enough British spellings to establish a majority, plus a couple of
+    /// American ones to be flagged.
+    const BRITISH_MAJORITY: &str = "\
+// The colour table, the behaviour of the analyser, the catalogue order,
+// the artefact list, an unrecognised colour and a centred behaviour.
+// This one is the odd behavior out, next to a lone color.
+export const x = 1;
+";
+
+    #[test]
+    fn the_minority_spelling_is_flagged_and_the_majority_is_not() {
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY)], None);
+        let words: Vec<&str> = issues
+            .iter()
+            .map(|i| i.message.split('`').nth(1).unwrap_or(""))
+            .collect();
+        assert_eq!(words, ["behavior", "color"], "{words:?}");
+        assert!(
+            issues[0].message.contains("write `behaviour`"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    /// The load-bearing constraint. `normalize`, `serialize` and
+    /// `initialize` are API surface; a prose convention must never ask for
+    /// them to be renamed.
+    #[test]
+    fn identifiers_are_never_read() {
+        let src = "\
+// The colour table, the behaviour of the analyser, the catalogue order,
+// the artefact list, an unrecognised colour and a centred behaviour.
+export function normalize(color: string) { return color; }
+export const serializeColorCatalog = normalize;
+class Analyzer { initialize() {} }
+";
+        assert!(run_spelling(&[("a.ts", src)], None).is_empty());
+    }
+
+    /// A string with no space is a code token — an import specifier, a
+    /// key, a check id — not English.
+    #[test]
+    fn a_spaceless_string_literal_is_a_code_token_not_prose() {
+        let src = "\
+// The colour table, the behaviour of the analyser, the catalogue order,
+// the artefact list, an unrecognised colour and a centred behaviour.
+import x from './normalize';
+export const k = 'color';
+export const id = 'Design.SerializeColor';
+export const y = x;
+";
+        assert!(run_spelling(&[("a.ts", src)], None).is_empty());
+    }
+
+    #[test]
+    fn a_prose_string_literal_is_read() {
+        let src = "\
+// The colour table, the behaviour of the analyser, the catalogue order,
+// the artefact list, an unrecognised colour and a centred behaviour.
+export const msg = 'the analyzer keeps every artifact';
+";
+        let issues = run_spelling(&[("a.ts", src)], None);
+        assert_eq!(issues.len(), 2, "{issues:?}");
+    }
+
+    /// A project that has not chosen is not a project in violation.
+    #[test]
+    fn an_even_split_says_nothing() {
+        let src = "\
+// colour behaviour analyser catalogue artefact
+// color behavior analyzer catalog artifact
+export const x = 1;
+";
+        assert!(run_spelling(&[("a.ts", src)], None).is_empty());
+    }
+
+    /// Below the floor a majority is a coincidence.
+    #[test]
+    fn too_few_occurrences_say_nothing() {
+        let src = "// colour colour behaviour, and one color.\nexport const x = 1;\n";
+        assert!(run_spelling(&[("a.ts", src)], None).is_empty());
+    }
+
+    /// With a dialect pinned, the floor and the majority rule both fall
+    /// away — one deviation is enough.
+    #[test]
+    fn a_pinned_dialect_overrules_the_majority() {
+        let src = "// colour colour colour behaviour, and one color.\nexport const x = 1;\n";
+        let issues = run_spelling(&[("a.ts", src)], Some("american"));
+        assert_eq!(
+            issues.len(),
+            4,
+            "every British spelling now deviates: {issues:?}"
+        );
+
+        let issues = run_spelling(&[("a.ts", src)], Some("british"));
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].message.contains("`color`"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    /// The majority is learned across the project, not per file, so a file
+    /// that is internally consistent still deviates from its neighbours.
+    #[test]
+    fn the_majority_is_learned_across_files() {
+        let british =
+            "// colour behaviour analyser catalogue artefact centre\nexport const a = 1;\n";
+        let american = "// color behavior\nexport const b = 2;\n";
+        let issues = run_spelling(&[("a.ts", british), ("b.ts", american)], None);
+        assert_eq!(issues.len(), 2, "{issues:?}");
+        assert!(
+            issues.iter().all(|i| i.file.ends_with("b.ts")),
+            "{issues:?}"
+        );
+    }
+
+    /// A sentence-initial word keeps its capital in the suggestion.
+    #[test]
+    fn the_suggestion_keeps_the_leading_capital() {
+        let src = "\
+// The colour table, the behaviour of the analyser, the catalogue order,
+// the artefact list, an unrecognised colour and a centred behaviour.
+// Color is the odd one out.
+export const x = 1;
+";
+        let issues = run_spelling(&[("a.ts", src)], None);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].message.contains("write `Colour`"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    /// `deserialise` contains `serialise`; a word boundary on both sides
+    /// keeps the inner match out of the tally.
+    #[test]
+    fn a_word_inside_a_longer_word_is_not_a_hit() {
+        let mut hits = Vec::new();
+        let text = "deserialiseThing and colourful";
+        collect_dialect_hits(text, 0, text, &mut hits);
+        assert!(
+            hits.is_empty(),
+            "{:?}",
+            hits.iter().map(|h| &h.word).collect::<Vec<_>>()
+        );
     }
 }

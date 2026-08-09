@@ -14,6 +14,7 @@ export const checksItems = [
       { text: 'BroadSuppression', link: '/checks/Consistency.BroadSuppression' },
       { text: 'ErrorHandlingIdiom', link: '/checks/Consistency.ErrorHandlingIdiom' },
       { text: 'QuoteStyle', link: '/checks/Consistency.QuoteStyle' },
+      { text: 'SpellingDialect', link: '/checks/Consistency.SpellingDialect' },
       { text: 'UnusedSuppression', link: '/checks/Consistency.UnusedSuppression' },
     ],
   },

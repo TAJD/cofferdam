@@ -33,6 +33,10 @@ A short cheat sheet for the flags that matter in CI. Full reference: [`docs/outp
 | `--only=<CheckId>` | Restrict the run, the baseline, the budgets and the exit-code gate to one check. Exits 2 if no such check exists. See [§9](#_9-gating-on-a-single-check-with-only). |
 | `--max-issues=<N>` | Cap rendered findings (gate still uses the full set). |
 | `--quiet` | Suppress info lines (decorative output, not findings). |
+| `--hide-baselined` | Omit baselined findings from the output. The gate is unaffected — they never gated anyway. Useful when a large baseline drowns the new findings. |
+| `--no-cache` | Ignore the findings cache and re-run every check. See [caching caveat](#the-cache-can-mask-the-change-you-are-testing) below. |
+| `--cache-dir=<path>` | Where the findings cache lives. Defaults to `.cofferdam/cache/`. |
+| `--time-checks` | Print per-check wall-clock timings. For diagnosing which check dominates a slow run. |
 
 ## GitHub Actions
 
@@ -153,6 +157,27 @@ For full-fidelity JSON (with baseline tags, related spans, truncation metadata):
 ```
 
 If your project already has a `package.json` and `package-lock.json` with cofferdam as a `devDependency`, the standard `npm ci` cache key handles cofferdam's binary too — no extra config needed.
+
+#### The cache can mask the change you are testing
+
+Separately from the npm cache above, cofferdam keeps a **findings cache** in
+`.cofferdam/cache/`, keyed on `(content, config, engine_version)`. In CI this is
+almost always what you want.
+
+It bites in one situation: evaluating a change to cofferdam itself, or to a
+plugin, against a repo you have already scanned with the *same* version. The key
+does not change, so the cached findings replay and the run appears to prove that
+your change did nothing.
+
+Pass `--no-cache` whenever you are validating a rule change:
+
+```bash
+cofferdam check apps/web/src --no-cache
+```
+
+Releases self-heal — the version bump invalidates the cache directory — so this
+only affects developers re-running one version against an already-scanned
+checkout.
 
 ### 6. SARIF upload to GitHub Code Scanning
 

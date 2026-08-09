@@ -8,7 +8,7 @@ reformat or an unrelated edit further up the file does not invalidate an
 existing baseline entry:
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["baselined at commit A<br/>checkout.ts:12"] --> H["sha256(trimmed span)"]
     B["same finding at commit B (reformatted)<br/>checkout.ts:31"] --> H
     H --> R["same rule_signature → still baselined"]

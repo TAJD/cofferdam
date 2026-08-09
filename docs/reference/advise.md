@@ -283,7 +283,7 @@ Both are a set difference over the same finding keys (`file`, `check_id`,
 `rule_signature`), computed both ways:
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Base ["findings at &lt;ref&gt;"]
         direction TB
         Clear["would_clear<br/>(base only — fixed by this edit)"]
@@ -319,7 +319,7 @@ is the same SHA-256-of-trimmed-span used by the baseline subsystem, so
 reformats and line shifts do **not** show up as spurious entries:
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["checkout.ts:12<br/>import db from 'src/infra/db'"] --> H["sha256(trimmed span)"]
     B["checkout.ts:31 (after reformat)<br/>import db from 'src/infra/db'"] --> H
     H --> R["same rule_signature<br/>→ not a new/cleared finding"]

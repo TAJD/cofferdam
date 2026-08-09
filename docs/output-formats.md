@@ -18,16 +18,10 @@
 Priority and severity are two independent axes — the two-axis model
 Credo popularised, and easy to miss from a single sentence:
 
-```mermaid
-quadrantChart
-    title Priority (report order) vs. severity (CI gate)
-    x-axis Low severity --> High severity
-    y-axis Low priority --> High priority
-    quadrant-1 "High priority, high severity: read first, gates CI"
-    quadrant-2 "High priority, low severity: read first, doesn't gate CI"
-    quadrant-3 "Low priority, low severity: read last, doesn't gate CI"
-    quadrant-4 "Low priority, high severity: read last, still gates CI"
-```
+| | Low severity | High severity |
+|---|---|---|
+| **High priority** | Read first. Does not gate CI. | Read first. Gates CI. |
+| **Low priority** | Read last. Does not gate CI. | Read last. Still gates CI. |
 
 **Priority** is computed per finding (category base + check-specific
 adjustments) and decides *what to look at first* in the report.

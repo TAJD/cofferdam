@@ -1,8 +1,8 @@
 # The whole is not the sum of its files
 
-Most static analysis is myopic by construction. A linter opens one file, walks its syntax tree, closes the file, and moves on; it can tell you that a function is too long, but not that the interface it just parsed is the third file in the project to redeclare the same three fields under a different name. That kind of smell only shows up once you can see the whole codebase at once — and until recently, cofferdam couldn't.
+Most static analysis is myopic by construction. A linter opens one file, walks its syntax tree, closes the file, and moves on; it can tell you that a function is too long, but not that the interface it just parsed is the third file in the project to redeclare the same three fields under a different name. That kind of smell only shows up once you can see the whole codebase at once.
 
-Six checks added in this release change that. Each one waits until every file has been parsed, then asks a question that only makes sense at the level of the whole project: is this file unusually central? Does this barrel re-export everything in sight? Does the project even agree on how it handles errors? The answers come from statistics computed over the codebase, not from a rule written against a single file.
+Six checks do. Each waits until every file has been parsed, then asks a question that only makes sense at the level of the whole project: is this file unusually central? Does this barrel re-export everything in sight? Does the project even agree on how it handles errors? The answers come from statistics computed over the codebase, not from a rule written against a single file.
 
 ## Cheap thresholds are false thresholds
 

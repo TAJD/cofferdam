@@ -8,14 +8,17 @@ prevents that.
 
 ## The three schemas
 
-| Schema | Surface | Owner |
+| Schema | Surface | Versioned today |
 |---|---|---|
-| `cofferdam.invariants.toml` | The project architecture spec — layers, boundaries, invariants, public API | cd-9hp.12 (this doc) |
-| Canonical graph | Emitted by adapters, consumed by rules | cd-T1 / cd-9hp.9 |
-| Predicate DSL | Surface syntax for scripted rules inside `cofferdam.invariants.toml` | cd-9hp.1 |
+| `cofferdam.invariants.toml` | The project architecture spec — layers, boundaries, invariants, public API | Yes: `schema_version`, currently 1.0 |
+| Canonical graph | Emitted by adapters, consumed by rules | No — declares no version yet |
+| Predicate DSL | Surface syntax for scripted rules inside `cofferdam.invariants.toml` | No — declares no version yet |
 
-Each is versioned independently. They share the same policy, defined
-below.
+Each will be versioned independently and they share the policy below,
+but only the first declares a version today. What follows describes a
+live contract for `cofferdam.invariants.toml` and an intent for the
+other two; do not read the graph or DSL rows as a compatibility promise
+that anything currently enforces.
 
 ## Version format
 
@@ -160,15 +163,24 @@ When a schema-touching change lands:
 4. Add a `### Schema changes` block to the CHANGELOG entry for the
    release; link the migration recipe.
 
-A CI gate that fails the release when a schema-touching commit
-forgets to update the relevant version constant is tracked separately
-(see the TODO at the bottom of this file).
+Steps 1 and 2 are enforced. `crates/cofferdam-core/src/invariants_schema.snapshot`
+records the accepted TOML field set alongside the schema version it
+belongs to, and a unit test in `invariants.rs` reads the field set back
+out of the deserialised structs and compares. A commit that widens or
+narrows the spec surface has to touch the snapshot, and the snapshot
+carries the version — so a forgotten bump fails the `test` job, which is
+a required check on every pull request. A second test holds the
+snapshot's version and `CURRENT_SCHEMA_VERSION` together, so neither can
+move alone.
 
-## TODO
+Steps 3 and 4 are convention. Nothing checks that the fixtures or the
+CHANGELOG were updated, and given that no MAJOR bump has ever happened,
+building machinery for it now would be guessing at a process that has
+run zero times.
 
-* CI gate: fail the release workflow if any of (a) the TomlDoc struct,
-  (b) the canonical-graph schema module, (c) the DSL parser change
-  without a matching version constant bump and CHANGELOG entry. Tracked
-  alongside cd-9hp.12; unimplemented.
-* `cofferdam invariants migrate <input>` — one-shot migration tool.
-  Stub until the first MAJOR bump makes it earn its keep.
+## Not yet built
+
+`cofferdam invariants migrate <input>`, the one-shot migration tool the
+MAJOR-bump checklist points at. It stays a stub until the first MAJOR
+bump makes it earn its keep; the checklist says "manual instructions at
+minimum" for that reason.

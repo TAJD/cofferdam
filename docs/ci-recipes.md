@@ -20,23 +20,9 @@ Each recipe is shown for GitHub Actions first because it's the most common; GitL
 
 ## Universal flags
 
-A short cheat sheet for the flags that matter in CI. Full reference: [`docs/output-formats.md`](output-formats.md), [`docs/checks/`](checks/), or `cofferdam check --help`.
+Every `cofferdam check` flag, with its default and its exact effect on the gate, is in [the CLI reference](/reference/cli#cofferdam-check) — generated from the binary, so it cannot drift. The ones that come up in nearly every CI job are `--fail-on`, `--baseline`, `--since`, `--format` and `--only`; each has a recipe below.
 
-| Flag | Purpose |
-|---|---|
-| `--fail-on=<level>` | Severity threshold for exit-1 gate. `info` / `low` / `medium` / `high` / `critical`. Default `medium`. |
-| `--baseline=<path>` | Active baseline file. Auto-detected at `.cofferdam/baseline.json` when present. |
-| `--no-baseline` | Disable baseline detection entirely for this run. |
-| `--since=<git-ref>` | PR-only mode — only check files changed in `<git-ref>...HEAD`. |
-| `--robot` | Default to a machine-readable format. Pairs with `--format=compact` for AI shovelling. |
-| `--format=<text\|json\|compact\|sarif>` | Output format. `text` for humans, `json` for tools, `compact` for AI agents, `sarif` for GitHub Code Scanning + other static-analysis consumers. |
-| `--only=<CheckId>` | Restrict the run, the baseline, the budgets and the exit-code gate to one check. Exits 2 if no such check exists. See [§9](#_9-gating-on-a-single-check-with-only). |
-| `--max-issues=<N>` | Cap rendered findings (gate still uses the full set). |
-| `--quiet` | Suppress info lines (decorative output, not findings). |
-| `--hide-baselined` | Omit baselined findings from the output. The gate is unaffected — they never gated anyway. Useful when a large baseline drowns the new findings. |
-| `--no-cache` | Ignore the findings cache and re-run every check. See [caching caveat](#the-cache-can-mask-the-change-you-are-testing) below. |
-| `--cache-dir=<path>` | Where the findings cache lives. Defaults to `.cofferdam/cache/`. |
-| `--time-checks` | Print per-check wall-clock timings. For diagnosing which check dominates a slow run. |
+One caveat the reference cannot state, because it is about how you use the tool rather than what it does: the findings cache can mask the change you are testing. See [below](#the-cache-can-mask-the-change-you-are-testing).
 
 ## GitHub Actions
 

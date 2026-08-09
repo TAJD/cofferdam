@@ -69,21 +69,7 @@ cofferdam context --robot --pretty
 
 ## Flags
 
-| Flag | Effect |
-|---|---|
-| `[PATHS]...` | Explicit changed files — no git required. Empty (default) → resolve from git: staged + unstaged vs `HEAD`. |
-| `--staged` | Only staged changes (`git diff --cached`). Conflicts with `--base`. |
-| `--base <GIT-REF>` | Diff against `merge-base(<ref>, HEAD)` — everything on this branch, committed or not. |
-| `--budget <N>` | Token budget for the digest (crude 4-chars/token estimate). Default `2000`. |
-| `--format <text\|json>` | Output format. Default `text` (markdown); with `--robot` and no explicit `--format`, defaults to `json`. |
-| `--robot` | Shorthand: JSON output unless `--format` is given. |
-| `--pretty` | Pretty-print JSON. |
-| `--config <PATH>` | Path to `cofferdam.toml`. Same discovery semantics as `check`/`advise`. |
-| `--no-config` | Disable config discovery entirely. |
-| `--hidden` | Walk hidden files/directories. |
-| `--no-ignore` | Disable `.gitignore`/`.cofferdamignore` filtering. |
-| `--lint-knowledge` | Validate every `.cofferdam/knowledge/*.md` note instead of producing a digest — see below. Ignores `paths`/`staged`/`base`/`budget`/`format`. |
-| `--lint-context-suppress` | Validate every `[[context_suppress]]` rule instead of producing a digest — see below. Ignores `paths`/`staged`/`base`/`budget`/`format`. |
+Every flag is listed in [the CLI reference](/reference/cli#cofferdam-context), which is generated from the binary and so cannot drift. The two that change what the command *does* rather than how it prints — `--lint-knowledge` and `--lint-context-suppress` — are covered below.
 
 ## Text output
 

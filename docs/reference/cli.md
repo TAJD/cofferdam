@@ -437,7 +437,7 @@ Start here — the default entrypoint into project context you don't already hav
 
 ###### **Options:**
 
-* `--staged` — Only staged changes (`git diff --cached`)
+* `--staged` — Only staged changes (`git diff --cached`). Conflicts with `--base`
 * `--base <GIT-REF>` — Diff against merge-base(`<ref>`, HEAD) — everything on this branch, committed or not
 * `--budget <BUDGET>` — Token budget for the digest (crude 4-chars/token estimate)
 

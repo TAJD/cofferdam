@@ -495,7 +495,8 @@ enum Cmd {
         /// Explicit changed files (no git required). Empty → resolve
         /// from git (staged + unstaged vs HEAD by default).
         paths: Vec<PathBuf>,
-        /// Only staged changes (`git diff --cached`).
+        /// Only staged changes (`git diff --cached`). Conflicts with
+        /// `--base`.
         #[arg(long, conflicts_with = "base")]
         staged: bool,
         /// Diff against merge-base(`<ref>`, HEAD) — everything on this

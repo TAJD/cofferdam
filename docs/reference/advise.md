@@ -84,20 +84,10 @@ cofferdam advise --robot --pretty
 ## Flags
 
 `advise` accepts the same set of discovery and config flags as `check`,
-plus the format pair shared with the rest of the CLI. The full reference
-is in [the CLI page](./cli.md#cofferdam-advise); the load-bearing ones
-are:
-
-| Flag | Effect |
-|---|---|
-| `[PATHS]...` | Files, directories, or globs. Defaults to `.`. Shell expansion is honoured first; the CLI also runs its own globset matcher for quoted patterns. |
-| `--format <text\|json>` | Output format. Default `text`; with `--robot` and no explicit `--format`, defaults to `json`. |
-| `--robot` | Switch the default to JSON. Token-economical for AI agents. |
-| `--pretty` | Pretty-print JSON. |
-| `--config <PATH>` | Path to a config file. Defaults to walking up from the analysed target path, falling back to CWD, until one is found. |
-| `--no-config` | Disable config discovery entirely — every check uses its built-in defaults. |
-| `--hidden` | Walk hidden files/directories. |
-| `--no-ignore` | Disable `.gitignore` / `.cofferdamignore` filtering. |
+plus the format pair shared with the rest of the CLI. They are listed in
+[the CLI reference](/reference/cli#cofferdam-advise), which is generated
+from the binary and so cannot drift. The two flags that change what the
+command *does* — `--diff` and `--analyze` — have their own sections below.
 
 ## Text output
 

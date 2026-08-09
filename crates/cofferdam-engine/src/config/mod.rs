@@ -39,6 +39,7 @@
 pub mod loader;
 pub mod options;
 pub mod resolution;
+pub mod schema;
 
 use std::collections::BTreeMap;
 use std::io;
@@ -54,6 +55,7 @@ pub use options::{options_for, options_for_raw, unknown_check_ids};
 pub use resolution::{
     resolve_for_targets, resolve_with_invariants, target_anchor, LoadDiagnostics,
 };
+pub use schema::{unknown_keys, KeySpec, Keys, SectionSpec, UnknownKey, SECTIONS};
 
 /// Parsed project config: per-check raw option bags + per-check
 /// severity overrides. Unknown check IDs are stored verbatim and
@@ -119,6 +121,12 @@ pub struct ProjectConfig {
     /// (never fails `cofferdam context`, which always exits 0 outside
     /// usage errors). Empty when none are declared.
     pub context_suppress: Vec<ContextSuppressRule>,
+    /// Keys the file declares that no section of the schema recognises
+    /// (CD-311). Serde skips them, so without this they would be
+    /// silently inert — a rule that never fires and a green run. Surfaced
+    /// through `LoadDiagnostics` as warnings, the same way an unknown
+    /// check id is: a typo should be visible, not fatal.
+    pub unknown_keys: Vec<schema::UnknownKey>,
 }
 
 /// One `[[overrides]]` block: a set of path globs plus the per-check
@@ -748,6 +756,58 @@ severity = 5
         assert!(matches!(err, ConfigError::SeverityNotString { .. }));
     }
 
+    /// CD-312: `loader::load` used to build the config with an
+    /// unconditional `layers: None`, so a `[layers]` block in
+    /// cofferdam.toml parsed, validated and was then discarded —
+    /// `Design.LayerViolation` fired only for layers declared in
+    /// cofferdam.invariants.toml. The config was accepted either way, so
+    /// the failure was silent: a green build with no enforcement.
+    #[test]
+    fn cofferdam_toml_layers_reach_the_config() {
+        let raw = r#"
+[layers]
+domain = ["src/domain/**"]
+ui = ["src/ui/**"]
+
+[layers.allow]
+domain = []
+ui = ["domain"]
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        let layers = cfg
+            .layers
+            .expect("a [layers] block in cofferdam.toml must produce a LayersConfig");
+        assert_eq!(
+            layers.layers.get("domain").map(Vec::as_slice),
+            Some(["src/domain/**".to_string()].as_slice())
+        );
+        assert_eq!(
+            layers.allow.get("domain").map(Vec::as_slice),
+            Some([].as_slice()),
+            "an empty allow list means an isolated layer, not an absent one"
+        );
+    }
+
+    /// A malformed `[layers]` block must surface the same typed error the
+    /// rest of the config does, rather than being ignored along with the
+    /// valid ones.
+    #[test]
+    fn malformed_cofferdam_toml_layers_are_rejected() {
+        let err = loader::parse(Path::new("cofferdam.toml"), "[layers]\ndomain = 1\n")
+            .expect_err("a non-array layer value is not valid");
+        assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn no_layers_block_leaves_layers_unset() {
+        let cfg = loader::parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(
+            cfg.layers.is_none(),
+            "an absent [layers] block must stay None — Design.LayerViolation is a no-op \
+             for projects that have not declared an architecture"
+        );
+    }
+
     #[test]
     fn missing_top_level_checks_yields_empty_config() {
         let cfg = loader::parse(Path::new("test.toml"), "").expect("parse");
@@ -772,6 +832,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let opts = options_for(
@@ -810,6 +871,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -833,6 +895,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -913,6 +976,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

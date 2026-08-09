@@ -58,6 +58,7 @@ export default withMermaid(defineConfig({
           { text: 'Doctor', link: '/doctor' },
           { text: 'Agent advisory (advise)', link: '/reference/advise' },
           { text: 'CLI reference', link: '/reference/cli' },
+          { text: 'Config reference', link: '/reference/config' },
         ],
       },
       {

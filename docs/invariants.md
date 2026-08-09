@@ -15,6 +15,26 @@ used — the analyzed target path, falling back to the working directory —
 until it finds the file or hits a `.git` entry. Both files
 are optional and additive; you can ship one without the other.
 
+## Seeing what was loaded
+
+```sh
+cofferdam invariants show          # the resolved, merged spec
+cofferdam invariants show --robot  # the same, as JSON
+cofferdam invariants validate      # parse and report problems; exits 1 on failure
+cofferdam invariants normalize     # canonical TOML, to stdout
+```
+
+Reach for `show` when a rule is not firing. It prints which files were
+read and — the part that usually explains it — which of them the layers in
+force came from. A `[layers]` block in `cofferdam.invariants.toml`
+replaces `cofferdam.toml`'s wholesale, so the file you are staring at may
+be the one that lost.
+
+`validate` parses the spec without running the engine, so CI can gate on
+the config separately from the findings it produces. Pass `--strict` to
+fail on warnings too — a missing or deprecated `schema_version`, or
+`[layers]` declared in both files.
+
 ## Starter spec
 
 The minimal viable spec for a typical Next.js/Vite app — copy, adjust the
@@ -127,8 +147,16 @@ deprecation hint pointing at `cofferdam.toml`. Read by
   many files. Standard glob metacharacters `*`, `**`, `?`, `[…]`, and
   `{…,…}` are supported; an invalid pattern is silently skipped (the
   check still runs, the pattern just exempts nothing), or
-* a `package.json:<key>` pointer (`package.json:exports`) — schema
-  accepts it; resolution lands in a follow-up bead.
+* a `package.json:<key>` pointer (`package.json:exports`) — cofferdam
+  reads that key out of the project root's `package.json` and exempts
+  every file it names. Any key works: `main`, `module`, `types`, `bin`.
+  Nested `exports` subpaths and conditions are all followed, so one line
+  covers the whole published surface. A manifest naming built output
+  (`./dist/index.js`) matches the source it came from (`src/index.ts`) —
+  the first `dist`, `build`, `lib`, `out` or `output` path segment is
+  read as `src` and the extension is ignored. A pointer whose manifest
+  is missing or lacks the key exempts nothing; `cofferdam advise` says
+  so in `public_api_unresolved` rather than leaving you to guess.
 
 **Example — exempt a vendored UI directory:**
 

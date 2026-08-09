@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use cofferdam_core::span_from_bytes;
 use cofferdam_core::{
@@ -1956,48 +1957,60 @@ fn count_dialect(all: &HashMap<PathBuf, Vec<DialectHit>>, dialect: Dialect) -> u
 /// Matching is case-insensitive and bounded on both sides by a non-word
 /// character, so `serialise` inside `deserialiseThing` is not a hit.
 fn collect_dialect_hits(text: &str, base: u32, full_text: &str, out: &mut Vec<DialectHit>) {
-    // Fold only ASCII letters: a full `to_lowercase` can change a
-    // character's byte length, which would shift every offset derived
-    // from it. Every dialect word is ASCII, so nothing is missed.
-    let lower: String = text
-        .chars()
-        .map(|c| {
-            if c.is_ascii() {
-                c.to_ascii_lowercase()
-            } else {
-                c
-            }
-        })
-        .collect();
-    scan_lowered(&lower, text, base, full_text, out);
-}
-
-fn scan_lowered(lower: &str, text: &str, base: u32, full_text: &str, out: &mut Vec<DialectHit>) {
-    for (british, american) in DIALECT_PAIRS {
-        for (word, dialect, counterpart) in [
-            (*british, Dialect::British, *american),
-            (*american, Dialect::American, *british),
-        ] {
-            let mut from = 0;
-            while let Some(offset) = lower[from..].find(word) {
-                let start = from + offset;
-                let end = start + word.len();
-                from = end;
-                let before = start.checked_sub(1).and_then(|i| lower.as_bytes().get(i));
-                if is_word_char(before.copied()) || is_word_char(lower.as_bytes().get(end).copied())
-                {
-                    continue;
-                }
-                out.push(DialectHit {
-                    span: span_from_bytes(full_text, base + start as u32, base + end as u32),
-                    word: text[start..end].to_string(),
-                    counterpart,
-                    dialect,
-                });
-            }
+    // One pass over the text, splitting it into runs of word characters
+    // and looking each run up. Scanning for each of the ~170 spellings in
+    // turn is the obvious alternative and costs 170 passes over every
+    // comment in the project, which showed up as a 20% whole-run
+    // regression on the benchmark corpus.
+    let bytes = text.as_bytes();
+    let mut folded = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !is_word_char(Some(bytes[i])) {
+            i += 1;
+            continue;
         }
+        let start = i;
+        while i < bytes.len() && is_word_char(Some(bytes[i])) {
+            i += 1;
+        }
+        let word = &text[start..i];
+        if word.len() < DIALECT_MIN_LEN || word.len() > DIALECT_MAX_LEN {
+            continue;
+        }
+        folded.clear();
+        folded.extend(word.bytes().map(|b| b.to_ascii_lowercase() as char));
+        let Some(&(dialect, counterpart)) = DIALECT_LOOKUP.get(folded.as_str()) else {
+            continue;
+        };
+        out.push(DialectHit {
+            span: span_from_bytes(full_text, base + start as u32, base + i as u32),
+            word: word.to_string(),
+            counterpart,
+            dialect,
+        });
     }
 }
+
+/// Every spelling in `DIALECT_PAIRS`, each mapped to the dialect it
+/// belongs to and the spelling on the other side of the pair.
+static DIALECT_LOOKUP: LazyLock<HashMap<&'static str, (Dialect, &'static str)>> =
+    LazyLock::new(|| {
+        DIALECT_PAIRS
+            .iter()
+            .flat_map(|(british, american)| {
+                [
+                    (*british, (Dialect::British, *american)),
+                    (*american, (Dialect::American, *british)),
+                ]
+            })
+            .collect()
+    });
+
+/// Bounds of the word list, used to skip the fold-and-look-up on the
+/// overwhelming majority of words that cannot be in it.
+const DIALECT_MIN_LEN: usize = 4;
+const DIALECT_MAX_LEN: usize = 16;
 
 fn is_word_char(byte: Option<u8>) -> bool {
     matches!(byte, Some(b) if b.is_ascii_alphanumeric() || b == b'_')
@@ -2034,6 +2047,21 @@ mod spelling_dialect_tests {
     use std::path::PathBuf;
 
     // ─── Consistency.SpellingDialect ────────────────────────────────────────
+
+    /// The length guard in `collect_dialect_hits` skips a word before it is
+    /// ever looked up, so a pair outside the bounds would be silently
+    /// unenforceable.
+    #[test]
+    fn every_spelling_falls_inside_the_length_guard() {
+        for (british, american) in DIALECT_PAIRS {
+            for word in [british, american] {
+                assert!(
+                    (DIALECT_MIN_LEN..=DIALECT_MAX_LEN).contains(&word.len()),
+                    "{word} is outside DIALECT_MIN_LEN..=DIALECT_MAX_LEN and would never match"
+                );
+            }
+        }
+    }
 
     /// Run the check over `files` (path, source) and return `finalize`'s
     /// issues. `dialect` pins the option when `Some`.

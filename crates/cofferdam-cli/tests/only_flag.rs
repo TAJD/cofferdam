@@ -13,11 +13,18 @@ fn cofferdam_bin() -> PathBuf {
 }
 
 fn run_check(only: &str, source: &str) -> std::process::Output {
+    run_check_args(&["--only", only], source)
+}
+
+fn run_check_args(extra: &[&str], source: &str) -> std::process::Output {
     let dir = tempfile::TempDir::new().expect("temp dir");
     std::fs::write(dir.path().join("a.ts"), source).expect("write ts");
 
+    let mut args = vec!["check"];
+    args.extend_from_slice(extra);
+    args.extend_from_slice(&["--format", "json", "--no-baseline"]);
     Command::new(cofferdam_bin())
-        .args(["check", "--only", only, "--format", "json", "--no-baseline"])
+        .args(args)
         .current_dir(dir.path())
         .output()
         .expect("spawn cofferdam")
@@ -41,6 +48,73 @@ fn only_restricts_to_the_named_check() {
     assert!(
         !stdout.contains("Design.OrphanExport"),
         "expected no findings from other checks; stdout={stdout}"
+    );
+}
+
+/// CD-307: several ids in one run, comma-separated. The fixture fires
+/// both named checks, so seeing both proves the set is a union rather
+/// than last-one-wins.
+#[test]
+fn only_accepts_a_comma_separated_set() {
+    let long_line = format!("export const a = \"{}\";\n", "x".repeat(200));
+    let out = run_check_args(
+        &["--only", "Readability.MaxLineLength,Design.OrphanExport"],
+        &long_line,
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Readability.MaxLineLength") && stdout.contains("Design.OrphanExport"),
+        "both named checks should survive the filter; stdout={stdout}"
+    );
+}
+
+/// CD-307: the repeated-flag form is equivalent to the comma-separated
+/// one — clap's `value_delimiter` plus the default append behaviour.
+#[test]
+fn only_accepts_a_repeated_flag() {
+    let long_line = format!("export const a = \"{}\";\n", "x".repeat(200));
+    let out = run_check_args(
+        &[
+            "--only",
+            "Readability.MaxLineLength",
+            "--only",
+            "Design.OrphanExport",
+        ],
+        &long_line,
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Readability.MaxLineLength") && stdout.contains("Design.OrphanExport"),
+        "both named checks should survive the filter; stdout={stdout}"
+    );
+}
+
+/// CD-307: one bad id among good ones must fail the whole run. Accepting
+/// the good ones and dropping the typo would silently shrink a CI gate —
+/// the failure mode `--only` exists to prevent, made likelier by sets.
+#[test]
+fn only_with_one_bad_id_among_good_ones_errors() {
+    let long_line = format!("export const a = \"{}\";\n", "x".repeat(200));
+    let out = run_check_args(
+        &[
+            "--only",
+            "Readability.MaxLineLength,Warning.TripleEqualz,Design.OrphanExport",
+        ],
+        &long_line,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "one unknown id must fail the run, not narrow it; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Warning.TripleEqualz"),
+        "the error should name the offending id; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("Readability.MaxLineLength"),
+        "the error should name only the offending id, not the valid ones; stderr={stderr}"
     );
 }
 

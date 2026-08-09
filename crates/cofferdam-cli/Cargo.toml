@@ -47,7 +47,7 @@ cofferdam-typst = { workspace = true }
 # CD-84: HTML plugin AST wire builder walks tree-sitter-html nodes
 # directly. Pin mirrors cofferdam-html's own tree-sitter pin — bump
 # together to keep ABI in sync.
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 clap = { workspace = true }
 clap-markdown = "0.1"
 globset = { workspace = true }

@@ -14,6 +14,7 @@ Drop-in workflows for the major CI systems. Each recipe runs `cofferdam check`, 
 | Findings on the PR + Security tab via SARIF | [§6 SARIF upload](#6-sarif-upload-to-github-code-scanning) |
 | Catching regressions in built HTML output | [§7 verify --dist](#_7-verifying-build-output-verify-dist) |
 | Validating `.cofferdam/knowledge/*.md` notes | [§8 context --lint-knowledge](#_8-validating-knowledge-notes-context---lint-knowledge) |
+| Gating on one check only (e.g. a plugin convention) | [§9 `--only`](#_9-gating-on-a-single-check-with-only) |
 
 Each recipe is shown for GitHub Actions first because it's the most common; GitLab / CircleCI / Drone equivalents are at the bottom.
 
@@ -29,6 +30,7 @@ A short cheat sheet for the flags that matter in CI. Full reference: [`docs/outp
 | `--since=<git-ref>` | PR-only mode — only check files changed in `<git-ref>...HEAD`. |
 | `--robot` | Default to a machine-readable format. Pairs with `--format=compact` for AI shovelling. |
 | `--format=<text\|json\|compact\|sarif>` | Output format. `text` for humans, `json` for tools, `compact` for AI agents, `sarif` for GitHub Code Scanning + other static-analysis consumers. |
+| `--only=<CheckId>` | Restrict the run, the baseline, the budgets and the exit-code gate to one check. Exits 2 if no such check exists. See [§9](#_9-gating-on-a-single-check-with-only). |
 | `--max-issues=<N>` | Cap rendered findings (gate still uses the full set). |
 | `--quiet` | Suppress info lines (decorative output, not findings). |
 
@@ -237,6 +239,52 @@ It ignores `paths` / `--staged` / `--base` / `--budget` / `--format`, needs
 no git history, and is fast enough to run as its own step next to
 `cofferdam check`. See [knowledge notes](/knowledge-notes) for the note
 format.
+
+### 9. Gating on a single check with `--only`
+
+A repo often wants one project-specific rule to fail the build without turning on the
+full suite — a plugin check enforcing a local convention, say, in a directory that
+already carries unrelated findings. `--only` restricts the run to one check:
+
+```yaml
+      - name: Design system convention
+        run: |
+          pnpm --filter @acme/cofferdam-design-system build
+          npx --yes @cofferdam/cofferdam check apps/web/src --only Warning.DesignSystemConvention
+```
+
+The flag applies after plugin merge, so it covers plugin-emitted checks as well as
+built-ins. Budgets, the baseline and the exit-code gate all see only the named check's
+findings.
+
+The exit codes are the point:
+
+| Exit | Meaning |
+|---|---|
+| 0 | The named check found nothing |
+| 1 | The named check found something at or above `--fail-on` |
+| 2 | No check by that name exists |
+
+Exit 2 is what makes this worth using over a hand-rolled filter. The obvious
+alternative is to run the whole suite and grep the JSON:
+
+```sh
+# don't do this
+cofferdam check apps/web/src --format json \
+  | jq -e '[.findings[] | select(.check == "DesignSystemConvention")] | length == 0'
+```
+
+A filter over findings cannot tell "no violations" from "the check never ran". If the
+plugin fails to load — an unbuilt `dist/`, a bad path in `cofferdam.toml`, a typo in
+the check id — the findings array contains nothing matching, and the gate reports
+success against a check that never executed. This is not hypothetical: the projektor
+repo ran such a wrapper against a plugin whose build step CI never invoked. It printed
+`OK` and exited 0 on every pull request for as long as it was wired that way.
+
+`--only` fails loudly instead. A gate that cannot find its check exits 2.
+
+Build the plugin in the same step, as above. `dist/` directories are usually
+gitignored, so a fresh CI checkout has no plugin until something builds it.
 
 ## GitLab CI
 

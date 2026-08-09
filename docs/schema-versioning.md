@@ -8,11 +8,11 @@ prevents that.
 
 ## The three schemas
 
-| Schema | Surface | Owner |
+| Schema | Surface | Reference implementation |
 |---|---|---|
-| `cofferdam.invariants.toml` | The project architecture spec — layers, boundaries, invariants, public API | cd-9hp.12 (this doc) |
-| Canonical graph | Emitted by adapters, consumed by rules | cd-T1 / cd-9hp.9 |
-| Predicate DSL | Surface syntax for scripted rules inside `cofferdam.invariants.toml` | cd-9hp.1 |
+| `cofferdam.invariants.toml` | The project architecture spec — layers, boundaries, invariants, public API | `crates/cofferdam-core/src/invariants.rs` |
+| Canonical graph | Emitted by adapters, consumed by rules | `crates/cofferdam-graph/` |
+| Predicate DSL | Surface syntax for scripted rules inside `cofferdam.invariants.toml` | `crates/cofferdam-core/src/dsl/` |
 
 Each is versioned independently. They share the same policy, defined
 below.
@@ -67,8 +67,8 @@ Outside the window:
   the spec to a version your build understands."*
 * `v < MIN_SUPPORTED` — rejected with: *"schema_version X.Y is no
   longer supported by this build (minimum supported is MIN_SUPPORTED);
-  run `cofferdam invariants migrate` against an older cofferdam release
-  or update the spec to a supported version."*
+  update the spec to a supported version, or pin an older cofferdam
+  release that still accepts it."*
 
 Recommended window sizes:
 
@@ -100,9 +100,11 @@ pub const CURRENT_SCHEMA_VERSION       = SchemaVersion { major: 1, minor: 0 };
 pub const MIN_SUPPORTED_SCHEMA_VERSION = SchemaVersion { major: 1, minor: 0 };
 ```
 
-For `cofferdam.invariants.toml` today: only `1.0` is accepted; any
-other declared value is rejected. The canonical graph and predicate DSL
-inherit the same policy once they ship (cd-T1, cd-9hp.1).
+For `cofferdam.invariants.toml` today: only `1.0` is accepted; any other
+declared value is rejected. Because `MIN_SUPPORTED` equals `CURRENT`, the
+deprecation window is currently empty — no version can be old enough to
+trigger the "no longer supported" path. That branch is tested but has
+never fired in the wild.
 
 ## What is versioned and what isn't
 
@@ -140,11 +142,10 @@ The reference implementation lives in
   `is_fatal()` returning `true`, so the engine fails loudly rather than
   silently ignoring the spec.
 
-The canonical-graph and DSL halves of this policy ship with their own
-beads (cd-T1 / cd-9hp.9 for the graph; cd-9hp.1 for the DSL). Both
-should reuse `SchemaVersion`, `validate_version`, and the same
-deprecation policy described here — same trio of error variants, same
-loudness contract.
+The canonical graph and the DSL have both since shipped, but neither
+declares a schema version of its own yet. When they do, they should reuse
+`SchemaVersion`, `validate_version` and the deprecation policy described
+here — same trio of error variants, same loudness contract.
 
 ## Release process
 
@@ -160,15 +161,15 @@ When a schema-touching change lands:
 4. Add a `### Schema changes` block to the CHANGELOG entry for the
    release; link the migration recipe.
 
-A CI gate that fails the release when a schema-touching commit
-forgets to update the relevant version constant is tracked separately
-(see the TODO at the bottom of this file).
+Nothing enforces step 1 or 2. A schema-touching commit that forgets its
+version bump passes CI today, which makes the discipline above a
+convention rather than a gate.
 
-## TODO
+## Not built yet
 
-* CI gate: fail the release workflow if any of (a) the TomlDoc struct,
-  (b) the canonical-graph schema module, (c) the DSL parser change
-  without a matching version constant bump and CHANGELOG entry. Tracked
-  alongside cd-9hp.12; unimplemented.
-* `cofferdam invariants migrate <input>` — one-shot migration tool.
-  Stub until the first MAJOR bump makes it earn its keep.
+* **A CI gate** failing the release when the TOML field set, the
+  canonical-graph schema module or the DSL parser changes without a
+  matching version-constant bump and CHANGELOG entry.
+* **`cofferdam invariants migrate`** — there is no `cofferdam invariants`
+  subcommand at all. It earns its keep at the first MAJOR bump and not
+  before; until then, migration means editing the spec by hand.

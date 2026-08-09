@@ -430,6 +430,12 @@
           ]
         },
         {
+          "id": "test_imports_count",
+          "kind": "boolean",
+          "doc": "Whether an import made from a test file (per `test_file_patterns`) counts as consumption. Default true — a test-only-consumed export is not an orphan. Set false to require a non-test consumer; exports imported only by test files are then reported with a distinct message instead of being silently treated as unconsumed.",
+          "default": true
+        },
+        {
           "id": "framework_entry_patterns",
           "kind": "string[]",
           "doc": "Filename substrings for framework entry-point files (Next.js App Router, Pages Router, SvelteKit, config files). Exports from matching files are skipped because the framework runtime — not application code — consumes them.",

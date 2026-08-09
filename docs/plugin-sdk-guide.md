@@ -479,7 +479,7 @@ export default defineCheck({
 });
 ```
 
-## Cross-file plugin checks: corpus + finalize (cd-9hp.6)
+## Cross-file plugin checks: corpus + finalize
 
 A plugin that needs to see *all* files before emitting findings —
 duplicate exports, orphan modules, layered-import audits — uses two
@@ -511,9 +511,9 @@ the TypeScript generic syntax (`ctx.corpus.append<ClassDecl>(...)`,
 | `append<T>(key, item)` | Get-or-create-array, push `item`. Optimised for the common `Vec<T>` aggregation pattern. |
 
 The slot value lives in memory for the duration of the analysis run.
-There is no cross-run persistence — `cofferdam --watch` (cd-9hp.4)
-will eventually share corpus state between incremental runs, but
-plugins should not rely on that today.
+There is no cross-run persistence. `cofferdam watch` may one day share
+corpus state between incremental runs; plugins must not rely on that
+today.
 
 ### `finalize(ctx, opts)`
 
@@ -553,7 +553,7 @@ plugin host therefore stores each plugin's slots in its own private
 map; from a plugin's perspective, no key conflict with any other
 plugin is possible.
 
-The Rust runtime underneath (cd-9hp.7) supports the same model via
+The Rust runtime underneath supports the same model via
 `CorpusIndex::try_with_namespaced_slot(check_id, key, …)`. Plugin
 authors don't see that API directly — the JS host translates
 `ctx.corpus.read/write/append` into the appropriate namespaced calls.

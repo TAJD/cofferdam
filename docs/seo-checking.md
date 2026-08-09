@@ -7,12 +7,11 @@ verifying a real build's HTML output. Every example here is lifted
 directly from [`examples-plugins/seo/`](https://github.com/TAJD/cofferdam/tree/main/examples-plugins/seo),
 a real, tested plugin package you can read, run, and copy from.
 
-This page assembles four SDK surfaces that each have their own reference
-documentation — [Author guide](/plugin-sdk-guide), [Type-aware checks](/type-aware-checks),
+It assembles surfaces documented separately on three reference pages —
+[Author guide](/plugin-sdk-guide), [Type-aware checks](/type-aware-checks)
 and [Verifying built output](/verify-dist) — into one continuous use case.
-If you only need the API reference for one surface, those pages are more
-direct; this page is for readers who want to see how the pieces fit
-together.
+If you want the API reference for a single surface, go to those pages
+instead; this one is for seeing how the pieces fit together.
 
 ## The use case
 

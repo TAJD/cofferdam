@@ -151,7 +151,7 @@ Recommendations for teams adopting suppression directives:
 
 **Prefer next-line over range, and range over file.** Narrower scope means fewer future findings silently hidden. File-wide suppression is appropriate for generated files or vendor code that should not be linted at all; prefer checking the scope is correct before reaching for it.
 
-**Generated and vendor files: consider `--ignore-path` instead.** If an entire file should be excluded from analysis, putting it in `cofferdam.toml`'s `exclude` list (or using `--ignore-path`) is cleaner than a `cofferdam-ignore-file` directive. Exclusions are visible at the config level; file-wide directives are buried in the file itself.
+**Generated and vendor files: exclude them at the config level instead.** If an entire file should never be analysed, list it in `cofferdam.toml`'s `exclude` or in [`.cofferdamignore`](/ignore) rather than reaching for a `cofferdam-ignore-file` directive. Exclusions are visible where someone will look for them; file-wide directives are buried in the file itself.
 
 ---
 

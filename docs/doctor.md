@@ -93,14 +93,14 @@ Remediation: `scope cofferdam by passing paths or configuring [discovery] in cof
 
 Discovers all `.ts`/`.tsx` files (same walk as discovery), then scans each file for `// cofferdam-disable-next-line` and `/* cofferdam-disable */` directives that name specific check IDs. Validates every named ID against the current `all_builtins()` registry. This catches stale directives left over after a check was renamed or removed.
 
-If more than 1000 files are found, the scan is skipped with a warning (use `--paths` to narrow scope and then re-run).
+If more than 1000 files are found, the scan is skipped with a warning. `doctor` scans the working directory and takes no path argument, so the way to narrow the scope is to run it from a subdirectory.
 
 | Status | Condition |
 |---|---|
 | Pass | All named directive IDs are known |
 | Warn | One or more directive IDs reference unknown checks, or >1000 files (scan skipped) |
 
-Remediation: `rename to a current check ID or remove the directive — see cofferdam explain --list`
+Remediation: rename to a current check ID or remove the directive. `cofferdam explain <CHECK_ID>` describes one check; the full catalog is at [checks](/checks/).
 
 ---
 

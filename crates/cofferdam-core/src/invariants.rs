@@ -243,10 +243,11 @@ impl Default for InvariantsSpec {
 /// and `Warning.UnusedImport`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PublicApiSpec {
-    /// Each entry is either a relative file path (`src/index.ts`) or a
-    /// `package.json:<key>` pointer (`package.json:exports`). The
-    /// `package.json:` form is resolved by the engine at load time; the
-    /// resolved set is stored here.
+    /// Each entry is a relative file path (`src/index.ts`), a glob
+    /// (`src/api/**/*.ts`) or a `package.json:<key>` pointer
+    /// (`package.json:exports`). Entries are stored verbatim;
+    /// `cofferdam_core::public_api::resolve_public_api` reads the
+    /// manifest and expands the pointer form.
     pub exports: Vec<String>,
 }
 

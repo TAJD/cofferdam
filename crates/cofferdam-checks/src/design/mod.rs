@@ -160,12 +160,16 @@ mod tests {
     }
 
     #[test]
-    fn package_json_entry_is_ignored() {
+    fn package_json_entry_with_no_manifest_matches_nothing_and_says_so() {
         let root = PathBuf::from("/project");
         let api = make_public_api(&["package.json:exports"], &root);
-        // No file key should match — the entry is silently dropped.
         let key = path_key(&root.join("src/index.ts"));
         assert!(!api.is_match(&key));
+        assert_eq!(
+            api.unresolved(),
+            ["package.json:exports".to_string()],
+            "a pointer at a manifest that isn't there must be reported, not dropped"
+        );
     }
 
     #[test]

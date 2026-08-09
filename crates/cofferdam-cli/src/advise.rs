@@ -343,15 +343,9 @@ pub fn build_advisories(
         project_config.as_ref().and_then(|p| p.invariants.as_ref());
     let public_api_matcher: Option<PublicApi> = invariants
         .map(|spec| public_api::resolve_public_api(&spec.public_api.exports, &spec.project_root));
-    let public_api_unresolved: Vec<String> = invariants
-        .map(|spec| {
-            spec.public_api
-                .exports
-                .iter()
-                .filter(|e| e.starts_with("package.json:"))
-                .cloned()
-                .collect()
-        })
+    let public_api_unresolved: Vec<String> = public_api_matcher
+        .as_ref()
+        .map(|m| m.unresolved().to_vec())
         .unwrap_or_default();
 
     // Load plugin check metadata so advise can include plugin-specific
@@ -911,8 +905,9 @@ pub struct Constraint {
     pub exempt: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exempt_reason: Option<String>,
-    /// `[public_api].exports` entries this constraint could not resolve
-    /// (currently `package.json:<key>` pointers — resolution deferred).
+    /// `[public_api].exports` entries this constraint could not resolve —
+    /// a `package.json:<key>` pointer whose manifest is missing, malformed
+    /// or lacks that key.
     /// Present only on `Design.OrphanExport` when such entries exist, so
     /// callers relying on `public_api`/`exempt` know the allowlist is
     /// incomplete rather than silently treating it as fully resolved.

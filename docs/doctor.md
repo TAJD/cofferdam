@@ -34,7 +34,7 @@ Remediation: `re-install @cofferdam/cofferdam`
 
 ### config
 
-Searches for `cofferdam.toml` by walking up from the current directory to the nearest `.git` root. (`cofferdam check` uses the same walk, but anchors it on the paths you ask it to analyze and only falls back to the current directory; `doctor` takes no target path, so it always reports on the current-directory anchor.) Reports whether the file exists, whether it parses cleanly, and whether it references any unknown check IDs.
+Searches for `cofferdam.toml` by walking up from the current directory to the nearest `.git` root. (`cofferdam check` uses the same walk, but anchors it on the paths you ask it to analyse and only falls back to the current directory; `doctor` takes no target path, so it always reports on the current-directory anchor.) Reports whether the file exists, whether it parses cleanly, and whether it references any unknown check IDs.
 
 | Status | Condition |
 |---|---|
@@ -100,7 +100,7 @@ If more than 1000 files are found, the scan is skipped with a warning. `doctor` 
 | Pass | All named directive IDs are known |
 | Warn | One or more directive IDs reference unknown checks, or >1000 files (scan skipped) |
 
-Remediation: rename to a current check ID or remove the directive. `cofferdam explain <CHECK_ID>` describes one check; the full catalog is at [checks](/checks/).
+Remediation: rename to a current check ID or remove the directive. `cofferdam explain <CHECK_ID>` describes one check; the full catalogue is at [checks](/checks/).
 
 ---
 

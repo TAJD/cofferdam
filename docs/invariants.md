@@ -15,6 +15,26 @@ used — the analyzed target path, falling back to the working directory —
 until it finds the file or hits a `.git` entry. Both files
 are optional and additive; you can ship one without the other.
 
+## Seeing what was loaded
+
+```sh
+cofferdam invariants show          # the resolved, merged spec
+cofferdam invariants show --robot  # the same, as JSON
+cofferdam invariants validate      # parse and report problems; exits 1 on failure
+cofferdam invariants normalize     # canonical TOML, to stdout
+```
+
+Reach for `show` when a rule is not firing. It prints which files were
+read and — the part that usually explains it — which of them the layers in
+force came from. A `[layers]` block in `cofferdam.invariants.toml`
+replaces `cofferdam.toml`'s wholesale, so the file you are staring at may
+be the one that lost.
+
+`validate` parses the spec without running the engine, so CI can gate on
+the config separately from the findings it produces. Pass `--strict` to
+fail on warnings too — a missing or deprecated `schema_version`, or
+`[layers]` declared in both files.
+
 ## Starter spec
 
 The minimal viable spec for a typical Next.js/Vite app — copy, adjust the

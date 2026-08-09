@@ -2,7 +2,7 @@
 
 use cofferdam_cli::{
     advise, advise_diff, agents, baseline_diff, baseline_lint, context_cmd, doctor, explain,
-    gen_docs, init, plugins, type_host, watch,
+    gen_docs, init, invariants_cmd, plugins, type_host, watch,
 };
 
 use std::collections::BTreeMap;
@@ -549,6 +549,15 @@ enum Cmd {
         #[arg(long)]
         lint_context_suppress: bool,
     },
+    /// Inspect the resolved architectural spec — the merge of
+    /// `cofferdam.toml` `[layers]` and `cofferdam.invariants.toml` that
+    /// `check` actually runs against (CD-308). Use it when a rule is not
+    /// firing and you want to know what cofferdam loaded, rather than
+    /// what you think you wrote.
+    Invariants {
+        #[command(subcommand)]
+        cmd: InvariantsCmd,
+    },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
     /// index, and the CLI reference page (from clap-markdown). Use
@@ -637,6 +646,69 @@ enum Cmd {
         /// themselves still print. Has no effect on JSON output.
         #[arg(long)]
         quiet: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum InvariantsCmd {
+    /// Print the resolved, merged spec: which files were read, which
+    /// layers are in force and which file they came from, the public
+    /// API, boundaries and invariants, plus any load warnings. Always
+    /// exits 0 when the spec loads, including when nothing is declared.
+    Show {
+        /// Directory to resolve from. Discovery walks up from here, the
+        /// same way `check` does. Defaults to `.`.
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Output format. Default: `text`. With `--robot` and no
+        /// explicit `--format`, defaults to `json`.
+        #[arg(long, value_enum)]
+        format: Option<ContextOutputFormat>,
+        /// Shorthand: JSON output unless `--format` is given.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output.
+        #[arg(long)]
+        pretty: bool,
+        /// Path to a `cofferdam.toml` config file. Same discovery
+        /// semantics as `check`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+    },
+    /// Parse the spec and report problems without running the engine.
+    /// Exits 1 when the spec fails to load — a malformed predicate, an
+    /// unsupported schema version — so CI can gate on the config alone,
+    /// separately from the findings it produces. Warnings do not fail
+    /// the run unless `--strict` is set.
+    Validate {
+        /// Directory to resolve from. Defaults to `.`.
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Treat load warnings — a deprecated or missing
+        /// `schema_version`, `[layers]` declared in both files — as
+        /// failures.
+        #[arg(long)]
+        strict: bool,
+        /// Path to a `cofferdam.toml` config file.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+    },
+    /// Print the canonical TOML serialisation of
+    /// `cofferdam.invariants.toml` — every optional field spelled out in
+    /// the form `docs/schema-versioning.md` defines as canonical. Writes
+    /// to stdout; redirect it yourself if you want to replace the file.
+    /// Exits 1 when no `cofferdam.invariants.toml` is discoverable,
+    /// since there is nothing to normalise.
+    Normalize {
+        /// Directory to resolve from. Defaults to `.`.
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
     },
 }
 
@@ -1129,6 +1201,7 @@ fn run() -> ExitCode {
             lint_knowledge,
             lint_context_suppress,
         }),
+        Cmd::Invariants { cmd } => run_invariants(cmd),
         Cmd::GenDocs { out, check } => gen_docs::run::<Cli>(out, check),
         Cmd::Lsp => run_lsp(),
         Cmd::TypeHost {
@@ -1384,6 +1457,103 @@ fn find_tsconfig(start: &Path) -> Option<PathBuf> {
         dir = d.parent();
     }
     None
+}
+
+fn run_invariants(cmd: InvariantsCmd) -> ExitCode {
+    match cmd {
+        InvariantsCmd::Show {
+            path,
+            format,
+            robot,
+            pretty,
+            config,
+            no_config,
+        } => {
+            let resolved = match invariants_cmd::resolve(config.as_deref(), &path, no_config) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            let format = format.unwrap_or(if robot {
+                ContextOutputFormat::Json
+            } else {
+                ContextOutputFormat::Text
+            });
+            match format {
+                ContextOutputFormat::Text => print!("{}", invariants_cmd::render_text(&resolved)),
+                ContextOutputFormat::Json => {
+                    let rendered = if pretty {
+                        serde_json::to_string_pretty(&resolved)
+                    } else {
+                        serde_json::to_string(&resolved)
+                    };
+                    match rendered {
+                        Ok(s) => println!("{s}"),
+                        Err(e) => {
+                            eprintln!("error: serializing spec: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        InvariantsCmd::Validate {
+            path,
+            strict,
+            config,
+            no_config,
+        } => {
+            let resolved = match invariants_cmd::resolve(config.as_deref(), &path, no_config) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            for w in &resolved.warnings {
+                eprintln!("warning: {w}");
+            }
+            if strict && !resolved.warnings.is_empty() {
+                eprintln!(
+                    "error: {} warning(s) with --strict",
+                    resolved.warnings.len()
+                );
+                return ExitCode::FAILURE;
+            }
+            println!("ok: spec loads");
+            ExitCode::SUCCESS
+        }
+        InvariantsCmd::Normalize { path } => {
+            let Some(found) = cofferdam_core::invariants::discover(&path) else {
+                eprintln!(
+                    "error: no {} found from {}",
+                    cofferdam_core::invariants::FILE_NAME,
+                    path.display()
+                );
+                return ExitCode::FAILURE;
+            };
+            let spec = match cofferdam_core::invariants::load(&found) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match invariants_cmd::normalize(&spec) {
+                Ok(s) => {
+                    print!("{s}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: serializing spec: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
 }
 
 fn run_lsp() -> ExitCode {

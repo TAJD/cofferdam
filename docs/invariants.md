@@ -127,8 +127,9 @@ deprecation hint pointing at `cofferdam.toml`. Read by
   many files. Standard glob metacharacters `*`, `**`, `?`, `[…]`, and
   `{…,…}` are supported; an invalid pattern is silently skipped (the
   check still runs, the pattern just exempts nothing), or
-* a `package.json:<key>` pointer (`package.json:exports`) — schema
-  accepts it; resolution lands in a follow-up bead.
+* a `package.json:<key>` pointer (`package.json:exports`) — the schema
+  accepts it and the loader stores it, but nothing resolves it yet, so it
+  exempts nothing (CD-304). Until it does, list the entry files directly.
 
 **Example — exempt a vendored UI directory:**
 
@@ -144,10 +145,12 @@ Read by `Design.OrphanExport`.
 
 ### `[boundaries]`
 
-Glob → boundary metadata. `frozen = true` marks the area as off-limits
-to new code; v0 stub-warns one finding per file matching the glob
-(`Design.BoundaryFrozen`), with `reason` echoed in the message. Per-file
-delta enforcement against a baseline lands in a follow-up bead.
+Glob → boundary metadata. `frozen = true` marks the area as off-limits to
+new code. Today `Design.BoundaryFrozen` emits one finding per file
+matching the glob, with `reason` echoed in the message — every file, not
+just the ones you touched, so a large frozen area produces a lot of
+findings on the first run. Baseline it. Delta enforcement, which would
+flag only changed files, is not implemented (CD-304).
 
 ### `[invariants]`
 
@@ -213,7 +216,7 @@ over comparisons; string concat with `+`; functions `basename(...)`,
 | `==` / `!=` | string equality on `file.path` / `file.layer` |
 | `in '<layer>'` | file resolves to the named layer |
 | `imports '<spec>'` | direct import edge to a module specifier or path |
-| `transitively imports '<spec>'` | transitive closure (direct-only in v1; full closure in cd-9hp.9) |
+| `transitively imports '<spec>'` | transitive closure — **direct edges only today**, so it behaves exactly like `imports` (CD-304) |
 | `imports as type '<spec>'` / `imports as value '<spec>'` | type-only vs value imports |
 | `exports '<name>'` | file exports a named symbol |
 
@@ -235,8 +238,8 @@ refuses to start. Bad scripts never reach file 4000 of the run.
 * `message` is the literal string. `{file}` and friends from the
   grammar doc are forward-compat surface — v1 emits the message
   verbatim and reserves interpolation for v2.
-* `transitively imports` evaluates direct edges only in v1 (graph
-  closure ships with cd-9hp.9).
+* `transitively imports` evaluates direct edges only, so a rule written
+  with it silently misses anything more than one hop away (CD-304).
 
 Read by `Design.ScriptedInvariant`. All scripted rules share one
 check id — suppress per-line via `// cofferdam-disable-next-line

@@ -212,8 +212,7 @@ evaluator (`Design.ScriptedInvariant`) walks per file.
 
 ## Implementation pointer
 
-- Parser + AST: `crates/cofferdam-core/src/dsl/` (cd-9hp.1 ships
-  this in three checkpoints — see the bead's `--design` field).
+- Parser + AST: `crates/cofferdam-core/src/dsl/`.
 - Evaluator over flat corpus: same module, separate file.
 - Engine integration: `Design.ScriptedInvariant` registered in
   `cofferdam-checks` like any other check, but its `run()` body

@@ -212,17 +212,19 @@ enum Cmd {
         /// external tool if you want a chart. (CD-64 D3)
         #[arg(long)]
         trend: bool,
-        /// Restrict output to findings from one check (dotted id, e.g.
-        /// `Warning.IslandApiConvention`). Applied after plugin merge, so
-        /// it covers both built-in and plugin-emitted findings; budgets,
-        /// baseline, and the exit-code gate all see only this check's
-        /// findings. Useful for a CI hook that gates on a single
-        /// project-specific plugin check without turning on the full
-        /// suite (CD-74). An id that matches no built-in check (and no
-        /// plugins are configured) exits 2 rather than silently returning
-        /// zero findings — a typo here must not make a CI gate pass.
-        #[arg(long, value_name = "CHECK_ID")]
-        only: Option<String>,
+        /// Restrict output to findings from the named checks (dotted ids,
+        /// e.g. `Warning.IslandApiConvention`). Repeatable, and accepts a
+        /// comma-separated list: `--only A --only B` and `--only A,B` are
+        /// the same. Applied after plugin merge, so it covers both
+        /// built-in and plugin-emitted findings; budgets, baseline, and
+        /// the exit-code gate all see only these checks' findings. Useful
+        /// for a CI hook that gates on a few project-specific plugin
+        /// checks without turning on the full suite (CD-74, CD-307). If
+        /// ANY id matches no known check, the run exits 2 rather than
+        /// silently narrowing — a typo in one of several ids must not
+        /// quietly shrink a CI gate.
+        #[arg(long, value_name = "CHECK_ID", value_delimiter = ',')]
+        only: Vec<String>,
     },
     /// Opt-in check mode for built HTML output (CD-85). Discovers only the
     /// given output directory (e.g. `dist/`, `.next/`, `build/`) and runs
@@ -1471,7 +1473,7 @@ struct CheckArgs {
     fail_on_type_unavailable: bool,
     time_checks: bool,
     trend: bool,
-    only: Option<String>,
+    only: Vec<String>,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -1818,59 +1820,64 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // both engine and plugin findings respect the narrowed output window.
     signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
 
-    // --only <CheckId> (CD-74): restrict to one check's findings, applied
-    // after plugin merge so it covers plugin-emitted ids too. A check that
-    // legitimately found nothing this run must NOT error — so validate
-    // against the known-id registry, not against whether it fired here.
-    // Plugin ids aren't statically known (same reason the cofferdam.toml
-    // unknown-check-id warning above is silenced when plugins are
-    // configured), so skip the typo check in that case.
+    // --only <CheckId>... (CD-74, widened to a set in CD-307): restrict to
+    // the named checks' findings, applied after plugin merge so it covers
+    // plugin-emitted ids too. A check that legitimately found nothing this
+    // run must NOT error — so validate against the known-id registry, not
+    // against whether it fired here.
     //
     // A typo hard-errors (exit 2) rather than warning-and-continuing: the
-    // primary use case is a CI hook gating on one check's exit code, and a
-    // silently-empty `signed` from an unmatched id would make that gate
-    // pass regardless of real violations — the exact false-green failure
-    // mode `--fail-on-type-unavailable` (cd-260l) and the `[budgets]` key
-    // warning both exist to prevent.
-    if let Some(only_id) = only.as_deref() {
-        let plugin_cfg = project_config
+    // primary use case is a CI hook gating on these checks' exit code, and
+    // a silently-narrowed `signed` from an unmatched id would make that
+    // gate pass regardless of real violations — the exact false-green
+    // failure mode `--fail-on-type-unavailable` (cd-260l) and the
+    // `[budgets]` key warning both exist to prevent. With a set of ids
+    // that reasoning gets stronger, not weaker: one bad id out of four
+    // would otherwise quietly drop a quarter of the gate.
+    if !only.is_empty() {
+        let plugin_metas = project_config
             .as_ref()
-            .filter(|cfg| !cfg.plugins.is_empty());
-        // CD-96: when plugins are configured, `only_id` might be the bare
-        // id a plugin author wrote in their own `defineCheck({ id: ... })`
-        // rather than the category-prefixed id its findings actually
-        // carry at runtime. Resolve via plugin metadata (available even
-        // for a check that found nothing this run) so both forms work,
-        // and so a genuine typo still hard-errors instead of silently
-        // matching zero findings — the previous behaviour blanket-skipped
-        // this validation whenever any plugin was configured.
-        let resolved_only = match plugin_cfg {
-            Some(cfg) => {
+            .filter(|cfg| !cfg.plugins.is_empty())
+            .map(|cfg| {
                 let cfg_dir = resolved_config_path
                     .as_deref()
                     .and_then(Path::parent)
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| PathBuf::from("."));
-                let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir);
-                let matched = plugin_metas.iter().find(|m| {
-                    let prefixed = plugin_prefixed_id(m);
-                    m.id == only_id || prefixed == only_id
-                });
-                match matched {
-                    Some(m) => Some(plugin_prefixed_id(m)),
-                    None if registered.contains(&only_id) => Some(only_id.to_string()),
-                    None => None,
-                }
+                plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir)
+            })
+            .unwrap_or_default();
+
+        let mut resolved: Vec<String> = Vec::with_capacity(only.len());
+        let mut unknown: Vec<&str> = Vec::new();
+        for only_id in only.iter().map(String::as_str) {
+            // CD-96: `only_id` might be the bare id a plugin author wrote
+            // in their own `defineCheck({ id: ... })` rather than the
+            // category-prefixed id its findings actually carry at runtime.
+            // Resolve via plugin metadata (available even for a check that
+            // found nothing this run) so both forms work, and so a genuine
+            // typo still hard-errors instead of silently matching zero.
+            let matched = plugin_metas
+                .iter()
+                .find(|m| m.id == only_id || plugin_prefixed_id(m) == only_id);
+            match matched {
+                Some(m) => resolved.push(plugin_prefixed_id(m)),
+                None if registered.contains(&only_id) => resolved.push(only_id.to_string()),
+                None => unknown.push(only_id),
             }
-            None => registered.contains(&only_id).then(|| only_id.to_string()),
-        };
-        let Some(resolved_only) = resolved_only else {
+        }
+        if !unknown.is_empty() {
             eprintln!(
-                "error: --only '{only_id}' matches no known check id (built-in or plugin) — check for a typo"
+                "error: --only {} matches no known check id (built-in or plugin) — check for a typo",
+                unknown
+                    .iter()
+                    .map(|id| format!("'{id}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             return ExitCode::from(2);
-        };
-        signed.retain(|(issue, _sig)| issue.check_id == resolved_only);
+        }
+        signed.retain(|(issue, _sig)| resolved.contains(&issue.check_id));
     }
 
     // COMMON: [budgets] enforcement + --trend (CD-64 D2/D3). Both tally

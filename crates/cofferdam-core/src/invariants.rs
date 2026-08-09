@@ -393,7 +393,10 @@ pub enum InvariantsError {
         declared: SchemaVersion,
         current: SchemaVersion,
     },
-    #[error("{path}: schema_version {declared} is no longer supported by this build (minimum supported is {min_supported}); run `cofferdam invariants migrate` against an older cofferdam release or update the spec to a supported version")]
+    // No `cofferdam invariants` subcommand exists; the hint used to name
+    // `invariants migrate`, which would strand a user at the one moment
+    // they are already stuck (CD-301).
+    #[error("{path}: schema_version {declared} is no longer supported by this build (minimum supported is {min_supported}); update the spec to a supported version, or pin an older cofferdam release that still accepts it")]
     UnsupportedSchemaVersion {
         path: PathBuf,
         declared: SchemaVersion,
@@ -805,6 +808,34 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    /// A schema-version error is read at the one moment the user is already
+    /// stuck, so it must not send them to a subcommand that does not exist.
+    /// `cofferdam invariants` is not one of them (CD-301).
+    #[test]
+    fn schema_version_errors_name_no_invented_subcommand() {
+        let v = SchemaVersion { major: 1, minor: 0 };
+        let errors = [
+            InvariantsError::FutureSchemaVersion {
+                path: PathBuf::from("cofferdam.invariants.toml"),
+                declared: SchemaVersion { major: 9, minor: 0 },
+                current: v,
+            },
+            InvariantsError::UnsupportedSchemaVersion {
+                path: PathBuf::from("cofferdam.invariants.toml"),
+                declared: SchemaVersion { major: 0, minor: 1 },
+                min_supported: v,
+            },
+        ];
+        for e in errors {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("cofferdam invariants"),
+                "error names a `cofferdam invariants` subcommand, which clap \
+                 does not define; verify against `cofferdam --help`: {msg}"
+            );
+        }
+    }
 
     const FULL_SPEC: &str = r#"
 schema_version = "1.0"

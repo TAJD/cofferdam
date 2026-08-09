@@ -39,6 +39,7 @@
 pub mod loader;
 pub mod options;
 pub mod resolution;
+pub mod schema;
 
 use std::collections::BTreeMap;
 use std::io;
@@ -54,6 +55,7 @@ pub use options::{options_for, options_for_raw, unknown_check_ids};
 pub use resolution::{
     resolve_for_targets, resolve_with_invariants, target_anchor, LoadDiagnostics,
 };
+pub use schema::{unknown_keys, KeySpec, Keys, SectionSpec, UnknownKey, SECTIONS};
 
 /// Parsed project config: per-check raw option bags + per-check
 /// severity overrides. Unknown check IDs are stored verbatim and
@@ -119,6 +121,12 @@ pub struct ProjectConfig {
     /// (never fails `cofferdam context`, which always exits 0 outside
     /// usage errors). Empty when none are declared.
     pub context_suppress: Vec<ContextSuppressRule>,
+    /// Keys the file declares that no section of the schema recognises
+    /// (CD-311). Serde skips them, so without this they would be
+    /// silently inert — a rule that never fires and a green run. Surfaced
+    /// through `LoadDiagnostics` as warnings, the same way an unknown
+    /// check id is: a typo should be visible, not fatal.
+    pub unknown_keys: Vec<schema::UnknownKey>,
 }
 
 /// One `[[overrides]]` block: a set of path globs plus the per-check
@@ -772,6 +780,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let opts = options_for(
@@ -810,6 +819,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -833,6 +843,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -913,6 +924,7 @@ severity = 5
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
             context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()

@@ -131,6 +131,16 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         source,
     })?;
 
+    // CD-311: serde skips keys it does not recognise, so a typo or an
+    // invented key parses cleanly and does nothing. Re-parse as a plain
+    // table and diff against the declared schema so the CLI can say so.
+    // Warn rather than reject: the dangerous half of the problem is the
+    // silence, and rejecting outright would break every existing config
+    // carrying a stray key.
+    let unknown_keys = toml::from_str::<toml::Table>(raw)
+        .map(|t| super::schema::unknown_keys(&t))
+        .unwrap_or_default();
+
     let mut checks: BTreeMap<String, BTreeMap<String, RawOptionValue>> = BTreeMap::new();
     let mut severity_overrides: BTreeMap<String, Severity> = BTreeMap::new();
     for (check_id, value) in doc.checks {
@@ -227,6 +237,7 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         budgets: doc.budgets,
         engine_extra_extensions,
         context_suppress,
+        unknown_keys,
     })
 }
 

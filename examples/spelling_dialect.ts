@@ -28,3 +28,13 @@ export const initializeColorTable = initialize;
 // NOT FLAGGED: a literal with no space is a code token, not prose.
 export const MODULE = './normalize';
 export const KEY = 'color';
+
+// NOT FLAGGED: a CSS-property-keyed object value is a CSS value, not
+// prose, even though it contains a space.
+export const transitionStyle = {
+  transition: 'width 200ms linear, background-color 300ms',
+};
+
+// NOT FLAGGED: a dialect word hyphenated against a utility-class root
+// reads as a class name, not prose, even outside a className attribute.
+export const utilityClasses = 'flex items-center justify-center';

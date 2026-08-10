@@ -208,6 +208,7 @@ fn summarise_incoming(
     g: &Graph,
     file_node: cofferdam_graph::NodeId,
     test_patterns: &[String],
+    track_non_test: bool,
 ) -> FileConsumption {
     let mut out = FileConsumption::default();
     for (src, kind, attrs) in g.incoming(file_node) {
@@ -227,13 +228,16 @@ fn summarise_incoming(
         // Importer is a test file when its node path (already
         // forward-slash-normalised by build_canonical_graph) matches
         // one of `test_file_patterns` — the same list that gates
-        // exports declared in test files.
-        let from_test_file = match g.node(src) {
-            Some(cofferdam_graph::NodeKind::File { path, .. }) => {
-                matches_substring(path, test_patterns)
-            }
-            _ => false,
-        };
+        // exports declared in test files. Only computed when the
+        // `non_test` tally will actually be read: `matches_substring`
+        // allocates, and this runs once per import edge in the project.
+        let from_test_file = track_non_test
+            && match g.node(src) {
+                Some(cofferdam_graph::NodeKind::File { path, .. }) => {
+                    matches_substring(path, test_patterns)
+                }
+                _ => false,
+            };
 
         let apply = |set: &mut ConsumptionSet| match import_kind {
             "namespace" => set.ns_touched = true,
@@ -249,7 +253,7 @@ fn summarise_incoming(
             _ => {}
         };
         apply(&mut out.any);
-        if !from_test_file {
+        if track_non_test && !from_test_file {
             apply(&mut out.non_test);
         }
     }
@@ -304,7 +308,7 @@ fn compute_orphans_on_graph(
 
         let normalised = normalized_file_path(&file_path);
         let consumption = match g.node_id_for_path(&normalised) {
-            Some(id) => summarise_incoming(g, id, &opts.test_patterns),
+            Some(id) => summarise_incoming(g, id, &opts.test_patterns, !opts.test_imports_count),
             // File never made it into the graph — happens only when
             // no record at all referenced it. Treat as zero
             // consumption (every named/default export is orphan).
@@ -449,6 +453,23 @@ mod tests {
         let exports = vec![named_export(&src, "entitlementFor")];
         let imports = vec![named_import(&test, &src, "entitlementFor")];
 
+        assert!(findings(&exports, &imports, true).is_empty());
+    }
+
+    /// One non-test consumer is enough under the strict reading — the
+    /// test consumers alongside it change nothing.
+    #[test]
+    fn mixed_test_and_source_consumers_stay_clean_when_strict() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let test = PathBuf::from("/proj/lib/account-capabilities.test.ts");
+        let app = PathBuf::from("/proj/app/route.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![
+            named_import(&test, &src, "entitlementFor"),
+            named_import(&app, &src, "entitlementFor"),
+        ];
+
+        assert!(findings(&exports, &imports, false).is_empty());
         assert!(findings(&exports, &imports, true).is_empty());
     }
 

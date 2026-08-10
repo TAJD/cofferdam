@@ -12,7 +12,8 @@ use cofferdam_core::{
     ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
 };
 use oxc_ast::ast::{
-    JSXAttribute, JSXAttributeName, JSXAttributeValue, ObjectProperty, PropertyKey, StringLiteral,
+    Expression, JSXAttribute, JSXAttributeName, JSXAttributeValue, ObjectProperty, PropertyKey,
+    StringLiteral,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
@@ -2094,13 +2095,21 @@ impl<'a> Visit<'a> for ProseLiteralCollector<'_> {
     /// `'background-color'` form) pairs a CSS property with a CSS value —
     /// not prose, even when the value itself contains a space
     /// (`'width 200ms linear'`).
+    ///
+    /// Only the property's own string value is skipped, never the whole
+    /// subtree: a dozen CSS property names (`content`, `color`, `order`,
+    /// `filter`, `position`, …) are commoner as ordinary domain keys, and
+    /// skipping the subtree took a chat message's `{ role, content }` out
+    /// of the check entirely.
     fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
         let key_name: Option<&str> = match &it.key {
             PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
             PropertyKey::StringLiteral(lit) => Some(lit.value.as_str()),
             _ => None,
         };
-        if key_name.is_some_and(is_css_property_key) {
+        if key_name.is_some_and(is_css_property_key)
+            && matches!(&it.value, Expression::StringLiteral(_))
+        {
             return;
         }
         oxc_ast_visit::walk::walk_object_property(self, it);
@@ -2112,6 +2121,12 @@ impl<'a> Visit<'a> for ProseLiteralCollector<'_> {
 /// `{ 'background-color': ... }` as CSS rather than prose. Not
 /// exhaustive — an unrecognized key just falls through to the ordinary
 /// prose/code-token rules, same as before this list existed.
+///
+/// Single words that are commoner as ordinary domain keys than as CSS —
+/// `content`, `color`, `order`, `filter`, `position`, `width` — are
+/// deliberately absent. Their CSS values (`'#fff'`, `'0 auto'`) almost
+/// never contain a dialect word, so listing them bought nothing and cost
+/// the check its view of every `{ role, content }` message object.
 const CSS_PROPERTY_NAMES: &[&str] = &[
     "align-content",
     "align-items",
@@ -2121,7 +2136,6 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "animation-duration",
     "animation-name",
     "animation-timing-function",
-    "appearance",
     "background",
     "background-color",
     "background-image",
@@ -2133,17 +2147,10 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "border-radius",
     "border-style",
     "border-width",
-    "bottom",
     "box-shadow",
     "box-sizing",
-    "clear",
-    "color",
     "column-gap",
-    "content",
     "cursor",
-    "display",
-    "fill",
-    "filter",
     "flex",
     "flex-basis",
     "flex-direction",
@@ -2151,13 +2158,11 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "flex-grow",
     "flex-shrink",
     "flex-wrap",
-    "float",
     "font",
     "font-family",
     "font-size",
     "font-style",
     "font-weight",
-    "gap",
     "grid",
     "grid-area",
     "grid-column",
@@ -2167,11 +2172,9 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "grid-template-areas",
     "grid-template-columns",
     "grid-template-rows",
-    "height",
     "justify-content",
     "justify-items",
     "justify-self",
-    "left",
     "letter-spacing",
     "line-height",
     "list-style",
@@ -2187,9 +2190,7 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "object-fit",
     "object-position",
     "opacity",
-    "order",
     "outline",
-    "overflow",
     "overflow-x",
     "overflow-y",
     "padding",
@@ -2201,9 +2202,6 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "place-items",
     "place-self",
     "pointer-events",
-    "position",
-    "resize",
-    "right",
     "row-gap",
     "stroke",
     "text-align",
@@ -2211,7 +2209,6 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "text-overflow",
     "text-shadow",
     "text-transform",
-    "top",
     "transform",
     "transform-origin",
     "transition",
@@ -2221,9 +2218,7 @@ const CSS_PROPERTY_NAMES: &[&str] = &[
     "transition-timing-function",
     "user-select",
     "vertical-align",
-    "visibility",
     "white-space",
-    "width",
     "word-break",
     "word-wrap",
     "z-index",
@@ -2353,7 +2348,6 @@ const CSS_CLASS_HYPHEN_SEGMENTS: &[&str] = &[
     "forced",
     "scrollbar",
     "background",
-    "accent",
 ];
 
 fn is_class_hyphen_segment(segment: &str) -> bool {
@@ -2691,6 +2685,30 @@ export function Panel() {
     fn a_utility_root_shared_with_an_english_prefix_is_still_excluded() {
         let src = "export const classes = 'self-center place-content-center';";
         assert!(run_spelling(&[("a.ts", src)], Some("british")).is_empty());
+    }
+
+    /// A dozen CSS property names — `content`, `order`, `filter`,
+    /// `position` — are commoner as ordinary domain keys. Skipping the
+    /// whole subtree took a chat message's `{ role, content }` out of the
+    /// check entirely, so only the property's own string value is skipped
+    /// (CD-319).
+    #[test]
+    fn prose_under_a_css_named_key_still_reports() {
+        let src = "export const msgs = [{ role: 'user', content: 'analyze the colour of it' }];";
+        let issues = run_spelling(&[("a.ts", src)], Some("american"));
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].message.contains("colour"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    /// The nested form the subtree skip also swallowed (CD-319).
+    #[test]
+    fn prose_nested_under_a_css_named_key_still_reports() {
+        let src = "export const cfg = { content: { title: 'analyze the colour of it' } };";
+        assert_eq!(run_spelling(&[("a.ts", src)], Some("american")).len(), 1);
     }
 
     /// Rewriting a media query breaks it as surely as rewriting a class

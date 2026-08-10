@@ -286,6 +286,7 @@ mod tests {
             include_type_only: false,
             test_patterns: Vec::new(),
             framework_entry_patterns: Vec::new(),
+            test_imports_count: true,
         }
     }
 

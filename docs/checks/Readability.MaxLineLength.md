@@ -4,7 +4,7 @@ title: Readability.MaxLineLength
 category: Readability
 base_priority: -5
 default_severity: Low
-options: [limit]
+options: [limit, report_unwrappable]
 autofix: false
 ---
 

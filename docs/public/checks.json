@@ -583,6 +583,12 @@
           "kind": "integer",
           "doc": "maximum line length in display columns",
           "default": 120
+        },
+        {
+          "id": "report_unwrappable",
+          "kind": "boolean",
+          "doc": "report lines even when the overflow comes from a single atomic token (a string/template/JSX-text/regex literal, or a JSX attribute with a literal value) that no formatter can break; disabled by default since such lines can't be shortened by hand either",
+          "default": false
         }
       ],
       "badges": [

@@ -2589,6 +2589,39 @@ fn plugin_prefixed_id(meta: &plugins::PluginCheckMeta) -> String {
     }
 }
 
+/// Per-path `[[overrides]]` resolution for one plugin finding (CD-321).
+/// Plugin checks run through the Node host in `plugins.rs`, entirely
+/// outside the engine's `self.checks` loop, so they never passed through
+/// `Engine::effective_options`/`effective_severity` — a `disabled = true`
+/// override matched a built-in check with identical `paths` but silently
+/// did nothing for a plugin check. Mirrors those two methods' last-match-
+/// wins semantics over the same `OverrideBlock` list the engine consults
+/// (plugin issues, like built-in ones, carry the category-prefixed
+/// `check_id` by the time they reach here).
+fn plugin_override_verdict(
+    overrides: &[cfg::OverrideBlock],
+    file_key: &str,
+    check_id: &str,
+) -> (bool, Option<Severity>) {
+    let mut disabled = false;
+    let mut severity = None;
+    for block in overrides {
+        if !block.is_match(file_key) {
+            continue;
+        }
+        let Some(oc) = block.checks.get(check_id) else {
+            continue;
+        };
+        if let Some(d) = oc.disabled {
+            disabled = d;
+        }
+        if let Some(s) = oc.severity {
+            severity = Some(s);
+        }
+    }
+    (disabled, severity)
+}
+
 /// Run Node-side plugins declared in `cofferdam.toml`, then re-apply the
 /// suppression directive parser to plugin findings (plugins bypass the
 /// engine's built-in suppression pass since they emit out-of-band).
@@ -2620,6 +2653,25 @@ fn run_plugins_filtered(
         tsconfig_path,
         warn_on_type_unavailable,
     );
+    let plugin_issues: Vec<cofferdam_core::Issue> = if cfg.overrides.is_empty() {
+        plugin_issues
+    } else {
+        plugin_issues
+            .into_iter()
+            .filter_map(|mut issue| {
+                let file_key = cfg::path_key(&issue.file);
+                let (disabled, severity) =
+                    plugin_override_verdict(&cfg.overrides, &file_key, &issue.check_id);
+                if disabled {
+                    return None;
+                }
+                if let Some(s) = severity {
+                    issue.severity = s;
+                }
+                Some(issue)
+            })
+            .collect()
+    };
     let suppression_cache: HashMap<PathBuf, cofferdam_engine::suppress::Suppressions> = files
         .iter()
         .filter_map(|p| {

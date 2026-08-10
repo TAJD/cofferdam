@@ -11,7 +11,9 @@ use cofferdam_core::{
     Issue, Location, OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
     ALL_PRE_FILTER_FINDINGS, REGISTERED_CHECK_IDS,
 };
-use oxc_ast::ast::{JSXAttributeValue, StringLiteral};
+use oxc_ast::ast::{
+    JSXAttribute, JSXAttributeName, JSXAttributeValue, ObjectProperty, PropertyKey, StringLiteral,
+};
 use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
 
@@ -1827,7 +1829,12 @@ const SPELLING_DIALECT_META: CheckMeta = CheckMeta {
 /// function to satisfy a prose convention is not a trade anyone would
 /// make. Only comments and prose-shaped string literals are scanned; a
 /// literal with no space in it is treated as a code token — an import
-/// specifier, a key, a check id — and skipped.
+/// specifier, a key, a check id — and skipped. A `className`/`class`
+/// attribute value and a CSS-property-keyed object value (`style={{
+/// backgroundColor: ... }}`) are skipped even though they contain spaces —
+/// a Tailwind class list is American by construction. A dialect word
+/// hyphenated against a utility-class root (`items-center`) is skipped the
+/// same way even outside those two positions.
 ///
 /// The check ships no opinion on which dialect is right. Under the
 /// default `dialect = "infer"` it reports the minority against whatever
@@ -1983,6 +1990,32 @@ fn collect_dialect_hits(text: &str, base: u32, full_text: &str, out: &mut Vec<Di
         let Some(&(dialect, counterpart)) = DIALECT_LOOKUP.get(folded.as_str()) else {
             continue;
         };
+        // `items-center` / `background-color`: a hyphenated compound whose
+        // other segment is a utility-class root reads as a class name, not
+        // prose. `well-organised` has no such neighbour on either side, so
+        // it is unaffected. Gated on the word being CSS vocabulary too,
+        // because a utility root like `self` is also an English hyphen
+        // prefix — without the gate `self-center` and `self-defence` are
+        // indistinguishable, and the latter is a spelling we want to keep
+        // reporting.
+        let hyphen_class_shape = is_css_vocabulary_word(folded.as_str());
+        let left_is_class = hyphen_class_shape && start > 0 && bytes[start - 1] == b'-' && {
+            let mut j = start - 1;
+            while j > 0 && is_word_char(Some(bytes[j - 1])) {
+                j -= 1;
+            }
+            is_class_hyphen_segment(&text[j..start - 1])
+        };
+        let right_is_class = hyphen_class_shape && i < bytes.len() && bytes[i] == b'-' && {
+            let mut j = i + 1;
+            while j < bytes.len() && is_word_char(Some(bytes[j])) {
+                j += 1;
+            }
+            is_class_hyphen_segment(&text[i + 1..j])
+        };
+        if left_is_class || right_is_class {
+            continue;
+        }
         out.push(DialectHit {
             span: span_from_bytes(full_text, base + start as u32, base + i as u32),
             word: word.to_string(),
@@ -2037,6 +2070,321 @@ impl<'a> Visit<'a> for ProseLiteralCollector<'_> {
             collect_dialect_hits(raw, start, self.text, self.hits);
         }
     }
+
+    /// `className="flex items-center"` / `class="..."` is a space-separated
+    /// utility-class list, not prose — a Tailwind class is American by
+    /// construction (`items-center`, `justify-center`). Skip the attribute
+    /// entirely rather than trying to tell a class list from a caption by
+    /// its text alone.
+    fn visit_jsx_attribute(&mut self, it: &JSXAttribute<'a>) {
+        let is_class_attr = match &it.name {
+            JSXAttributeName::Identifier(id) => {
+                let name = id.name.as_str();
+                name.eq_ignore_ascii_case("classname") || name.eq_ignore_ascii_case("class")
+            }
+            JSXAttributeName::NamespacedName(_) => false,
+        };
+        if is_class_attr {
+            return;
+        }
+        oxc_ast_visit::walk::walk_jsx_attribute(self, it);
+    }
+
+    /// `style={{ backgroundColor: '...' }}` (and the string-keyed
+    /// `'background-color'` form) pairs a CSS property with a CSS value —
+    /// not prose, even when the value itself contains a space
+    /// (`'width 200ms linear'`).
+    fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
+        let key_name: Option<&str> = match &it.key {
+            PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+            PropertyKey::StringLiteral(lit) => Some(lit.value.as_str()),
+            _ => None,
+        };
+        if key_name.is_some_and(is_css_property_key) {
+            return;
+        }
+        oxc_ast_visit::walk::walk_object_property(self, it);
+    }
+}
+
+/// A representative slice of the CSS property surface, in kebab-case.
+/// Enough to recognize `style={{ backgroundColor: ... }}` and
+/// `{ 'background-color': ... }` as CSS rather than prose. Not
+/// exhaustive — an unrecognized key just falls through to the ordinary
+/// prose/code-token rules, same as before this list existed.
+const CSS_PROPERTY_NAMES: &[&str] = &[
+    "align-content",
+    "align-items",
+    "align-self",
+    "animation",
+    "animation-delay",
+    "animation-duration",
+    "animation-name",
+    "animation-timing-function",
+    "appearance",
+    "background",
+    "background-color",
+    "background-image",
+    "background-position",
+    "background-repeat",
+    "background-size",
+    "border",
+    "border-color",
+    "border-radius",
+    "border-style",
+    "border-width",
+    "bottom",
+    "box-shadow",
+    "box-sizing",
+    "clear",
+    "color",
+    "column-gap",
+    "content",
+    "cursor",
+    "display",
+    "fill",
+    "filter",
+    "flex",
+    "flex-basis",
+    "flex-direction",
+    "flex-flow",
+    "flex-grow",
+    "flex-shrink",
+    "flex-wrap",
+    "float",
+    "font",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "gap",
+    "grid",
+    "grid-area",
+    "grid-column",
+    "grid-gap",
+    "grid-row",
+    "grid-template",
+    "grid-template-areas",
+    "grid-template-columns",
+    "grid-template-rows",
+    "height",
+    "justify-content",
+    "justify-items",
+    "justify-self",
+    "left",
+    "letter-spacing",
+    "line-height",
+    "list-style",
+    "margin",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "max-height",
+    "max-width",
+    "min-height",
+    "min-width",
+    "object-fit",
+    "object-position",
+    "opacity",
+    "order",
+    "outline",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "padding",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "place-content",
+    "place-items",
+    "place-self",
+    "pointer-events",
+    "position",
+    "resize",
+    "right",
+    "row-gap",
+    "stroke",
+    "text-align",
+    "text-decoration",
+    "text-overflow",
+    "text-shadow",
+    "text-transform",
+    "top",
+    "transform",
+    "transform-origin",
+    "transition",
+    "transition-delay",
+    "transition-duration",
+    "transition-property",
+    "transition-timing-function",
+    "user-select",
+    "vertical-align",
+    "visibility",
+    "white-space",
+    "width",
+    "word-break",
+    "word-wrap",
+    "z-index",
+];
+
+/// `backgroundColor` -> `background-color`; a key already containing a
+/// hyphen (`'background-color'`) is assumed to be kebab-case already.
+fn camel_to_kebab(name: &str) -> String {
+    if name.contains('-') {
+        return name.to_ascii_lowercase();
+    }
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_css_property_key(key: &str) -> bool {
+    CSS_PROPERTY_NAMES.contains(&camel_to_kebab(key).as_str())
+}
+
+/// Utility-class segments that pair with a dialect word across a hyphen in
+/// Tailwind-style class lists (`items-center`, `justify-center`,
+/// `self-center`). Deliberately short — utility roots, not a dictionary —
+/// mirroring `DIALECT_PAIRS`' own restraint. A hyphenated word is treated
+/// as a class name rather than prose when either side of the hyphen names
+/// one of these.
+const CSS_CLASS_HYPHEN_SEGMENTS: &[&str] = &[
+    "items",
+    "justify",
+    "content",
+    "self",
+    "place",
+    "text",
+    "bg",
+    "border",
+    "rounded",
+    "gap",
+    "flex",
+    "grid",
+    "space",
+    "divide",
+    "shadow",
+    "ring",
+    "outline",
+    "opacity",
+    "scale",
+    "rotate",
+    "translate",
+    "skew",
+    "origin",
+    "cursor",
+    "select",
+    "resize",
+    "overflow",
+    "inset",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "order",
+    "col",
+    "row",
+    "auto",
+    "w",
+    "h",
+    "min",
+    "max",
+    "p",
+    "m",
+    "px",
+    "py",
+    "pt",
+    "pb",
+    "pl",
+    "pr",
+    "mx",
+    "my",
+    "mt",
+    "mb",
+    "ml",
+    "mr",
+    "font",
+    "tracking",
+    "leading",
+    "align",
+    "whitespace",
+    "decoration",
+    "indent",
+    "caret",
+    "accent",
+    "blur",
+    "brightness",
+    "contrast",
+    "grayscale",
+    "saturate",
+    "invert",
+    "sepia",
+    "backdrop",
+    "transition",
+    "duration",
+    "ease",
+    "delay",
+    "animate",
+    "transform",
+    "hover",
+    "focus",
+    "active",
+    "disabled",
+    "sm",
+    "md",
+    "lg",
+    "xl",
+    "z",
+    // Media-query and CSS-property neighbours: `prefers-color-scheme`,
+    // `forced-colors`, `scrollbar-color`.
+    "prefers",
+    "scheme",
+    "forced",
+    "scrollbar",
+    "background",
+    "accent",
+];
+
+fn is_class_hyphen_segment(segment: &str) -> bool {
+    CSS_CLASS_HYPHEN_SEGMENTS.contains(&segment.to_ascii_lowercase().as_str())
+}
+
+/// The handful of dialect-carrying words that CSS and Tailwind actually
+/// use, in both spellings. Only these get the hyphen-neighbour treatment
+/// above; everything else is prose wherever it appears.
+const CSS_VOCABULARY_WORDS: &[&str] = &[
+    "center",
+    "centre",
+    "centered",
+    "centred",
+    "color",
+    "colour",
+    "colors",
+    "colours",
+    "gray",
+    "grey",
+    "normalize",
+    "normalise",
+    "capitalize",
+    "capitalise",
+    "behavior",
+    "behaviour",
+];
+
+/// `folded` is already lowercased by the caller.
+fn is_css_vocabulary_word(folded: &str) -> bool {
+    CSS_VOCABULARY_WORDS.contains(&folded)
 }
 
 #[cfg(test)]
@@ -2256,5 +2604,100 @@ export const x = 1;
             "{:?}",
             hits.iter().map(|h| &h.word).collect::<Vec<_>>()
         );
+    }
+
+    /// A Tailwind `className` is a class list, not prose — following the
+    /// check's own advice would emit a class Tailwind never generated
+    /// (CD-319).
+    #[test]
+    fn a_classname_attribute_is_not_scanned() {
+        let src = "\
+export function Panel() {
+  return <div className=\"flex sm:items-center color-swatch\" />;
+}
+";
+        assert!(run_spelling(&[("a.tsx", src)], Some("british")).is_empty());
+    }
+
+    /// A CSS-property-keyed object value (`style={{ backgroundColor: ...
+    /// }}`) is a CSS value, not prose, even though it contains a space
+    /// (CD-319).
+    #[test]
+    fn a_css_property_keyed_object_value_is_not_scanned() {
+        let src = "\
+export const styles = {
+  backgroundColor: 'width 200ms linear, background-color 300ms',
+};
+";
+        assert!(run_spelling(&[("a.ts", src)], Some("british")).is_empty());
+    }
+
+    /// The positional exclusions above are not a blanket "skip JSX" or
+    /// "skip objects" rule — a genuine prose string literal elsewhere in
+    /// the same file still reports.
+    #[test]
+    fn a_prose_string_literal_still_reports_alongside_excluded_positions() {
+        let src = "\
+export function Panel() {
+  return <div className=\"flex sm:items-center\" title={'the analyzer keeps every artifact'} />;
+}
+";
+        let issues = run_spelling(&[("a.tsx", src)], Some("british"));
+        assert_eq!(issues.len(), 2, "{issues:?}");
+    }
+
+    /// A hyphenated compound whose neighbour is a utility-class root reads
+    /// as a class name even outside a `className` attribute or a style
+    /// object — e.g. a class list assembled with `clsx`/`cn` rather than
+    /// written inline (CD-319).
+    #[test]
+    fn a_class_shaped_hyphen_compound_is_not_a_hit_outside_jsx() {
+        let src = "export const classes = 'flex items-center justify-center';";
+        assert!(run_spelling(&[("a.ts", src)], Some("british")).is_empty());
+    }
+
+    /// A genuine hyphenated English compound is unaffected by the
+    /// class-shape exclusion — `well` is not a utility-class root
+    /// (CD-319).
+    #[test]
+    fn a_genuine_hyphenated_compound_still_reports() {
+        let src = "export const msg = 'a well-organised list of files';";
+        let issues = run_spelling(&[("a.ts", src)], Some("american"));
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].message.contains("organised"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    /// `self` is both a utility-class root (`self-center`) and an English
+    /// hyphen prefix. Only the CSS vocabulary gets the class-shape
+    /// exclusion, so `self-defence` still reports (CD-319).
+    #[test]
+    fn an_english_hyphen_prefix_shared_with_a_utility_root_still_reports() {
+        let src = "export const msg = 'a matter of self-defence';";
+        let issues = run_spelling(&[("a.ts", src)], Some("american"));
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].message.contains("defence"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    /// The same prefix in a class list is still excluded (CD-319).
+    #[test]
+    fn a_utility_root_shared_with_an_english_prefix_is_still_excluded() {
+        let src = "export const classes = 'self-center place-content-center';";
+        assert!(run_spelling(&[("a.ts", src)], Some("british")).is_empty());
+    }
+
+    /// Rewriting a media query breaks it as surely as rewriting a class
+    /// name does (CD-319).
+    #[test]
+    fn a_media_query_feature_name_is_not_scanned() {
+        let src = "export const q = window.matchMedia('(prefers-color-scheme: dark)');";
+        assert!(run_spelling(&[("a.ts", src)], Some("british")).is_empty());
     }
 }

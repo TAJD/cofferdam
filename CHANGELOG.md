@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `scripts/version.mjs set X.Y.Z --regen` could stamp the previous version into `docs/public/checks.json` and `docs/public/llms.txt` (CD-317). A stale cargo fingerprint after a `Cargo.toml` revert-then-rebump left `cargo build --workspace` reporting `Finished` without recompiling `cofferdam-cli`, so the subsequent `gen-docs` ran the old binary and wrote the old version, and `node scripts/version.mjs check` then failed on locations that regen was meant to fix. `--regen` now runs `cargo clean -p cofferdam-cli` before the build to force that crate's recompile, checks the built binary's own `--version` against the target before trusting it to run `gen-docs`, and re-reads `checks.json`/`llms.txt` afterwards to confirm they landed on the target version — failing loudly and naming both versions if not.
+
 ## [0.4.2] - 2026-08-09
 
 ### Added

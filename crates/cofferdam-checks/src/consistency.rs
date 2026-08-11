@@ -1855,7 +1855,27 @@ impl Check for SpellingDialect {
         });
     }
 
+    fn languages(&self) -> &'static [cofferdam_core::Language] {
+        &[
+            cofferdam_core::Language::TypeScript,
+            cofferdam_core::Language::Markdown,
+        ]
+    }
+
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        if file.language == cofferdam_core::Language::Markdown {
+            let mut hits = Vec::new();
+            collect_markdown_dialect_hits(&file.text, &mut hits);
+            ctx.corpus.with_slot(&DIALECT_HITS, |slot| {
+                if hits.is_empty() {
+                    slot.remove(&file.path);
+                } else {
+                    slot.insert(file.path.clone(), std::mem::take(&mut hits));
+                }
+            });
+            return Vec::new();
+        }
+
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -1950,6 +1970,203 @@ fn match_leading_case(matched: &str, suggestion: &str) -> String {
     } else {
         suggestion.to_string()
     }
+}
+
+/// Scan a Markdown file for dialect-carrying words. The whole document is
+/// prose, so the TypeScript rule — comments and prose-shaped literals —
+/// has no analogue here; what needs excluding instead is the code a
+/// Markdown file quotes. Fenced blocks, inline code spans, link
+/// destinations and YAML frontmatter are skipped, because a page
+/// documenting a `normalize` option or linking to `color-scheme.md` is
+/// reporting an American spelling, not writing one.
+///
+/// Indented code blocks are deliberately not excluded: four-space
+/// indentation is also how a nested list continuation is written, and
+/// silencing every one of those would cost more prose than the rule buys.
+fn collect_markdown_dialect_hits(text: &str, out: &mut Vec<DialectHit>) {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut offset = 0usize;
+    let mut in_fence: Option<(u8, usize)> = None;
+    let mut first = 0usize;
+
+    // YAML frontmatter: a `---` line opening the file, up to its closer.
+    // A document that opens with a thematic break and never closes one is
+    // not frontmatter, so the scan restarts at the top rather than
+    // swallowing the whole file.
+    if text.starts_with("---\n") || text.starts_with("---\r\n") {
+        if let Some(close) = lines.iter().skip(1).position(|l| l.trim_end() == "---") {
+            first = close + 2;
+            offset = lines[..first].iter().map(|l| l.len()).sum();
+        }
+    }
+
+    for line in &lines[first..] {
+        let len = line.len();
+        let fence = fence_marker(line);
+        let mut is_fence_line = false;
+        match (in_fence, fence) {
+            // CommonMark: an opening backtick fence's info string may not
+            // contain a backtick, which is what keeps a line beginning
+            // ```` ```const x``` ```` from reading as a fence.
+            (None, Some((c, run, rest))) if c == b'~' || !rest.contains('`') => {
+                in_fence = Some((c, run));
+                is_fence_line = true;
+            }
+            // The closer must be at least as long as the opener and carry
+            // no info string. Without the length rule a ```` ```` ````
+            // fence quoting ``` examples — every page that documents
+            // Markdown — desynchronises on the inner fence.
+            (Some((open, open_run)), Some((c, run, rest)))
+                if open == c && run >= open_run && rest.trim().is_empty() =>
+            {
+                in_fence = None;
+                is_fence_line = true;
+            }
+            _ => {}
+        }
+        if in_fence.is_none() && !is_fence_line {
+            for (start, end) in markdown_prose_spans(line) {
+                collect_dialect_hits(&line[start..end], (offset + start) as u32, text, out);
+            }
+        }
+        offset += len;
+    }
+}
+
+/// A fence line's character, run length and whatever follows the run.
+fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
+    let trimmed = line.trim_start();
+    let c = match trimmed.as_bytes().first()? {
+        b'`' => b'`',
+        b'~' => b'~',
+        _ => return None,
+    };
+    let run = trimmed.bytes().take_while(|&b| b == c).count();
+    if run < 3 {
+        return None;
+    }
+    Some((c, run, &trimmed[run..]))
+}
+
+/// Byte ranges of `line` that are prose, i.e. everything outside inline
+/// code spans, link destinations and markup.
+fn markdown_prose_spans(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    // A reference-link definition (`[g]: ./analyze-guide.md`), an MDX
+    // `import`/`export`, and a bare URL are all code tokens on a line
+    // that otherwise looks like prose. You cannot rename someone else's
+    // path to satisfy a spelling convention.
+    if is_reference_definition(line) || is_mdx_module_line(line) {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b':' && bytes[i..].starts_with(b"://") {
+            // Rewind over the scheme and skip to the end of the URL
+            // token; `https://example.com/color-guide` is one word to the
+            // reader and none of it is English.
+            let mut word_start = i;
+            while word_start > 0 && !bytes[word_start - 1].is_ascii_whitespace() {
+                word_start -= 1;
+            }
+            if start < word_start {
+                spans.push((start, word_start));
+            }
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            start = i;
+            continue;
+        }
+        match bytes[i] {
+            // An HTML or JSX tag — `<Callout type="behavior">`, `<br/>`,
+            // and the `<https://…>` autolink form.
+            b'<' if bytes
+                .get(i + 1)
+                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/') =>
+            {
+                if start < i {
+                    spans.push((start, i));
+                }
+                while i < bytes.len() && bytes[i] != b'>' {
+                    i += 1;
+                }
+                i = (i + 1).min(bytes.len());
+                start = i;
+            }
+            b'`' => {
+                let ticks = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+                let close = find_backtick_run(&bytes[i + ticks..], ticks);
+                if start < i {
+                    spans.push((start, i));
+                }
+                // An unclosed run is a stray backtick, not a code span:
+                // treat the rest of the line as prose.
+                match close {
+                    Some(rel) => i += ticks + rel + ticks,
+                    None => i += ticks,
+                }
+                start = i;
+            }
+            // `](https://…)` and `][ref]` — the destination is a URL or a
+            // label, never prose.
+            b']' if bytes.get(i + 1).is_some_and(|&b| b == b'(' || b == b'[') => {
+                let closer = if bytes[i + 1] == b'(' { b')' } else { b']' };
+                if start < i + 1 {
+                    spans.push((start, i + 1));
+                }
+                i += 2;
+                while i < bytes.len() && bytes[i] != closer {
+                    i += 1;
+                }
+                i = (i + 1).min(bytes.len());
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < bytes.len() {
+        spans.push((start, bytes.len()));
+    }
+    spans
+}
+
+/// `[label]: destination` at the head of a line.
+fn is_reference_definition(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(rest) = t.strip_prefix('[') else {
+        return false;
+    };
+    rest.find(']')
+        .is_some_and(|i| rest[i + 1..].starts_with(':'))
+}
+
+/// An MDX `import`/`export` line. `.mdx` shares `Language::Markdown`, and
+/// its module specifiers are code the TypeScript path would never have
+/// scanned.
+fn is_mdx_module_line(line: &str) -> bool {
+    let t = line.trim_start();
+    (t.starts_with("import ") || t.starts_with("export "))
+        && (t.contains(" from ") || t.contains('{') || t.contains("default"))
+}
+
+/// Offset of the next run of exactly `len` backticks in `bytes`.
+fn find_backtick_run(bytes: &[u8], len: usize) -> Option<usize> {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let run = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+            if run == len {
+                return Some(i);
+            }
+            i += run;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 fn count_dialect(all: &HashMap<PathBuf, Vec<DialectHit>>, dialect: Dialect) -> usize {
@@ -2413,6 +2630,16 @@ mod spelling_dialect_tests {
 
         for (path, src) in files {
             let file = SourceFile::new(PathBuf::from(path), *src);
+            // Markdown never reaches the parser — the engine hands it to
+            // `run` with `parsed: None` (CD-316).
+            if file.language == cofferdam_core::Language::Markdown {
+                let mut ctx = CheckContext::new(&file).with_corpus(&corpus);
+                assert!(
+                    check.run(&file, &mut ctx).is_empty(),
+                    "pass 1 emits nothing"
+                );
+                continue;
+            }
             let allocator = Allocator::default();
             let parser_return = parse_into(&allocator, &file);
             let parsed = ParsedView {
@@ -2471,6 +2698,140 @@ export const x = 1;
             "{}",
             issues[0].message
         );
+    }
+
+    /// CD-316: the condition that motivated the check was a docs corpus
+    /// split between "analyz*" and "analys*", which it could not reach
+    /// while a check declared one language.
+    #[test]
+    fn markdown_prose_is_scanned() {
+        let md = "Here we analyze the behavior of the colour table.\n";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        let words: Vec<&str> = issues
+            .iter()
+            .map(|i| i.message.split('`').nth(1).unwrap_or(""))
+            .collect();
+        assert_eq!(
+            words,
+            ["behavior", "color", "analyze", "behavior"],
+            "{words:?}"
+        );
+    }
+
+    /// A page documenting a `normalize` option, quoting code, or linking
+    /// to `color-scheme.md` is reporting an American spelling, not
+    /// writing one.
+    #[test]
+    fn markdown_code_and_link_destinations_are_not_prose() {
+        let md = "\
+---
+title: color test
+---
+
+Call `normalize` first, then see [the guide](./color-scheme.md).
+
+```ts
+const normalize = 1; // color
+```
+
+~~~
+analyze
+~~~
+";
+        assert!(
+            run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None).len() == 2,
+            "only the TypeScript fixture's own two outliers should remain"
+        );
+    }
+
+    /// A four-backtick fence quoting three-backtick examples is how every
+    /// page that documents Markdown is written. Closing on the inner
+    /// fence desynchronises the state machine, which reports the quoted
+    /// code and silences the prose after it.
+    #[test]
+    fn a_longer_fence_is_not_closed_by_a_shorter_one() {
+        let md = "\
+Intro prose about behaviour.
+
+````markdown
+```ts
+const behavior = 1;
+```
+
+Analyze the color output above.
+````
+
+Closing prose about the color scheme.
+";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        let words: Vec<&str> = issues
+            .iter()
+            .map(|i| i.message.split('`').nth(1).unwrap_or(""))
+            .collect();
+        assert_eq!(words, ["behavior", "color", "color"], "{words:?}");
+    }
+
+    /// A line opening with an inline code span is not a fence: an opening
+    /// backtick fence's info string may not contain a backtick.
+    #[test]
+    fn an_inline_span_at_line_start_is_not_a_fence() {
+        let md = "```const x``` is inline code.\n\nLater prose about the color.\n";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        assert_eq!(issues.len(), 3, "{issues:?}");
+    }
+
+    /// Reference definitions, autolinks and bare URLs are destinations
+    /// too. You cannot rename someone else's path to satisfy a spelling
+    /// convention.
+    #[test]
+    fn every_link_destination_shape_is_excluded() {
+        let md = "\
+See [the guide][g] and <https://example.com/analyze-guide> and
+https://example.com/color-guide for details.
+
+[g]: ./analyze-guide.md
+[h]: https://example.com/behavior/x
+";
+        assert_eq!(
+            run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None).len(),
+            2,
+            "only the TypeScript fixture's own two outliers should remain"
+        );
+    }
+
+    /// `.mdx` shares `Language::Markdown`. Its module specifiers and tag
+    /// attributes are code the TypeScript path would never have scanned.
+    #[test]
+    fn mdx_imports_and_tags_are_not_prose() {
+        let md = "\
+import { Thing } from './analyze-utils';
+import Chart from \"@site/src/components/color-chart\";
+
+<Callout type=\"behavior\">Real behaviour prose.</Callout>
+";
+        assert_eq!(
+            run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.mdx", md)], None).len(),
+            2,
+            "only the TypeScript fixture's own two outliers should remain"
+        );
+    }
+
+    /// A document opening with a thematic break is not frontmatter, and
+    /// treating it as an unclosed one loses the whole body.
+    #[test]
+    fn a_leading_thematic_break_is_not_unclosed_frontmatter() {
+        let md = "---\nThe behavior of the color table.\n";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        assert_eq!(issues.len(), 4, "{issues:?}");
+    }
+
+    /// A stray backtick opens nothing, so the rest of the line stays
+    /// prose rather than disappearing from the corpus.
+    #[test]
+    fn an_unclosed_backtick_does_not_swallow_the_line() {
+        let md = "A ` stray tick and then the behavior of it.\n";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        assert_eq!(issues.len(), 3, "{issues:?}");
     }
 
     /// The load-bearing constraint. `normalize`, `serialize` and

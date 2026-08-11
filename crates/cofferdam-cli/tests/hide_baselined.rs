@@ -89,6 +89,12 @@ fn repo_with_one_baselined_and_one_new_finding(dir: &Path) {
 }
 
 fn check(dir: &Path, format: &str, hide: bool) -> String {
+    check_out(dir, format, hide).0
+}
+
+/// Stdout plus the exit code, for the test that pins the `--fail-on`
+/// gate as well as the rendered list.
+fn check_out(dir: &Path, format: &str, hide: bool) -> (String, Option<i32>) {
     let mut args = vec![
         "check",
         "--baseline",
@@ -102,7 +108,25 @@ fn check(dir: &Path, format: &str, hide: bool) -> String {
         args.push("--hide-baselined");
     }
     let out = run_cofferdam(dir, &args);
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        out.status.code(),
+    )
+}
+
+/// The `--fail-on` gate counts un-baselined findings and is computed
+/// before the flag's filter. Hiding the entries must not change what the
+/// CI gate decides — that is the whole reason the summary counts are
+/// left whole.
+#[test]
+fn hide_baselined_does_not_move_the_exit_code() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+    repo_with_one_baselined_and_one_new_finding(dir);
+
+    let (_, shown) = check_out(dir, "json", false);
+    let (_, hidden) = check_out(dir, "json", true);
+    assert_eq!(shown, hidden, "exit code must not depend on the flag");
 }
 
 #[test]

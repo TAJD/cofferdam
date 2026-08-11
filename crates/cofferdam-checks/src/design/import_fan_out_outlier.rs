@@ -224,12 +224,16 @@ fn compute_outliers(
     let mut sorted_population = population;
     sorted_population.sort_by(|a, b| a.display.cmp(&b.display));
     for stats in sorted_population {
-        if stddev_in > 0.0 && stats.fan_in as f64 > threshold_in {
+        if stddev_in > 0.0
+            && stats.fan_in as f64 > threshold_in
+            && stddev_out > 0.0
+            && stats.fan_out as f64 > threshold_out
+        {
             issues.push(Issue {
                 check_id: META.id.to_string(),
                 message: format!(
-                    "unusually high import fan-in: {} files import this one (project mean {mean_in:.1}, stddev {stddev_in:.1}) — possible over-centralized dependency",
-                    stats.fan_in
+                    "unusually high import fan-in and fan-out: {} files import this one and it imports {} others (project mean fan-in {mean_in:.1}, stddev {stddev_in:.1}) — possible over-centralized hub",
+                    stats.fan_in, stats.fan_out
                 ),
                 file: stats.display.clone(),
                 location: Location::from_span(&stats.display, zero_span),
@@ -254,4 +258,112 @@ fn compute_outliers(
         }
     }
     issues
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::graph::{ImportKind, ImportedName};
+    use std::path::PathBuf;
+
+    fn edge(from: &Path, to: &Path) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: "./m".to_string(),
+            resolved: Some(to.to_path_buf()),
+            names: vec![ImportedName {
+                source_name: "x".to_string(),
+                local_name: "x".to_string(),
+                kind: ImportKind::Named,
+                type_only: false,
+                local_use_count: 1,
+            }],
+            type_only: false,
+            span: Span {
+                start_byte: 0,
+                end_byte: 0,
+                line: 1,
+                column: 1,
+            },
+        }
+    }
+
+    fn messages_for<'a>(issues: &'a [Issue], needle: &str) -> Vec<&'a Issue> {
+        issues
+            .iter()
+            .filter(|i| i.message.contains(needle))
+            .collect()
+    }
+
+    /// CD-333 regression: a leaf utility with many importers but no
+    /// imports of its own (fan-in high, fan-out low) must not be
+    /// flagged — it is a shared module doing its job, not a hub.
+    #[test]
+    fn high_fan_in_alone_is_not_flagged() {
+        let leaf = PathBuf::from("/proj/leaf.ts");
+        let mut all_files = HashSet::new();
+        all_files.insert(leaf.clone());
+        let mut imports = Vec::new();
+        for i in 0..15 {
+            let importer = PathBuf::from(format!("/proj/importer_{i}.ts"));
+            all_files.insert(importer.clone());
+            imports.push(edge(&importer, &leaf));
+        }
+
+        let issues = compute_outliers(&imports, &[], &all_files);
+        assert!(
+            issues.is_empty(),
+            "expected no findings for a high-fan-in-only leaf, got {issues:?}"
+        );
+    }
+
+    /// A genuine god module — high fan-in AND high fan-out — must
+    /// still fire the fan-in finding.
+    #[test]
+    fn high_fan_in_and_fan_out_together_is_flagged() {
+        let god = PathBuf::from("/proj/god.ts");
+        let mut all_files = HashSet::new();
+        all_files.insert(god.clone());
+        let mut imports = Vec::new();
+        for i in 0..15 {
+            let sibling = PathBuf::from(format!("/proj/sibling_{i}.ts"));
+            all_files.insert(sibling.clone());
+            imports.push(edge(&sibling, &god)); // sibling -> god: god's fan-in
+            imports.push(edge(&god, &sibling)); // god -> sibling: god's fan-out
+        }
+
+        let issues = compute_outliers(&imports, &[], &all_files);
+        let fan_in_hits = messages_for(&issues, "fan-in");
+        assert_eq!(
+            fan_in_hits.len(),
+            1,
+            "expected exactly one fan-in finding, got {issues:?}"
+        );
+        assert_eq!(fan_in_hits[0].file, god);
+    }
+
+    /// The fan-out branch is untouched: high fan-out with low fan-in
+    /// still produces exactly the fan-out finding, nothing else for
+    /// that file.
+    #[test]
+    fn high_fan_out_alone_is_still_flagged() {
+        let hub = PathBuf::from("/proj/hub.ts");
+        let mut all_files = HashSet::new();
+        all_files.insert(hub.clone());
+        let mut imports = Vec::new();
+        for i in 0..15 {
+            let target = PathBuf::from(format!("/proj/target_{i}.ts"));
+            all_files.insert(target.clone());
+            imports.push(edge(&hub, &target));
+        }
+
+        let issues = compute_outliers(&imports, &[], &all_files);
+        let hub_issues: Vec<&Issue> = issues.iter().filter(|i| i.file == hub).collect();
+        assert_eq!(
+            hub_issues.len(),
+            1,
+            "expected exactly one finding for hub, got {issues:?}"
+        );
+        assert!(hub_issues[0].message.contains("fan-out"));
+    }
 }

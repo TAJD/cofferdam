@@ -5,8 +5,8 @@ use cofferdam_core::{
     OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
 };
 use oxc_ast::ast::{
-    ArrowFunctionExpression, Function, FunctionBody, JSXAttribute, JSXAttributeValue, JSXText,
-    Program, RegExpLiteral, Statement, StringLiteral, TemplateLiteral,
+    ArrowFunctionExpression, Function, FunctionBody, JSXAttribute, JSXAttributeValue, Program,
+    RegExpLiteral, Statement, StringLiteral, TemplateLiteral,
 };
 use oxc_ast_visit::{walk, Visit};
 use unicode_width::UnicodeWidthStr;
@@ -29,13 +29,14 @@ use crate::count_skippable_lines;
 ///
 /// Two exceptions to the raw width comparison (CD-318, CD-322):
 /// - A line is skipped when it is **unwrappable**: its widest atomic
-///   token — a string/template/JSX-text/regex literal or a whole JSX
-///   attribute with a literal value, kept whole; or, elsewhere on the
-///   line, a plain whitespace-delimited run — exceeds `limit` once the
-///   line's own indentation is added, which is the narrowest a formatter
-///   could ever place it. A long prose comment still reports because its
-///   words are ordinary-width; a long string, a Tailwind `className`, or
-///   an unbreakable identifier or import path does not.
+///   token — a string/template/regex literal or a whole JSX attribute
+///   with a literal value, kept whole; or, elsewhere on the line, a
+///   plain whitespace-delimited run — exceeds `limit` once the line's
+///   own indentation is added, which is the narrowest a formatter could
+///   ever place it. A long prose comment or run of JSX text still
+///   reports because its words are ordinary-width; a long string, a
+///   Tailwind `className`, or an unbreakable identifier or import path
+///   does not.
 ///   `report_unwrappable = true` restores flagging every over-limit line.
 /// - A line that is itself a cofferdam suppression directive is skipped
 ///   outright — the engine has no mechanism to suppress a directive's
@@ -58,9 +59,9 @@ const MLL_OPTIONS: &[OptionSpec] = &[
         kind: OptionKind::Bool,
         default: OptionDefault::Bool(false),
         doc: "report lines even when the overflow comes from a single atomic token \
-            (a string/template/JSX-text/regex literal, or a JSX attribute with a \
-            literal value) that no formatter can break; disabled by default since \
-            such lines can't be shortened by hand either",
+            (a string/template/regex literal, or a JSX attribute with a literal \
+            value) that no formatter can break; disabled by default since such \
+            lines can't be shortened by hand either",
     },
 ];
 
@@ -262,10 +263,10 @@ fn widest_word(s: &str) -> u32 {
         .unwrap_or(0)
 }
 
-/// String/template/JSX-text/regex literal spans — the "atomic" tokens a
-/// formatter cannot break (CD-318). Comments are deliberately NOT
-/// collected here: a long comment is wrappable by a human, so it must
-/// keep reporting like ordinary whitespace-split code.
+/// String/template/regex literal spans — the "atomic" tokens a formatter
+/// cannot break (CD-318). Comments and JSX text are deliberately NOT
+/// collected: both are prose that reflows at spaces, so they must keep
+/// reporting like ordinary whitespace-split code.
 struct AtomicTokenCollector {
     spans: Vec<(u32, u32)>,
 }
@@ -284,11 +285,6 @@ impl<'a> Visit<'a> for AtomicTokenCollector {
     fn visit_reg_exp_literal(&mut self, it: &RegExpLiteral<'a>) {
         self.spans.push((it.span.start, it.span.end));
         walk::walk_reg_exp_literal(self, it);
-    }
-
-    fn visit_jsx_text(&mut self, it: &JSXText<'a>) {
-        self.spans.push((it.span.start, it.span.end));
-        walk::walk_jsx_text(self, it);
     }
 
     /// `className="…"` is atomic as a whole, not just its value: an
@@ -765,6 +761,27 @@ mod tests {
         assert!(
             run_mll_parsed_path(&src, &opts, "test.tsx").is_empty(),
             "an attribute a formatter can only move, not break, must not flag"
+        );
+    }
+
+    /// JSX text is prose that reflows at spaces, exactly like a comment,
+    /// so it must keep reporting. Treating it as atomic silenced a long
+    /// paragraph in a component while the identical sentence in a comment
+    /// two lines above still flagged.
+    #[test]
+    fn long_jsx_prose_still_flags() {
+        let prose = "This is a very long paragraph of ordinary English prose that any \
+             formatter in the world would happily reflow at a space.";
+        let src = format!("const el = <p>{prose}</p>;");
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert_eq!(
+            run_mll_parsed_path(&src, &opts, "test.tsx").len(),
+            1,
+            "JSX prose is wrappable and must report"
         );
     }
 

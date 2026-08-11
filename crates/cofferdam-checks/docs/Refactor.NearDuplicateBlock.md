@@ -28,6 +28,8 @@ return receipt;
 
 Both blocks share one `finalize` pass and one corpus slot (`Refactor.DuplicateBlock.fingerprints`) with `Refactor.DuplicateBlock` — only that check's `run` writes to it, this one reads the same data back and reports the other half of the same grouping: groups whose members are structurally identical (same `hash`) but not byte-identical (differing `exact_hash`). The two checks never report overlapping spans, because the shared overlap-claim pass runs once across both checks' candidates before either is filtered out.
 
+This check takes no options of its own: `min_statements`, `min_chars`, `include_tokens`, `include_ast` and `normalize_literals` are all read by `Refactor.DuplicateBlock`'s `run` — the sole writer of the shared corpus slot — and the resulting window shape applies to whatever lands here too. Configure them under `[checks."Refactor.DuplicateBlock"]`; setting them under `[checks."Refactor.NearDuplicateBlock"]` has no effect.
+
 **Severity:** near-clones default to `low`, unlike `Refactor.DuplicateBlock`'s `medium`, and print without tripping the default `--fail-on medium` gate. That is deliberate — severity is set per check id, not per finding, so splitting verbatim clones from literal-drift ones into two ids was the only way to keep a noisier, less actionable signal from failing a build that only meant to gate on real copy-paste. To gate on this check too, raise its severity in `cofferdam.toml`:
 
 ```toml

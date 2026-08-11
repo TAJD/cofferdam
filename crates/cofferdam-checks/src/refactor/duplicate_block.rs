@@ -9,11 +9,11 @@ use cofferdam_core::{
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
     BlockStatement, BooleanLiteral, BreakStatement, CallExpression, Class, ConditionalExpression,
-    ContinueStatement, DoWhileStatement, ExpressionStatement, ForInStatement, ForOfStatement,
-    ForStatement, Function, FunctionBody, IdentifierName, IdentifierReference, IfStatement,
-    LogicalExpression, NewExpression, NullLiteral, NumericLiteral, ReturnStatement, Statement,
-    StringLiteral, SwitchStatement, TemplateLiteral, ThrowStatement, TryStatement, UnaryExpression,
-    UpdateExpression, VariableDeclaration, WhileStatement,
+    ContinueStatement, DoWhileStatement, Expression, ExpressionStatement, ForInStatement,
+    ForOfStatement, ForStatement, Function, FunctionBody, IdentifierName, IdentifierReference,
+    IfStatement, LogicalExpression, NewExpression, NullLiteral, NumericLiteral, ReturnStatement,
+    Statement, StringLiteral, SwitchStatement, TemplateLiteral, ThrowStatement, TryStatement,
+    UnaryExpression, UpdateExpression, VariableDeclaration, WhileStatement,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
@@ -70,6 +70,13 @@ struct Fingerprint {
     kind: FingerprintKind,
     file: PathBuf,
     span: Span,
+    /// Number of statements the window actually covered, read back at
+    /// finalize so the message reports the effective (per-file
+    /// configured) `min_statements` rather than the hardcoded
+    /// `Default`. Unused in token mode — set to `0` there, since that
+    /// message is built from `min_tokens` instead (mirrors how
+    /// `exact_hash` is a no-op for token-mode grouping).
+    stmt_count: usize,
 }
 
 /// Order matters: AST first so finalize's overlap-dedupe pass claims
@@ -214,7 +221,13 @@ const DUP_NEAR_META: CheckMeta = CheckMeta {
     body: include_str!("../../docs/Refactor.NearDuplicateBlock.md"),
     requires_types: false,
     consistency: false,
-    options: DUP_BLOCK_OPTIONS,
+    // The window options (min_statements, min_chars, include_tokens,
+    // include_ast, normalize_literals) are read by `DuplicateBlock::run`
+    // — the sole writer of the shared corpus slot — and apply to both
+    // checks equally; `NearDuplicateBlock::run` is a no-op, so it has no
+    // options of its own to advertise (CD-339). Configure them under
+    // `[checks."Refactor.DuplicateBlock"]`.
+    options: &[],
     autofix: false,
     pure_run: false,
 };
@@ -310,7 +323,7 @@ impl Check for DuplicateBlock {
                 let message = match group[0].kind {
                     FingerprintKind::Ast => format!(
                         "duplicate {}-statement block, also at {} other location(s)",
-                        self.min_statements,
+                        group[0].stmt_count,
                         group.len() - 1
                     ),
                     FingerprintKind::Token => format!(
@@ -326,21 +339,12 @@ impl Check for DuplicateBlock {
 }
 
 /// `Refactor.NearDuplicateBlock` — see `DUP_NEAR_META`'s doc comment.
-/// Only holds `min_statements`, the one field its message text needs;
-/// it never collects fingerprints itself (`run` is a no-op — see the
-/// `Check` impl below), so it has no use for the rest of
-/// `DuplicateBlock`'s configuration.
-pub struct NearDuplicateBlock {
-    min_statements: usize,
-}
-
-impl Default for NearDuplicateBlock {
-    fn default() -> Self {
-        Self {
-            min_statements: DUPLICATE_BLOCK_MIN_STATEMENTS,
-        }
-    }
-}
+/// Holds no fields: it never collects fingerprints itself (`run` is a
+/// no-op — see the `Check` impl below), and its message reads the
+/// matched window's statement count off `Fingerprint::stmt_count`
+/// rather than any of `DuplicateBlock`'s configuration.
+#[derive(Default)]
+pub struct NearDuplicateBlock;
 
 impl Check for NearDuplicateBlock {
     fn meta(&self) -> &'static CheckMeta {
@@ -361,7 +365,7 @@ impl Check for NearDuplicateBlock {
             .map(|group| {
                 let message = format!(
                     "duplicate {}-statement block differing only in literal values, also at {} other location(s)",
-                    self.min_statements,
+                    group[0].stmt_count,
                     group.len() - 1
                 );
                 build_issue(DUP_NEAR_META.id, DUP_NEAR_META.base_priority, message, &group)
@@ -562,18 +566,35 @@ impl<'a> DupCollector<'a> {
         // './y'`) are excluded the same way; a bare `export { x }` or
         // `export function f() {}` (no `source`) is ordinary code and
         // still participates.
-        let stmts: Vec<&Statement<'a>> =
-            stmts.iter().filter(|s| !is_import_or_reexport(s)).collect();
+        //
+        // Windowing runs per maximal contiguous run of non-excluded
+        // statements (CD-339) rather than over a flattened list of all
+        // of them — a flattened list lets a window's `start`/`end` span
+        // an excluded statement sitting between two real ones, so the
+        // reported range (and the `min_chars` floor computed from it)
+        // included bytes the window never actually hashed.
+        let mut run: Vec<&Statement<'a>> = Vec::new();
+        for stmt in stmts {
+            if is_import_or_reexport(stmt) {
+                self.scan_run(std::mem::take(&mut run));
+            } else {
+                run.push(stmt);
+            }
+        }
+        self.scan_run(run);
+    }
+
+    fn scan_run(&mut self, stmts: Vec<&Statement<'a>>) {
         if stmts.len() < self.min_statements {
             return;
         }
         // Per-statement hash-op streams (CD-173), memoized lazily: a
-        // statement is AST-walked at most once per `scan()` call no
-        // matter how many overlapping windows it participates in
-        // (previously it was walked once per window, i.e. up to
-        // `min_statements` times). Lazy rather than eager so scopes
-        // where every window gets filtered out by `min_chars` below
-        // don't pay for op collection they'll never use.
+        // statement is AST-walked at most once per run no matter how
+        // many overlapping windows it participates in (previously it
+        // was walked once per window, i.e. up to `min_statements`
+        // times). Lazy rather than eager so scopes where every window
+        // gets filtered out by `min_chars` below don't pay for op
+        // collection they'll never use.
         let mut stmt_ops: Vec<Option<Vec<HashOp<'a>>>> = (0..stmts.len()).map(|_| None).collect();
         for i in 0..=stmts.len() - self.min_statements {
             let first = stmts[i];
@@ -614,23 +635,51 @@ impl<'a> DupCollector<'a> {
                 kind: FingerprintKind::Ast,
                 file: self.file.path.clone(),
                 span,
+                stmt_count: self.min_statements,
             });
         }
     }
 }
 
 /// True for statements that must never enter an AST-mode window
-/// (CD-331 follow-up): plain `import` declarations, `export * from`,
-/// and re-exports (`export { x } from './y'`). A bare `export { x }`
-/// or `export function f() {}` — an `ExportNamedDeclaration` with no
-/// `source` — is ordinary code and is NOT excluded.
+/// (CD-331 follow-up, extended CD-339): plain `import` declarations,
+/// `export * from`, and re-exports (`export { x } from './y'`); the
+/// TS-specific `import x = require('y')` (`TSImportEqualsDeclaration`)
+/// and `export = x` (`TSExportAssignment`) spellings; and a
+/// `VariableDeclaration` that is a CommonJS require block — every
+/// declarator's initialiser is a direct `require(...)` call (a
+/// declarator with no initialiser, or one whose initialiser is
+/// anything else, makes the whole statement ordinary code instead). A
+/// bare `export { x }` or `export function f() {}` — an
+/// `ExportNamedDeclaration` with no `source` — is ordinary code and is
+/// NOT excluded.
 fn is_import_or_reexport(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::ImportDeclaration(_) => true,
         Statement::ExportAllDeclaration(_) => true,
         Statement::ExportNamedDeclaration(decl) => decl.source.is_some(),
+        Statement::TSImportEqualsDeclaration(_) => true,
+        Statement::TSExportAssignment(_) => true,
+        Statement::VariableDeclaration(decl) => {
+            !decl.declarations.is_empty()
+                && decl
+                    .declarations
+                    .iter()
+                    .all(|d| d.init.as_ref().is_some_and(is_require_call))
+        }
         _ => false,
     }
+}
+
+/// True for `require(...)` — a `CallExpression` whose callee is the bare
+/// identifier `require`. Used to recognise `const x = require('y')` (and
+/// destructured variants like `const { a } = require('y')`) as an import
+/// for windowing purposes.
+fn is_require_call(expr: &Expression<'_>) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    matches!(&call.callee, Expression::Identifier(id) if id.name == "require")
 }
 
 impl<'a> Visit<'a> for DupCollector<'a> {
@@ -1351,6 +1400,8 @@ fn collect_token_fingerprints(
             kind: FingerprintKind::Token,
             file: file.path.clone(),
             span,
+            // Unused by the token-mode message (see `Fingerprint::stmt_count`'s doc).
+            stmt_count: 0,
         });
     }
 }

@@ -1209,7 +1209,7 @@ impl Engine {
                 }
             };
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != file.language {
+                if !check.languages().contains(&file.language) {
                     continue;
                 }
                 let (disabled, ov_opts) = match &file_key {
@@ -1250,7 +1250,7 @@ impl Engine {
                 }
             };
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != file.language {
+                if !check.languages().contains(&file.language) {
                     continue;
                 }
                 let (disabled, ov_opts) = match &file_key {
@@ -1289,7 +1289,7 @@ impl Engine {
         #[allow(clippy::collapsible_if)]
         if file.language != Language::TypeScript {
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != file.language {
+                if !check.languages().contains(&file.language) {
                     continue;
                 }
                 let (disabled, ov_opts) = match &file_key {
@@ -1392,7 +1392,7 @@ impl Engine {
         let content_hash = findings_cache.map(|_| cache::hash_text(&file.text));
 
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-            if check.language() != Language::TypeScript {
+            if !check.languages().contains(&Language::TypeScript) {
                 continue;
             }
             // Type-aware routing (cd-9hp.2). A check declaring

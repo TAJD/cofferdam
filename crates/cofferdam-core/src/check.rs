@@ -344,15 +344,21 @@ impl<'a> FinalizeContext<'a> {
 /// byte-offset order to avoid span-shift bugs.
 pub trait Check: Send + Sync {
     fn meta(&self) -> &'static CheckMeta;
-    /// Source language this check targets. The engine consults this in
+    /// Source languages this check targets. The engine consults this in
     /// its per-file loop and only invokes `run` / `pass2` / `autofix`
-    /// when `file.language == self.language()`. `finalize` still fires
+    /// when the file's language is in the set. `finalize` still fires
     /// unconditionally (cross-file checks read corpus slots, not files).
     ///
     /// Defaults to `Language::TypeScript` so every existing built-in
-    /// compiles unchanged — only the Rust adapter's checks override.
-    fn language(&self) -> Language {
-        Language::TypeScript
+    /// compiles unchanged — only the Rust and HTML checks override.
+    ///
+    /// A set rather than one language because a prose rule and a code
+    /// rule are not the same shape: `Consistency.SpellingDialect` reads
+    /// comments in TypeScript and the whole file in Markdown, and
+    /// splitting that into two check ids would put two entries in the
+    /// catalogue for one convention (CD-316).
+    fn languages(&self) -> &'static [Language] {
+        &[Language::TypeScript]
     }
     /// Whether this check is eligible to run against `origin: build_output`
     /// files discovered by `cofferdam verify --dist` (CD-85). Defaults to

@@ -1855,7 +1855,27 @@ impl Check for SpellingDialect {
         });
     }
 
+    fn languages(&self) -> &'static [cofferdam_core::Language] {
+        &[
+            cofferdam_core::Language::TypeScript,
+            cofferdam_core::Language::Markdown,
+        ]
+    }
+
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        if file.language == cofferdam_core::Language::Markdown {
+            let mut hits = Vec::new();
+            collect_markdown_dialect_hits(&file.text, &mut hits);
+            ctx.corpus.with_slot(&DIALECT_HITS, |slot| {
+                if hits.is_empty() {
+                    slot.remove(&file.path);
+                } else {
+                    slot.insert(file.path.clone(), std::mem::take(&mut hits));
+                }
+            });
+            return Vec::new();
+        }
+
         let Some(parsed) = ctx.parsed else {
             return Vec::new();
         };
@@ -1950,6 +1970,119 @@ fn match_leading_case(matched: &str, suggestion: &str) -> String {
     } else {
         suggestion.to_string()
     }
+}
+
+/// Scan a Markdown file for dialect-carrying words. The whole document is
+/// prose, so the TypeScript rule — comments and prose-shaped literals —
+/// has no analogue here; what needs excluding instead is the code a
+/// Markdown file quotes. Fenced blocks, inline code spans, link
+/// destinations and YAML frontmatter are skipped, because a page
+/// documenting a `normalize` option or linking to `color-scheme.md` is
+/// reporting an American spelling, not writing one.
+///
+/// Indented code blocks are deliberately not excluded: four-space
+/// indentation is also how a nested list continuation is written, and
+/// silencing every one of those would cost more prose than the rule buys.
+fn collect_markdown_dialect_hits(text: &str, out: &mut Vec<DialectHit>) {
+    let mut offset = 0usize;
+    let mut in_fence: Option<u8> = None;
+    let mut lines = text.split_inclusive('\n').peekable();
+    let mut line_no = 0usize;
+
+    // YAML frontmatter: a `---` line opening the file, up to its closer.
+    if text.starts_with("---\n") || text.starts_with("---\r\n") {
+        for line in lines.by_ref() {
+            offset += line.len();
+            line_no += 1;
+            if line_no > 1 && line.trim_end() == "---" {
+                break;
+            }
+        }
+    }
+
+    for line in lines {
+        let len = line.len();
+        let trimmed = line.trim_start();
+        let fence_char = match trimmed.as_bytes() {
+            [b'`', b'`', b'`', ..] => Some(b'`'),
+            [b'~', b'~', b'~', ..] => Some(b'~'),
+            _ => None,
+        };
+        match (in_fence, fence_char) {
+            (None, Some(c)) => in_fence = Some(c),
+            (Some(open), Some(c)) if open == c => in_fence = None,
+            _ => {}
+        }
+        if in_fence.is_none() && fence_char.is_none() {
+            for (start, end) in markdown_prose_spans(line) {
+                collect_dialect_hits(&line[start..end], (offset + start) as u32, text, out);
+            }
+        }
+        offset += len;
+    }
+}
+
+/// Byte ranges of `line` that are prose, i.e. everything outside inline
+/// code spans and link destinations.
+fn markdown_prose_spans(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'`' => {
+                let ticks = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+                let close = find_backtick_run(&bytes[i + ticks..], ticks);
+                if start < i {
+                    spans.push((start, i));
+                }
+                // An unclosed run is a stray backtick, not a code span:
+                // treat the rest of the line as prose.
+                match close {
+                    Some(rel) => i += ticks + rel + ticks,
+                    None => i += ticks,
+                }
+                start = i;
+            }
+            // `](https://…)` and `][ref]` — the destination is a URL or a
+            // label, never prose.
+            b']' if bytes.get(i + 1).is_some_and(|&b| b == b'(' || b == b'[') => {
+                let closer = if bytes[i + 1] == b'(' { b')' } else { b']' };
+                if start < i + 1 {
+                    spans.push((start, i + 1));
+                }
+                i += 2;
+                while i < bytes.len() && bytes[i] != closer {
+                    i += 1;
+                }
+                i = (i + 1).min(bytes.len());
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < bytes.len() {
+        spans.push((start, bytes.len()));
+    }
+    spans
+}
+
+/// Offset of the next run of exactly `len` backticks in `bytes`.
+fn find_backtick_run(bytes: &[u8], len: usize) -> Option<usize> {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let run = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+            if run == len {
+                return Some(i);
+            }
+            i += run;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 fn count_dialect(all: &HashMap<PathBuf, Vec<DialectHit>>, dialect: Dialect) -> usize {
@@ -2413,6 +2546,16 @@ mod spelling_dialect_tests {
 
         for (path, src) in files {
             let file = SourceFile::new(PathBuf::from(path), *src);
+            // Markdown never reaches the parser — the engine hands it to
+            // `run` with `parsed: None` (CD-316).
+            if file.language == cofferdam_core::Language::Markdown {
+                let mut ctx = CheckContext::new(&file).with_corpus(&corpus);
+                assert!(
+                    check.run(&file, &mut ctx).is_empty(),
+                    "pass 1 emits nothing"
+                );
+                continue;
+            }
             let allocator = Allocator::default();
             let parser_return = parse_into(&allocator, &file);
             let parsed = ParsedView {
@@ -2471,6 +2614,59 @@ export const x = 1;
             "{}",
             issues[0].message
         );
+    }
+
+    /// CD-316: the condition that motivated the check was a docs corpus
+    /// split between "analyz*" and "analys*", which it could not reach
+    /// while a check declared one language.
+    #[test]
+    fn markdown_prose_is_scanned() {
+        let md = "Here we analyze the behavior of the colour table.\n";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        let words: Vec<&str> = issues
+            .iter()
+            .map(|i| i.message.split('`').nth(1).unwrap_or(""))
+            .collect();
+        assert_eq!(
+            words,
+            ["behavior", "color", "analyze", "behavior"],
+            "{words:?}"
+        );
+    }
+
+    /// A page documenting a `normalize` option, quoting code, or linking
+    /// to `color-scheme.md` is reporting an American spelling, not
+    /// writing one.
+    #[test]
+    fn markdown_code_and_link_destinations_are_not_prose() {
+        let md = "\
+---
+title: color test
+---
+
+Call `normalize` first, then see [the guide](./color-scheme.md).
+
+```ts
+const normalize = 1; // color
+```
+
+~~~
+analyze
+~~~
+";
+        assert!(
+            run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None).len() == 2,
+            "only the TypeScript fixture's own two outliers should remain"
+        );
+    }
+
+    /// A stray backtick opens nothing, so the rest of the line stays
+    /// prose rather than disappearing from the corpus.
+    #[test]
+    fn an_unclosed_backtick_does_not_swallow_the_line() {
+        let md = "A ` stray tick and then the behavior of it.\n";
+        let issues = run_spelling(&[("a.ts", BRITISH_MAJORITY), ("docs/a.md", md)], None);
+        assert_eq!(issues.len(), 3, "{issues:?}");
     }
 
     /// The load-bearing constraint. `normalize`, `serialize` and

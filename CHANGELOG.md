@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- A check declares a set of languages rather than one, and `Consistency.SpellingDialect` now reads Markdown as well as TypeScript (CD-316). The check shipped against the codebase but not against the corpus that motivated it: a docs tree split between "analyz*" and "analys*", which it could not reach because `Check::language()` returned a single `Language` and the engine dispatched on equality. `Check::languages()` returns `&'static [Language]`, defaulting to `&[Language::TypeScript]`, so every check that does not care compiles unchanged; the four that do — three Rust checks and one HTML — name their own. Registering a second check id for Markdown was the cheaper option and was rejected: two entries in the catalogue for one convention is a worse surface than the gap. In Markdown the whole document is prose, so what gets excluded is the code a page quotes — fenced blocks, inline code spans, link destinations and YAML frontmatter — but not indented blocks, since four spaces is also a nested list continuation. Markdown discovery remains opt-in behind `[engine] extra_extensions`, so no project sees new findings without asking.
+
 ## [0.4.2] - 2026-08-09
 
 ### Added

@@ -45,8 +45,8 @@ impl Check for MissingLangAttribute {
         &META
     }
 
-    fn language(&self) -> Language {
-        Language::Html
+    fn languages(&self) -> &'static [Language] {
+        &[Language::Html]
     }
 
     /// A build-output HTML page missing `lang` is exactly the kind of

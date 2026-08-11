@@ -6,7 +6,8 @@ three does not have two conventions; it has one convention and three outliers.
 
 ## What it reads
 
-Comments, doc comments and prose-shaped string literals. Nothing else.
+In TypeScript: comments, doc comments and prose-shaped string literals.
+Nothing else.
 
 Identifiers are never scanned, and that is the load-bearing constraint rather
 than an oversight. `normalize`, `serialize`, `initialize` and CSS `color` are
@@ -15,10 +16,19 @@ callers to fix nothing. A string literal counts as prose only if it contains a
 space, which keeps import specifiers, object keys and check ids out of the
 tally for the same reason.
 
-The corpus stops at TypeScript. Markdown prose is not read, because a check
-declares one language and this one declares TypeScript; CD-316 tracks lifting
-that. A project whose documentation and code disagree will see only the code
-half of the disagreement.
+In Markdown: the document body. The whole file is prose, so the TypeScript
+rule has no analogue; what is excluded instead is the code a page quotes —
+fenced blocks, inline code spans, link destinations and YAML frontmatter. A
+page documenting a `normalize` option or linking to `color-scheme.md` is
+reporting an American spelling, not writing one. Indented code blocks are not
+excluded, because four spaces is also how a nested list continuation is
+written and silencing every one of those would cost more prose than the rule
+buys.
+
+Markdown files are discovered only when a project opts in with `[engine]
+extra_extensions = ["md"]`. Without it the corpus is the code half alone, and
+a project whose documentation and code disagree sees one side of the
+disagreement.
 
 ## Which dialect
 

@@ -1771,6 +1771,49 @@ export function computeTotal(items: number[]): number {
     }
 
     #[test]
+    fn sparse_graph_does_not_flag_a_leaf_that_imports_one_module() {
+        // A leaf imported by many files but itself importing only one
+        // local module must not be flagged: `high_fan_in_alone_is_not_flagged`
+        // above only passes because its leaf has fan_out == 0, which is
+        // unrealistic — a leaf with a single import can still clear a
+        // sparse graph's relative threshold without an absolute floor.
+        let leaf = PathBuf::from("/p/leaf.ts");
+        let leaf_dep = PathBuf::from("/p/leaf_dep.ts");
+        let mut imports: Vec<ImportRecord> = (0..14)
+            .map(|i| {
+                let importer = PathBuf::from(format!("/p/importer{i}.ts"));
+                internal_import(&importer, &leaf)
+            })
+            .collect();
+        imports.push(internal_import(&leaf, &leaf_dep));
+        let issues = run_fan_out_outlier(imports);
+        assert!(
+            issues.is_empty(),
+            "expected no findings for a leaf with fan_out 1 in a sparse graph; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_is_never_reported_twice() {
+        // The same file must never receive both a fan-out finding and a
+        // combined fan-in/fan-out finding.
+        let hub = PathBuf::from("/p/hub.ts");
+        let mut imports = Vec::new();
+        for i in 0..14 {
+            let sibling = PathBuf::from(format!("/p/sibling{i}.ts"));
+            imports.push(internal_import(&sibling, &hub));
+            imports.push(internal_import(&hub, &sibling));
+        }
+        let issues = run_fan_out_outlier(imports);
+        let hub_issues: Vec<&CoreIssue> = issues.iter().filter(|i| i.file == hub).collect();
+        assert_eq!(
+            hub_issues.len(),
+            1,
+            "expected exactly one issue for hub; got {issues:?}"
+        );
+    }
+
+    #[test]
     fn below_min_files_emits_nothing() {
         // Only 3 files total, well under MIN_FILES (8).
         let god = PathBuf::from("/p/god.ts");

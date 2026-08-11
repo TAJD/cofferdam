@@ -1284,8 +1284,9 @@ impl Engine {
         // Defensive catch-all for languages we recognise (via
         // `Language::from_path`) but haven't wired a parser for
         // yet. Falls through to the TS path so nothing crashes;
-        // matching checks (none today) would see `parsed_lang =
-        // None`.
+        // matching checks see `parsed_lang = None` and work off raw
+        // text. This is the branch that dispatches
+        // `Consistency.SpellingDialect` to Markdown (CD-316).
         #[allow(clippy::collapsible_if)]
         if file.language != Language::TypeScript {
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {

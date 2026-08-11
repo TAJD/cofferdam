@@ -196,13 +196,20 @@ function runSet(version) {
   );
 
   if (regen) {
-    // cofferdam-cli's binary is what stamps checks.json/llms.txt below, so a
-    // stale fingerprint for JUST that crate is what bit CD-317 (a Cargo.toml
-    // revert-then-rebump left cargo believing nothing changed and it skipped
-    // recompiling). `cargo clean -p cofferdam-cli` forces that one crate to
-    // rebuild without paying for a full workspace clean.
-    process.stdout.write("clearing cofferdam-cli build cache (cargo clean -p cofferdam-cli)...\n");
-    execFileSync("cargo", ["clean", "-p", "cofferdam-cli"], { cwd: REPO_ROOT, stdio: "inherit" });
+    // cofferdam-cli's binary is what stamps the version into
+    // checks.json/llms.txt below, so a stale fingerprint for that crate is
+    // what bit CD-317 (a Cargo.toml revert-then-rebump left cargo believing
+    // nothing changed and it skipped recompiling). cofferdam-checks is
+    // cleaned too because every check's `body` is `include_str!`-ed from its
+    // catalogue page, and a stale artifact there writes stale bodies that
+    // the version assertion below cannot see. Two crates, not the whole
+    // workspace: a full clean rebuilds ~450 dependencies for no added
+    // safety.
+    process.stdout.write("clearing cofferdam-cli + cofferdam-checks build cache (cargo clean)...\n");
+    execFileSync("cargo", ["clean", "-p", "cofferdam-cli", "-p", "cofferdam-checks"], {
+      cwd: REPO_ROOT,
+      stdio: "inherit",
+    });
     process.stdout.write("regenerating Cargo.lock (cargo build --workspace)...\n");
     execFileSync("cargo", ["build", "--workspace"], { cwd: REPO_ROOT, stdio: "inherit" });
 
@@ -217,7 +224,7 @@ function runSet(version) {
     const builtVersion = builtVersionMatch ? builtVersionMatch[1] : null;
     if (builtVersion !== version) {
       fail(
-        `stale cofferdam-cli binary: '${builtVersionRaw}' reports ${builtVersion ?? "an unparseable version"}, but the manifests were just bumped to ${version}. gen-docs would silently stamp the old version into checks.json/llms.txt. Not running gen-docs. Try 'cargo clean -p cofferdam-cli' followed by 'cargo build --workspace' by hand.`,
+        `stale cofferdam-cli binary: '${builtVersionRaw}' reports ${builtVersion ?? "an unparseable version"}, but the manifests were just bumped to ${version}. gen-docs would silently stamp the old version into checks.json/llms.txt. Not running gen-docs. The targeted clean above did not take, so clear the whole cache: 'cargo clean' followed by 'cargo build --workspace'.`,
       );
       return 1;
     }

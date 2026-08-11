@@ -669,7 +669,7 @@
       "base_priority": 12,
       "default_severity": "Medium",
       "explanation": "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
-      "body": "---\nid: Refactor.DuplicateBlock\ncategory: Refactor\nbase_priority: 12\ndefault_severity: Medium\noptions: [min_statements, min_chars, include_tokens, include_ast]\n---\n\nRuns of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper. Canonicalisation maps identifier tokens to per-window local indices so renamed copies still match. Minimum window is `6` consecutive statements (and `80` characters) to keep noise low. Cross-file: per-file `run` writes fingerprints into the shared corpus; `finalize` groups by hash and emits one `Issue` per duplicate set with `related` spans pointing at every other occurrence.\n\n```ts\n// src/orders.ts:42\nconst items = parseItems(input);\nconst validated = validateItems(items);\nconst priced = priceItems(validated, currency);\nconst taxed = applyTax(priced, region);\nconst total = sumItems(taxed);\nreturn { items: taxed, total };\n```\n\n```ts\n// src/quotes.ts:88 — same shape, renamed: flagged as related\nconst products = parseItems(input);\nconst checkedProducts = validateItems(products);\nconst pricedProducts = priceItems(checkedProducts, currency);\nconst taxedProducts = applyTax(pricedProducts, region);\nconst total = sumItems(taxedProducts);\nreturn { items: taxedProducts, total };\n```\n\n```ts\n// fix: extract once\nexport function pipeline(input: RawInput, currency: Currency, region: Region) {\n  const items = parseItems(input);\n  const validated = validateItems(items);\n  const priced = priceItems(validated, currency);\n  const taxed = applyTax(priced, region);\n  return { items: taxed, total: sumItems(taxed) };\n}\n```\n\n**Suppressing:** each duplicate group is emitted as a single `Issue` covering every\noccurrence — one primary location plus `related` spans for the rest. A\n`cofferdam-ignore: Refactor.DuplicateBlock` comment placed at *any* occurrence (the\nprimary one or any related one) suppresses the whole finding, not just that copy.\nYou don't need to find and suppress every occurrence individually — one ignore\ncomment on either side of a duplicated pair is enough.\n",
+      "body": "---\nid: Refactor.DuplicateBlock\ncategory: Refactor\nbase_priority: 12\ndefault_severity: Medium\noptions: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]\n---\n\nRuns of statements that recur, verbatim, in multiple files. Likely copy-paste — extract a shared helper. Canonicalisation maps identifier tokens to per-window local indices so renamed copies still match; a block that is otherwise identical but carries different string or number literal values is not this check's concern — it is reported separately, at low severity, by [`Refactor.NearDuplicateBlock`](Refactor.NearDuplicateBlock.md), since a near-clone is a weaker and noisier signal than a byte-identical one and should not trip a default CI gate on its own. The `normalize_literals` option controls which of the two checks a given block lands on (see that page), not whether it is reported at all. `import` declarations and re-exports (`export { x } from './y'`) are never windowed at all — an import block can't be extracted into a shared helper, so treating one run of imports as a duplicate of another is never actionable, and normalizing their module-specifier string literals would otherwise make every same-length import block in a project match every other. A plain `export { x }` or `export function f() {}` (no `source`) is ordinary code and is unaffected. Minimum window is `6` consecutive statements (and `80` characters) to keep noise low. Cross-file: per-file `run` writes fingerprints into a corpus slot shared with `Refactor.NearDuplicateBlock`; `finalize` groups by hash, runs one overlap-claim pass across both checks' candidates together (so the two never report overlapping spans), and emits one `Issue` per verbatim-duplicate set with `related` spans pointing at every other occurrence.\n\n```ts\n// src/orders.ts:42\nconst items = parseItems(input);\nconst validated = validateItems(items);\nconst priced = priceItems(validated, currency);\nconst taxed = applyTax(priced, region);\nconst total = sumItems(taxed);\nreturn { items: taxed, total };\n```\n\n```ts\n// src/quotes.ts:88 — same shape, renamed: flagged as related\nconst products = parseItems(input);\nconst checkedProducts = validateItems(products);\nconst pricedProducts = priceItems(checkedProducts, currency);\nconst taxedProducts = applyTax(pricedProducts, region);\nconst total = sumItems(taxedProducts);\nreturn { items: taxedProducts, total };\n```\n\n```ts\n// fix: extract once\nexport function pipeline(input: RawInput, currency: Currency, region: Region) {\n  const items = parseItems(input);\n  const validated = validateItems(items);\n  const priced = priceItems(validated, currency);\n  const taxed = applyTax(priced, region);\n  return { items: taxed, total: sumItems(taxed) };\n}\n```\n\n**Suppressing:** each duplicate group is emitted as a single `Issue` covering every\noccurrence — one primary location plus `related` spans for the rest. A\n`cofferdam-ignore: Refactor.DuplicateBlock` comment placed at *any* occurrence (the\nprimary one or any related one) suppresses the whole finding, not just that copy.\nYou don't need to find and suppress every occurrence individually — one ignore\ncomment on either side of a duplicated pair is enough. Suppression targets the\ncomment's next non-blank line, not a range, so anchor it to the first *statement*\nof the duplicated run — not to an import or other declaration preceding it. Import\nand re-export statements are excluded from windows entirely, so a comment sitting\nabove one no longer covers the block that follows.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
@@ -696,6 +696,12 @@
           "id": "include_ast",
           "kind": "boolean",
           "doc": "run the AST statement-window pass (disable to use token-mode only)",
+          "default": true
+        },
+        {
+          "id": "normalize_literals",
+          "kind": "boolean",
+          "doc": "treat string and number literals as positional placeholders, so blocks differing only in their literal values are still reported as duplicates",
           "default": true
         }
       ],
@@ -761,6 +767,53 @@
       "options": [],
       "badges": [
         "file"
+      ]
+    },
+    {
+      "id": "Refactor.NearDuplicateBlock",
+      "category": "Refactor",
+      "base_priority": 10,
+      "default_severity": "Low",
+      "explanation": "Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.",
+      "body": "---\nid: Refactor.NearDuplicateBlock\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Low\noptions: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]\n---\n\nRuns of statements that are structurally identical to a block elsewhere in the project but differ in a string or number literal value — a near-clone rather than a verbatim one. Identifier tokens were already canonicalised to per-window local indices before this check existed, so a renamed copy has always matched [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md); this check is specifically about the case where a literal, not a name, is the only thing that changed. That is usually the interesting half of the finding: two blocks drift apart because someone copied one and edited the values, and the edit — which fields moved, which threshold changed — is worth a look even though the shape underneath is unchanged.\n\n```ts\n// src/billing/charge-gold.ts\nconst productId = \"gold-membership\";\nconst amountCents = 4999;\nconst invoice = createInvoice(account, productId, amountCents);\nconst receipt = submitInvoice(invoice, \"Gold membership\");\nreturn receipt;\n```\n\n```ts\n// src/billing/charge-silver.ts — same shape, different literals: flagged as related\nconst productId = \"silver-membership\";\nconst amountCents = 2999;\nconst invoice = createInvoice(account, productId, amountCents);\nconst receipt = submitInvoice(invoice, \"Silver membership\");\nreturn receipt;\n```\n\nBoth blocks share one `finalize` pass and one corpus slot (`Refactor.DuplicateBlock.fingerprints`) with `Refactor.DuplicateBlock` — only that check's `run` writes to it, this one reads the same data back and reports the other half of the same grouping: groups whose members are structurally identical (same `hash`) but not byte-identical (differing `exact_hash`). The two checks never report overlapping spans, because the shared overlap-claim pass runs once across both checks' candidates before either is filtered out.\n\n**Severity:** near-clones default to `low`, unlike `Refactor.DuplicateBlock`'s `medium`, and print without tripping the default `--fail-on medium` gate. That is deliberate — severity is set per check id, not per finding, so splitting verbatim clones from literal-drift ones into two ids was the only way to keep a noisier, less actionable signal from failing a build that only meant to gate on real copy-paste. To gate on this check too, raise its severity in `cofferdam.toml`:\n\n```toml\n[checks.\"Refactor.NearDuplicateBlock\"]\nseverity = \"medium\"\n```\n\n**Suppressing:** as with `Refactor.DuplicateBlock`, each group is one `Issue` with `related` spans for every other occurrence, and a `cofferdam-ignore: Refactor.NearDuplicateBlock` comment at any occurrence suppresses the whole finding.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [
+        {
+          "id": "min_statements",
+          "kind": "integer",
+          "doc": "minimum number of consecutive statements required to flag a duplicate block",
+          "default": 6
+        },
+        {
+          "id": "min_chars",
+          "kind": "integer",
+          "doc": "minimum raw byte length of a duplicate window; prevents trivial single-liner runs from firing",
+          "default": 80
+        },
+        {
+          "id": "include_tokens",
+          "kind": "boolean",
+          "doc": "also run a sliding token-window pass that catches duplicates spanning non-statement boundaries",
+          "default": false
+        },
+        {
+          "id": "include_ast",
+          "kind": "boolean",
+          "doc": "run the AST statement-window pass (disable to use token-mode only)",
+          "default": true
+        },
+        {
+          "id": "normalize_literals",
+          "kind": "boolean",
+          "doc": "treat string and number literals as positional placeholders, so blocks differing only in their literal values are still reported as duplicates",
+          "default": true
+        }
+      ],
+      "badges": [
+        "file",
+        "advisable"
       ]
     },
     {

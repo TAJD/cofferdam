@@ -117,10 +117,7 @@ fn text_render_quiet() {
     let issues = fixture_issues();
     insta::assert_snapshot!(TextFormatter::render_with_opts(
         &issues,
-        cofferdam_formatters::TextRenderOpts {
-            quiet: true,
-            ..Default::default()
-        }
+        cofferdam_formatters::TextRenderOpts { quiet: true }
     ));
 }
 

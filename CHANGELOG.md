@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `--hide-baselined` now applies to every output format, not text alone (CD-315). The flag filtered findings inside the text formatter, so `--format=json`, `compact` and `sarif` received the untouched list and printed baselined findings anyway, marked `"baselined": true`. Nothing in the help text said so, and a CI pipeline reading JSON was quietly counting pre-existing findings as new work. The filter now runs once in the CLI, ahead of the per-format branch, so all four formats render the same list. Summary counts are deliberately left whole — `total`, `new` and `baselined` still describe the full run, matching what the text formatter has always done — so the gate count stays visible when the entries are hidden.
+
 ## [0.4.2] - 2026-08-09
 
 ### Added

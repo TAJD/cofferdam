@@ -169,13 +169,13 @@ enum Cmd {
         /// already terse).
         #[arg(long)]
         quiet: bool,
-        /// Hide baselined findings from text output. The summary line
-        /// still reports `(N new, M baselined)` counts so the CI gate
-        /// remains visible. Has no effect on `--format=json` (which
-        /// always includes the per-finding `baselined` flag) or on the
-        /// `--fail-on` gate (which already ignores baselined findings).
-        /// Useful for routine local runs against repos with substantial
-        /// baselines (cd-k23 / gh #11).
+        /// Hide baselined findings from the output, in every format
+        /// (text, json, compact, sarif). The summary/counts still report
+        /// the full `(N new, M baselined)` totals so the CI gate remains
+        /// visible — only the per-finding entries are dropped. Has no
+        /// effect on the `--fail-on` gate (which already ignores
+        /// baselined findings). Useful for routine local runs against
+        /// repos with substantial baselines (cd-k23 / gh #11).
         #[arg(long)]
         hide_baselined: bool,
         /// Directory for the disk-backed findings/run cache (cd-9hp.4
@@ -1285,10 +1285,7 @@ fn run_typst(args: TypstArgs) -> ExitCode {
 
     match format {
         OutputFormat::Text => {
-            let opts = TextRenderOpts {
-                quiet,
-                ..Default::default()
-            };
+            let opts = TextRenderOpts { quiet };
             print!("{}", TextFormatter::render_with_opts(&issues, opts));
         }
         OutputFormat::Json => {
@@ -2158,15 +2155,23 @@ fn run_check(args: CheckArgs) -> ExitCode {
         let truncated_from = apply_max_issues(&mut tagged, max_issues);
         print_truncation_warning(quiet, format, tagged.len(), truncated_from);
 
+        // `--hide-baselined` (cd-315): filter once, here, so every
+        // formatter renders the same list — previously only the text
+        // formatter honoured the flag, so `--format=json` (and
+        // compact/sarif) silently printed baselined findings anyway.
+        // `tagged` stays the source of truth for summary counts
+        // (`render_with_baseline_filtered`'s `full` argument below);
+        // only the rendered `findings`/body shrinks.
+        let hidden: Option<Vec<(cofferdam_core::Issue, bool)>> =
+            hide_baselined.then(|| tagged.iter().filter(|(_, b)| !*b).cloned().collect());
+        let render_tagged: &[(cofferdam_core::Issue, bool)] = hidden.as_deref().unwrap_or(&tagged);
+
         match format {
             OutputFormat::Text => {
-                let opts = TextRenderOpts {
-                    quiet,
-                    hide_baselined,
-                };
+                let opts = TextRenderOpts { quiet };
                 print!(
                     "{}",
-                    TextFormatter::render_with_baseline_opts(&tagged, opts)
+                    TextFormatter::render_with_baseline_filtered(&tagged, render_tagged, opts)
                 );
             }
             OutputFormat::Json => {
@@ -2178,7 +2183,12 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     all_builtins().iter().map(|c| *c.meta()).collect();
                 println!(
                     "{}",
-                    JsonFormatter::render_with_baseline_with_opts(&tagged, &metas, opts)
+                    JsonFormatter::render_with_baseline_filtered(
+                        &tagged,
+                        render_tagged,
+                        &metas,
+                        opts
+                    )
                 );
             }
             OutputFormat::Compact => {
@@ -2186,7 +2196,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 // render the underlying findings; users who need
                 // baseline info should use --format=json.
                 let issues_only: Vec<cofferdam_core::Issue> =
-                    tagged.iter().map(|(i, _)| i.clone()).collect();
+                    render_tagged.iter().map(|(i, _)| i.clone()).collect();
                 print!("{}", CompactFormatter::render(&issues_only));
             }
             OutputFormat::Sarif => {
@@ -2194,7 +2204,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 // --format=json when you need the per-finding `baselined`
                 // flag in the output.
                 let issues_only: Vec<cofferdam_core::Issue> =
-                    tagged.iter().map(|(i, _)| i.clone()).collect();
+                    render_tagged.iter().map(|(i, _)| i.clone()).collect();
                 let metas: Vec<cofferdam_core::CheckMeta> =
                     all_builtins().iter().map(|c| *c.meta()).collect();
                 println!(
@@ -2237,10 +2247,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         match format {
             OutputFormat::Text => {
                 // --hide-baselined is a no-op here (nothing is baselined).
-                let opts = TextRenderOpts {
-                    quiet,
-                    ..Default::default()
-                };
+                let opts = TextRenderOpts { quiet };
                 print!("{}", TextFormatter::render_with_opts(&issues, opts));
             }
             OutputFormat::Json => {
@@ -2533,10 +2540,7 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
                     println!("no output-mode findings");
                 }
             } else {
-                let opts = TextRenderOpts {
-                    quiet,
-                    ..Default::default()
-                };
+                let opts = TextRenderOpts { quiet };
                 print!("{}", TextFormatter::render_with_opts(&issues, opts));
             }
         }

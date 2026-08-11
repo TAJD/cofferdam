@@ -31,7 +31,7 @@ pub use cyclomatic_complexity::{
     max_in_file as max_cyclomatic_complexity_in_file, CyclomaticComplexity,
 };
 pub use dead_export::DeadExport;
-pub use duplicate_block::DuplicateBlock;
+pub use duplicate_block::{DuplicateBlock, NearDuplicateBlock};
 pub use long_and_complex::LongAndComplex;
 pub use mixed_throw_and_return_error::MixedThrowAndReturnError;
 pub use mutated_parameter::MutatedParameter;
@@ -132,7 +132,7 @@ mod tests {
     // Run a quick parse on a synthetic source, then compare hashes to verify
     // structural canonicalisation does what we expect.
 
-    fn ast_hash_first_n_stmts(text: &str, n: usize) -> u64 {
+    fn ast_hash_first_n_stmts(text: &str, n: usize) -> (u64, u64) {
         let file = SourceFile::new(PathBuf::from("test.ts"), text.to_string());
         let alloc = Allocator::default();
         let parsed = parse_into(&alloc, &file);
@@ -415,6 +415,396 @@ mod tests {
         let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         // Should not panic; token-mode may or may not produce issues for this source.
         let _ = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
+    }
+
+    // ─── DuplicateBlock literal normalization (CD-331) ─────────────────────
+    //
+    // The ticket claimed identifiers were missed by canonicalisation; that
+    // was already handled (window-relative local indices). The real gap:
+    // `HashOp::Str`/`HashOp::Num` were hashed by value, so blocks differing
+    // only in literals never grouped. These tests pin the fix at both the
+    // `hash_ops` level (via `AstHashWalker::finish`) and the full
+    // run+finalize level.
+
+    #[test]
+    fn ast_hash_string_literal_normalizes_but_exact_differs() {
+        let a = r#"const label = "hello"; return label;"#;
+        let b = r#"const label = "goodbye"; return label;"#;
+        let (norm_a, exact_a) = ast_hash_first_n_stmts(a, 2);
+        let (norm_b, exact_b) = ast_hash_first_n_stmts(b, 2);
+        assert_eq!(
+            norm_a, norm_b,
+            "normalized hash should treat string literals as positional placeholders"
+        );
+        assert_ne!(
+            exact_a, exact_b,
+            "exact hash must still distinguish different string literal values"
+        );
+    }
+
+    #[test]
+    fn ast_hash_numeric_literal_normalizes_but_exact_differs() {
+        let a = "const n = 1; return n;";
+        let b = "const n = 2; return n;";
+        let (norm_a, exact_a) = ast_hash_first_n_stmts(a, 2);
+        let (norm_b, exact_b) = ast_hash_first_n_stmts(b, 2);
+        assert_eq!(
+            norm_a, norm_b,
+            "normalized hash should treat numeric literals as positional placeholders"
+        );
+        assert_ne!(
+            exact_a, exact_b,
+            "exact hash must still distinguish different numeric literal values"
+        );
+    }
+
+    #[test]
+    fn ast_hash_normalization_does_not_collapse_genuinely_different_structure() {
+        // Guard against over-normalising: differing operators are a
+        // structural difference (`Bin:` tag payload), not a literal, and
+        // must still hash differently even with literal normalization on.
+        let a = "if (x === 1) return;";
+        let b = "if (x !== 1) return;";
+        let (norm_a, _) = ast_hash_first_n_stmts(a, 1);
+        let (norm_b, _) = ast_hash_first_n_stmts(b, 1);
+        assert_ne!(
+            norm_a, norm_b,
+            "different operators must still hash differently under literal normalization"
+        );
+    }
+
+    #[test]
+    fn ast_hash_string_placeholder_does_not_collide_with_numeric_placeholder() {
+        // Both literals occupy local placeholder index 0 within their
+        // window; distinct `Str#`/`Num#` prefixes must keep them from
+        // aliasing each other.
+        let with_string = r#"const first = "x";"#;
+        let with_number = "const first = 1;";
+        let (norm_str, _) = ast_hash_first_n_stmts(with_string, 1);
+        let (norm_num, _) = ast_hash_first_n_stmts(with_number, 1);
+        assert_ne!(
+            norm_str, norm_num,
+            "a string literal placeholder at index 0 must not hash the same as \
+             a numeric literal placeholder at index 0"
+        );
+    }
+
+    /// Run DuplicateBlock on two *different* sources (one per file) and
+    /// return the issues emitted by finalize. Unlike
+    /// `run_duplicate_block_with_options`, the two files needn't be
+    /// byte-identical — used to test literal-only differences.
+    fn run_duplicate_block_two_sources(
+        check: &DuplicateBlock,
+        source_a: &str,
+        source_b: &str,
+        options: &CheckOptions,
+    ) -> Vec<CoreIssue> {
+        let corpus = CorpusIndex::default();
+
+        let alloc_a = Allocator::default();
+        let file_a = SourceFile::new(PathBuf::from("a.ts"), source_a.to_string());
+        let ret_a = parse_into(&alloc_a, &file_a);
+        let view_a = ParsedView {
+            program: &ret_a.program,
+            diagnostics: &ret_a.errors,
+        };
+        let mut ctx_a = CheckContext::new(&file_a)
+            .with_parsed(&view_a)
+            .with_options(options)
+            .with_corpus(&corpus);
+        check.run(&file_a, &mut ctx_a);
+
+        let alloc_b = Allocator::default();
+        let file_b = SourceFile::new(PathBuf::from("b.ts"), source_b.to_string());
+        let ret_b = parse_into(&alloc_b, &file_b);
+        let view_b = ParsedView {
+            program: &ret_b.program,
+            diagnostics: &ret_b.errors,
+        };
+        let mut ctx_b = CheckContext::new(&file_b)
+            .with_parsed(&view_b)
+            .with_options(options)
+            .with_corpus(&corpus);
+        check.run(&file_b, &mut ctx_b);
+
+        let mut finalize_ctx = FinalizeContext::new(&corpus);
+        check.finalize(&mut finalize_ctx)
+    }
+
+    /// Six structurally identical statements whose literal values are
+    /// parameterised, large enough to clear the default thresholds.
+    fn make_duplicate_source_with_literals(product: &str, amount_cents: i64) -> String {
+        format!(
+            "const productId = \"{product}\";\n\
+             const amountCents = {amount_cents};\n\
+             const description = \"description for {product}\";\n\
+             const invoice = createInvoice(productId, amountCents);\n\
+             const receipt = submitInvoice(invoice, description);\n\
+             return receipt;"
+        )
+    }
+
+    /// Runs `DuplicateBlock::run` (the sole corpus writer) on two files,
+    /// then finalizes both `dup` and `near` against the same corpus and
+    /// returns `(dup_issues, near_issues)`. Used everywhere the CD-331
+    /// split needs pinning: which check a group lands on, and that the
+    /// two never claim overlapping territory.
+    fn run_both_checks_two_sources(
+        dup: &DuplicateBlock,
+        near: &NearDuplicateBlock,
+        source_a: &str,
+        source_b: &str,
+        options: &CheckOptions,
+    ) -> (Vec<CoreIssue>, Vec<CoreIssue>) {
+        let corpus = CorpusIndex::default();
+
+        let alloc_a = Allocator::default();
+        let file_a = SourceFile::new(PathBuf::from("a.ts"), source_a.to_string());
+        let ret_a = parse_into(&alloc_a, &file_a);
+        let view_a = ParsedView {
+            program: &ret_a.program,
+            diagnostics: &ret_a.errors,
+        };
+        let mut ctx_a = CheckContext::new(&file_a)
+            .with_parsed(&view_a)
+            .with_options(options)
+            .with_corpus(&corpus);
+        dup.run(&file_a, &mut ctx_a);
+
+        let alloc_b = Allocator::default();
+        let file_b = SourceFile::new(PathBuf::from("b.ts"), source_b.to_string());
+        let ret_b = parse_into(&alloc_b, &file_b);
+        let view_b = ParsedView {
+            program: &ret_b.program,
+            diagnostics: &ret_b.errors,
+        };
+        let mut ctx_b = CheckContext::new(&file_b)
+            .with_parsed(&view_b)
+            .with_options(options)
+            .with_corpus(&corpus);
+        dup.run(&file_b, &mut ctx_b);
+
+        let mut finalize_ctx_dup = FinalizeContext::new(&corpus);
+        let dup_issues = dup.finalize(&mut finalize_ctx_dup);
+        let mut finalize_ctx_near = FinalizeContext::new(&corpus);
+        let near_issues = near.finalize(&mut finalize_ctx_near);
+        (dup_issues, near_issues)
+    }
+
+    #[test]
+    fn duplicate_block_exact_clone_lands_on_duplicate_block_not_near() {
+        let dup = DuplicateBlock::default();
+        let near = NearDuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source = make_duplicate_source();
+        let (dup_issues, near_issues) =
+            run_both_checks_two_sources(&dup, &near, &source, &source, &opts);
+        assert_eq!(
+            dup_issues.len(),
+            1,
+            "expected exactly one Refactor.DuplicateBlock finding for a verbatim clone, got {:?}",
+            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert_eq!(dup_issues[0].check_id, "Refactor.DuplicateBlock");
+        assert!(
+            near_issues.is_empty(),
+            "a verbatim clone must not also be reported by Refactor.NearDuplicateBlock, got {:?}",
+            near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn duplicate_block_literal_drift_lands_on_near_duplicate_block_not_duplicate_block() {
+        let dup = DuplicateBlock::default();
+        let near = NearDuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source_a = make_duplicate_source_with_literals("gold", 4999);
+        let source_b = make_duplicate_source_with_literals("silver", 2999);
+        let (dup_issues, near_issues) =
+            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        assert!(
+            dup_issues.is_empty(),
+            "blocks differing only in literal values must not be reported by \
+             Refactor.DuplicateBlock, got {:?}",
+            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            near_issues.len(),
+            1,
+            "expected exactly one Refactor.NearDuplicateBlock finding for blocks differing \
+             only in literals, got {:?}",
+            near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert_eq!(near_issues[0].check_id, "Refactor.NearDuplicateBlock");
+        assert!(
+            near_issues[0]
+                .message
+                .contains("differing only in literal values"),
+            "message should call out that the blocks differ only in literal values, got {:?}",
+            near_issues[0].message
+        );
+    }
+
+    #[test]
+    fn duplicate_block_normalize_literals_false_reproduces_old_grouping() {
+        let dup = DuplicateBlock::default();
+        let near = NearDuplicateBlock::default();
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert(
+            "normalize_literals".to_string(),
+            RawOptionValue::Bool(false),
+        );
+        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let source_a = make_duplicate_source_with_literals("gold", 4999);
+        let source_b = make_duplicate_source_with_literals("silver", 2999);
+        let (dup_issues, near_issues) =
+            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        assert!(
+            dup_issues.is_empty() && near_issues.is_empty(),
+            "with normalize_literals=false, blocks differing only in literal values must not \
+             be grouped by either check (pre-CD-331 behaviour), got dup={:?} near={:?}",
+            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
+            near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn duplicate_block_and_near_duplicate_block_never_overlap_spans() {
+        // Mix a verbatim-clone pair with a literal-drift pair across the
+        // same two files and assert that no span (primary or related)
+        // reported by either check overlaps a span reported by the
+        // other, for the same file — pinning that `partition_claimed_groups`
+        // runs its overlap-claim pass once, across both checks' candidates
+        // together, rather than each check claiming independently.
+        let dup = DuplicateBlock::default();
+        let near = NearDuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let exact = make_duplicate_source();
+        let near_a = make_duplicate_source_with_literals("gold", 4999);
+        let near_b = make_duplicate_source_with_literals("silver", 2999);
+        let source_a = format!("{exact}\n\n{near_a}");
+        let source_b = format!("{exact}\n\n{near_b}");
+        let (dup_issues, near_issues) =
+            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        assert_eq!(
+            dup_issues.len(),
+            1,
+            "expected the verbatim clone, got {dup_issues:?}"
+        );
+        assert_eq!(
+            near_issues.len(),
+            1,
+            "expected the literal-drift clone, got {near_issues:?}"
+        );
+
+        let spans_of = |issues: &[CoreIssue]| -> Vec<(PathBuf, u32, u32)> {
+            issues
+                .iter()
+                .flat_map(|i| {
+                    std::iter::once((i.file.clone(), i.location.line(), i.location.line())).chain(
+                        i.related
+                            .iter()
+                            .map(|r| (r.file.clone(), r.location.line(), r.location.line())),
+                    )
+                })
+                .collect()
+        };
+        let dup_spans = spans_of(&dup_issues);
+        let near_spans = spans_of(&near_issues);
+        for (dfile, dline, _) in &dup_spans {
+            for (nfile, nline, _) in &near_spans {
+                assert!(
+                    !(dfile == nfile && dline == nline),
+                    "Refactor.DuplicateBlock and Refactor.NearDuplicateBlock reported the same \
+                     location {dfile:?}:{dline}"
+                );
+            }
+        }
+    }
+
+    // ─── DuplicateBlock: import/re-export windows excluded (CD-331 follow-up) ──
+    //
+    // Real-repo validation of the literal-normalization fix above turned up a
+    // false-positive class it did not anticipate: normalizing string literals
+    // also normalizes module specifiers, so any two same-length runs of
+    // `import` statements now hash equal — an import block can never be
+    // "extracted into a shared helper", so the finding is never actionable.
+    // Import declarations and re-exports (`export { x } from './y'`) are now
+    // excluded from AST-mode windows entirely; a plain `export { x }` or
+    // `export function f() {}` (no `source`) is ordinary code and still
+    // participates.
+
+    fn make_import_block(prefix: &str) -> String {
+        (0..6)
+            .map(|i| format!("import {{ value{i} }} from \"{prefix}/mod{i}\";"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn make_reexport_block(prefix: &str) -> String {
+        (0..6)
+            .map(|i| format!("export {{ value{i} }} from \"{prefix}/mod{i}\";"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn make_plain_export_function_block(offset: i64) -> String {
+        (0..6)
+            .map(|i| format!("export function step{i}() {{ return {}; }}", offset + i))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn duplicate_block_import_run_produces_no_finding() {
+        let check = DuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source_a = make_import_block("./a");
+        let source_b = make_import_block("./b");
+        let issues = run_duplicate_block_two_sources(&check, &source_a, &source_b, &opts);
+        assert!(
+            issues.is_empty(),
+            "a run of six or more import declarations differing only in module \
+             specifiers must not be flagged as a duplicate block, got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn duplicate_block_reexport_run_produces_no_finding() {
+        let check = DuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source_a = make_reexport_block("./a");
+        let source_b = make_reexport_block("./b");
+        let issues = run_duplicate_block_two_sources(&check, &source_a, &source_b, &opts);
+        assert!(
+            issues.is_empty(),
+            "a run of re-exports (`export {{ x }} from './y'`) differing only in \
+             module specifiers must not be flagged as a duplicate block, got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn duplicate_block_plain_export_function_still_participates_in_windows() {
+        // Sanity guard against over-excluding: an `ExportNamedDeclaration`
+        // with no `source` (a plain `export function`) is ordinary code and
+        // must still be windowed and flagged like any other duplicate.
+        let check = DuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        // Same offset on both sides — a verbatim clone, so this stays a
+        // pure windowing sanity check rather than exercising the
+        // literal-drift split (that's covered separately, above).
+        let source_a = make_plain_export_function_block(100);
+        let source_b = make_plain_export_function_block(100);
+        let issues = run_duplicate_block_two_sources(&check, &source_a, &source_b, &opts);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a plain `export function` block with no `source` must still be \
+             windowed and flagged, got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
     }
 
     // ─── UnusedVariable: TS parameter properties (cd-sh72 / gh #44) ─────────

@@ -7,7 +7,8 @@
 //! [checks."Readability.MaxLineLength"]
 //! limit = 120
 //! severity = "warning"   # phase-3 (cd-t1a) — accepted, not yet enforced
-//! enabled = true         # phase-3 — accepted, not yet enforced
+//! enabled = true         # an option like any other; only checks that
+//!                        # declare it see it (CD-324)
 //!
 //! [checks."Readability.MaxFunctionLength"]
 //! limit = 50
@@ -572,17 +573,63 @@ enabled = true
             .checks
             .get("Readability.MaxLineLength")
             .expect("present");
-        // `limit` flows through to the per-check option bag; `severity`
-        // goes to `severity_overrides`; `enabled` is silently accepted
-        // (no behaviour wired today).
-        assert_eq!(bag.len(), 1);
+        // `limit` and `enabled` flow through to the per-check option
+        // bag; `severity` goes to `severity_overrides`.
+        assert_eq!(bag.len(), 2);
         assert!(bag.contains_key("limit"));
+        assert!(bag.contains_key("enabled"));
         assert!(!bag.contains_key("severity"));
-        assert!(!bag.contains_key("enabled"));
         assert_eq!(
             cfg.severity_overrides.get("Readability.MaxLineLength"),
             Some(&Severity::High)
         );
+    }
+
+    /// CD-324: `enabled` used to be stripped by the loader for every
+    /// check, which made `Refactor.PurityHeuristic` — whose only option
+    /// is called `enabled` — impossible to switch on. It now reaches the
+    /// option bag when the check declares it.
+    #[test]
+    fn enabled_reaches_a_check_that_declares_it() {
+        let raw = r#"
+[checks."Refactor.PurityHeuristic"]
+enabled = true
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        let schema = &[cofferdam_core::OptionSpec {
+            name: "enabled",
+            kind: cofferdam_core::OptionKind::Bool,
+            default: cofferdam_core::OptionDefault::Bool(false),
+            doc: "opt in",
+        }];
+        let opts = options_for(
+            &cfg,
+            Path::new("test.toml"),
+            "Refactor.PurityHeuristic",
+            schema,
+        )
+        .expect("validates");
+        assert_eq!(opts.get_bool("enabled"), Some(true));
+    }
+
+    /// ...and is still tolerated (dropped, not an error) for the checks
+    /// that do not, so configs written against the old placeholder keep
+    /// loading.
+    #[test]
+    fn enabled_is_dropped_for_a_check_that_does_not_declare_it() {
+        let raw = r#"
+[checks."Readability.MaxLineLength"]
+enabled = false
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        let opts = options_for(
+            &cfg,
+            Path::new("test.toml"),
+            "Readability.MaxLineLength",
+            &[],
+        )
+        .expect("must not reject a legacy `enabled` key");
+        assert_eq!(opts.get_bool("enabled"), None);
     }
 
     #[test]
@@ -991,7 +1038,7 @@ ui = ["domain"]
         //
         // The parse() step strips `limit` into the raw bag before
         // reaching options_for, but `plugins` (an array) would be kept
-        // as-is if it weren't in META_KEYS — so we test options_for
+        // as-is — so we test options_for
         // directly with `plugins` in the raw bag.
         let err = options_for_with_raw_key(
             "Readability.MaxLineLength",

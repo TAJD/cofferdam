@@ -35,7 +35,7 @@ Keys are chosen by you — each is a check id.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `severity` | string | — | Override the check's default severity: `info`, `low`, `medium`, `high` or `critical`. |
-| `enabled` | bool | — | Accepted but not yet wired to anything. To disable a check over a path glob, use `[[overrides]]` with `disabled = true`. |
+| `enabled` | bool | — | Passed to the check as an option. Only `Refactor.PurityHeuristic` declares it (as its opt-in switch); for every other check it is accepted and ignored. To turn a check off over a path glob, use `[[overrides]]` with `disabled = true`. |
 
 ## `[layers]`
 

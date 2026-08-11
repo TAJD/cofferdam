@@ -1724,10 +1724,12 @@ export function computeTotal(items: number[]): number {
     }
 
     #[test]
-    fn fan_in_outlier_is_flagged() {
-        // 14 files that each import a single shared `utils.ts` — utils
-        // has fan-in 14 against a background of zero, the fan-in mirror
-        // of `fan_out_outlier_is_flagged`.
+    fn high_fan_in_alone_is_not_flagged() {
+        // CD-333: 14 files that each import a single shared `utils.ts`
+        // — utils has fan-in 14 against a background of zero, but zero
+        // fan-out of its own. A shared leaf module doing its job must
+        // not be flagged; fan-in alone can't distinguish it from a
+        // real hub.
         let utils = PathBuf::from("/p/utils.ts");
         let imports: Vec<ImportRecord> = (0..14)
             .map(|i| {
@@ -1736,13 +1738,36 @@ export function computeTotal(items: number[]): number {
             })
             .collect();
         let issues = run_fan_out_outlier(imports);
-        assert_eq!(
-            issues.len(),
-            1,
-            "expected one fan-in finding for utils.ts; got {issues:?}"
+        assert!(
+            issues.is_empty(),
+            "high fan-in alone must not be flagged; got {issues:?}"
         );
-        assert_eq!(issues[0].file, utils);
-        assert!(issues[0].message.contains("fan-in"));
+    }
+
+    #[test]
+    fn high_fan_in_and_fan_out_together_is_flagged() {
+        // CD-333: a genuine god module — high fan-in AND high fan-out
+        // — must still fire the fan-in finding. 14 sibling files each
+        // import `hub.ts` (hub's fan-in) and `hub.ts` imports each of
+        // them back (hub's fan-out).
+        let hub = PathBuf::from("/p/hub.ts");
+        let mut imports = Vec::new();
+        for i in 0..14 {
+            let sibling = PathBuf::from(format!("/p/sibling{i}.ts"));
+            imports.push(internal_import(&sibling, &hub));
+            imports.push(internal_import(&hub, &sibling));
+        }
+        let issues = run_fan_out_outlier(imports);
+        let fan_in_issues: Vec<&CoreIssue> = issues
+            .iter()
+            .filter(|i| i.message.contains("fan-in"))
+            .collect();
+        assert_eq!(
+            fan_in_issues.len(),
+            1,
+            "expected one fan-in finding for the god module; got {issues:?}"
+        );
+        assert_eq!(fan_in_issues[0].file, hub);
     }
 
     #[test]

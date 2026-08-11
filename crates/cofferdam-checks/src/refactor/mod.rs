@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn duplicate_block_exact_clone_lands_on_duplicate_block_not_near() {
         let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock::default();
+        let near = NearDuplicateBlock;
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source = make_duplicate_source();
         let (dup_issues, near_issues) =
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn duplicate_block_literal_drift_lands_on_near_duplicate_block_not_duplicate_block() {
         let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock::default();
+        let near = NearDuplicateBlock;
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_duplicate_source_with_literals("gold", 4999);
         let source_b = make_duplicate_source_with_literals("silver", 2999);
@@ -648,7 +648,7 @@ mod tests {
     #[test]
     fn duplicate_block_normalize_literals_false_reproduces_old_grouping() {
         let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock::default();
+        let near = NearDuplicateBlock;
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert(
             "normalize_literals".to_string(),
@@ -677,7 +677,7 @@ mod tests {
         // runs its overlap-claim pass once, across both checks' candidates
         // together, rather than each check claiming independently.
         let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock::default();
+        let near = NearDuplicateBlock;
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let exact = make_duplicate_source();
         let near_a = make_duplicate_source_with_literals("gold", 4999);
@@ -803,6 +803,172 @@ mod tests {
             1,
             "a plain `export function` block with no `source` must still be \
              windowed and flagged, got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // ─── DuplicateBlock: run-scoped windowing + require blocks (CD-339) ────
+    //
+    // Four defects fixed together: (1) a window could straddle an excluded
+    // statement, inflating its reported span with bytes it never hashed;
+    // (2) `import x = require(...)` / `export = x` / `const x =
+    // require(...)` were not excluded, so require blocks differing only in
+    // module path false-positived as duplicates; (3) both messages
+    // hardcoded `min_statements` instead of the effective per-file value
+    // (covered indirectly — no dedicated test here, see `Fingerprint::
+    // stmt_count`'s doc); (4) `NearDuplicateBlock`'s options were
+    // advertised but never read (covered by the docs page, not a runtime
+    // test).
+
+    fn make_leader_trailer_source(with_imports: bool) -> String {
+        // Two "leader" statements, optionally four side-effect imports,
+        // then six "trailer" statements — imports sit between statement 2
+        // and 3, splitting what a flattened-list windower would treat as
+        // one run of 8 into a too-short leader run (2) and a full-length
+        // trailer run (6).
+        let leader = [
+            "const leaderOne = computeLeader(1);",
+            "const leaderTwo = computeLeader(2);",
+        ];
+        let imports = [
+            "import \"./sideEffectOne\";",
+            "import \"./sideEffectTwo\";",
+            "import \"./sideEffectThree\";",
+            "import \"./sideEffectFour\";",
+        ];
+        let trailer = [
+            "const trailerZero = computeTrailer(10);",
+            "const trailerOne = computeTrailer(11);",
+            "const trailerTwo = computeTrailer(12);",
+            "const trailerThree = computeTrailer(13);",
+            "const trailerFour = computeTrailer(14);",
+            "const trailerFive = computeTrailer(15);",
+        ];
+        let mut lines: Vec<&str> = leader.to_vec();
+        if with_imports {
+            lines.extend_from_slice(&imports);
+        }
+        lines.extend_from_slice(&trailer);
+        lines.join("\n")
+    }
+
+    #[test]
+    fn duplicate_block_window_does_not_straddle_excluded_statement() {
+        // Identical leader+trailer statement sequences in both files; only
+        // `source_a` has the four side-effect imports interleaved between
+        // the leader and trailer runs. Both files report a duplicate for
+        // the matched window, and the byte length of that window's span
+        // must be identical in both files — the with-imports file's span
+        // must not swallow the excluded imports' bytes.
+        let check = DuplicateBlock::default();
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("min_chars".to_string(), RawOptionValue::Int(1));
+        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+
+        let source_a = make_leader_trailer_source(true);
+        let source_b = make_leader_trailer_source(false);
+        let issues = run_duplicate_block_two_sources(&check, &source_a, &source_b, &opts);
+
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected exactly one duplicate group, got {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        let issue = &issues[0];
+        assert_eq!(issue.related.len(), 1, "expected exactly one related span");
+        let primary_len = issue.location.end_byte() - issue.location.start_byte();
+        let related_len =
+            issue.related[0].location.end_byte() - issue.related[0].location.start_byte();
+        assert_eq!(
+            primary_len, related_len,
+            "a window must not straddle the excluded import statements sitting between the \
+             leader and trailer runs — the reported span must cover exactly the matched \
+             statements in both files, not swallow the import block's bytes in the file that \
+             has one"
+        );
+    }
+
+    fn make_require_block(prefix: &str) -> String {
+        (0..6)
+            .map(|i| format!("const mod{i} = require(\"{prefix}/mod{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn duplicate_block_const_require_block_produces_no_finding() {
+        // Distinct module paths only, but otherwise structurally identical
+        // statements: pre-fix, this doesn't land on `Refactor.DuplicateBlock`
+        // (module-path strings differ, so `exact_hash` differs too) — it
+        // lands on `Refactor.NearDuplicateBlock` instead, since
+        // `normalize_literals` treats the path strings as positional
+        // placeholders. Neither check should report a require block at all.
+        let dup = DuplicateBlock::default();
+        let near = NearDuplicateBlock;
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source_a = make_require_block("./a");
+        let source_b = make_require_block("./b");
+        let (dup_issues, near_issues) =
+            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        assert!(
+            dup_issues.is_empty() && near_issues.is_empty(),
+            "a run of six or more `const x = require(...)` declarations differing only in \
+             module specifiers must not be flagged as a duplicate block, got dup={:?} near={:?}",
+            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
+            near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    fn make_import_equals_block(prefix: &str) -> String {
+        (0..6)
+            .map(|i| format!("import mod{i} = require(\"{prefix}/mod{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn duplicate_block_import_equals_require_block_produces_no_finding() {
+        let dup = DuplicateBlock::default();
+        let near = NearDuplicateBlock;
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source_a = make_import_equals_block("./a");
+        let source_b = make_import_equals_block("./b");
+        let (dup_issues, near_issues) =
+            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        assert!(
+            dup_issues.is_empty() && near_issues.is_empty(),
+            "a run of six or more `import x = require(...)` declarations differing only in \
+             module specifiers must not be flagged as a duplicate block, got dup={:?} near={:?}",
+            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
+            near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    fn make_plain_variable_block(offset: i64) -> String {
+        (0..6)
+            .map(|i| format!("const value{i} = {};", offset + i))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn duplicate_block_plain_variable_declarations_still_participate_in_windows() {
+        // Regression guard for the require-block exclusion: a
+        // `VariableDeclaration` whose initialisers are NOT `require(...)`
+        // calls is ordinary code and must still be windowed and flagged —
+        // this would fail if the require fix over-excluded every
+        // `VariableDeclaration` instead of only require blocks.
+        let check = DuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let source_a = make_plain_variable_block(100);
+        let source_b = make_plain_variable_block(100);
+        let issues = run_duplicate_block_two_sources(&check, &source_a, &source_b, &opts);
+        assert_eq!(
+            issues.len(),
+            1,
+            "ordinary variable declarations (not require blocks) must still be windowed and \
+             flagged, got {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }

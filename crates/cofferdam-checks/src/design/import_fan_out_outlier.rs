@@ -20,6 +20,13 @@ const MIN_FILES: usize = 8;
 /// to count as an outlier.
 const STDDEV_MULTIPLIER: f64 = 3.0;
 
+/// A metric must also clear this absolute count, not just the relative
+/// stddev threshold. In a project whose files import mainly from
+/// node_modules the in-project graph is sparse enough that
+/// `mean + 3*stddev` falls below 1, and a file importing a single local
+/// module would otherwise read as an outlier.
+const MIN_ABSOLUTE_FAN: u32 = 8;
+
 /// Basenames treated as intentional aggregator hubs — always high
 /// fan-in/fan-out by design (a barrel `index.ts`, a shared `types.ts`).
 /// Excluded from BOTH the flaggable set AND the statistical population,
@@ -75,11 +82,14 @@ const META: CheckMeta = CheckMeta {
 };
 
 /// `Design.ImportFanOutOutlier` — finalize-stage check (CD-130) that
-/// flags a file whose import fan-in (files that import it) or fan-out
-/// (files it imports) is more than `STDDEV_MULTIPLIER` standard
-/// deviations above the project mean, computed over the project's
-/// in-project (resolved) import edges only — external package imports
-/// don't count toward either metric.
+/// flags a file whose import fan-out (files it imports) is more than
+/// `STDDEV_MULTIPLIER` standard deviations above the project mean AND
+/// at least `MIN_ABSOLUTE_FAN`, computed over the project's in-project
+/// (resolved) import edges only — external package imports don't count
+/// toward either metric. Fan-in (files that import it) is never
+/// sufficient on its own; when it clears the same two bars alongside
+/// fan-out, the file is reported once as a combined hub finding rather
+/// than twice.
 ///
 /// Scope: files matching `HUB_BASENAMES` (barrel `index.*`, `types.*`)
 /// or resolving as the nearest `package.json`'s declared entry point
@@ -224,11 +234,17 @@ fn compute_outliers(
     let mut sorted_population = population;
     sorted_population.sort_by(|a, b| a.display.cmp(&b.display));
     for stats in sorted_population {
-        if stddev_in > 0.0
+        let fan_in_is_outlier = stddev_in > 0.0
             && stats.fan_in as f64 > threshold_in
-            && stddev_out > 0.0
+            && stats.fan_in >= MIN_ABSOLUTE_FAN;
+        let fan_out_is_outlier = stddev_out > 0.0
             && stats.fan_out as f64 > threshold_out
-        {
+            && stats.fan_out >= MIN_ABSOLUTE_FAN;
+        // Exclusive branches: fan-in never qualifies without fan-out also
+        // qualifying (see the module doc), so at most one issue per file
+        // — a combined finding when both are outliers, else a fan-out-only
+        // finding, never both for the same file.
+        if fan_in_is_outlier && fan_out_is_outlier {
             issues.push(Issue {
                 check_id: META.id.to_string(),
                 message: format!(
@@ -241,8 +257,7 @@ fn compute_outliers(
                 severity: Severity::Medium,
                 related: Vec::new(),
             });
-        }
-        if stddev_out > 0.0 && stats.fan_out as f64 > threshold_out {
+        } else if fan_out_is_outlier {
             issues.push(Issue {
                 check_id: META.id.to_string(),
                 message: format!(
@@ -365,5 +380,60 @@ mod tests {
             "expected exactly one finding for hub, got {issues:?}"
         );
         assert!(hub_issues[0].message.contains("fan-out"));
+    }
+
+    /// A leaf imported by many files but itself importing only one local
+    /// module must not be flagged: `high_fan_in_alone_is_not_flagged`
+    /// above only passes because its leaf has fan_out == 0, which is
+    /// unrealistic — a leaf with a single import has a fan_out that can
+    /// still clear a sparse graph's relative threshold without an
+    /// absolute floor.
+    #[test]
+    fn sparse_graph_does_not_flag_a_leaf_that_imports_one_module() {
+        let leaf = PathBuf::from("/proj/leaf.ts");
+        let leaf_dep = PathBuf::from("/proj/leaf_dep.ts");
+        let mut all_files = HashSet::new();
+        all_files.insert(leaf.clone());
+        all_files.insert(leaf_dep.clone());
+        let mut imports = Vec::new();
+        for i in 0..15 {
+            let importer = PathBuf::from(format!("/proj/importer_{i}.ts"));
+            all_files.insert(importer.clone());
+            imports.push(edge(&importer, &leaf));
+        }
+        imports.push(edge(&leaf, &leaf_dep));
+        for i in 0..150 {
+            all_files.insert(PathBuf::from(format!("/proj/filler_{i}.ts")));
+        }
+
+        let issues = compute_outliers(&imports, &[], &all_files);
+        assert!(
+            issues.is_empty(),
+            "expected no findings for a leaf with fan_out 1 in a sparse graph, got {issues:?}"
+        );
+    }
+
+    /// The same file must never receive both a fan-out finding and a
+    /// combined fan-in/fan-out finding.
+    #[test]
+    fn a_file_is_never_reported_twice() {
+        let hub = PathBuf::from("/proj/hub.ts");
+        let mut all_files = HashSet::new();
+        all_files.insert(hub.clone());
+        let mut imports = Vec::new();
+        for i in 0..15 {
+            let sibling = PathBuf::from(format!("/proj/sibling_{i}.ts"));
+            all_files.insert(sibling.clone());
+            imports.push(edge(&sibling, &hub));
+            imports.push(edge(&hub, &sibling));
+        }
+
+        let issues = compute_outliers(&imports, &[], &all_files);
+        let hub_issues: Vec<&Issue> = issues.iter().filter(|i| i.file == hub).collect();
+        assert_eq!(
+            hub_issues.len(),
+            1,
+            "expected exactly one issue for hub, got {issues:?}"
+        );
     }
 }

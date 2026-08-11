@@ -150,7 +150,7 @@ const CHECK_ENTRY_KEYS: &[KeySpec] = &[
         key: "enabled",
         type_name: "bool",
         default: None,
-        doc: "Accepted but not yet wired to anything. To disable a check over a path glob, use `[[overrides]]` with `disabled = true`.",
+        doc: "Passed to the check as an option. Only `Refactor.PurityHeuristic` declares it (as its opt-in switch); for every other check it is accepted and ignored. To turn a check off over a path glob, use `[[overrides]]` with `disabled = true`.",
     },
 ];
 

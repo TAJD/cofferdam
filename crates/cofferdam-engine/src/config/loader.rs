@@ -11,13 +11,6 @@ use super::{ConfigError, ContextSuppressRule, OverrideBlock, OverrideCheck, Proj
 /// Filename loaders look for during walk-up discovery.
 pub const FILE_NAME: &str = "cofferdam.toml";
 
-/// Meta-keys that may appear inside `[checks."X.Y"]` blocks but aren't
-/// per-check options. `severity` (cd-t1a) is now first-class — extracted
-/// into `ProjectConfig::severity_overrides` rather than passed through
-/// to `validate_options`. `enabled` is still a forward-compatible
-/// placeholder (no behaviour wired yet).
-const META_KEYS: &[&str] = &["severity", "enabled"];
-
 /// TOML document layout. Top-level sections grow additively here.
 #[derive(Debug, Deserialize, Default)]
 pub struct TomlDoc {
@@ -158,9 +151,18 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
 
         let mut options: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         for (key, val) in table {
-            // Meta-keys are extracted into their own slots, not passed
-            // through to per-check option validation (which would
-            // reject them as UnknownKey).
+            // `severity` (cd-t1a) is a meta-key, extracted into its own
+            // slot rather than passed through to per-check option
+            // validation (which would reject it as UnknownKey).
+            //
+            // `enabled` used to get the same treatment, as a
+            // forward-compatible placeholder. That silently discarded
+            // the only option `Refactor.PurityHeuristic` has — its
+            // catalogue page tells the user to write `enabled = true` —
+            // leaving a registered check nobody could turn on (CD-324).
+            // It now reaches the option bag; `options_for_raw` drops it
+            // again for the checks that do not declare it, so configs
+            // written against the old placeholder keep loading.
             if key == "severity" {
                 let s = match &val {
                     toml::Value::String(s) => s.clone(),
@@ -178,11 +180,6 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
                     source,
                 })?;
                 severity_overrides.insert(check_id.clone(), sev);
-                continue;
-            }
-            if META_KEYS.contains(&key.as_str()) {
-                // `enabled` (and any future placeholders) — silently
-                // accepted, no behaviour wired today.
                 continue;
             }
             let raw = toml_to_raw(&val).ok_or_else(|| ConfigError::UnsupportedValue {

@@ -60,6 +60,7 @@ export const checksItems = [
       { text: 'LongAndComplex', link: '/checks/Refactor.LongAndComplex' },
       { text: 'MixedThrowAndReturnError', link: '/checks/Refactor.MixedThrowAndReturnError' },
       { text: 'MutatedParameter', link: '/checks/Refactor.MutatedParameter' },
+      { text: 'NearDuplicateBlock', link: '/checks/Refactor.NearDuplicateBlock' },
       { text: 'PreferArrayMethodOverLoop', link: '/checks/Refactor.PreferArrayMethodOverLoop' },
       { text: 'PreferConstOverLet', link: '/checks/Refactor.PreferConstOverLet' },
       { text: 'PreferNullishCoalescing', link: '/checks/Refactor.PreferNullishCoalescing' },

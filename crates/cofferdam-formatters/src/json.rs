@@ -250,16 +250,33 @@ impl JsonFormatter {
         metas: &[CheckMeta],
         opts: JsonRenderOpts,
     ) -> String {
-        let builtin_ids: HashSet<&str> = metas.iter().map(|m| m.id).collect();
-        Self::render_with_baseline_inner(tagged, opts, &builtin_ids)
+        Self::render_with_baseline_filtered(tagged, tagged, metas, opts)
     }
 
-    fn render_with_baseline_inner(
-        tagged: &[(Issue, bool)],
+    /// Render a caller-filtered slice of findings (`rendered`) while
+    /// still reporting summary totals (`total`, `by_category`, `new`,
+    /// `baselined`) from the pre-filter `full` slice. Lets the CLI apply
+    /// `--hide-baselined` once, ahead of the per-format `match`, and
+    /// have every formatter agree on the same counts (cd-315) — only
+    /// the `findings` array shrinks, the summary always reflects the
+    /// full run.
+    pub fn render_with_baseline_filtered(
+        full: &[(Issue, bool)],
+        rendered: &[(Issue, bool)],
+        metas: &[CheckMeta],
+        opts: JsonRenderOpts,
+    ) -> String {
+        let builtin_ids: HashSet<&str> = metas.iter().map(|m| m.id).collect();
+        Self::render_with_baseline_filtered_inner(full, rendered, opts, &builtin_ids)
+    }
+
+    fn render_with_baseline_filtered_inner(
+        full: &[(Issue, bool)],
+        rendered: &[(Issue, bool)],
         opts: JsonRenderOpts,
         builtin_ids: &HashSet<&str>,
     ) -> String {
-        let findings: Vec<RobotFinding<'_>> = tagged
+        let findings: Vec<RobotFinding<'_>> = rendered
             .iter()
             .map(|(i, baselined)| RobotFinding {
                 id: i.check_id.as_str(),
@@ -284,18 +301,17 @@ impl JsonFormatter {
 
         let mut by_category: std::collections::BTreeMap<&'static str, usize> =
             std::collections::BTreeMap::new();
-        for f in &findings {
-            *by_category.entry(f.category).or_insert(0) += 1;
+        for (i, _) in full {
+            *by_category
+                .entry(category_str(category_of(&i.check_id)))
+                .or_insert(0) += 1;
         }
-        let baselined_count = findings
-            .iter()
-            .filter(|f| f.baselined == Some(true))
-            .count();
-        let new_count = findings.len() - baselined_count;
+        let baselined_count = full.iter().filter(|(_, b)| *b).count();
+        let new_count = full.len() - baselined_count;
 
         let report = RobotReport {
             summary: RobotSummary {
-                total: findings.len(),
+                total: full.len(),
                 by_category,
                 new: Some(new_count),
                 baselined: Some(baselined_count),

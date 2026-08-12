@@ -16,8 +16,9 @@ CLI calls — CLI and MCP output are byte-for-byte identical:
 - **`cofferdam.explain`** — a check's metadata and prose explanation by ID (built-in or
   plugin-declared). Same shape as `cofferdam explain <id> --robot`.
 - **`cofferdam.invariants`** — the parsed `cofferdam.invariants.toml` (layers, public_api,
-  boundaries, invariants) as JSON, discovered upward from a given path. No CLI equivalent
-  exists — this is MCP-only.
+  boundaries, invariants) as JSON, discovered upward from a given path. Same shape as
+  `cofferdam invariants show --robot`, which reports rather more: which files were read,
+  and which of them the layers in force actually came from.
 
 All five load `cofferdam.toml` / `cofferdam.invariants.toml` when discoverable upward from the
 target path, otherwise run with default options.

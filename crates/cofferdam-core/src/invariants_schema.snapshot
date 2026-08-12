@@ -1,0 +1,23 @@
+# The versioned field set of cofferdam.invariants.toml, and the schema
+# version it belongs to. `schema_snapshot_matches_the_live_field_set` in
+# invariants.rs fails when this file and the code disagree.
+#
+# Changing it is the point: a schema change that forgets its version bump
+# cannot land, because the same commit has to touch this file.
+schema_version = 1.0
+
+BoundaryToml.frozen
+BoundaryToml.reason
+InvariantToml.forbid_imports
+InvariantToml.from_layers
+InvariantToml.require_imports
+PublicApiToml.exports
+ScriptedToml.forbid
+ScriptedToml.message
+ScriptedToml.require
+ScriptedToml.when
+TomlDoc.boundaries
+TomlDoc.invariants
+TomlDoc.layers
+TomlDoc.public_api
+TomlDoc.schema_version

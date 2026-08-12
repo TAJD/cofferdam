@@ -1,8 +1,9 @@
 # Design.BoundaryFrozen
 
-Stub-warns when a source file lives inside a boundary marked `frozen = true`
-in `cofferdam.invariants.toml`. The intent is to make a frozen architectural
-area visible during code review without blocking work.
+Flags any source file inside a boundary marked `frozen = true` in
+`cofferdam.invariants.toml`. A frozen boundary is an architectural intent —
+"no new code here" — and this check makes that intent visible at review time
+rather than blocking work outright.
 
 ## Configuration
 
@@ -11,20 +12,39 @@ area visible during code review without blocking work.
 "src/legacy/**" = { frozen = true, reason = "see ADR-0007" }
 ```
 
-When `frozen = true`, every source file matching the glob receives one
-finding from this check, with the configured `reason` echoed in the
-message. v0 does not yet distinguish *new* additions to the area from
-existing files — every match emits. Per-file deltas against a baseline
-are tracked under a follow-up bead.
+Every file matching the glob gets one finding, with `reason` echoed in the
+message. The check itself has no notion of new versus old: on a whole-project
+run it names the entire boundary, which is the honest answer to "what is
+frozen?" but not the one you want on a pull request.
+
+## Enforcing the delta
+
+Two flags turn the census into a gate, and they answer different questions.
+
+`--since` asks what this branch touched:
+
+```bash
+cofferdam check --since origin/main --only Design.BoundaryFrozen --fail-on low
+```
+
+Findings are scoped to files in the diff, so a branch that stays out of the
+frozen area reports nothing and one that edits a single file there reports
+that file alone. The whole project is still analysed — only the report is
+narrowed — so cross-file checks keep their full graph. This is the recipe for
+a pull-request gate.
+
+`--baseline` asks what has been added since the day you froze the area:
+
+```bash
+cofferdam baseline write --output .cofferdam/baseline.json   # once, at freeze time
+cofferdam check --baseline .cofferdam/baseline.json --fail-on low
+```
+
+The files already inside the boundary are recorded and thereafter marked
+`baselined`; only later additions count as new and trip `--fail-on`. This is
+the recipe for a repository that means to shrink the frozen area over time.
 
 ## Suppression
 
-Use a normal severity override or the inline `// cofferdam-disable-next-line`
-suppression directive when the area is intentionally still active during
-migration work.
-
-## Rationale
-
-A frozen boundary is an architectural intent: "no new code here". v0
-surfaces the intent; v1 will turn intent into enforcement using the
-baseline machinery already used by `cofferdam check --baseline`.
+Use a severity override or an inline `// cofferdam-disable-next-line`
+directive when the area is intentionally still active during migration work.

@@ -42,6 +42,24 @@ pub fn options_for_raw(
     schema: &[cofferdam_core::OptionSpec],
     raw: &BTreeMap<String, RawOptionValue>,
 ) -> Result<CheckOptions, ConfigError> {
+    // `enabled` was historically stripped by the config loader for every
+    // check, as a forward-compatible placeholder. That made
+    // `Refactor.PurityHeuristic` — whose sole option is called `enabled`
+    // — impossible to turn on (CD-324). The loader now passes it
+    // through; drop it here only for the checks that do not declare it,
+    // so configs written against the old placeholder keep loading.
+    let stripped;
+    let raw = if raw.contains_key("enabled") && !schema.iter().any(|s| s.name == "enabled") {
+        stripped = raw
+            .iter()
+            .filter(|(k, _)| k.as_str() != "enabled")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>();
+        &stripped
+    } else {
+        raw
+    };
+
     validate_options(check_id, schema, raw).map_err(|source| {
         // When `validate_options` rejects a key that looks like a
         // well-known top-level cofferdam.toml key (plugins, extends,

@@ -54,8 +54,8 @@ impl Check for MissingPubDoc {
         &META
     }
 
-    fn language(&self) -> Language {
-        Language::Rust
+    fn languages(&self) -> &'static [Language] {
+        &[Language::Rust]
     }
 
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {

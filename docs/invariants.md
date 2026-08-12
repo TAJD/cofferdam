@@ -11,9 +11,29 @@ import rules.
 `cofferdam.invariants.toml` lives next to `cofferdam.toml` at the project
 root. Discovery walks up from the directory holding `cofferdam.toml` if
 one was found, otherwise from the same anchor `cofferdam.toml` discovery
-used — the analysed target path, falling back to the working directory —
+used — the analyzed target path, falling back to the working directory —
 until it finds the file or hits a `.git` entry. Both files
 are optional and additive; you can ship one without the other.
+
+## Seeing what was loaded
+
+```sh
+cofferdam invariants show          # the resolved, merged spec
+cofferdam invariants show --robot  # the same, as JSON
+cofferdam invariants validate      # parse and report problems; exits 1 on failure
+cofferdam invariants normalize     # canonical TOML, to stdout
+```
+
+Reach for `show` when a rule is not firing. It prints which files were
+read and — the part that usually explains it — which of them the layers in
+force came from. A `[layers]` block in `cofferdam.invariants.toml`
+replaces `cofferdam.toml`'s wholesale, so the file you are staring at may
+be the one that lost.
+
+`validate` parses the spec without running the engine, so CI can gate on
+the config separately from the findings it produces. Pass `--strict` to
+fail on warnings too — a missing or deprecated `schema_version`, or
+`[layers]` declared in both files.
 
 ## Starter spec
 
@@ -127,9 +147,16 @@ deprecation hint pointing at `cofferdam.toml`. Read by
   many files. Standard glob metacharacters `*`, `**`, `?`, `[…]`, and
   `{…,…}` are supported; an invalid pattern is silently skipped (the
   check still runs, the pattern just exempts nothing), or
-* a `package.json:<key>` pointer (`package.json:exports`) — the schema
-  accepts it and the loader stores it, but nothing resolves it yet, so it
-  exempts nothing (CD-304). Until it does, list the entry files directly.
+* a `package.json:<key>` pointer (`package.json:exports`) — cofferdam
+  reads that key out of the project root's `package.json` and exempts
+  every file it names. Any key works: `main`, `module`, `types`, `bin`.
+  Nested `exports` subpaths and conditions are all followed, so one line
+  covers the whole published surface. A manifest naming built output
+  (`./dist/index.js`) matches the source it came from (`src/index.ts`) —
+  the first `dist`, `build`, `lib`, `out` or `output` path segment is
+  read as `src` and the extension is ignored. A pointer whose manifest
+  is missing or lacks the key exempts nothing; `cofferdam advise` says
+  so in `public_api_unresolved` rather than leaving you to guess.
 
 **Example — exempt a vendored UI directory:**
 
@@ -145,12 +172,10 @@ Read by `Design.OrphanExport`.
 
 ### `[boundaries]`
 
-Glob → boundary metadata. `frozen = true` marks the area as off-limits to
-new code. Today `Design.BoundaryFrozen` emits one finding per file
-matching the glob, with `reason` echoed in the message — every file, not
-just the ones you touched, so a large frozen area produces a lot of
-findings on the first run. Baseline it. Delta enforcement, which would
-flag only changed files, is not implemented (CD-304).
+Glob → boundary metadata. `frozen = true` marks the area as off-limits
+to new code; v0 stub-warns one finding per file matching the glob
+(`Design.BoundaryFrozen`), with `reason` echoed in the message. Per-file
+delta enforcement against a baseline lands in a follow-up bead.
 
 ### `[invariants]`
 
@@ -216,7 +241,7 @@ over comparisons; string concat with `+`; functions `basename(...)`,
 | `==` / `!=` | string equality on `file.path` / `file.layer` |
 | `in '<layer>'` | file resolves to the named layer |
 | `imports '<spec>'` | direct import edge to a module specifier or path |
-| `transitively imports '<spec>'` | transitive closure — **direct edges only today**, so it behaves exactly like `imports` (CD-304) |
+| `transitively imports '<spec>'` | transitive closure (direct-only in v1; full closure in cd-9hp.9) |
 | `imports as type '<spec>'` / `imports as value '<spec>'` | type-only vs value imports |
 | `exports '<name>'` | file exports a named symbol |
 
@@ -238,8 +263,8 @@ refuses to start. Bad scripts never reach file 4000 of the run.
 * `message` is the literal string. `{file}` and friends from the
   grammar doc are forward-compat surface — v1 emits the message
   verbatim and reserves interpolation for v2.
-* `transitively imports` evaluates direct edges only, so a rule written
-  with it silently misses anything more than one hop away (CD-304).
+* `transitively imports` evaluates direct edges only in v1 (graph
+  closure ships with cd-9hp.9).
 
 Read by `Design.ScriptedInvariant`. All scripted rules share one
 check id — suppress per-line via `// cofferdam-disable-next-line

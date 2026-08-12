@@ -4,7 +4,7 @@ title: Design.OrphanExport
 category: Design
 base_priority: 5
 default_severity: Medium
-options: [include_type_only, test_file_patterns, framework_entry_patterns]
+options: [include_type_only, test_file_patterns, test_imports_count, framework_entry_patterns]
 autofix: false
 ---
 

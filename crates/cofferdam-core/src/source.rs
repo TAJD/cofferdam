@@ -28,7 +28,8 @@ pub enum Language {
     /// Markdown / MDX — not parsed as a whole file (CD-68). Text-corpus
     /// content (blog posts, docs) reaches plugin checks as raw
     /// `file.text` + `LineView`s with no AST (`ast: null` on the wire);
-    /// no built-in check declares this language. Discovery only walks
+    /// `Consistency.SpellingDialect` is the one built-in that declares
+    /// it, reading the document as prose (CD-316). Discovery only walks
     /// `.md`/`.mdx` files when a project opts in via `cofferdam.toml`
     /// `[engine] extra_extensions`.
     Markdown,

@@ -189,7 +189,9 @@ fn identical_content_files_each_report_their_own_path() {
     let engine = engine();
     // A line well over 120 columns fires Readability.MaxLineLength, which
     // is a `pure_run` check — exactly the kind the findings cache serves.
-    let body = format!("const x = \"{}\";\n", "a".repeat(130));
+    // Built from short tokens: since CD-318 the check skips a line whose
+    // over-length comes from a single atomic token.
+    let body = format!("const x = [{}];\n", "1, ".repeat(60));
     let sources = vec![
         (PathBuf::from("alpha.ts"), body.clone()),
         (PathBuf::from("beta.ts"), body),

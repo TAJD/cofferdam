@@ -1,0 +1,40 @@
+---
+id: Refactor.NearDuplicateBlock
+category: Refactor
+base_priority: 10
+default_severity: Low
+options: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]
+---
+
+Runs of statements that are structurally identical to a block elsewhere in the project but differ in a string or number literal value — a near-clone rather than a verbatim one. Identifier tokens were already canonicalised to per-window local indices before this check existed, so a renamed copy has always matched [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md); this check is specifically about the case where a literal, not a name, is the only thing that changed. That is usually the interesting half of the finding: two blocks drift apart because someone copied one and edited the values, and the edit — which fields moved, which threshold changed — is worth a look even though the shape underneath is unchanged.
+
+```ts
+// src/billing/charge-gold.ts
+const productId = "gold-membership";
+const amountCents = 4999;
+const invoice = createInvoice(account, productId, amountCents);
+const receipt = submitInvoice(invoice, "Gold membership");
+return receipt;
+```
+
+```ts
+// src/billing/charge-silver.ts — same shape, different literals: flagged as related
+const productId = "silver-membership";
+const amountCents = 2999;
+const invoice = createInvoice(account, productId, amountCents);
+const receipt = submitInvoice(invoice, "Silver membership");
+return receipt;
+```
+
+Both blocks share one `finalize` pass and one corpus slot (`Refactor.DuplicateBlock.fingerprints`) with `Refactor.DuplicateBlock` — only that check's `run` writes to it, this one reads the same data back and reports the other half of the same grouping: groups whose members are structurally identical (same `hash`) but not byte-identical (differing `exact_hash`). The two checks never report overlapping spans, because the shared overlap-claim pass runs once across both checks' candidates before either is filtered out.
+
+This check takes no options of its own: `min_statements`, `min_chars`, `include_tokens`, `include_ast` and `normalize_literals` are all read by `Refactor.DuplicateBlock`'s `run` — the sole writer of the shared corpus slot — and the resulting window shape applies to whatever lands here too. Configure them under `[checks."Refactor.DuplicateBlock"]`; setting them under `[checks."Refactor.NearDuplicateBlock"]` has no effect.
+
+**Severity:** near-clones default to `low`, unlike `Refactor.DuplicateBlock`'s `medium`, and print without tripping the default `--fail-on medium` gate. That is deliberate — severity is set per check id, not per finding, so splitting verbatim clones from literal-drift ones into two ids was the only way to keep a noisier, less actionable signal from failing a build that only meant to gate on real copy-paste. To gate on this check too, raise its severity in `cofferdam.toml`:
+
+```toml
+[checks."Refactor.NearDuplicateBlock"]
+severity = "medium"
+```
+
+**Suppressing:** as with `Refactor.DuplicateBlock`, each group is one `Issue` with `related` spans for every other occurrence, and a `cofferdam-ignore: Refactor.NearDuplicateBlock` comment at any occurrence suppresses the whole finding.

@@ -76,8 +76,12 @@ whose resolved target is in layer **B**, where **B** is not in the
 
 * No "test layer" sugar yet. If you want tests to import from anywhere,
   add a `test` layer to your config and put it on every other layer's
-  `allow` list (or, simpler: exclude tests from the analysis via
-  `.cofferdamignore` since tests typically don't need their own layer).
+  `allow` list (or, simpler, turn this one check off over the test glob
+  with an `[[overrides]]` block carrying `disabled = true`). Do not reach
+  for `.cofferdamignore` here: it prunes the files before discovery, so
+  they contribute no import edges either, and `Design.OrphanExport` then
+  reports every symbol only the tests import as never imported at all
+  (CD-325).
 * Re-exports through barrel files attribute the violation to the
   re-exporter, not the eventual consumer. If you want barrels to be
   transparent, file an issue — the graph already records re-export

@@ -20,6 +20,7 @@ pub struct OrphanOptions {
     pub include_type_only: bool,
     pub test_patterns: Vec<String>,
     pub framework_entry_patterns: Vec<String>,
+    pub test_imports_count: bool,
 }
 
 const OE_OPTIONS: &[OptionSpec] = &[
@@ -41,6 +42,12 @@ const OE_OPTIONS: &[OptionSpec] = &[
             "/__mocks__/",
         ]),
         doc: "Filename substrings that mark a file as test/mocks. Exports from matching files are skipped.",
+    },
+    OptionSpec {
+        name: "test_imports_count",
+        kind: OptionKind::Bool,
+        default: OptionDefault::Bool(true),
+        doc: "Whether an import made from a test file (per `test_file_patterns`) counts as consumption. Default true — a test-only-consumed export is not an orphan. Set false to require a non-test consumer; exports imported only by test files are then reported with a distinct message instead of being silently treated as unconsumed.",
     },
     OptionSpec {
         name: "framework_entry_patterns",
@@ -103,6 +110,7 @@ impl Check for OrphanExport {
                 .get_string_list("framework_entry_patterns")
                 .map(|xs| xs.to_vec())
                 .unwrap_or_default(),
+            test_imports_count: ctx.options.get_bool("test_imports_count").unwrap_or(true),
         };
 
         // cd-9hp.9 cp3 — graph-backed query path. The engine
@@ -166,10 +174,23 @@ pub fn compute_orphans(
 /// './m'` both surface as Named edges with `source_name == "default"`
 /// and must be routed into the default bucket rather than the named
 /// bucket.
-struct FileConsumption {
+#[derive(Default)]
+struct ConsumptionSet {
     ns_touched: bool,
     default: bool,
     named: HashSet<SmolStr>,
+}
+
+/// Consumption tallied two ways: `any` counts every importer,
+/// `non_test` counts only importers that don't match
+/// `test_file_patterns`. Both are kept so the caller can (a) decide
+/// whether an export is an orphan under the active `test_imports_count`
+/// reading and (b) still tell "never imported" apart from "imported
+/// only by test files" when reporting under the strict reading.
+#[derive(Default)]
+struct FileConsumption {
+    any: ConsumptionSet,
+    non_test: ConsumptionSet,
 }
 
 /// Walk the incoming import edges on a single file node and reduce
@@ -183,13 +204,14 @@ struct FileConsumption {
 ///
 /// `side_effect` edges contribute nothing — they don't consume any
 /// export.
-fn summarise_incoming(g: &Graph, file_node: cofferdam_graph::NodeId) -> FileConsumption {
-    let mut out = FileConsumption {
-        ns_touched: false,
-        default: false,
-        named: HashSet::new(),
-    };
-    for (_src, kind, attrs) in g.incoming(file_node) {
+fn summarise_incoming(
+    g: &Graph,
+    file_node: cofferdam_graph::NodeId,
+    test_patterns: &[String],
+    track_non_test: bool,
+) -> FileConsumption {
+    let mut out = FileConsumption::default();
+    for (src, kind, attrs) in g.incoming(file_node) {
         // Only import edges contribute to consumption. ExportsAs /
         // BelongsToLayer / future Extension edges are noise here.
         if !matches!(kind, EdgeKind::ImportsAsValue | EdgeKind::ImportsAsType) {
@@ -203,21 +225,52 @@ fn summarise_incoming(g: &Graph, file_node: cofferdam_graph::NodeId) -> FileCons
             Some(Value::String(s)) => Some(s.clone()),
             _ => None,
         };
-        match import_kind {
-            "namespace" => out.ns_touched = true,
-            "default" => out.default = true,
-            "named" => match source_name {
-                Some(name) if name.as_str() == "default" => out.default = true,
+        // Importer is a test file when its node path (already
+        // forward-slash-normalised by build_canonical_graph) matches
+        // one of `test_file_patterns` — the same list that gates
+        // exports declared in test files. Only computed when the
+        // `non_test` tally will actually be read: `matches_substring`
+        // allocates, and this runs once per import edge in the project.
+        let from_test_file = track_non_test
+            && match g.node(src) {
+                Some(cofferdam_graph::NodeKind::File { path, .. }) => {
+                    matches_substring(path, test_patterns)
+                }
+                _ => false,
+            };
+
+        let apply = |set: &mut ConsumptionSet| match import_kind {
+            "namespace" => set.ns_touched = true,
+            "default" => set.default = true,
+            "named" => match &source_name {
+                Some(name) if name.as_str() == "default" => set.default = true,
                 Some(name) => {
-                    out.named.insert(name);
+                    set.named.insert(name.clone());
                 }
                 None => {}
             },
             "side_effect" => {}
             _ => {}
+        };
+        apply(&mut out.any);
+        if track_non_test && !from_test_file {
+            apply(&mut out.non_test);
         }
     }
     out
+}
+
+/// Whether `set` counts as consuming `kind`/`name`. Folds the
+/// namespace-import shortcut (a namespace import claims every named
+/// export) into the same boolean the caller checks — matches the
+/// pre-cd-320 behaviour of treating a namespace-touched file as fully
+/// consumed rather than special-casing it at the call site.
+fn is_consumed(kind: &ExportKind, name: &str, set: &ConsumptionSet) -> bool {
+    match kind {
+        ExportKind::Default => set.default,
+        ExportKind::Named => set.ns_touched || set.named.contains(&SmolStr::new(name)),
+        ExportKind::ReExport => true,
+    }
 }
 
 /// Walk every exporting file and emit one finding per export that
@@ -255,15 +308,11 @@ fn compute_orphans_on_graph(
 
         let normalised = normalized_file_path(&file_path);
         let consumption = match g.node_id_for_path(&normalised) {
-            Some(id) => summarise_incoming(g, id),
+            Some(id) => summarise_incoming(g, id, &opts.test_patterns, !opts.test_imports_count),
             // File never made it into the graph — happens only when
             // no record at all referenced it. Treat as zero
             // consumption (every named/default export is orphan).
-            None => FileConsumption {
-                ns_touched: false,
-                default: false,
-                named: HashSet::new(),
-            },
+            None => FileConsumption::default(),
         };
 
         for exp in sorted {
@@ -274,26 +323,37 @@ fn compute_orphans_on_graph(
             if exp.type_only && !opts.include_type_only {
                 continue;
             }
-            if consumption.ns_touched && matches!(exp.kind, ExportKind::Named) {
-                continue;
-            }
-            let consumed = match exp.kind {
-                ExportKind::Default => consumption.default,
-                ExportKind::Named => consumption.named.contains(&SmolStr::new(&exp.name)),
-                ExportKind::ReExport => true,
+
+            // `test_imports_count` picks which bucket decides orphan
+            // status. `consumed_any` is still needed under the strict
+            // reading to tell "never imported" apart from "imported
+            // only by test files" — a test-only consumer clears
+            // `any` but not `non_test`.
+            let consumed_any = is_consumed(&exp.kind, &exp.name, &consumption.any);
+            let (consumed, test_only) = if opts.test_imports_count {
+                (consumed_any, false)
+            } else {
+                let consumed_non_test = is_consumed(&exp.kind, &exp.name, &consumption.non_test);
+                (consumed_non_test, !consumed_non_test && consumed_any)
             };
+
             if !consumed {
                 let display_name = if matches!(exp.kind, ExportKind::Default) {
                     "default export".to_string()
                 } else {
                     format!("`{}`", exp.name)
                 };
-                issues.push(Issue {
-                    check_id: OE_META.id.to_string(),
-                    message: format!(
+                let message = if test_only {
+                    format!("{} is imported only by test files", display_name)
+                } else {
+                    format!(
                         "{} is exported but never imported in the project",
                         display_name
-                    ),
+                    )
+                };
+                issues.push(Issue {
+                    check_id: OE_META.id.to_string(),
+                    message,
                     file: exp.file.clone(),
                     location: Location::from_span(&exp.file, exp.span),
                     priority: Priority(OE_META.base_priority),
@@ -310,4 +370,172 @@ fn compute_orphans_on_graph(
             .then_with(|| a.location.start_byte().cmp(&b.location.start_byte()))
     });
     issues
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cofferdam_core::graph::{ImportKind, ImportRecord, ImportedName};
+    use cofferdam_core::Span;
+    use std::path::PathBuf;
+
+    fn span() -> Span {
+        Span {
+            start_byte: 0,
+            end_byte: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    fn opts(test_imports_count: bool) -> OrphanOptions {
+        OrphanOptions {
+            include_type_only: false,
+            test_patterns: vec![
+                ".test.".to_string(),
+                ".spec.".to_string(),
+                "_test.".to_string(),
+                "_spec.".to_string(),
+                "/__tests__/".to_string(),
+                "/__mocks__/".to_string(),
+            ],
+            framework_entry_patterns: Vec::new(),
+            test_imports_count,
+        }
+    }
+
+    fn named_export(file: &Path, name: &str) -> ExportRecord {
+        ExportRecord {
+            file: file.to_path_buf(),
+            name: name.to_string(),
+            kind: ExportKind::Named,
+            type_only: false,
+            span: span(),
+            source_specifier: None,
+            resolved_source: None,
+        }
+    }
+
+    fn named_import(from: &Path, to: &Path, source_name: &str) -> ImportRecord {
+        ImportRecord {
+            from_file: from.to_path_buf(),
+            source_specifier: "./m".to_string(),
+            resolved: Some(to.to_path_buf()),
+            names: vec![ImportedName {
+                source_name: source_name.to_string(),
+                local_name: source_name.to_string(),
+                kind: ImportKind::Named,
+                type_only: false,
+                local_use_count: 1,
+            }],
+            type_only: false,
+            span: span(),
+        }
+    }
+
+    fn findings(
+        exports: &[ExportRecord],
+        imports: &[ImportRecord],
+        test_imports_count: bool,
+    ) -> Vec<Issue> {
+        compute_orphans(
+            imports,
+            exports,
+            &opts(test_imports_count),
+            &PublicApi::default(),
+        )
+    }
+
+    #[test]
+    fn same_dir_test_file_import_counts_by_default() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let test = PathBuf::from("/proj/lib/account-capabilities.test.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![named_import(&test, &src, "entitlementFor")];
+
+        assert!(findings(&exports, &imports, true).is_empty());
+    }
+
+    /// One non-test consumer is enough under the strict reading — the
+    /// test consumers alongside it change nothing.
+    #[test]
+    fn mixed_test_and_source_consumers_stay_clean_when_strict() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let test = PathBuf::from("/proj/lib/account-capabilities.test.ts");
+        let app = PathBuf::from("/proj/app/route.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![
+            named_import(&test, &src, "entitlementFor"),
+            named_import(&app, &src, "entitlementFor"),
+        ];
+
+        assert!(findings(&exports, &imports, false).is_empty());
+        assert!(findings(&exports, &imports, true).is_empty());
+    }
+
+    #[test]
+    fn same_dir_test_file_import_flagged_as_test_only_when_strict() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let test = PathBuf::from("/proj/lib/account-capabilities.test.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![named_import(&test, &src, "entitlementFor")];
+
+        let issues = findings(&exports, &imports, false);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(
+            issues[0].message,
+            "`entitlementFor` is imported only by test files"
+        );
+    }
+
+    #[test]
+    fn tests_subdir_import_counts_by_default() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let test = PathBuf::from("/proj/lib/__tests__/account-capabilities.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![named_import(&test, &src, "entitlementFor")];
+
+        assert!(findings(&exports, &imports, true).is_empty());
+    }
+
+    #[test]
+    fn tests_subdir_import_flagged_as_test_only_when_strict() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let test = PathBuf::from("/proj/lib/__tests__/account-capabilities.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![named_import(&test, &src, "entitlementFor")];
+
+        let issues = findings(&exports, &imports, false);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(
+            issues[0].message,
+            "`entitlementFor` is imported only by test files"
+        );
+    }
+
+    #[test]
+    fn source_file_import_never_flagged() {
+        let src = PathBuf::from("/proj/lib/account-capabilities.ts");
+        let consumer = PathBuf::from("/proj/lib/worker.ts");
+        let exports = vec![named_export(&src, "entitlementFor")];
+        let imports = vec![named_import(&consumer, &src, "entitlementFor")];
+
+        assert!(findings(&exports, &imports, true).is_empty());
+        assert!(findings(&exports, &imports, false).is_empty());
+    }
+
+    #[test]
+    fn no_importer_at_all_is_never_imported_in_both_modes() {
+        let src = PathBuf::from("/proj/lib/dead.ts");
+        let exports = vec![named_export(&src, "dead")];
+
+        for test_imports_count in [true, false] {
+            let issues = findings(&exports, &[], test_imports_count);
+            assert_eq!(issues.len(), 1);
+            assert_eq!(
+                issues[0].message,
+                "`dead` is exported but never imported in the project"
+            );
+        }
+    }
 }

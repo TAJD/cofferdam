@@ -5,42 +5,37 @@
 // ============================================================
 
 // cofferdam-disable-next-line
-if (a == b) {
-  // This would normally trigger Warning.TripleEquals, but it's suppressed.
-}
+let a = 1;
+// This would normally trigger Refactor.PreferConstOverLet, but it's suppressed.
 
 // ============================================================
 // Next-line directive: suppress specific checks
 // ============================================================
 
-// cofferdam-disable-next-line Warning.TripleEquals
-if (x == y) {
-  // Only TripleEquals is suppressed here; other checks still fire.
-}
+// cofferdam-disable-next-line Refactor.PreferConstOverLet
+let x = 1;
+// Only PreferConstOverLet is suppressed here; other checks still fire.
 
 // ============================================================
 // Block directive: suppress all checks
 // ============================================================
 
 /* cofferdam-disable */
-if (c == d) {
-  // Everything suppressed inside this block.
-}
+let c = 1;
+// Everything suppressed inside this block.
 /* cofferdam-enable */
 
 // This one is NOT suppressed:
-if (p == q) {
-  // This should trigger Warning.TripleEquals normally.
-}
+let p = 1;
+// This should trigger Refactor.PreferConstOverLet normally.
 
 // ============================================================
 // Block directive: suppress specific checks
 // ============================================================
 
-/* cofferdam-disable Warning.TripleEquals */
-if (m == n) {
-  // Only TripleEquals suppressed; other findings still appear.
-}
+/* cofferdam-disable Refactor.PreferConstOverLet */
+let m = 1;
+// Only PreferConstOverLet suppressed; other findings still appear.
 /* cofferdam-enable */
 
 // ============================================================
@@ -49,18 +44,16 @@ if (m == n) {
 
 // cofferdam-disable-next-line
 
-if (e == f) {
-  // The directive above applies to this line (first non-blank after directive).
-}
+let e = 1;
+// The directive above applies to this line (first non-blank after directive).
 
 // ============================================================
 // Block with multiple check IDs
 // ============================================================
 
-/* cofferdam-disable Warning.TripleEquals, Design.MaxParameters */
-if (g == h) {
-  // Both TripleEquals and MaxParameters are suppressed on this line.
-}
+/* cofferdam-disable Refactor.PreferConstOverLet, Design.MaxParameters */
+let g = 1;
+// Both PreferConstOverLet and MaxParameters are suppressed on this line.
 /* cofferdam-enable */
 
 // ============================================================

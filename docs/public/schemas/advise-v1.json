@@ -51,30 +51,6 @@
         "public_api_unresolved": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
-    },
-    "analyzeEnvelope": {
-      "description": "Shape emitted by `cofferdam advise --analyze <file>`.",
-      "type": "object",
-      "required": ["schema_version", "file", "budgets"],
-      "properties": {
-        "schema_version": { "const": 1 },
-        "file": { "type": "string" },
-        "budgets": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["rule", "limit", "current", "remaining"],
-            "properties": {
-              "rule": { "type": "string" },
-              "limit": { "type": "integer" },
-              "current": { "type": "integer", "minimum": 0 },
-              "remaining": { "type": "integer", "minimum": 0 }
-            },
-            "additionalProperties": false
-          }
-        }
-      },
-      "additionalProperties": false
     }
   }
 }

@@ -1,10 +1,10 @@
-export function legacy() {
-  if (1 == 1) {
+export function legacy(obj: { b: number } | null) {
+  if (obj && obj.b) {
     return true;
   }
 }
 
 export function touched(a: number, b: number) {
-  console.log("debug");
+  const unused = 5;
   return a + b;
 }

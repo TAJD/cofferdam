@@ -143,7 +143,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "check_id": {
                         "type": "string",
-                        "description": "Dotted check ID, e.g. 'Warning.TripleEquals'.",
+                        "description": "Dotted check ID, e.g. 'Refactor.PreferConstOverLet'.",
                     },
                     "full": {
                         "type": "boolean",
@@ -342,7 +342,7 @@ mod tests {
     fn tools_call_check_returns_json_formatter_shape() {
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/triple_equals.ts"
+            "/../../examples/smoke_fixture.ts"
         );
         let request = json!({
             "jsonrpc": "2.0",
@@ -367,11 +367,11 @@ mod tests {
         assert!(findings["summary"]["total"].as_u64().unwrap() > 0);
         assert!(!findings["findings"].as_array().unwrap().is_empty());
         let first = &findings["findings"][0];
-        assert_eq!(first["id"], "Warning.TripleEquals");
+        assert_eq!(first["id"], "Design.MaxParameters");
         assert!(first["file"]
             .as_str()
             .unwrap()
-            .ends_with("triple_equals.ts"));
+            .ends_with("smoke_fixture.ts"));
     }
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
         // a deliberate breaking change to the JSON output shape.
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../examples/triple_equals.ts"
+            "/../../examples/smoke_fixture.ts"
         );
         let request = json!({
             "jsonrpc": "2.0",
@@ -463,7 +463,7 @@ mod tests {
             "method": "tools/call",
             "params": {
                 "name": "cofferdam.explain",
-                "arguments": { "check_id": "Warning.TripleEquals" }
+                "arguments": { "check_id": "Refactor.PreferConstOverLet" }
             }
         })
         .to_string();
@@ -474,7 +474,7 @@ mod tests {
             .as_str()
             .expect("text content");
         let report: Value = serde_json::from_str(text).expect("valid JSON");
-        assert_eq!(report["id"], "Warning.TripleEquals");
+        assert_eq!(report["id"], "Refactor.PreferConstOverLet");
     }
 
     #[test]

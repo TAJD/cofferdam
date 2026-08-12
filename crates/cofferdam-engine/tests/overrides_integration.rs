@@ -13,15 +13,10 @@ use cofferdam_core::{Issue, Severity};
 use cofferdam_engine::{config, Engine};
 use tempfile::TempDir;
 
-/// 60-statement function body — well over the default
-/// `Readability.MaxFunctionLength` limit of 50, under a relaxed 400.
+/// A 6-parameter function — over the default `Design.MaxParameters`
+/// limit of 5, under a relaxed limit like 10.
 fn long_function() -> String {
-    let mut s = String::from("export function big() {\n");
-    for i in 0..60 {
-        s.push_str(&format!("  const v{i} = {i};\n"));
-    }
-    s.push_str("  return v0;\n}\n");
-    s
+    "export function big(a, b, c, d, e, f) {\n  return a + b + c + d + e + f;\n}\n".to_string()
 }
 
 /// Write `cofferdam.toml` + the given `(relative_path, contents)` files
@@ -60,8 +55,8 @@ fn relaxed_limit_only_affects_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 400
+[overrides.checks."Design.MaxParameters"]
+limit = 10
 "#;
     let (issues, paths) = analyze_project(
         toml,
@@ -74,12 +69,12 @@ limit = 400
     let regular_file = &paths[1];
 
     assert!(
-        !fired_on(&issues, "Readability.MaxFunctionLength", test_file),
-        "relaxed limit (400) should silence the test file's long function"
+        !fired_on(&issues, "Design.MaxParameters", test_file),
+        "relaxed limit (10) should silence the test file's 6-param function"
     );
     assert!(
-        fired_on(&issues, "Readability.MaxFunctionLength", regular_file),
-        "the non-matching regular file keeps the default limit (50) and still fires"
+        fired_on(&issues, "Design.MaxParameters", regular_file),
+        "the non-matching regular file keeps the default limit (5) and still fires"
     );
 }
 
@@ -90,21 +85,21 @@ fn disabled_skips_only_that_check_on_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.ts"]
-[overrides.checks."Readability.MaxFunctionLength"]
+[overrides.checks."Design.MaxParameters"]
 disabled = true
 "#;
     let mut body = long_function();
-    body.push_str("const wrong = (1 == 2);\n"); // Warning.TripleEquals bait
+    body.push_str("let unused = 1;\n"); // Refactor.PreferConstOverLet bait
 
     let (issues, paths) = analyze_project(toml, &[("src/thing.test.ts", body)]);
     let test_file = &paths[0];
 
     assert!(
-        !fired_on(&issues, "Readability.MaxFunctionLength", test_file),
-        "disabled override must skip MaxFunctionLength on the test file"
+        !fired_on(&issues, "Design.MaxParameters", test_file),
+        "disabled override must skip MaxParameters on the test file"
     );
     assert!(
-        fired_on(&issues, "Warning.TripleEquals", test_file),
+        fired_on(&issues, "Refactor.PreferConstOverLet", test_file),
         "other checks must still run on the test file"
     );
 }
@@ -114,10 +109,10 @@ fn severity_override_applies_only_to_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.ts"]
-[overrides.checks."Warning.TripleEquals"]
+[overrides.checks."Refactor.PreferConstOverLet"]
 severity = "info"
 "#;
-    let body = "export const a = (1 == 2);\n".to_string();
+    let body = "let a = 1;\n".to_string();
     let (issues, paths) =
         analyze_project(toml, &[("src/a.test.ts", body.clone()), ("src/a.ts", body)]);
     let test_file = &paths[0];
@@ -125,11 +120,11 @@ severity = "info"
 
     let test_sev = issues
         .iter()
-        .find(|i| i.check_id == "Warning.TripleEquals" && i.file == *test_file)
+        .find(|i| i.check_id == "Refactor.PreferConstOverLet" && i.file == *test_file)
         .map(|i| i.severity);
     let regular_sev = issues
         .iter()
-        .find(|i| i.check_id == "Warning.TripleEquals" && i.file == *regular_file)
+        .find(|i| i.check_id == "Refactor.PreferConstOverLet" && i.file == *regular_file)
         .map(|i| i.severity);
 
     assert_eq!(
@@ -150,21 +145,21 @@ fn last_matching_block_wins() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 400
+[overrides.checks."Design.MaxParameters"]
+limit = 10
 
 [[overrides]]
 paths = ["src/**"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 10
+[overrides.checks."Design.MaxParameters"]
+limit = 3
 "#;
     let (issues, paths) = analyze_project(toml, &[("src/Lobby.test.tsx", long_function())]);
     let test_file = &paths[0];
 
-    // The second block (limit 10) wins → the 60-line function fires again.
+    // The second block (limit 3) wins → the 6-param function fires again.
     assert!(
-        fired_on(&issues, "Readability.MaxFunctionLength", test_file),
-        "last matching block (limit 10) should win over the earlier limit 400"
+        fired_on(&issues, "Design.MaxParameters", test_file),
+        "last matching block (limit 3) should win over the earlier limit 10"
     );
 }
 
@@ -199,7 +194,7 @@ fn no_overrides_is_unaffected() {
     // Sanity: a config with no [[overrides]] behaves exactly as before.
     let (issues, paths) = analyze_project("", &[("src/Lobby.tsx", long_function())]);
     assert!(
-        fired_on(&issues, "Readability.MaxFunctionLength", &paths[0]),
+        fired_on(&issues, "Design.MaxParameters", &paths[0]),
         "without overrides, the default limit applies"
     );
 }

@@ -42,14 +42,6 @@ export const checksItems = [
     ],
   },
   {
-    text: 'Readability',
-    collapsed: true,
-    items: [
-      { text: 'MaxFunctionLength', link: '/checks/Readability.MaxFunctionLength' },
-      { text: 'MaxLineLength', link: '/checks/Readability.MaxLineLength' },
-    ],
-  },
-  {
     text: 'Refactor',
     collapsed: true,
     items: [
@@ -77,12 +69,6 @@ export const checksItems = [
       { text: 'MissingLangAttribute', link: '/checks/Html.MissingLangAttribute' },
       { text: 'NoUnimplementedInNonTest', link: '/checks/Rust.NoUnimplementedInNonTest' },
       { text: 'NoUnwrapInLib', link: '/checks/Rust.NoUnwrapInLib' },
-      { text: 'NoConsoleLog', link: '/checks/Warning.NoConsoleLog' },
-      { text: 'NoDebugger', link: '/checks/Warning.NoDebugger' },
-      { text: 'NoEval', link: '/checks/Warning.NoEval' },
-      { text: 'TripleEquals', link: '/checks/Warning.TripleEquals' },
-      { text: 'UnusedImport', link: '/checks/Warning.UnusedImport' },
-      { text: 'UnusedNullCheck', link: '/checks/Warning.UnusedNullCheck' },
     ],
   },
 ]

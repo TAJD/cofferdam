@@ -636,48 +636,6 @@ mod tests {
     }
 
     #[test]
-    fn explain_triple_equals_autofix_true() {
-        use cofferdam_checks::all_builtins;
-        let builtins = all_builtins();
-        let metas: Vec<&'static CheckMeta> = builtins.iter().map(|c| c.meta()).collect();
-        let meta = metas
-            .iter()
-            .find(|m| m.id == "Warning.TripleEquals")
-            .copied()
-            .expect("Warning.TripleEquals must exist");
-        let out = render_text(meta);
-        assert!(
-            out.contains("Autofix:     yes"),
-            "expected yes for Warning.TripleEquals:\n{out}"
-        );
-        let report = build_report(meta, false);
-        let s = serde_json::to_string(&report).expect("valid JSON");
-        let parsed: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
-        assert_eq!(parsed["autofix"], true);
-    }
-
-    #[test]
-    fn explain_max_line_length_autofix_false() {
-        use cofferdam_checks::all_builtins;
-        let builtins = all_builtins();
-        let metas: Vec<&'static CheckMeta> = builtins.iter().map(|c| c.meta()).collect();
-        let meta = metas
-            .iter()
-            .find(|m| m.id == "Readability.MaxLineLength")
-            .copied()
-            .expect("Readability.MaxLineLength must exist");
-        let out = render_text(meta);
-        assert!(
-            out.contains("Autofix:     no"),
-            "expected no for Readability.MaxLineLength:\n{out}"
-        );
-        let report = build_report(meta, false);
-        let s = serde_json::to_string(&report).expect("valid JSON");
-        let parsed: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
-        assert_eq!(parsed["autofix"], false);
-    }
-
-    #[test]
     fn suggestions_substring_match_is_case_insensitive() {
         let metas = vec![&NO_OPTS_META, &WITH_OPTS_META];
         let hits = suggestions_for("max", &metas, &[]);

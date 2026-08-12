@@ -63,7 +63,7 @@ fn analyze_context_still_returns_normal_issues() {
     let engine = Engine::new(cofferdam_checks::all_builtins());
     let src = PathBuf::from("/virtual/b.ts");
     let cs = ChangeSet::from_files([src.clone()]);
-    let out = engine.analyze_context(vec![(src, "if (a == b) { console.log(1) }\n".into())], &cs);
+    let out = engine.analyze_context(vec![(src, "let x = 1;\n".into())], &cs);
     assert!(!out.issues.is_empty());
     assert!(out.items.is_empty());
 }
@@ -94,16 +94,16 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
     // `Design.MissingTestFile`) that would also fire on an isolated
     // fixture pair and muddy the fresh/legacy counts being asserted.
     let checks: Vec<Box<dyn Check>> = vec![
-        Box::new(cofferdam_checks::warning::TripleEquals),
-        Box::new(cofferdam_checks::warning::NoConsoleLog),
+        Box::new(cofferdam_checks::refactor::PreferOptionalChain),
+        Box::new(cofferdam_checks::refactor::UnusedVariable),
         Box::new(cofferdam_checks::context::findings::Findings),
     ];
     let engine = Engine::new(checks);
 
     // The diff only touched the `touched` function (lines 7-10); the
-    // `Warning.TripleEquals` finding on line 2 (inside `legacy`) is
+    // `Refactor.PreferOptionalChain` finding on line 2 (inside `legacy`) is
     // outside that range and so counts as legacy debt, while the
-    // `Warning.NoConsoleLog` finding on line 8 is fresh.
+    // `Refactor.UnusedVariable` finding on line 8 is fresh.
     let cs = ChangeSet {
         files: [dirty.clone(), clean.clone()].into_iter().collect(),
         line_ranges: [(dirty.clone(), vec![LineRange { start: 7, end: 10 }])]
@@ -130,12 +130,12 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
         .find(|i| i.title.contains("in changed lines"))
         .expect("fresh-findings item");
     assert!(
-        fresh.body.contains("Warning.NoConsoleLog"),
+        fresh.body.contains("Refactor.UnusedVariable"),
         "{}",
         fresh.body
     );
     assert!(
-        !fresh.body.contains("Warning.TripleEquals"),
+        !fresh.body.contains("Refactor.PreferOptionalChain"),
         "legacy finding must not appear in the fresh summary: {}",
         fresh.body
     );

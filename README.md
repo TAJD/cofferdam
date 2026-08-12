@@ -28,7 +28,7 @@ Full docs site: **<https://tajd.github.io/cofferdam>**
 
 - [Check catalog](https://tajd.github.io/cofferdam/checks/) — every built-in check with bad/good examples
 - [CLI reference](https://tajd.github.io/cofferdam/reference/cli/) — flags and exit codes
-- [`advise` reference](https://tajd.github.io/cofferdam/reference/advise/) — the JSON envelope agents branch on, plus `advise --analyze` budget headroom
+- [`advise` reference](https://tajd.github.io/cofferdam/reference/advise/) — the JSON envelope agents branch on
 - [llms.txt](https://tajd.github.io/cofferdam/llms.txt) — the entrypoint for LLM agents: version, subcommands, agent workflow, docs links
 - [Install guide](docs/install.md) — binary overrides, air-gapped installs, building from source
 - [CI recipes](docs/ci-recipes.md) — GitHub Actions, GitLab, CircleCI, Drone, pre-commit

@@ -476,15 +476,6 @@ enum Cmd {
         /// `--diff`.
         #[arg(long, value_enum, value_name = "LEVEL")]
         fail_on: Option<FailOnLevel>,
-        /// State-of-play mode (CD-65 A4): parse exactly one file (no
-        /// project graph) and report `current`/`remaining` budget for
-        /// the complexity/length checks (`Refactor.CyclomaticComplexity`,
-        /// `Refactor.CognitiveComplexity`, `Readability.MaxFunctionLength`,
-        /// `Readability.MaxLineLength`, `Design.MaxParameters`) alongside
-        /// their configured `limit`. Requires exactly one path in
-        /// `paths`. Always JSON; `--format`/`--diff` are ignored.
-        #[arg(long)]
-        analyze: bool,
     },
     /// Start here — the default entrypoint into project context you
     /// don't already have. Run it first, before or right after making
@@ -1114,27 +1105,8 @@ fn run() -> ExitCode {
             no_config,
             hidden: _,
             no_ignore: _,
-            diff: _,
-            fail_on: _,
-            analyze: true,
-        } => advise::run_analyze(advise::AnalyzeArgs {
-            paths,
-            pretty,
-            config_path: config,
-            no_config,
-        }),
-        Cmd::Advise {
-            paths,
-            format: _,
-            robot: _,
-            pretty,
-            config,
-            no_config,
-            hidden: _,
-            no_ignore: _,
             diff,
             fail_on,
-            analyze: false,
         } if diff.is_some() => advise_diff::run(advise_diff::DiffArgs {
             diff_ref: diff.expect("checked by guard"),
             paths,
@@ -1154,7 +1126,6 @@ fn run() -> ExitCode {
             no_ignore,
             diff: _,
             fail_on: _,
-            analyze: false,
         } => advise::run(advise::AdviseArgs {
             paths,
             format: match format.unwrap_or(if robot {

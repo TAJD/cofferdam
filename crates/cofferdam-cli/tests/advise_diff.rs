@@ -76,20 +76,20 @@ fn diff_introduces_violation_shows_in_would_fire() {
     let dir = tmp.path();
     init_repo(dir);
 
-    // Baseline: clean source with strict equality — passes
-    // `Warning.TripleEquals`.
+    // Baseline: clean source with 5 parameters — passes
+    // `Design.MaxParameters` (default limit 5).
     let file = dir.join("src.ts");
     std::fs::write(
         &file,
-        "export function eq(a: number, b: number) { return a === b; }\n",
+        "export function eq(a: number, b: number, c: number, d: number, e: number) { return a + b + c + d + e; }\n",
     )
     .expect("write baseline");
     commit_all(dir, "baseline");
 
-    // Working-tree edit: switch to loose equality, which the check flags.
+    // Working-tree edit: add a 6th parameter, which the check flags.
     std::fs::write(
         &file,
-        "export function eq(a: number, b: number) { return a == b; }\n",
+        "export function eq(a: number, b: number, c: number, d: number, e: number, f: number) { return a + b + c + d + e + f; }\n",
     )
     .expect("write modified");
 
@@ -106,8 +106,8 @@ fn diff_introduces_violation_shows_in_would_fire() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"check_id\":\"Warning.TripleEquals\""),
-        "expected TripleEquals in would_fire, got: {stdout}"
+        stdout.contains("\"check_id\":\"Design.MaxParameters\""),
+        "expected MaxParameters in would_fire, got: {stdout}"
     );
     assert!(
         stdout.contains("\"would_fire\":1"),
@@ -125,19 +125,19 @@ fn diff_clears_violation_shows_in_would_clear() {
     let dir = tmp.path();
     init_repo(dir);
 
-    // Baseline: dirty source with loose equality.
+    // Baseline: dirty source with 6 parameters.
     let file = dir.join("src.ts");
     std::fs::write(
         &file,
-        "export function eq(a: number, b: number) { return a == b; }\n",
+        "export function eq(a: number, b: number, c: number, d: number, e: number, f: number) { return a + b + c + d + e + f; }\n",
     )
     .expect("write baseline");
     commit_all(dir, "baseline");
 
-    // Working-tree edit: clears the violation.
+    // Working-tree edit: drops to 5 parameters, clearing the violation.
     std::fs::write(
         &file,
-        "export function eq(a: number, b: number) { return a === b; }\n",
+        "export function eq(a: number, b: number, c: number, d: number, e: number) { return a + b + c + d + e; }\n",
     )
     .expect("write modified");
 
@@ -161,8 +161,8 @@ fn diff_clears_violation_shows_in_would_clear() {
         "expected would_clear summary count of 1, got: {stdout}"
     );
     assert!(
-        stdout.contains("\"check_id\":\"Warning.TripleEquals\""),
-        "expected TripleEquals in would_clear, got: {stdout}"
+        stdout.contains("\"check_id\":\"Design.MaxParameters\""),
+        "expected MaxParameters in would_clear, got: {stdout}"
     );
 }
 
@@ -196,13 +196,13 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     let file = dir.join("src.ts");
     std::fs::write(
         &file,
-        "export function eq(a: number, b: number) { return a === b; }\n",
+        "export function eq(a: number, b: number, c: number, d: number, e: number) { return a + b + c + d + e; }\n",
     )
     .expect("write baseline");
     commit_all(dir, "baseline");
     std::fs::write(
         &file,
-        "export function eq(a: number, b: number) { return a == b; }\n",
+        "export function eq(a: number, b: number, c: number, d: number, e: number, f: number) { return a + b + c + d + e + f; }\n",
     )
     .expect("write modified");
 
@@ -217,7 +217,7 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
         String::from_utf8_lossy(&no_gate.stderr)
     );
 
-    // With --fail-on=medium and Warning.TripleEquals at Medium, exit 1.
+    // With --fail-on=medium and Design.MaxParameters at Medium, exit 1.
     let gated = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD", "--fail-on", "medium"])
         .output()

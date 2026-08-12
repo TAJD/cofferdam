@@ -9,9 +9,7 @@ pub mod consistency;
 pub mod context;
 pub mod design;
 pub mod framework_paths;
-pub mod readability;
 pub mod refactor;
-pub mod warning;
 
 use cofferdam_core::{Check, LineView};
 
@@ -59,8 +57,6 @@ pub(crate) fn count_skippable_lines(views: &[LineView<'_>], lo: u32, hi: u32) ->
 /// `SourceFile.language`) ensures they only fire on `.rs` files.
 pub fn all_builtins() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = vec![
-        Box::new(readability::MaxLineLength::new(120)),
-        Box::new(readability::MaxFunctionLength::new(50)),
         Box::new(consistency::QuoteStyle),
         Box::new(consistency::BroadSuppression),
         Box::new(consistency::UnusedSuppression),
@@ -97,12 +93,6 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::PurityHeuristic),
         Box::new(refactor::MixedThrowAndReturnError),
         Box::new(refactor::SideEffectInMapCallback),
-        Box::new(warning::TripleEquals),
-        Box::new(warning::UnusedImport),
-        Box::new(warning::UnusedNullCheck),
-        Box::new(warning::NoConsoleLog),
-        Box::new(warning::NoDebugger),
-        Box::new(warning::NoEval),
     ];
     checks.extend(cofferdam_rust::all_rust_checks());
     checks.extend(cofferdam_html::all_html_checks());
@@ -129,9 +119,9 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
 
-    /// `Warning.TripleEquals` is the only builtin with a real `autofix`
-    /// implementation today. Confirm it is the sole check with
-    /// `meta().autofix == true`, and that every other check is `false`.
+    /// No builtin ships a real `autofix` implementation today (CD-357
+    /// removed `Warning.TripleEquals`, the last one). Confirm every check
+    /// has `meta().autofix == false`.
     #[test]
     fn meta_autofix_field_is_populated() {
         let builtins = all_builtins();
@@ -140,19 +130,10 @@ mod tests {
             .filter(|c| c.meta().autofix)
             .map(|c| c.meta().id)
             .collect();
-        assert_eq!(
-            autofix_true,
-            vec!["Warning.TripleEquals"],
+        assert!(
+            autofix_true.is_empty(),
             "unexpected set of checks with autofix=true: {:?}",
             autofix_true
-        );
-
-        // All remaining checks must be false.
-        let autofix_false_count = builtins.iter().filter(|c| !c.meta().autofix).count();
-        assert_eq!(
-            autofix_false_count,
-            builtins.len() - 1,
-            "expected all checks except Warning.TripleEquals to have autofix=false"
         );
     }
 

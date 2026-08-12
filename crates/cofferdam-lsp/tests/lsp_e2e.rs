@@ -6,7 +6,7 @@
 //! Pins the contract the bead's acceptance gate calls out:
 //!
 //! - Server publishes diagnostics for a file that exercises a
-//!   built-in check (here: `Warning.TripleEquals` on `==`).
+//!   built-in check (here: `Refactor.PreferConstOverLet` on `let`).
 //! - The diagnostic carries cofferdam's source / code / message /
 //!   severity in their LSP forms.
 //! - The server shuts down cleanly on `shutdown` + `exit`.
@@ -28,10 +28,10 @@ use lsp_types::{
 };
 use tempfile::tempdir;
 
-fn workspace_with_triple_equals() -> tempfile::TempDir {
+fn workspace_with_prefer_const() -> tempfile::TempDir {
     let dir = tempdir().expect("tempdir");
     let ts = dir.path().join("a.ts");
-    std::fs::write(&ts, "export const x: any = 1;\nif (x == 1) {}\n").unwrap();
+    std::fs::write(&ts, "let x = 1;\n").unwrap();
     dir
 }
 
@@ -69,8 +69,8 @@ fn recv_with_timeout(connection: &Connection, timeout: Duration) -> Option<Messa
 }
 
 #[test]
-fn full_lifecycle_publishes_diagnostics_for_triple_equals() {
-    let workspace = workspace_with_triple_equals();
+fn full_lifecycle_publishes_diagnostics_for_prefer_const() {
+    let workspace = workspace_with_prefer_const();
     let workspace_path = workspace.path().to_path_buf();
 
     // memory() returns (server, client) — server side hands to the
@@ -130,14 +130,14 @@ fn full_lifecycle_publishes_diagnostics_for_triple_equals() {
             uri: uri.clone(),
             language_id: "typescript".to_string(),
             version: 1,
-            text: "export const x: any = 1;\nif (x == 1) {}\n".to_string(),
+            text: "let x = 1;\n".to_string(),
         },
     };
     send_notification::<DidOpenTextDocument>(&client, did_open);
 
     // Drain publishDiagnostics until we see one carrying
-    // Warning.TripleEquals for our file.
-    let mut got_triple_equals = false;
+    // Refactor.PreferConstOverLet for our file.
+    let mut got_prefer_const = false;
     for _ in 0..32 {
         let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
             break;
@@ -152,19 +152,19 @@ fn full_lifecycle_publishes_diagnostics_for_triple_equals() {
                             && matches!(
                                 &d.code,
                                 Some(lsp_types::NumberOrString::String(s))
-                                    if s == "Warning.TripleEquals"
+                                    if s == "Refactor.PreferConstOverLet"
                             )
                     })
                 {
-                    got_triple_equals = true;
+                    got_prefer_const = true;
                     break;
                 }
             }
         }
     }
     assert!(
-        got_triple_equals,
-        "expected Warning.TripleEquals diagnostic on a.ts after didOpen"
+        got_prefer_const,
+        "expected Refactor.PreferConstOverLet diagnostic on a.ts after didOpen"
     );
 
     // --- shutdown + exit ---
@@ -263,12 +263,12 @@ fn empty_workspace_initializes_without_diagnostics() {
 
 #[test]
 fn did_save_triggers_re_analysis_with_updated_content() {
-    // Start with a clean file (no triple equals → no Warning.TripleEquals).
+    // Start with a clean file (no `let` → no Refactor.PreferConstOverLet).
     // After sending didSave with dirty text, the server must re-analyze
-    // and publish Warning.TripleEquals for the same file.
+    // and publish Refactor.PreferConstOverLet for the same file.
     let workspace = tempdir().expect("tempdir");
     let ts = workspace.path().join("a.ts");
-    std::fs::write(&ts, "export const x = 1;\n").unwrap();
+    std::fs::write(&ts, "const x = 1;\n").unwrap();
     let workspace_path = workspace.path().to_path_buf();
 
     let (server, client) = Connection::memory();
@@ -311,18 +311,18 @@ fn did_save_triggers_re_analysis_with_updated_content() {
         }
     }
 
-    // Send didSave with text that now contains a triple equals.
+    // Send didSave with text that now contains a never-reassigned `let`.
     let uri = Url::from_file_path(&ts).unwrap();
     send_notification::<DidSaveTextDocument>(
         &client,
         DidSaveTextDocumentParams {
             text_document: TextDocumentIdentifier { uri: uri.clone() },
-            text: Some("export const x: any = 1;\nif (x == 1) {}\n".to_string()),
+            text: Some("let x = 1;\n".to_string()),
         },
     );
 
-    // Collect diagnostics until we see Warning.TripleEquals on a.ts.
-    let mut got_triple_equals = false;
+    // Collect diagnostics until we see Refactor.PreferConstOverLet on a.ts.
+    let mut got_prefer_const = false;
     for _ in 0..32 {
         let Some(msg) = recv_with_timeout(&client, Duration::from_secs(5)) else {
             break;
@@ -337,19 +337,19 @@ fn did_save_triggers_re_analysis_with_updated_content() {
                             && matches!(
                                 &d.code,
                                 Some(lsp_types::NumberOrString::String(s))
-                                    if s == "Warning.TripleEquals"
+                                    if s == "Refactor.PreferConstOverLet"
                             )
                     })
                 {
-                    got_triple_equals = true;
+                    got_prefer_const = true;
                     break;
                 }
             }
         }
     }
     assert!(
-        got_triple_equals,
-        "expected Warning.TripleEquals after didSave with triple-equals content"
+        got_prefer_const,
+        "expected Refactor.PreferConstOverLet after didSave with let content"
     );
 
     send_request::<Shutdown>(&client, 2, ());
@@ -378,7 +378,7 @@ fn nested_workspace_discovers_subdirectory_files() {
     //   workspace/
     //     src/
     //       nested/
-    //         b.ts  (has triple equals → Warning.TripleEquals fires)
+    //         b.ts  (has a never-reassigned `let` → PreferConstOverLet fires)
     //
     // Verifies that the engine's discover() walk reaches files in
     // subdirectories, not just the workspace root.
@@ -386,7 +386,7 @@ fn nested_workspace_discovers_subdirectory_files() {
     let nested_dir = workspace.path().join("src").join("nested");
     std::fs::create_dir_all(&nested_dir).unwrap();
     let ts = nested_dir.join("b.ts");
-    std::fs::write(&ts, "export const y: any = 2;\nif (y == 2) {}\n").unwrap();
+    std::fs::write(&ts, "let y = 2;\n").unwrap();
     let workspace_path = workspace.path().to_path_buf();
 
     let (server, client) = Connection::memory();
@@ -438,7 +438,7 @@ fn nested_workspace_discovers_subdirectory_files() {
                             && matches!(
                                 &d.code,
                                 Some(lsp_types::NumberOrString::String(s))
-                                    if s == "Warning.TripleEquals"
+                                    if s == "Refactor.PreferConstOverLet"
                             )
                     })
                 {
@@ -450,7 +450,7 @@ fn nested_workspace_discovers_subdirectory_files() {
     }
     assert!(
         got_nested_diag,
-        "expected Warning.TripleEquals for nested file src/nested/b.ts"
+        "expected Refactor.PreferConstOverLet for nested file src/nested/b.ts"
     );
 
     send_request::<Shutdown>(&client, 2, ());

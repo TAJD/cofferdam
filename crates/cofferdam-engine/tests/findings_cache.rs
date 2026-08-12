@@ -187,11 +187,9 @@ fn identical_content_files_each_report_their_own_path() {
     // before the fix it inherited the path of whichever file populated
     // the entry, so a warm-cache run pointed findings at the wrong file.
     let engine = engine();
-    // A line well over 120 columns fires Readability.MaxLineLength, which
+    // A never-reassigned `let` fires Refactor.PreferConstOverLet, which
     // is a `pure_run` check — exactly the kind the findings cache serves.
-    // Built from short tokens: since CD-318 the check skips a line whose
-    // over-length comes from a single atomic token.
-    let body = format!("const x = [{}];\n", "1, ".repeat(60));
+    let body = "let x = 1;\n".to_string();
     let sources = vec![
         (PathBuf::from("alpha.ts"), body.clone()),
         (PathBuf::from("beta.ts"), body),
@@ -204,14 +202,14 @@ fn identical_content_files_each_report_their_own_path() {
 
     let mll_files: Vec<String> = issues
         .iter()
-        .filter(|i| i.check_id == "Readability.MaxLineLength")
+        .filter(|i| i.check_id == "Refactor.PreferConstOverLet")
         .map(|i| i.file.to_string_lossy().replace('\\', "/"))
         .collect();
 
     // Paths are absolutized by the engine, so match on the file name.
     assert!(
         mll_files.iter().any(|f| f.ends_with("/alpha.ts")),
-        "alpha.ts MaxLineLength finding missing: {mll_files:?}"
+        "alpha.ts PreferConstOverLet finding missing: {mll_files:?}"
     );
     assert!(
         mll_files.iter().any(|f| f.ends_with("/beta.ts")),
@@ -230,8 +228,8 @@ fn file_scoped_suppression_through_cache_not_flagged_stale() {
     // gh #47 / cd-5dnl regression, exercised through the findings cache.
     //
     // Two byte-identical files, each carrying a file-scoped suppression
-    // for a `pure_run` check (Readability.MaxFunctionLength) over a
-    // genuinely-too-long function. The second file is served from the
+    // for a `pure_run` check (Refactor.PreferConstOverLet) over a
+    // never-reassigned `let`. The second file is served from the
     // findings cache. Before cd-mwr6 the cached finding inherited the
     // FIRST file's path, so the second file's entry vanished from the
     // ALL_PRE_FILTER_FINDINGS snapshot — and Consistency.UnusedSuppression
@@ -241,16 +239,10 @@ fn file_scoped_suppression_through_cache_not_flagged_stale() {
     // reported as covering nothing.
     let engine = engine();
 
-    // 60-statement body, well over the default MaxFunctionLength limit
-    // of 50 lines. Identical bytes in both files → shared cache entry.
-    let mut body = String::from(
-        "// cofferdam-ignore-file: Readability.MaxFunctionLength: long fn on purpose\n\
-         export function big() {\n",
-    );
-    for i in 0..60 {
-        body.push_str(&format!("  const v{i} = {i};\n"));
-    }
-    body.push_str("  return v0;\n}\n");
+    // Identical bytes in both files → shared cache entry.
+    let body = "// cofferdam-ignore-file: Refactor.PreferConstOverLet: on purpose\n\
+         let x = 1;\n"
+        .to_string();
 
     let sources = vec![
         (PathBuf::from("alpha.ts"), body.clone()),
@@ -262,14 +254,14 @@ fn file_scoped_suppression_through_cache_not_flagged_stale() {
     let (issues, _) =
         engine.analyze_with_sources_caches(sources, Some(&parse_cache), Some(&findings_cache));
 
-    // The directive does its job: no MaxFunctionLength survives on either file.
+    // The directive does its job: no PreferConstOverLet survives on either file.
     let mfl: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Readability.MaxFunctionLength")
+        .filter(|i| i.check_id == "Refactor.PreferConstOverLet")
         .collect();
     assert!(
         mfl.is_empty(),
-        "file-scoped directive should suppress MaxFunctionLength on both files: {mfl:?}"
+        "file-scoped directive should suppress PreferConstOverLet on both files: {mfl:?}"
     );
 
     // And the directive is NOT falsely reported as stale — on EITHER file,

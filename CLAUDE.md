@@ -134,7 +134,7 @@ A check with `requires_types: true` is routed through a Node ts-morph "type host
 - **Visitors must call `walk::walk_<node>(self, ...)`** at the end of overridden visit methods to descend into children. Forgetting this means nested matches are missed.
 - **A check that only overrides `visit_assignment_expression` misses `for...of`/`for...in` loop heads** (`for (x of xs)`, `for ([a, b] of pairs)`) — those reassign their target every iteration but are a distinct `ForStatementLeft` grammar production, not an `AssignmentExpression`. If a check's reassignment/binding logic matters for assignment targets, also override `visit_for_statement_left` (see `Refactor.PreferConstOverLet`, CD-154). More generally: oxc's `inherit_variants!` macro makes sibling enums (`SimpleAssignmentTarget`, `AssignmentTargetPattern`, `AssignmentTargetMaybeDefault`, `ForStatementLeft`, ...) share `AssignmentTarget`'s variants and gives each an `as_assignment_target()` accessor (`Option<&AssignmentTarget>`) — use that to funnel them all through one recursive collector instead of duplicating match arms per sibling enum.
 - **Register the new check** in `cofferdam-checks/src/lib.rs::all_builtins()`. The compiler doesn't catch a forgotten registration.
-- **Fixtures live in `examples/`** with one file per check (`triple_equals.ts`, `max_params.ts`, ...). Mix flagged + non-flagged cases.
+- **Fixtures live in `examples/`** with one file per check (`max_params.ts`, `prefer_const_over_let.ts`, ...). Mix flagged + non-flagged cases.
 - **Verification before claiming done**:
   ```bash
   cargo build --workspace

@@ -70,7 +70,7 @@ try {
       }
       Write-Host "OK: binary present at $InstalledBin"
 
-      $Fixture = Join-Path $RepoRoot "examples\triple_equals.ts"
+      $Fixture = Join-Path $RepoRoot "examples\smoke_fixture.ts"
       Write-Host "==> npx cofferdam check $Fixture --format json"
 
       # Run npx and capture stdout — don't let a non-zero exit explode out of $PSNativeCommandUseErrorActionPreference.
@@ -101,18 +101,18 @@ try {
       }
 
       if (-not $report.findings -or $report.findings.Count -eq 0) {
-        Write-Error "FAIL: zero findings against examples\triple_equals.ts"
+        Write-Error "FAIL: zero findings against examples\smoke_fixture.ts"
         exit 1
       }
 
-      $triple = $report.findings | Where-Object { $_.id -eq "Warning.TripleEquals" } | Select-Object -First 1
-      if (-not $triple) {
+      $maxParams = $report.findings | Where-Object { $_.id -eq "Design.MaxParameters" } | Select-Object -First 1
+      if (-not $maxParams) {
         $ids = ($report.findings | ForEach-Object { $_.id }) -join ", "
-        Write-Error "FAIL: Warning.TripleEquals not in findings (got: $ids)"
+        Write-Error "FAIL: Design.MaxParameters not in findings (got: $ids)"
         exit 1
       }
-      $loc = "$($triple.file):$($triple.line)"
-      Write-Host "OK: Warning.TripleEquals at $loc"
+      $loc = "$($maxParams.file):$($maxParams.line)"
+      Write-Host "OK: Design.MaxParameters at $loc"
 
       Write-Host ""
       Write-Host "[OK] smoke install passed (binary=$Binary)"

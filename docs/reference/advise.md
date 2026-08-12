@@ -68,7 +68,6 @@ whole envelope:
 | `layer` | per file | Which `[layers]` group the edit falls in — determines which `forbidden`/`allowed` lists apply. |
 | `frozen` | `Design.BoundaryFrozen` constraint | `true` → do not modify this file without addressing `reason`. |
 | `forbidden` | `Design.LayerViolation` constraint | Layers this file must not import from — check new imports against this before writing them. |
-| `remaining` | `--analyze` budget entry | Headroom left before a limit-style check (complexity, length, params) fires. `0` means the next addition trips it. |
 | `would_fire` | `--diff` output | Non-empty → the working tree introduces a new violation; resolve or justify before asking for a commit. |
 
 ## Quick start (more forms)
@@ -216,54 +215,6 @@ Per constraint:
 | `forbidden` | string[] \| omitted | `Design.LayerViolation` only — layers this file may **not** import from. |
 | `exempt` | bool \| omitted | `Design.OrphanExport` only — `true` when the file matches a framework-entry or test pattern. |
 | `exempt_reason` | string \| omitted | Set when `exempt: true`. |
-
-## State-of-play mode — `--analyze <file>`
-
-`cofferdam advise --analyze <file>` answers a different question than
-the rest of `advise`: not "what rules apply" but **"how close is this
-file to its limits right now?"** It parses the one file given (the only
-place in `advise` that touches an AST) and reports the current
-value and remaining headroom for every check that measures a
-magnitude against a configurable `limit`:
-
-- `Refactor.CyclomaticComplexity` — highest per-function McCabe count
-- `Refactor.CognitiveComplexity` — highest per-function Sonar-style score
-- `Design.MaxParameters` — highest per-function parameter count
-- `Readability.MaxFunctionLength` — longest function body, in lines
-- `Readability.MaxLineLength` — widest line, in display columns
-
-Each measurement reuses the real check's own visitor (extended with an
-unconditional running-max), so the numbers here always agree with what
-`cofferdam check` would flag — there's no separate, drift-prone counting
-logic. `limit` is resolved from `cofferdam.toml` the same way `check`
-resolves it; with no config or no override, the check's built-in default
-applies.
-
-```bash
-cofferdam advise --analyze src/big-module.ts --pretty
-```
-
-```json
-{
-  "schema_version": 1,
-  "file": "src/big-module.ts",
-  "budgets": [
-    { "rule": "Refactor.CyclomaticComplexity", "limit": 10, "current": 12, "remaining": 0 },
-    { "rule": "Refactor.CognitiveComplexity", "limit": 15, "current": 19, "remaining": 0 },
-    { "rule": "Design.MaxParameters", "limit": 5, "current": 4, "remaining": 1 },
-    { "rule": "Readability.MaxFunctionLength", "limit": 50, "current": 22, "remaining": 28 },
-    { "rule": "Readability.MaxLineLength", "limit": 120, "current": 80, "remaining": 40 }
-  ]
-}
-```
-
-`remaining` is `max(limit - current, 0)` — it never goes negative; a
-file already over budget just reads `0`. `--analyze` requires exactly
-one path (no directories, no globs — it parses a single file) and
-ignores `--format`/`--diff`; output is always JSON. Timing on a
-2258-line real-world file (`bestefforttools/lib/seoAnalyzer.ts`): ~47ms
-warm, comfortably inside the ~500ms budget for single-file advisory
-calls.
 
 ## Diff mode — `--diff <git-ref>`
 

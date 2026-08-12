@@ -40,8 +40,6 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 ## Readability
 
-- [`Readability.MaxFunctionLength`](Readability.MaxFunctionLength.md) `file` `advisable` — Functions longer than the configured limit are hard to follow. Break them into smaller helpers.
-- [`Readability.MaxLineLength`](Readability.MaxLineLength.md) `file` `advisable` — Lines longer than the configured limit are harder to scan and review.
 
 ## Refactor
 
@@ -66,9 +64,3 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Html.MissingLangAttribute`](Html.MissingLangAttribute.md) `file` — The document's `<html>` element has no `lang` attribute, so assistive technology and search engines can't determine the page's language.
 - [`Rust.NoUnimplementedInNonTest`](Rust.NoUnimplementedInNonTest.md) `file` — `unimplemented!()` / `todo!()` panic at runtime; calling them outside test code ships a guaranteed crash. Implement the function or move it into a `#[test]`.
 - [`Rust.NoUnwrapInLib`](Rust.NoUnwrapInLib.md) `file` — Calling `.unwrap()` in library code panics on `None`/`Err(_)` with no diagnostic context. Return `Result` and propagate via `?`, or use `.expect("<reason>")` when the value is provably infallible.
-- [`Warning.NoConsoleLog`](Warning.NoConsoleLog.md) `file` `advisable` — `console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.
-- [`Warning.NoDebugger`](Warning.NoDebugger.md) `file` — `debugger` statements halt execution under attached devtools. Remove before shipping.
-- [`Warning.NoEval`](Warning.NoEval.md) `file` — `eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.
-- [`Warning.TripleEquals`](Warning.TripleEquals.md) `file` — `==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. · autofix
-- [`Warning.UnusedImport`](Warning.UnusedImport.md) `file` — Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.
-- [`Warning.UnusedNullCheck`](Warning.UnusedNullCheck.md) `file` `type-aware` — An equality check against `null`/`undefined` whose other operand's TypeScript type already excludes that value — the guard can never change the outcome. Dead defensive code, or a hint the type annotation disagrees with reality.

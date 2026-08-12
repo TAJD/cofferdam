@@ -61,7 +61,7 @@ The unscoped legacy name `cofferdam` (binary wrapper, owned by user `tajdickson`
 
 ## Roadmap
 
-Phase/roadmap tracking lives on Projektor (Cofferdam project, key `CD`), not in this file — see the CD-165 (engine performance) and CD-156 (cofferdam context) epics for what's next.
+The public roadmap is [ROADMAP.md](ROADMAP.md) — keep it in sync with the tracker at each workstream boundary. Detailed ticket tracking lives on Projektor (Cofferdam project, key `CD`), not in this file — see the CD-348 epic (policy-engine repositioning, 0.5 → 1.0) for what's next.
 
 ## Project structure
 

@@ -108,7 +108,7 @@ cargo build --release -p cofferdam-cli
 
 ## Status
 
-Phase 4, in progress. Roadmap tracked on Projektor (Cofferdam project, key `CD`).
+See [ROADMAP.md](ROADMAP.md) for what's planned and what we've decided not to build. Detailed ticket tracking is private (Projektor, Cofferdam project, key `CD`).
 
 ## Licence
 

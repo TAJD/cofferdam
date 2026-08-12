@@ -434,8 +434,8 @@ fn run_one(dir: &Path) {
     );
 
     // Snapshot the corpus slices.
-    let imports: Vec<ImportRecord> = corpus.with_slot(&IMPORTS, |s| s.clone());
-    let exports: Vec<ExportRecord> = corpus.with_slot(&EXPORTS, |s| s.clone());
+    let imports: std::sync::Arc<Vec<ImportRecord>> = corpus.with_slot(&IMPORTS, |s| s.to_vec());
+    let exports: std::sync::Arc<Vec<ExportRecord>> = corpus.with_slot(&EXPORTS, |s| s.to_vec());
     println!("imports = {}, exports = {}", imports.len(), exports.len());
 
     // ===== Measurement 1: graph materialisation =====
@@ -455,7 +455,7 @@ fn run_one(dir: &Path) {
     // source_specifier) tuples — deterministic, no rand dependency.
     let mut queries: Vec<(PathBuf, String)> = Vec::new();
     let mut seen: std::collections::HashSet<(PathBuf, String)> = std::collections::HashSet::new();
-    for imp in &imports {
+    for imp in imports.iter() {
         let key = (imp.from_file.clone(), imp.source_specifier.clone());
         if seen.insert(key.clone()) {
             queries.push(key);

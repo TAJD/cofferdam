@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.13"
+version = "0.4.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/TAJD/cofferdam"
@@ -24,15 +24,15 @@ authors = ["cofferdam contributors"]
 rust-version = "1.93"
 
 [workspace.dependencies]
-cofferdam-cli = { path = "crates/cofferdam-cli", version = "0.3.13" }
-cofferdam-core = { path = "crates/cofferdam-core", version = "0.3.13" }
-cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.3.13" }
-cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.3.13" }
-cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.3.13" }
-cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.3.13" }
-cofferdam-html = { path = "crates/cofferdam-html", version = "0.3.13" }
-cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.3.13" }
-cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.3.13" }
+cofferdam-cli = { path = "crates/cofferdam-cli", version = "0.4.2" }
+cofferdam-core = { path = "crates/cofferdam-core", version = "0.4.2" }
+cofferdam-engine = { path = "crates/cofferdam-engine", version = "0.4.2" }
+cofferdam-checks = { path = "crates/cofferdam-checks", version = "0.4.2" }
+cofferdam-formatters = { path = "crates/cofferdam-formatters", version = "0.4.2" }
+cofferdam-graph = { path = "crates/cofferdam-graph", version = "0.4.2" }
+cofferdam-html = { path = "crates/cofferdam-html", version = "0.4.2" }
+cofferdam-rust = { path = "crates/cofferdam-rust", version = "0.4.2" }
+cofferdam-typst = { path = "crates/cofferdam-typst", version = "0.4.2" }
 
 # Third-party (kept narrow at phase 0; expanded as phases land)
 clap = { version = "4", features = ["derive"] }
@@ -48,6 +48,10 @@ oxc_span = "0.128"
 oxc_syntax = "0.128"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# CD-162 — `.cofferdam/knowledge/*.md` frontmatter is YAML (spec:
+# wiki `cofferdam-context-product-criteria` section 3); no other
+# workspace consumer needs YAML today.
+serde_yaml = "0.9"
 sha2 = "0.11"
 # cd-9hp.4 cp1 — self-referential parse-cache entry (Allocator + parse
 # result borrowed from it). The pattern in `crates/cofferdam-core/src/parser.rs`

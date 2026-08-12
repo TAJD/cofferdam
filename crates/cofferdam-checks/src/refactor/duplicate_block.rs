@@ -9,11 +9,11 @@ use cofferdam_core::{
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, BinaryExpression, BindingIdentifier,
     BlockStatement, BooleanLiteral, BreakStatement, CallExpression, Class, ConditionalExpression,
-    ContinueStatement, DoWhileStatement, ExpressionStatement, ForInStatement, ForOfStatement,
-    ForStatement, Function, FunctionBody, IdentifierName, IdentifierReference, IfStatement,
-    LogicalExpression, NewExpression, NullLiteral, NumericLiteral, ReturnStatement, Statement,
-    StringLiteral, SwitchStatement, TemplateLiteral, ThrowStatement, TryStatement, UnaryExpression,
-    UpdateExpression, VariableDeclaration, WhileStatement,
+    ContinueStatement, DoWhileStatement, Expression, ExpressionStatement, ForInStatement,
+    ForOfStatement, ForStatement, Function, FunctionBody, IdentifierName, IdentifierReference,
+    IfStatement, LogicalExpression, NewExpression, NullLiteral, NumericLiteral, ReturnStatement,
+    Statement, StringLiteral, SwitchStatement, TemplateLiteral, ThrowStatement, TryStatement,
+    UnaryExpression, UpdateExpression, VariableDeclaration, WhileStatement,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
@@ -61,9 +61,22 @@ const DUPLICATE_BLOCK_MIN_CHARS: usize = 80;
 #[derive(Clone)]
 struct Fingerprint {
     hash: u64,
+    /// Hash with string/number literal *values* included (never
+    /// normalized to positional placeholders), regardless of the
+    /// `normalize_literals` option. Used at finalize to tell whether a
+    /// group of blocks sharing `hash` are truly identical or only
+    /// identical in structure (CD-331).
+    exact_hash: u64,
     kind: FingerprintKind,
     file: PathBuf,
     span: Span,
+    /// Number of statements the window actually covered, read back at
+    /// finalize so the message reports the effective (per-file
+    /// configured) `min_statements` rather than the hardcoded
+    /// `Default`. Unused in token mode — set to `0` there, since that
+    /// message is built from `min_tokens` instead (mirrors how
+    /// `exact_hash` is a no-op for token-mode grouping).
+    stmt_count: usize,
 }
 
 /// Order matters: AST first so finalize's overlap-dedupe pass claims
@@ -99,6 +112,11 @@ pub struct DuplicateBlock {
     /// AST-mode enabled (default: true). Can be disabled to run
     /// token-mode only. Configurable via cofferdam.toml.
     include_ast: bool,
+    /// Treat string/number literals as positional placeholders (like
+    /// identifiers) when computing the grouping hash, so blocks that
+    /// differ only in their literal values are still reported as
+    /// duplicates (CD-331). Default: true.
+    normalize_literals: bool,
 }
 
 pub const DUP_BLOCK_OPTIONS: &[OptionSpec] = &[
@@ -126,6 +144,12 @@ pub const DUP_BLOCK_OPTIONS: &[OptionSpec] = &[
         default: OptionDefault::Bool(true),
         doc: "run the AST statement-window pass (disable to use token-mode only)",
     },
+    OptionSpec {
+        name: "normalize_literals",
+        kind: OptionKind::Bool,
+        default: OptionDefault::Bool(true),
+        doc: "treat string and number literals as positional placeholders, so blocks differing only in their literal values are still reported as duplicates",
+    },
 ];
 
 impl Default for DuplicateBlock {
@@ -136,6 +160,7 @@ impl Default for DuplicateBlock {
             min_tokens: DUPLICATE_BLOCK_MIN_TOKENS,
             include_tokens: false,
             include_ast: true,
+            normalize_literals: true,
         }
     }
 }
@@ -169,6 +194,41 @@ const DUP_META: CheckMeta = CheckMeta {
     // skipping run() on cache hit would drop those contributions, so
     // we always re-run this one. cp3's corpus-snapshot replay will
     // lift this restriction.
+    pure_run: false,
+};
+
+/// `Refactor.NearDuplicateBlock` — CD-331 split. Shares `DUPLICATE_BLOCKS`
+/// with `DuplicateBlock` (same corpus slot, populated only by
+/// `DuplicateBlock::run`) but reports the other half of the same
+/// grouping pass: AST-mode groups whose members are structurally
+/// identical yet differ in a string/number literal value.
+///
+/// A separate check id exists because severity is stamped per check id
+/// by the engine's post-pass (a check cannot vary severity per issue —
+/// see `Engine::finalize_and_filter`'s severity post-pass), and
+/// `Severity::Medium` on `Refactor.DuplicateBlock` trips the default
+/// `--fail-on medium` gate. Near-clones are a real signal (the
+/// divergence between two copies is often exactly what is worth
+/// looking at) but are noisier and less actionable than a verbatim
+/// clone, so they default to `Severity::Low` and print without gating
+/// CI — see `docs/Refactor.NearDuplicateBlock.md`.
+const DUP_NEAR_META: CheckMeta = CheckMeta {
+    id: "Refactor.NearDuplicateBlock",
+    category: Category::Refactor,
+    base_priority: 10,
+    default_severity: Severity::Low,
+    explanation: "Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.",
+    body: include_str!("../../docs/Refactor.NearDuplicateBlock.md"),
+    requires_types: false,
+    consistency: false,
+    // The window options (min_statements, min_chars, include_tokens,
+    // include_ast, normalize_literals) are read by `DuplicateBlock::run`
+    // — the sole writer of the shared corpus slot — and apply to both
+    // checks equally; `NearDuplicateBlock::run` is a no-op, so it has no
+    // options of its own to advertise (CD-339). Configure them under
+    // `[checks."Refactor.DuplicateBlock"]`.
+    options: &[],
+    autofix: false,
     pure_run: false,
 };
 
@@ -207,6 +267,10 @@ impl Check for DuplicateBlock {
         // field can also turn it off (no existing constructor does this, but
         // the option is there for completeness).
         let include_ast = self.include_ast && ctx.options.get_bool("include_ast").unwrap_or(true);
+        let normalize_literals = ctx
+            .options
+            .get_bool("normalize_literals")
+            .unwrap_or(self.normalize_literals);
 
         let mut collected = Vec::new();
         // Built once per file: `span_from_bytes` is O(start_byte), and a
@@ -223,6 +287,7 @@ impl Check for DuplicateBlock {
                 line_index: &line_index,
                 min_statements,
                 min_chars,
+                normalize_literals,
                 collected: Vec::new(),
             };
             visitor.visit_program(parsed.program);
@@ -246,111 +311,206 @@ impl Check for DuplicateBlock {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        let mut by_hash: BTreeMap<u64, Vec<Fingerprint>> = BTreeMap::new();
-        // Read-only (cd-32): a draining read would empty the slot as a
-        // side effect of finalize, which is fine for a one-shot analyze
-        // but corrupts `Engine::analyze_incremental`'s persistent
-        // `AnalysisState` — the next incremental call would finalize
-        // over an empty slot for every file that didn't just change.
-        ctx.corpus.with_slot(&DUPLICATE_BLOCKS, |slot| {
-            for fp in slot.iter().cloned() {
-                by_hash.entry(fp.hash).or_default().push(fp);
-            }
-        });
-
-        // Build candidate findings and dedupe overlapping windows in the
-        // same file. Sort groups by their primary's (file, start_byte) so
-        // earlier-in-the-source windows claim the territory first.
-        let mut candidates: Vec<Vec<Fingerprint>> = by_hash
-            .into_values()
-            .map(|mut fps| {
-                fps.sort_by(|a, b| {
-                    a.file
-                        .cmp(&b.file)
-                        .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
-                });
-                dedupe_self_overlaps(fps)
+        // Only the exact half (verbatim clones, plus all token-mode
+        // groups — token mode's exact_hash always equals hash, see
+        // `collect_token_fingerprints`) belongs to this check id; the
+        // literal-drift half is `Refactor.NearDuplicateBlock`'s (CD-331
+        // follow-up split, see `DUP_NEAR_META`'s doc comment for why).
+        let (exact_groups, _near_groups) = partition_claimed_groups(ctx);
+        exact_groups
+            .into_iter()
+            .map(|group| {
+                let message = match group[0].kind {
+                    FingerprintKind::Ast => format!(
+                        "duplicate {}-statement block, also at {} other location(s)",
+                        group[0].stmt_count,
+                        group.len() - 1
+                    ),
+                    FingerprintKind::Token => format!(
+                        "duplicate {}-token window (cross-statement), also at {} other location(s)",
+                        self.min_tokens,
+                        group.len() - 1
+                    ),
+                };
+                build_issue(DUP_META.id, DUP_META.base_priority, message, &group)
             })
-            // Self-overlap dedup can shrink a group below 2 (a single
-            // real block whose sliding windows all hashed identically),
-            // so re-check the size floor after it, not before.
-            .filter(|fps| fps.len() >= 2)
-            .collect();
-        // AST candidates run first so they claim territory before token
-        // candidates compete. Inside a kind, sort by primary's location.
-        candidates.sort_by(|a, b| {
-            a[0].kind
-                .cmp(&b[0].kind)
-                .then_with(|| a[0].file.cmp(&b[0].file))
-                .then_with(|| a[0].span.start_byte.cmp(&b[0].span.start_byte))
-        });
-
-        // (file, start, end) of every primary span we've already emitted.
-        // A new candidate whose primary OR any related span overlaps an
-        // already-emitted region in the same file is dropped.
-        let mut claimed: Vec<(PathBuf, u32, u32)> = Vec::new();
-        let mut issues = Vec::new();
-
-        for group in candidates {
-            let primary = &group[0];
-            let overlaps = |c: &(PathBuf, u32, u32), file: &PathBuf, s: u32, e: u32| {
-                &c.0 == file && c.1 < e && s < c.2
-            };
-            if claimed.iter().any(|c| {
-                overlaps(
-                    c,
-                    &primary.file,
-                    primary.span.start_byte,
-                    primary.span.end_byte,
-                )
-            }) {
-                continue;
-            }
-            // Also drop if any related span overlaps an already-claimed
-            // region — same logical duplicate, viewed from the other side.
-            if group[1..].iter().any(|fp| {
-                claimed
-                    .iter()
-                    .any(|c| overlaps(c, &fp.file, fp.span.start_byte, fp.span.end_byte))
-            }) {
-                continue;
-            }
-
-            for fp in &group {
-                claimed.push((fp.file.clone(), fp.span.start_byte, fp.span.end_byte));
-            }
-
-            let related: Vec<RelatedSpan> = group[1..]
-                .iter()
-                .map(|fp| RelatedSpan {
-                    location: Location::from_span(&fp.file, fp.span),
-                    file: fp.file.clone(),
-                })
-                .collect();
-            let message = match primary.kind {
-                FingerprintKind::Ast => format!(
-                    "duplicate {}-statement block, also at {} other location(s)",
-                    self.min_statements,
-                    related.len()
-                ),
-                FingerprintKind::Token => format!(
-                    "duplicate {}-token window (cross-statement), also at {} other location(s)",
-                    self.min_tokens,
-                    related.len()
-                ),
-            };
-            issues.push(Issue {
-                check_id: DUP_META.id.to_string(),
-                message,
-                file: primary.file.clone(),
-                location: Location::from_span(&primary.file, primary.span),
-                priority: Priority(DUP_META.base_priority),
-                severity: Severity::Medium,
-                related,
-            });
-        }
-        issues
+            .collect()
     }
+}
+
+/// `Refactor.NearDuplicateBlock` — see `DUP_NEAR_META`'s doc comment.
+/// Holds no fields: it never collects fingerprints itself (`run` is a
+/// no-op — see the `Check` impl below), and its message reads the
+/// matched window's statement count off `Fingerprint::stmt_count`
+/// rather than any of `DuplicateBlock`'s configuration.
+#[derive(Default)]
+pub struct NearDuplicateBlock;
+
+impl Check for NearDuplicateBlock {
+    fn meta(&self) -> &'static CheckMeta {
+        &DUP_NEAR_META
+    }
+
+    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        // Deliberately a no-op: `DuplicateBlock::run` is the sole writer
+        // of the shared `DUPLICATE_BLOCKS` corpus slot. Writing here too
+        // would double every fingerprint (CD-331 follow-up spec).
+        Vec::new()
+    }
+
+    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        let (_exact_groups, near_groups) = partition_claimed_groups(ctx);
+        near_groups
+            .into_iter()
+            .map(|group| {
+                let message = format!(
+                    "duplicate {}-statement block differing only in literal values, also at {} other location(s)",
+                    group[0].stmt_count,
+                    group.len() - 1
+                );
+                build_issue(DUP_NEAR_META.id, DUP_NEAR_META.base_priority, message, &group)
+            })
+            .collect()
+    }
+}
+
+/// Common `Issue` construction for both `DuplicateBlock` and
+/// `NearDuplicateBlock`: same fields, different check id / priority /
+/// message. `severity` is always the `Severity::Medium` placeholder —
+/// the engine's severity post-pass stamps the real value from each
+/// check id's registered `CheckMeta::default_severity` (or config
+/// override), so which severity a check "has" lives in exactly one
+/// place regardless of which of these two check ids built the issue.
+fn build_issue(
+    check_id: &'static str,
+    base_priority: i8,
+    message: String,
+    group: &[Fingerprint],
+) -> Issue {
+    let primary = &group[0];
+    let related: Vec<RelatedSpan> = group[1..]
+        .iter()
+        .map(|fp| RelatedSpan {
+            location: Location::from_span(&fp.file, fp.span),
+            file: fp.file.clone(),
+        })
+        .collect();
+    Issue {
+        check_id: check_id.to_string(),
+        message,
+        file: primary.file.clone(),
+        location: Location::from_span(&primary.file, primary.span),
+        priority: Priority(base_priority),
+        severity: Severity::Medium,
+        related,
+    }
+}
+
+/// Shared finalize core for `DuplicateBlock` and `NearDuplicateBlock`:
+/// reads `DUPLICATE_BLOCKS`, groups by `hash`, dedupes self-overlaps,
+/// and runs the cross-group overlap-claim pass exactly once — then
+/// partitions the *emitted* groups into "exact" (every member shares
+/// the primary's `exact_hash` — verbatim clones, and all token-mode
+/// groups) and "near" (an AST-mode group whose members differ in a
+/// literal value).
+///
+/// Splitting after the claim pass, not before, is what keeps the two
+/// checks from ever reporting overlapping spans: the claim pass is
+/// identical to (and, called once per check, reproduces) the single
+/// pass this file ran before the CD-331 split, so `exact_groups ∪
+/// near_groups` is exactly the set of groups the one check used to
+/// emit, and the two checks between them cover it once each rather
+/// than only recomputing the same deterministic partition twice.
+fn partition_claimed_groups(
+    ctx: &mut FinalizeContext<'_>,
+) -> (Vec<Vec<Fingerprint>>, Vec<Vec<Fingerprint>>) {
+    let mut by_hash: BTreeMap<u64, Vec<Fingerprint>> = BTreeMap::new();
+    // Read-only (cd-32): a draining read would empty the slot as a
+    // side effect of finalize, which is fine for a one-shot analyze
+    // but corrupts `Engine::analyze_incremental`'s persistent
+    // `AnalysisState` — the next incremental call would finalize
+    // over an empty slot for every file that didn't just change.
+    ctx.corpus.with_slot(&DUPLICATE_BLOCKS, |slot| {
+        for fp in slot.iter().cloned() {
+            by_hash.entry(fp.hash).or_default().push(fp);
+        }
+    });
+
+    // Build candidate findings and dedupe overlapping windows in the
+    // same file. Sort groups by their primary's (file, start_byte) so
+    // earlier-in-the-source windows claim the territory first.
+    let mut candidates: Vec<Vec<Fingerprint>> = by_hash
+        .into_values()
+        .map(|mut fps| {
+            fps.sort_by(|a, b| {
+                a.file
+                    .cmp(&b.file)
+                    .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+            });
+            dedupe_self_overlaps(fps)
+        })
+        // Self-overlap dedup can shrink a group below 2 (a single
+        // real block whose sliding windows all hashed identically),
+        // so re-check the size floor after it, not before.
+        .filter(|fps| fps.len() >= 2)
+        .collect();
+    // AST candidates run first so they claim territory before token
+    // candidates compete. Inside a kind, sort by primary's location.
+    candidates.sort_by(|a, b| {
+        a[0].kind
+            .cmp(&b[0].kind)
+            .then_with(|| a[0].file.cmp(&b[0].file))
+            .then_with(|| a[0].span.start_byte.cmp(&b[0].span.start_byte))
+    });
+
+    // (file, start, end) of every primary span we've already emitted.
+    // A new candidate whose primary OR any related span overlaps an
+    // already-emitted region in the same file is dropped.
+    let mut claimed: Vec<(PathBuf, u32, u32)> = Vec::new();
+    let mut exact_groups = Vec::new();
+    let mut near_groups = Vec::new();
+
+    for group in candidates {
+        let primary = &group[0];
+        let overlaps = |c: &(PathBuf, u32, u32), file: &PathBuf, s: u32, e: u32| {
+            &c.0 == file && c.1 < e && s < c.2
+        };
+        if claimed.iter().any(|c| {
+            overlaps(
+                c,
+                &primary.file,
+                primary.span.start_byte,
+                primary.span.end_byte,
+            )
+        }) {
+            continue;
+        }
+        // Also drop if any related span overlaps an already-claimed
+        // region — same logical duplicate, viewed from the other side.
+        if group[1..].iter().any(|fp| {
+            claimed
+                .iter()
+                .any(|c| overlaps(c, &fp.file, fp.span.start_byte, fp.span.end_byte))
+        }) {
+            continue;
+        }
+
+        for fp in &group {
+            claimed.push((fp.file.clone(), fp.span.start_byte, fp.span.end_byte));
+        }
+
+        // Grouping happens on `hash` (normalized under
+        // `normalize_literals`); check whether the group is also
+        // identical in its exact (literal-sensitive) hash to decide
+        // which check id owns it (CD-331 / CD-331 follow-up).
+        let all_exact = group.iter().all(|fp| fp.exact_hash == primary.exact_hash);
+        if all_exact {
+            exact_groups.push(group);
+        } else {
+            near_groups.push(group);
+        }
+    }
+    (exact_groups, near_groups)
 }
 
 /// Collapse windows *within one hash group* that overlap each other in
@@ -388,17 +548,57 @@ struct DupCollector<'a> {
     line_index: &'a LineIndex,
     min_statements: usize,
     min_chars: usize,
+    normalize_literals: bool,
     collected: Vec<Fingerprint>,
 }
 
 impl<'a> DupCollector<'a> {
     fn scan(&mut self, stmts: &[Statement<'a>]) {
+        // Module-level import/re-export declarations are excluded from
+        // windowing entirely (CD-331 follow-up), not just as window
+        // starts — otherwise a window could straddle the import block
+        // into real code. A run of import statements differing only in
+        // their module specifiers is never actionable (you cannot
+        // extract a shared helper for an import block), and once
+        // literal normalization treats those specifiers as positional
+        // placeholders, every same-length import block in a project
+        // hashes identically. Plain re-exports (`export { x } from
+        // './y'`) are excluded the same way; a bare `export { x }` or
+        // `export function f() {}` (no `source`) is ordinary code and
+        // still participates.
+        //
+        // Windowing runs per maximal contiguous run of non-excluded
+        // statements (CD-339) rather than over a flattened list of all
+        // of them — a flattened list lets a window's `start`/`end` span
+        // an excluded statement sitting between two real ones, so the
+        // reported range (and the `min_chars` floor computed from it)
+        // included bytes the window never actually hashed.
+        let mut run: Vec<&Statement<'a>> = Vec::new();
+        for stmt in stmts {
+            if is_import_or_reexport(stmt) {
+                self.scan_run(std::mem::take(&mut run));
+            } else {
+                run.push(stmt);
+            }
+        }
+        self.scan_run(run);
+    }
+
+    fn scan_run(&mut self, stmts: Vec<&Statement<'a>>) {
         if stmts.len() < self.min_statements {
             return;
         }
+        // Per-statement hash-op streams (CD-173), memoized lazily: a
+        // statement is AST-walked at most once per run no matter how
+        // many overlapping windows it participates in (previously it
+        // was walked once per window, i.e. up to `min_statements`
+        // times). Lazy rather than eager so scopes where every window
+        // gets filtered out by `min_chars` below don't pay for op
+        // collection they'll never use.
+        let mut stmt_ops: Vec<Option<Vec<HashOp<'a>>>> = (0..stmts.len()).map(|_| None).collect();
         for i in 0..=stmts.len() - self.min_statements {
-            let first = &stmts[i];
-            let last = &stmts[i + self.min_statements - 1];
+            let first = stmts[i];
+            let last = stmts[i + self.min_statements - 1];
             let start = first.span().start as usize;
             let end = last.span().end as usize;
             if start >= end || end > self.file.text.len() {
@@ -409,17 +609,77 @@ impl<'a> DupCollector<'a> {
             if (end - start) < self.min_chars {
                 continue;
             }
-            let window = &stmts[i..i + self.min_statements];
-            let hash = hash_ast_window(window);
+            for j in i..i + self.min_statements {
+                if stmt_ops[j].is_none() {
+                    stmt_ops[j] = Some(collect_stmt_ops(stmts[j]));
+                }
+            }
+            let window = &stmt_ops[i..i + self.min_statements];
+            let (normalized, exact) = hash_ops(
+                window
+                    .iter()
+                    .flat_map(|ops| ops.as_ref().expect("just populated above").iter()),
+            );
+            // When normalization is off, the grouping hash IS the exact
+            // hash — that reproduces pre-CD-331 grouping behaviour and
+            // keeps the "is this group exact?" check trivially true.
+            let hash = if self.normalize_literals {
+                normalized
+            } else {
+                exact
+            };
             let span = self.line_index.span_from_bytes(start as u32, end as u32);
             self.collected.push(Fingerprint {
                 hash,
+                exact_hash: exact,
                 kind: FingerprintKind::Ast,
                 file: self.file.path.clone(),
                 span,
+                stmt_count: self.min_statements,
             });
         }
     }
+}
+
+/// True for statements that must never enter an AST-mode window
+/// (CD-331 follow-up, extended CD-339): plain `import` declarations,
+/// `export * from`, and re-exports (`export { x } from './y'`); the
+/// TS-specific `import x = require('y')` (`TSImportEqualsDeclaration`)
+/// and `export = x` (`TSExportAssignment`) spellings; and a
+/// `VariableDeclaration` that is a CommonJS require block — every
+/// declarator's initialiser is a direct `require(...)` call (a
+/// declarator with no initialiser, or one whose initialiser is
+/// anything else, makes the whole statement ordinary code instead). A
+/// bare `export { x }` or `export function f() {}` — an
+/// `ExportNamedDeclaration` with no `source` — is ordinary code and is
+/// NOT excluded.
+fn is_import_or_reexport(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::ImportDeclaration(_) => true,
+        Statement::ExportAllDeclaration(_) => true,
+        Statement::ExportNamedDeclaration(decl) => decl.source.is_some(),
+        Statement::TSImportEqualsDeclaration(_) => true,
+        Statement::TSExportAssignment(_) => true,
+        Statement::VariableDeclaration(decl) => {
+            !decl.declarations.is_empty()
+                && decl
+                    .declarations
+                    .iter()
+                    .all(|d| d.init.as_ref().is_some_and(is_require_call))
+        }
+        _ => false,
+    }
+}
+
+/// True for `require(...)` — a `CallExpression` whose callee is the bare
+/// identifier `require`. Used to recognise `const x = require('y')` (and
+/// destructured variants like `const { a } = require('y')`) as an import
+/// for windowing purposes.
+fn is_require_call(expr: &Expression<'_>) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    matches!(&call.callee, Expression::Identifier(id) if id.name == "require")
 }
 
 impl<'a> Visit<'a> for DupCollector<'a> {
@@ -616,52 +876,159 @@ const HASH_SEPARATOR: u8 = 0x01;
 /// | `F`      | `BooleanLiteral` with value `false`                 |
 /// | `Nul`    | `NullLiteral`                                       |
 /// | `Tmpl`   | `TemplateLiteral`                                   |
-pub struct AstHashWalker {
-    hasher: std::collections::hash_map::DefaultHasher,
-    locals: HashMap<String, u32>,
-    next_local: u32,
+/// One structural emission from walking a statement's AST, deferred
+/// rather than fed straight into a hasher (CD-173). Every variant
+/// borrows straight from the oxc arena (`'a`, the parsed file's
+/// lifetime) or is `Copy` data — zero heap allocation per op, since an
+/// early version of this that owned (`Box<str>`/`Vec<u8>`) each op
+/// turned out to allocate MORE than the original per-window AST walk
+/// it replaced (measured: a real regression on `bestefforttools`, not
+/// an improvement) once every identifier occurrence — not just the
+/// first per scope — got its own heap allocation.
+/// `Ident` carries an identifier occurrence whose local index can only
+/// be resolved once the full window it belongs to is known (see
+/// `hash_ops`) — the same name may need a different index depending on
+/// what window-relative position it's first seen at.
+#[derive(Clone, Copy)]
+enum HashOp<'a> {
+    /// A plain structural tag. Every call site passes a literal byte
+    /// string or an oxc `.as_str()` result — both confirmed `&'static
+    /// str` in oxc_syntax/oxc_ast (operator/kind enums render via a
+    /// `match` over literals, never borrowing from `self`).
+    Bytes(&'static [u8]),
+    Ident {
+        prefix: &'static [u8],
+        name: &'a str,
+    },
+    /// `StringLiteral` value, borrowed from the arena.
+    Str(&'a str),
+    /// `NumericLiteral` value.
+    Num(f64),
 }
 
-impl AstHashWalker {
+/// Combine a window's worth of precomputed `HashOp`s into the final
+/// structural hash, assigning each distinct identifier name the next
+/// available index in first-occurrence order *within this window* —
+/// this window-relative (not per-statement, not per-file) numbering is
+/// exactly what `AstHashWalker`'s old single-pass `locals`/`next_local`
+/// fields did when shared across one window's worth of
+/// `visit_statement` calls; splitting collection from combination
+/// preserves it because op emission order for a given statement never
+/// depends on sibling statements' content (see `visit_*` below — every
+/// branch is on the node itself, never on accumulated hasher/locals
+/// state), so concatenating precomputed per-statement op lists in
+/// statement order reproduces the original single-pass sequence
+/// exactly.
+/// Combines a window's `HashOp`s into two hashes in a single pass:
+/// `(normalized, exact)`. `normalized` treats string/number literals as
+/// positional placeholders (same idea as identifier canonicalisation);
+/// `exact` hashes literal values verbatim, as `hash_ops` always did
+/// before CD-331. Computed together — not via two calls — because this
+/// is a hot path (CD-173).
+fn hash_ops<'a, 'i>(ops: impl Iterator<Item = &'i HashOp<'a>>) -> (u64, u64)
+where
+    'a: 'i,
+{
+    use std::hash::Hasher;
+    let mut norm_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut exact_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut locals: HashMap<&str, u32> = HashMap::new();
+    let mut next_local: u32 = 0;
+    let mut str_locals: HashMap<&str, u32> = HashMap::new();
+    let mut next_str: u32 = 0;
+    let mut num_locals: HashMap<u64, u32> = HashMap::new();
+    let mut next_num: u32 = 0;
+    for op in ops {
+        match *op {
+            HashOp::Bytes(bytes) => {
+                norm_hasher.write(bytes);
+                norm_hasher.write_u8(HASH_SEPARATOR);
+                exact_hasher.write(bytes);
+                exact_hasher.write_u8(HASH_SEPARATOR);
+            }
+            HashOp::Ident { prefix, name } => {
+                let idx = match locals.get(name) {
+                    Some(&i) => i,
+                    None => {
+                        let i = next_local;
+                        next_local += 1;
+                        locals.insert(name, i);
+                        i
+                    }
+                };
+                norm_hasher.write(prefix);
+                norm_hasher.write_u32(idx);
+                norm_hasher.write_u8(HASH_SEPARATOR);
+                exact_hasher.write(prefix);
+                exact_hasher.write_u32(idx);
+                exact_hasher.write_u8(HASH_SEPARATOR);
+            }
+            HashOp::Str(value) => {
+                let idx = match str_locals.get(value) {
+                    Some(&i) => i,
+                    None => {
+                        let i = next_str;
+                        next_str += 1;
+                        str_locals.insert(value, i);
+                        i
+                    }
+                };
+                norm_hasher.write(b"Str#");
+                norm_hasher.write_u32(idx);
+                norm_hasher.write_u8(HASH_SEPARATOR);
+
+                exact_hasher.write(b"Str:");
+                exact_hasher.write(value.as_bytes());
+                exact_hasher.write_u8(HASH_SEPARATOR);
+            }
+            HashOp::Num(value) => {
+                let bits = value.to_bits();
+                let idx = match num_locals.get(&bits) {
+                    Some(&i) => i,
+                    None => {
+                        let i = next_num;
+                        next_num += 1;
+                        num_locals.insert(bits, i);
+                        i
+                    }
+                };
+                norm_hasher.write(b"Num#");
+                norm_hasher.write_u32(idx);
+                norm_hasher.write_u8(HASH_SEPARATOR);
+
+                exact_hasher.write(b"Num:");
+                exact_hasher.write(&value.to_le_bytes());
+                exact_hasher.write_u8(HASH_SEPARATOR);
+            }
+        }
+    }
+    (norm_hasher.finish(), exact_hasher.finish())
+}
+
+pub struct AstHashWalker<'a> {
+    ops: Vec<HashOp<'a>>,
+}
+
+impl<'a> AstHashWalker<'a> {
     pub fn new() -> Self {
-        Self {
-            hasher: std::collections::hash_map::DefaultHasher::new(),
-            locals: HashMap::new(),
-            next_local: 0,
-        }
+        Self { ops: Vec::new() }
     }
 
-    fn tag(&mut self, bytes: &[u8]) {
-        use std::hash::Hasher;
-        self.hasher.write(bytes);
-        self.hasher.write_u8(HASH_SEPARATOR);
+    fn tag(&mut self, bytes: &'static [u8]) {
+        self.ops.push(HashOp::Bytes(bytes));
     }
 
-    fn ident_index(&mut self, name: &str) -> u32 {
-        if let Some(&i) = self.locals.get(name) {
-            return i;
-        }
-        let i = self.next_local;
-        self.next_local += 1;
-        self.locals.insert(name.to_string(), i);
-        i
+    fn ident_tag(&mut self, prefix: &'static [u8], name: &'a str) {
+        self.ops.push(HashOp::Ident { prefix, name });
     }
 
-    fn ident_tag(&mut self, prefix: &[u8], name: &str) {
-        use std::hash::Hasher;
-        let i = self.ident_index(name);
-        self.hasher.write(prefix);
-        self.hasher.write_u32(i);
-        self.hasher.write_u8(HASH_SEPARATOR);
-    }
-
-    pub fn finish(self) -> u64 {
-        use std::hash::Hasher;
-        self.hasher.finish()
+    #[allow(dead_code)] // exercised by refactor::tests' AST-hash canonicalisation sanity checks
+    pub fn finish(self) -> (u64, u64) {
+        hash_ops(self.ops.iter())
     }
 }
 
-impl<'a> Visit<'a> for AstHashWalker {
+impl<'a> Visit<'a> for AstHashWalker<'a> {
     fn visit_block_statement(&mut self, node: &BlockStatement<'a>) {
         self.tag(b"Blk");
         oxc_ast_visit::walk::walk_block_statement(self, node);
@@ -823,17 +1190,11 @@ impl<'a> Visit<'a> for AstHashWalker {
     }
 
     fn visit_string_literal(&mut self, lit: &StringLiteral<'a>) {
-        use std::hash::Hasher;
-        self.hasher.write(b"Str:");
-        self.hasher.write(lit.value.as_bytes());
-        self.hasher.write_u8(HASH_SEPARATOR);
+        self.ops.push(HashOp::Str(lit.value.as_str()));
     }
 
     fn visit_numeric_literal(&mut self, lit: &NumericLiteral<'a>) {
-        use std::hash::Hasher;
-        self.hasher.write(b"Num:");
-        self.hasher.write(&lit.value.to_le_bytes());
-        self.hasher.write_u8(HASH_SEPARATOR);
+        self.ops.push(HashOp::Num(lit.value));
     }
 
     fn visit_boolean_literal(&mut self, lit: &BooleanLiteral) {
@@ -850,15 +1211,15 @@ impl<'a> Visit<'a> for AstHashWalker {
     }
 }
 
-/// Hash a window of consecutive statements via AST canonicalisation.
-/// Replaces the source-text + regex approach for AST-mode duplicate
-/// detection (cd-mti). Token mode still uses text canonicalisation.
-fn hash_ast_window<'a>(stmts: &[Statement<'a>]) -> u64 {
+/// Walk one statement's AST into its raw (unresolved-identifier) op
+/// stream. Called at most once per statement per `scan()` (CD-173) —
+/// callers combine a window's worth of these via `hash_ops` rather
+/// than re-walking the AST for every overlapping window a statement
+/// participates in. Token mode still uses text canonicalisation.
+fn collect_stmt_ops<'a>(stmt: &Statement<'a>) -> Vec<HashOp<'a>> {
     let mut walker = AstHashWalker::new();
-    for stmt in stmts {
-        walker.visit_statement(stmt);
-    }
-    walker.finish()
+    walker.visit_statement(stmt);
+    walker.ops
 }
 
 // ─── Token mode (cd-jdq) ───────────────────────────────────────────────────
@@ -1031,9 +1392,16 @@ fn collect_token_fingerprints(
         let span = line_index.span_from_bytes(start, end);
         out.push(Fingerprint {
             hash,
+            // Token mode doesn't go through `hash_ops` and is out of
+            // scope for CD-331's literal-normalization; exact == hash
+            // here so the finalize "is this group exact?" check stays
+            // trivially true for token-mode findings.
+            exact_hash: hash,
             kind: FingerprintKind::Token,
             file: file.path.clone(),
             span,
+            // Unused by the token-mode message (see `Fingerprint::stmt_count`'s doc).
+            stmt_count: 0,
         });
     }
 }

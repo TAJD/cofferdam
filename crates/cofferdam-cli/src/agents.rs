@@ -13,6 +13,29 @@ pub fn prompt() -> String {
 Use cofferdam **before** editing to understand constraints, and **after** to
 verify your change is clean. This is the canonical workflow for AI coding agents.
 
+## Start here: what does this change touch?
+
+```sh
+cofferdam context
+```
+
+Run this first, before or right after making a change — it is the default
+entrypoint into project context you don't already have. It resolves your
+working-tree diff (or `git diff --staged`, or explicit paths) and prints a
+token-budgeted digest: fresh findings on the lines you touched, files that
+import what you changed (blast radius), sibling-file conventions your change
+should probably follow (precedent), relevant `.cofferdam/knowledge/*.md`
+notes, and any `// @cofferdam-context: ...` annotations on the code you're
+near. It never fails the build — advisory only, exit 0 except on a usage
+error — so there's no reason not to run it on every task, even ones that
+start with no prior conversation context at all.
+
+```sh
+cofferdam context --robot              # JSON — stable schema, for agents
+cofferdam context --base main          # diff against a ref instead of the working tree
+cofferdam context src/domain/order.ts  # explicit path, no git required
+```
+
 ## Before editing a file
 
 ```sh
@@ -88,6 +111,12 @@ pub fn hooks_fragment() -> String {
     r#"# cofferdam hook recipes — paste the relevant block into your tool's config.
 #
 # ---- Claude Code: .claude/settings.json ----
+# UserPromptSubmit fires when you submit a prompt, i.e. at the start of a
+# task — which is when `cofferdam context` is meant to run, before or right
+# after the first edit rather than at the end. Unlike PreToolUse, a
+# UserPromptSubmit hook's plain stdout IS prepended to the agent's context,
+# so no jq wrapping is needed. `context` is advisory and exits 0 (usage/git
+# errors excepted), so it can never block a prompt.
 # PreToolUse fires before Edit/Write/MultiEdit; the hook reads the target
 # file path from the event JSON on stdin (`tool_input.file_path`), runs
 # `advise` on it, and wraps the output in `hookSpecificOutput.additionalContext`
@@ -104,6 +133,16 @@ pub fn hooks_fragment() -> String {
 # `advise --diff HEAD` as a pre-commit-style pre-flight check.
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cofferdam context"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
@@ -190,6 +229,19 @@ mod tests {
         assert!(
             p.contains("https://github.com/TAJD/cofferdam/issues"),
             "must contain the GitHub issues URL"
+        );
+    }
+
+    #[test]
+    fn prompt_mentions_context_as_the_default_entrypoint() {
+        let p = prompt();
+        assert!(
+            p.contains("cofferdam context"),
+            "must mention the context command"
+        );
+        assert!(
+            p.contains("Start here"),
+            "context must be positioned as the default entrypoint, not buried"
         );
     }
 

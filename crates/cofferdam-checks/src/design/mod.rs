@@ -160,12 +160,16 @@ mod tests {
     }
 
     #[test]
-    fn package_json_entry_is_ignored() {
+    fn package_json_entry_with_no_manifest_matches_nothing_and_says_so() {
         let root = PathBuf::from("/project");
         let api = make_public_api(&["package.json:exports"], &root);
-        // No file key should match — the entry is silently dropped.
         let key = path_key(&root.join("src/index.ts"));
         assert!(!api.is_match(&key));
+        assert_eq!(
+            api.unresolved(),
+            ["package.json:exports".to_string()],
+            "a pointer at a manifest that isn't there must be reported, not dropped"
+        );
     }
 
     #[test]
@@ -282,6 +286,7 @@ mod tests {
             include_type_only: false,
             test_patterns: Vec::new(),
             framework_entry_patterns: Vec::new(),
+            test_imports_count: true,
         }
     }
 
@@ -1172,7 +1177,9 @@ function total(items) {
                 .with_corpus(&corpus);
             EffectLeakage.run(&file, &mut ctx);
         }
-        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(extra_imports));
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| {
+            slot.extend_by(extra_imports, |r| &r.from_file)
+        });
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         EffectLeakage.finalize(&mut finalize_ctx)
     }
@@ -1682,7 +1689,9 @@ export function computeTotal(items: number[]): number {
     /// `imports` as the shared import graph.
     fn run_fan_out_outlier(imports: Vec<ImportRecord>) -> Vec<CoreIssue> {
         let corpus = CorpusIndex::new();
-        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(imports));
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| {
+            slot.extend_by(imports, |r| &r.from_file)
+        });
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         ImportFanOutOutlier.finalize(&mut finalize_ctx)
     }
@@ -1715,10 +1724,12 @@ export function computeTotal(items: number[]): number {
     }
 
     #[test]
-    fn fan_in_outlier_is_flagged() {
-        // 14 files that each import a single shared `utils.ts` — utils
-        // has fan-in 14 against a background of zero, the fan-in mirror
-        // of `fan_out_outlier_is_flagged`.
+    fn high_fan_in_alone_is_not_flagged() {
+        // CD-333: 14 files that each import a single shared `utils.ts`
+        // — utils has fan-in 14 against a background of zero, but zero
+        // fan-out of its own. A shared leaf module doing its job must
+        // not be flagged; fan-in alone can't distinguish it from a
+        // real hub.
         let utils = PathBuf::from("/p/utils.ts");
         let imports: Vec<ImportRecord> = (0..14)
             .map(|i| {
@@ -1727,13 +1738,79 @@ export function computeTotal(items: number[]): number {
             })
             .collect();
         let issues = run_fan_out_outlier(imports);
-        assert_eq!(
-            issues.len(),
-            1,
-            "expected one fan-in finding for utils.ts; got {issues:?}"
+        assert!(
+            issues.is_empty(),
+            "high fan-in alone must not be flagged; got {issues:?}"
         );
-        assert_eq!(issues[0].file, utils);
-        assert!(issues[0].message.contains("fan-in"));
+    }
+
+    #[test]
+    fn high_fan_in_and_fan_out_together_is_flagged() {
+        // CD-333: a genuine god module — high fan-in AND high fan-out
+        // — must still fire the fan-in finding. 14 sibling files each
+        // import `hub.ts` (hub's fan-in) and `hub.ts` imports each of
+        // them back (hub's fan-out).
+        let hub = PathBuf::from("/p/hub.ts");
+        let mut imports = Vec::new();
+        for i in 0..14 {
+            let sibling = PathBuf::from(format!("/p/sibling{i}.ts"));
+            imports.push(internal_import(&sibling, &hub));
+            imports.push(internal_import(&hub, &sibling));
+        }
+        let issues = run_fan_out_outlier(imports);
+        let fan_in_issues: Vec<&CoreIssue> = issues
+            .iter()
+            .filter(|i| i.message.contains("fan-in"))
+            .collect();
+        assert_eq!(
+            fan_in_issues.len(),
+            1,
+            "expected one fan-in finding for the god module; got {issues:?}"
+        );
+        assert_eq!(fan_in_issues[0].file, hub);
+    }
+
+    #[test]
+    fn sparse_graph_does_not_flag_a_leaf_that_imports_one_module() {
+        // A leaf imported by many files but itself importing only one
+        // local module must not be flagged: `high_fan_in_alone_is_not_flagged`
+        // above only passes because its leaf has fan_out == 0, which is
+        // unrealistic — a leaf with a single import can still clear a
+        // sparse graph's relative threshold without an absolute floor.
+        let leaf = PathBuf::from("/p/leaf.ts");
+        let leaf_dep = PathBuf::from("/p/leaf_dep.ts");
+        let mut imports: Vec<ImportRecord> = (0..14)
+            .map(|i| {
+                let importer = PathBuf::from(format!("/p/importer{i}.ts"));
+                internal_import(&importer, &leaf)
+            })
+            .collect();
+        imports.push(internal_import(&leaf, &leaf_dep));
+        let issues = run_fan_out_outlier(imports);
+        assert!(
+            issues.is_empty(),
+            "expected no findings for a leaf with fan_out 1 in a sparse graph; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_is_never_reported_twice() {
+        // The same file must never receive both a fan-out finding and a
+        // combined fan-in/fan-out finding.
+        let hub = PathBuf::from("/p/hub.ts");
+        let mut imports = Vec::new();
+        for i in 0..14 {
+            let sibling = PathBuf::from(format!("/p/sibling{i}.ts"));
+            imports.push(internal_import(&sibling, &hub));
+            imports.push(internal_import(&hub, &sibling));
+        }
+        let issues = run_fan_out_outlier(imports);
+        let hub_issues: Vec<&CoreIssue> = issues.iter().filter(|i| i.file == hub).collect();
+        assert_eq!(
+            hub_issues.len(),
+            1,
+            "expected exactly one issue for hub; got {issues:?}"
+        );
     }
 
     #[test]
@@ -1844,7 +1921,9 @@ export function computeTotal(items: number[]): number {
         let imports = god_and_leaves_imports(&god, "leaf", 14);
 
         let corpus = CorpusIndex::new();
-        corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.extend(imports));
+        corpus.with_slot(&GRAPH_IMPORTS, |slot| {
+            slot.extend_by(imports, |r| &r.from_file)
+        });
         for i in 0..5 {
             let path = PathBuf::from(format!("/p/isolated{i}.ts"));
             let file = SourceFile::new(path, String::new());
@@ -1881,7 +1960,7 @@ export function computeTotal(items: number[]): number {
 
     fn run_barrel_reexport_bloat(exports: Vec<ExportRecord>) -> Vec<CoreIssue> {
         let corpus = CorpusIndex::new();
-        corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.extend(exports));
+        corpus.with_slot(&GRAPH_EXPORTS, |slot| slot.extend_by(exports, |r| &r.file));
         let mut finalize_ctx = FinalizeContext::new(&corpus);
         BarrelReexportBloat.finalize(&mut finalize_ctx)
     }

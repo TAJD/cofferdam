@@ -31,8 +31,115 @@ use std::any::{Any, TypeId};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+
+/// Per-file bucketed storage for a corpus slot (CD-40 lever 5 PR 2).
+///
+/// Replaces a flat `Vec<T>` slot for graph-wide record tables (e.g.
+/// `cofferdam_core::graph::IMPORTS` / `EXPORTS`) where the engine's
+/// incremental path needs "give me just `changed`'s records" without an
+/// O(total records) scan over every file's contributions. Pass 1 writes
+/// one file's records at a time via [`Self::replace_file`]; finalize-stage
+/// checks that still want the flat view use [`Self::records`].
+#[derive(Debug, Clone)]
+pub struct PerFile<T> {
+    by_file: HashMap<PathBuf, Vec<T>>,
+    /// Lazily-built flattened view, invalidated on every write. Finalize
+    /// runs ~13 checks that each want the full flat `Vec<T>` from the same
+    /// unmutated corpus state; without this, every one of them re-walks
+    /// `by_file.values().flatten()` and re-clones every record. `Arc`
+    /// makes a cache hit a refcount bump instead of a deep clone of every
+    /// record — [`Self::to_vec`] hands callers the `Arc` directly, so only
+    /// a caller that needs an owned, independently-mutable `Vec<T>` pays a
+    /// deep clone (via `Arc::make_mut`/`(*arc).clone()`), same as before.
+    flat_cache: Option<Arc<Vec<T>>>,
+}
+
+impl<T> Default for PerFile<T> {
+    fn default() -> Self {
+        Self {
+            by_file: HashMap::new(),
+            flat_cache: None,
+        }
+    }
+}
+
+impl<T> PerFile<T> {
+    /// Replace `path`'s bucket wholesale. An empty `records` removes the
+    /// bucket entirely rather than leaving a stale empty entry behind —
+    /// important for the incremental path, where a file that used to have
+    /// records (e.g. an import that got deleted) must stop appearing in
+    /// [`Self::records`].
+    pub fn replace_file(&mut self, path: PathBuf, records: Vec<T>) {
+        self.flat_cache = None;
+        if records.is_empty() {
+            self.by_file.remove(&path);
+        } else {
+            self.by_file.insert(path, records);
+        }
+    }
+
+    /// Drop `path`'s bucket, if any. Safe to call for a path with no
+    /// contributions — matches [`CorpusIndex::remove_file`]'s contract for
+    /// the removers it drives.
+    pub fn remove_file(&mut self, path: &Path) {
+        self.flat_cache = None;
+        self.by_file.remove(path);
+    }
+
+    /// `path`'s records, or an empty slice if it contributed none.
+    pub fn for_file(&self, path: &Path) -> &[T] {
+        self.by_file.get(path).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Every record across every file, in unspecified order (bucketed by
+    /// `HashMap`, not insertion order). Callers that need a stable order
+    /// must sort.
+    pub fn records(&self) -> impl Iterator<Item = &T> {
+        self.by_file.values().flatten()
+    }
+
+    /// Total record count across every file.
+    pub fn len(&self) -> usize {
+        self.by_file.values().map(Vec::len).sum()
+    }
+
+    /// True when no file has contributed any records. `replace_file` never
+    /// leaves an empty bucket behind, so this is just "no buckets at all".
+    pub fn is_empty(&self) -> bool {
+        self.by_file.is_empty()
+    }
+
+    /// Flatten every file's bucket into one shared `Vec`. The flattened
+    /// view is cached until the next write (see `flat_cache`), so only the
+    /// first call in a finalize pass pays the `HashMap::values().flatten()`
+    /// + clone cost; subsequent calls just bump the `Arc`'s refcount.
+    pub fn to_vec(&mut self) -> Arc<Vec<T>>
+    where
+        T: Clone,
+    {
+        if self.flat_cache.is_none() {
+            let mut built = Vec::with_capacity(self.len());
+            built.extend(self.by_file.values().flatten().cloned());
+            self.flat_cache = Some(Arc::new(built));
+        }
+        Arc::clone(self.flat_cache.as_ref().expect("just populated"))
+    }
+
+    /// Test/fixture convenience: bucket `items` by a caller-supplied key
+    /// extractor, appending to each bucket rather than replacing it.
+    /// Production pass-1 code should prefer [`Self::replace_file`], which
+    /// owns the whole-file semantics; this is for tests that seed the
+    /// corpus with a flat `Vec<T>` fixture directly.
+    pub fn extend_by(&mut self, items: impl IntoIterator<Item = T>, key: impl Fn(&T) -> &Path) {
+        self.flat_cache = None;
+        for item in items {
+            let path = key(&item).to_path_buf();
+            self.by_file.entry(path).or_default().push(item);
+        }
+    }
+}
 
 /// Typed handle to a corpus slot. Two checks sharing the same `CorpusKey`
 /// constant share storage. The `&'static str` name is the storage key;

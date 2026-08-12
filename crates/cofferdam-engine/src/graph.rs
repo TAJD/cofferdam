@@ -137,12 +137,12 @@ impl GraphBuilder {
             &mut imports,
             &mut exports,
         );
-        if !imports.is_empty() {
-            corpus.with_slot(&IMPORTS, |slot| slot.append(&mut imports));
-        }
-        if !exports.is_empty() {
-            corpus.with_slot(&EXPORTS, |slot| slot.append(&mut exports));
-        }
+        corpus.with_slot(&IMPORTS, |slot| {
+            slot.replace_file(file.path.clone(), imports)
+        });
+        corpus.with_slot(&EXPORTS, |slot| {
+            slot.replace_file(file.path.clone(), exports)
+        });
     }
 
     /// Astro frontmatter import extraction (cd-45). `.astro` SFCs mix an
@@ -199,9 +199,9 @@ impl GraphBuilder {
                 n.local_use_count = n.local_use_count.max(1);
             }
         }
-        if !imports.is_empty() {
-            corpus.with_slot(&IMPORTS, |slot| slot.append(&mut imports));
-        }
+        corpus.with_slot(&IMPORTS, |slot| {
+            slot.replace_file(file.path.clone(), imports)
+        });
     }
 }
 
@@ -725,7 +725,7 @@ mod extension_alias_tests {
         let builder = GraphBuilder::new();
         builder.collect(&file, &parsed, &corpus);
 
-        let imports = corpus.with_slot(&IMPORTS, |slot| slot.clone());
+        let imports: std::sync::Arc<Vec<_>> = corpus.with_slot(&IMPORTS, |slot| slot.to_vec());
         assert_eq!(imports.len(), 1, "expected exactly one import: {imports:?}");
         (dir, imports[0].resolved.clone())
     }
@@ -843,7 +843,7 @@ mod astro_tests {
         let builder = GraphBuilder::new();
         builder.collect_astro(&file, &corpus);
 
-        let imports = corpus.with_slot(&IMPORTS, |slot| slot.clone());
+        let imports: std::sync::Arc<Vec<_>> = corpus.with_slot(&IMPORTS, |slot| slot.to_vec());
         assert_eq!(imports.len(), 1, "expected one import record: {imports:?}");
         assert_eq!(imports[0].resolved.as_deref(), Some(island.as_path()));
         assert!(
@@ -852,7 +852,7 @@ mod astro_tests {
              to the frontmatter parse, so Refactor.DeadExport must not flag them: {imports:?}"
         );
 
-        let exports = corpus.with_slot(&EXPORTS, |slot| slot.clone());
+        let exports: std::sync::Arc<Vec<_>> = corpus.with_slot(&EXPORTS, |slot| slot.to_vec());
         assert!(
             exports.is_empty(),
             "frontmatter exports must not be recorded: {exports:?}"

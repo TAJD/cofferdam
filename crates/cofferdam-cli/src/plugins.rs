@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -357,8 +357,23 @@ pub struct PluginFileScope {
 struct ScopeEntry {
     /// `None` (JSON `null`) means "applies to every file", which
     /// disables the pre-filter entirely — see `scope_prefilter_sources`.
-    #[serde(default)]
+    /// CD-183: a malformed author-supplied shape (e.g. a string instead
+    /// of an object) is tolerated the same as `null` instead of failing
+    /// the whole record's deserialization — that used to stall the
+    /// scopes channel for the full host timeout.
+    #[serde(default, deserialize_with = "tolerant_file_scope")]
     files: Option<PluginFileScope>,
+}
+
+/// Deserializes `files` leniently: a well-formed object or `null` parses
+/// normally, anything else (e.g. a plugin author's `files: "src/**"`
+/// string) falls back to `None` instead of failing the enclosing record.
+fn tolerant_file_scope<'de, D>(deserializer: D) -> Result<Option<PluginFileScope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or(None))
 }
 
 /// One option entry returned by the plugin host's metadata mode.
@@ -639,9 +654,10 @@ fn scope_prefilter_sources<'a>(
     let filtered: Vec<(PathBuf, String)> = sources
         .iter()
         .filter(|(path, _)| {
-            let fwd_path = forward_slash(&absolutize(path));
+            let abs_path = absolutize(path);
+            let fwd_path = forward_slash(&abs_path);
             let layer = layers_cfg
-                .and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, path));
+                .and_then(|cfg| layers::layer_for(layer_matchers, &cfg.project_root, &abs_path));
             scopes.iter().any(|s| {
                 crate::advise::plugin_file_matches_scope(
                     &fwd_path,
@@ -884,11 +900,16 @@ pub fn run_plugins_with_sources(
                     Language::Rust => (None, None),
                 };
             // Resolve layer membership for this file. `None` → JSON `null`.
+            // Must use the absolutized path (matching `cfg.project_root`,
+            // which is always absolute) — the raw discovery-walk path can
+            // carry a leading `./` (e.g. root `.` for a no-path scan),
+            // which breaks both `strip_prefix` and glob matching (CD-192).
+            let abs_path = absolutize(path);
             let layer: Option<String> = layers_cfg
-                .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, path));
+                .and_then(|cfg| layers::layer_for(&layer_matchers, &cfg.project_root, &abs_path));
             let record = ManifestFile {
                 kind: "file",
-                path: forward_slash(&absolutize(path)),
+                path: forward_slash(&abs_path),
                 text,
                 lines,
                 layer,
@@ -1173,31 +1194,46 @@ pub fn run_plugins_with_sources(
 /// invocations share the file (deterministic name); the content is
 /// version-stamped via the build's compile-time string so a stale copy
 /// from a previous build gets overwritten on the next first-call.
+///
+/// CD-277: only the success path is cached — `OnceLock<PathBuf>` rather
+/// than `OnceLock<io::Result<PathBuf>>`. Caching an `Err` disabled
+/// every plugin for the rest of the process on the first failure, even
+/// a momentary one (a full/restrictive temp dir, an antivirus scanner
+/// holding the file, a `rename` racing a reader — see CD-266/CD-276).
+/// `INIT_LOCK` reproduces `OnceLock::get_or_init`'s "only one caller
+/// does the work, the rest wait" behaviour for the retry-on-failure
+/// case; see `type_host.rs::materialise_host_script`'s twin for why
+/// this isn't `get_or_try_init` (still unstable).
 fn materialise_host_script() -> std::io::Result<PathBuf> {
-    static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
-    let result = CACHED.get_or_init(|| {
-        let dir = scripts_dir();
-        std::fs::create_dir_all(&dir)?;
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
 
-        // Write the shared core module first — plugin-host.mjs's
-        // `import "./type-host-core.mjs"` must resolve by the time the
-        // host script is spawned. The version-scoped directory (CD-89)
-        // keeps this from colliding with another cofferdam build's copy;
-        // always overwritten for the same reason the host script is.
-        let core_path = dir.join(CORE_SCRIPT_NAME);
-        write_atomic(&core_path, CORE_SCRIPT)?;
-
-        let path = dir.join(HOST_SCRIPT_NAME);
-        // Always overwrite — the embedded script changes when the CLI
-        // is rebuilt. Compared to file-content-hash-named caching, this
-        // is one extra write per process. Fine for a multi-second run.
-        write_atomic(&path, HOST_SCRIPT)?;
-        Ok(path)
-    });
-    match result {
-        Ok(p) => Ok(p.clone()),
-        Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
     }
+    let _guard = INIT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
+    }
+
+    let dir = scripts_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    // Write the shared core module first — plugin-host.mjs's
+    // `import "./type-host-core.mjs"` must resolve by the time the
+    // host script is spawned. The version-scoped directory (CD-89)
+    // keeps this from colliding with another cofferdam build's copy;
+    // always overwritten for the same reason the host script is.
+    let core_path = dir.join(CORE_SCRIPT_NAME);
+    write_atomic(&core_path, CORE_SCRIPT)?;
+
+    let path = dir.join(HOST_SCRIPT_NAME);
+    // Always overwrite — the embedded script changes when the CLI
+    // is rebuilt. Compared to file-content-hash-named caching, this
+    // is one extra write per process. Fine for a multi-second run.
+    write_atomic(&path, HOST_SCRIPT)?;
+    let _ = CACHED.set(path.clone());
+    Ok(path)
 }
 
 /// Write `contents` to `path` via a process-unique temp file + rename.
@@ -1213,11 +1249,24 @@ fn materialise_host_script() -> std::io::Result<PathBuf> {
 /// both POSIX (rename(2)) and Windows (Rust's std uses
 /// `MOVEFILE_REPLACE_EXISTING`), so readers only ever see the old
 /// complete file or the new complete file, never a torn one.
+/// CD-276/CD-283: the `-plugins` suffix keeps this call site's tmp path
+/// distinct from `type_host.rs::write_atomic`'s `-type-host` one — both
+/// materialise the same `CORE_SCRIPT_NAME` into the same `scripts_dir`
+/// (see that function's doc for the full torn-file scenario this
+/// prevents), and `path.with_extension(format!("tmp-{pid}"))` alone
+/// would let them collide on the identical tmp path within one process.
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let tmp_path = tmp_sibling(path);
     std::fs::write(&tmp_path, contents)?;
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+/// Pure helper behind [`write_atomic`]'s tmp-path computation, split out
+/// so the call-site discriminator (CD-276/CD-283) is unit-testable
+/// without depending on filesystem write timing.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    path.with_extension(format!("tmp-{}-plugins", std::process::id()))
 }
 
 pub fn capitalize_category(wire: &str) -> Option<&'static str> {
@@ -1474,6 +1523,69 @@ mod scope_prefilter_tests {
             filtered.len(),
             2,
             "an unscoped check applies to every file, so no file may be skipped"
+        );
+    }
+
+    fn scoped_layer(name: &str) -> ScopeEntry {
+        meta_with_scope(Some(PluginFileScope {
+            extensions: Vec::new(),
+            layers: vec![name.to_string()],
+            path_pattern: None,
+            path_patterns: Vec::new(),
+            exclude_patterns: Vec::new(),
+        }))
+    }
+
+    /// CD-192: a no-path-argument full-repo scan roots the discovery walk
+    /// at `.`, so the walked paths carry a leading `./` (or `.\` on
+    /// Windows) — e.g. `./src/web/foo.ts` rather than `src/web/foo.ts`.
+    /// `layer_for` resolves layers against an *absolute* `project_root`,
+    /// so it must be given an absolutized path too, or `strip_prefix`
+    /// silently fails and the leftover `./` breaks glob matching against
+    /// `[layers]` patterns — silently excluding every file from a
+    /// `files.layers`-scoped check.
+    #[test]
+    fn layers_scope_matches_dot_relative_walk_path() {
+        let project_root = std::env::current_dir().unwrap();
+        let sources = vec![(
+            PathBuf::from(".").join("src").join("web").join("foo.ts"),
+            "a".to_string(),
+        )];
+        let mut layers = std::collections::BTreeMap::new();
+        layers.insert("web".to_string(), vec!["src/web/**".to_string()]);
+        let cfg = cofferdam_core::graph::LayersConfig {
+            project_root,
+            layers,
+            allow: std::collections::BTreeMap::new(),
+        };
+        let matchers = layers::build_matchers(&cfg);
+        let metas = vec![scoped_layer("web")];
+        let filtered = scope_prefilter_sources(&sources, Some(&metas), Some(&cfg), &matchers);
+        assert_eq!(
+            filtered.len(),
+            1,
+            "a `./`-relative path under the `web` layer must still match a `files.layers: ['web']` scope"
+        );
+    }
+
+    /// CD-276/CD-283: this module's tmp path must carry a discriminator
+    /// distinguishing it from `type_host.rs::write_atomic`'s (asserted
+    /// by the mirror-image test there), since both materialise the
+    /// identical `CORE_SCRIPT_NAME` into the identical `scripts_dir` —
+    /// without a distinct suffix per call site, a same-process run using
+    /// both plugins and type-aware checks could have the two computed
+    /// tmp paths collide on the same destination.
+    #[test]
+    fn tmp_sibling_is_discriminated_from_the_type_host_call_site() {
+        let path = Path::new("/scripts/type-host-core.mjs");
+        let tmp = tmp_sibling(path).to_string_lossy().into_owned();
+        assert!(
+            tmp.contains("-plugins"),
+            "tmp sibling {tmp:?} must carry the plugins call-site discriminator"
+        );
+        assert!(
+            !tmp.contains("-type-host"),
+            "tmp sibling {tmp:?} must not collide with type_host.rs's discriminator"
         );
     }
 }

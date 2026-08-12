@@ -6,6 +6,7 @@
 //! progressively as oxc and the project graph wire up.
 
 pub mod consistency;
+pub mod context;
 pub mod design;
 pub mod framework_paths;
 pub mod readability;
@@ -64,6 +65,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(consistency::BroadSuppression),
         Box::new(consistency::UnusedSuppression),
         Box::new(consistency::ErrorHandlingIdiom),
+        Box::new(consistency::SpellingDialect),
         Box::new(design::MaxParameters::new(5)),
         Box::new(design::BarrelReexportBloat),
         Box::new(design::DuplicateExportName),
@@ -84,6 +86,7 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
         Box::new(refactor::CognitiveComplexity::new(15)),
         Box::new(refactor::LongAndComplex::new(75, 15)),
         Box::new(refactor::DuplicateBlock::default()),
+        Box::new(refactor::NearDuplicateBlock),
         Box::new(refactor::PreferOptionalChain),
         Box::new(refactor::DeadExport),
         Box::new(refactor::PreferNullishCoalescing),
@@ -104,6 +107,20 @@ pub fn all_builtins() -> Vec<Box<dyn Check>> {
     checks.extend(cofferdam_rust::all_rust_checks());
     checks.extend(cofferdam_html::all_html_checks());
     checks
+}
+
+/// Registry of Context-category providers for `cofferdam context`.
+/// Deliberately separate from `all_builtins()` so `cofferdam check`
+/// never constructs or runs them (spec criterion 4: check output is
+/// byte-for-byte unchanged by the context feature's existence).
+pub fn all_context_providers() -> Vec<Box<dyn Check>> {
+    vec![
+        Box::new(context::annotations::Annotations),
+        Box::new(context::blast_radius::BlastRadius),
+        Box::new(context::findings::Findings),
+        Box::new(context::knowledge::Knowledge),
+        Box::new(context::precedent::Precedent),
+    ]
 }
 
 #[cfg(test)]
@@ -146,6 +163,7 @@ mod tests {
     fn no_orphan_companion_files() {
         let registered: HashSet<String> = all_builtins()
             .iter()
+            .chain(all_context_providers().iter())
             .map(|c| format!("{}.md", c.meta().id))
             .collect();
 

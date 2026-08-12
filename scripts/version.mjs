@@ -196,13 +196,55 @@ function runSet(version) {
   );
 
   if (regen) {
+    // cofferdam-cli's binary is what stamps the version into
+    // checks.json/llms.txt below, so a stale fingerprint for that crate is
+    // what bit CD-317 (a Cargo.toml revert-then-rebump left cargo believing
+    // nothing changed and it skipped recompiling). cofferdam-checks is
+    // cleaned too because every check's `body` is `include_str!`-ed from its
+    // catalogue page, and a stale artifact there writes stale bodies that
+    // the version assertion below cannot see. Two crates, not the whole
+    // workspace: a full clean rebuilds ~450 dependencies for no added
+    // safety.
+    process.stdout.write("clearing cofferdam-cli + cofferdam-checks build cache (cargo clean)...\n");
+    execFileSync("cargo", ["clean", "-p", "cofferdam-cli", "-p", "cofferdam-checks"], {
+      cwd: REPO_ROOT,
+      stdio: "inherit",
+    });
     process.stdout.write("regenerating Cargo.lock (cargo build --workspace)...\n");
     execFileSync("cargo", ["build", "--workspace"], { cwd: REPO_ROOT, stdio: "inherit" });
+
+    // Belt-and-braces: assert the binary we're about to run for gen-docs
+    // actually reports the target version before trusting its output.
+    const builtVersionRaw = execFileSync(
+      "cargo",
+      ["run", "-p", "cofferdam-cli", "--quiet", "--", "--version"],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    ).trim();
+    const builtVersionMatch = builtVersionRaw.match(/(\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?)/);
+    const builtVersion = builtVersionMatch ? builtVersionMatch[1] : null;
+    if (builtVersion !== version) {
+      fail(
+        `stale cofferdam-cli binary: '${builtVersionRaw}' reports ${builtVersion ?? "an unparseable version"}, but the manifests were just bumped to ${version}. gen-docs would silently stamp the old version into checks.json/llms.txt. Not running gen-docs. The targeted clean above did not take, so clear the whole cache: 'cargo clean' followed by 'cargo build --workspace'.`,
+      );
+      return 1;
+    }
+
     process.stdout.write("regenerating checks.json + llms.txt (cofferdam gen-docs)...\n");
     execFileSync("cargo", ["run", "-p", "cofferdam-cli", "--quiet", "--", "gen-docs"], {
       cwd: REPO_ROOT,
       stdio: "inherit",
     });
+
+    // Assert what gen-docs actually wrote, not just what the binary claimed.
+    const checksVer = checksJsonVersion();
+    const llmsVer = llmsTxtVersion();
+    if (checksVer !== version || llmsVer !== version) {
+      fail(
+        `gen-docs wrote a stale version: docs/public/checks.json=${checksVer ?? "<missing>"}, docs/public/llms.txt=${llmsVer ?? "<missing>"}, expected ${version}`,
+      );
+      return 1;
+    }
+
     process.stdout.write("\nDone. Verify with: node scripts/version.mjs check " + version + "\n");
   } else {
     process.stdout.write(

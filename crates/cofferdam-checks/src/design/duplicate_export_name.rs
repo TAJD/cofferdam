@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use cofferdam_core::graph::{InvariantsRuntime, INVARIANTS as GRAPH_INVARIANTS};
@@ -18,9 +20,31 @@ struct NamedExport {
     span: Span,
 }
 
+/// Incremental index (CD-40 lever 5): a name's group is only
+/// recomputed when a file contributing to it changed since the last
+/// `finalize()` call, instead of re-grouping every export on every
+/// call. `by_file` holds each file's exact contribution so a removed
+/// file can be subtracted precisely rather than re-derived from
+/// already-mutated corpus state (see CLAUDE.md's CD-40 lever-3 trap,
+/// which generalises to every incremental aggregate in this family).
+#[derive(Default)]
+struct DenIndex {
+    by_file: HashMap<PathBuf, Vec<NamedExport>>,
+    by_name: BTreeMap<String, Vec<NamedExport>>,
+    /// Names whose group has changed since the last `finalize()`.
+    dirty: BTreeSet<String>,
+    /// Cached issue per emitting group, keyed by name. A name absent
+    /// here either has <2 occurrences or is boundary-exempt.
+    emitted: BTreeMap<String, Issue>,
+    /// Hash of (exempt_boundary_pairs, project_root) as of the last
+    /// finalize. A change invalidates every cached group, since
+    /// boundary exemption can flip for any of them.
+    opts_fingerprint: Option<u64>,
+}
+
 /// Per-process slot in the corpus. All `DuplicateExportName` instances share
 /// it (only one is registered today, but the API permits sharing).
-static EXPORTS: CorpusKey<Vec<NamedExport>> = CorpusKey::new("Design.DuplicateExportName.exports");
+static DEN_INDEX: CorpusKey<DenIndex> = CorpusKey::new("Design.DuplicateExportName.index");
 
 const DEN_OPTIONS: &[OptionSpec] = &[OptionSpec {
     name: "exempt_boundary_pairs",
@@ -66,7 +90,20 @@ impl Check for DuplicateExportName {
     }
 
     fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
-        corpus.register_removable(&EXPORTS, |slot, path| slot.retain(|e| e.file != path));
+        corpus.register_removable(&DEN_INDEX, |idx, path| {
+            let Some(rows) = idx.by_file.remove(path) else {
+                return;
+            };
+            for exp in &rows {
+                idx.dirty.insert(exp.name.clone());
+                if let Some(group) = idx.by_name.get_mut(&exp.name) {
+                    group.retain(|e| e.file != path);
+                    if group.is_empty() {
+                        idx.by_name.remove(&exp.name);
+                    }
+                }
+            }
+        });
     }
 
     fn run(&self, file: &SourceFile, ctx: &mut CheckContext<'_>) -> Vec<Issue> {
@@ -81,9 +118,19 @@ impl Check for DuplicateExportName {
 
         // Hand off to the shared corpus. The lock is held only for the
         // length of this drain — every other check's per-file work
-        // continues uncontended.
-        ctx.corpus.with_slot(&EXPORTS, |slot| {
-            slot.append(&mut visitor.collected);
+        // continues uncontended. The engine's incremental path already
+        // ran `register_removable` for this file (if it existed
+        // before) prior to calling `run`, so any old contribution
+        // under this name is already subtracted.
+        ctx.corpus.with_slot(&DEN_INDEX, |idx| {
+            for exp in &visitor.collected {
+                idx.dirty.insert(exp.name.clone());
+                idx.by_name
+                    .entry(exp.name.clone())
+                    .or_default()
+                    .push(exp.clone());
+            }
+            idx.by_file.insert(file.path.clone(), visitor.collected);
         });
 
         Vec::new()
@@ -133,51 +180,76 @@ impl Check for DuplicateExportName {
             })
             .collect();
 
-        let mut by_name: BTreeMap<String, Vec<NamedExport>> = BTreeMap::new();
-        // Read-only (cd-32): a draining read would empty the slot as a
-        // side effect of finalize, which is fine for a one-shot analyze
-        // but corrupts `Engine::analyze_incremental`'s persistent
-        // `AnalysisState` — the next incremental call would finalize
-        // over an empty slot for every file that didn't just change.
-        ctx.corpus.with_slot(&EXPORTS, |slot| {
-            for exp in slot.iter().cloned() {
-                by_name.entry(exp.name.clone()).or_default().push(exp);
-            }
-        });
+        let raw_pairs = ctx
+            .options
+            .get_string_list("exempt_boundary_pairs")
+            .unwrap_or(&[]);
+        let mut fp_hasher = DefaultHasher::new();
+        raw_pairs.hash(&mut fp_hasher);
+        project_root.hash(&mut fp_hasher);
+        let opts_fingerprint = fp_hasher.finish();
 
-        for (name, mut occurrences) in by_name {
-            if occurrences.len() < 2 {
-                continue;
+        // Read-only aside from the `dirty`/`emitted` bookkeeping
+        // (cd-32): the export contributions themselves must survive
+        // this call unmutated for `Engine::analyze_incremental`'s
+        // persistent `AnalysisState` — the next incremental call
+        // needs `by_file`/`by_name` intact to subtract from on the
+        // next edit.
+        ctx.corpus.with_slot(&DEN_INDEX, |idx| {
+            if idx.opts_fingerprint != Some(opts_fingerprint) {
+                // Boundary config (or project root) changed since the
+                // last call: exemption can flip for any group, so
+                // every group must be re-evaluated.
+                idx.dirty = idx.by_name.keys().cloned().collect();
+                idx.opts_fingerprint = Some(opts_fingerprint);
             }
-            let paths: Vec<&Path> = occurrences.iter().map(|e| e.file.as_path()).collect();
-            if boundaries.iter().any(|b| b.exempts(&paths, &project_root)) {
-                continue;
+            let dirty = std::mem::take(&mut idx.dirty);
+            for name in dirty {
+                let Some(occurrences) = idx.by_name.get(&name) else {
+                    idx.emitted.remove(&name);
+                    continue;
+                };
+                if occurrences.len() < 2 {
+                    idx.emitted.remove(&name);
+                    continue;
+                }
+                let paths: Vec<&Path> = occurrences.iter().map(|e| e.file.as_path()).collect();
+                if boundaries.iter().any(|b| b.exempts(&paths, &project_root)) {
+                    idx.emitted.remove(&name);
+                    continue;
+                }
+                // Stable order: first-seen by (file, start_byte). The
+                // smallest (path, offset) becomes the primary; the
+                // rest are `related`.
+                let mut occurrences = occurrences.clone();
+                occurrences.sort_by(|a, b| {
+                    a.file
+                        .cmp(&b.file)
+                        .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
+                });
+                let primary = occurrences.remove(0);
+                let related: Vec<RelatedSpan> = occurrences
+                    .into_iter()
+                    .map(|e| RelatedSpan {
+                        location: Location::from_span(&e.file, e.span),
+                        file: e.file,
+                    })
+                    .collect();
+                idx.emitted.insert(
+                    name.clone(),
+                    Issue {
+                        check_id: DEN_META.id.to_string(),
+                        message: format!("`{}` is exported from {} files", name, related.len() + 1),
+                        file: primary.file.clone(),
+                        location: Location::from_span(&primary.file, primary.span),
+                        priority: Priority(DEN_META.base_priority),
+                        severity: Severity::Medium,
+                        related,
+                    },
+                );
             }
-            // Stable order: first-seen by (file, start_byte). The smallest
-            // (path, offset) becomes the primary; the rest are `related`.
-            occurrences.sort_by(|a, b| {
-                a.file
-                    .cmp(&b.file)
-                    .then_with(|| a.span.start_byte.cmp(&b.span.start_byte))
-            });
-            let primary = occurrences.remove(0);
-            let related: Vec<RelatedSpan> = occurrences
-                .into_iter()
-                .map(|e| RelatedSpan {
-                    location: Location::from_span(&e.file, e.span),
-                    file: e.file,
-                })
-                .collect();
-            issues.push(Issue {
-                check_id: DEN_META.id.to_string(),
-                message: format!("`{}` is exported from {} files", name, related.len() + 1),
-                file: primary.file.clone(),
-                location: Location::from_span(&primary.file, primary.span),
-                priority: Priority(DEN_META.base_priority),
-                severity: Severity::Medium,
-                related,
-            });
-        }
+            issues.extend(idx.emitted.values().cloned());
+        });
         issues
     }
 }

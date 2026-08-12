@@ -7,7 +7,8 @@
 //! [checks."Readability.MaxLineLength"]
 //! limit = 120
 //! severity = "warning"   # phase-3 (cd-t1a) — accepted, not yet enforced
-//! enabled = true         # phase-3 — accepted, not yet enforced
+//! enabled = true         # an option like any other; only checks that
+//!                        # declare it see it (CD-324)
 //!
 //! [checks."Readability.MaxFunctionLength"]
 //! limit = 50
@@ -39,6 +40,7 @@
 pub mod loader;
 pub mod options;
 pub mod resolution;
+pub mod schema;
 
 use std::collections::BTreeMap;
 use std::io;
@@ -49,11 +51,12 @@ use cofferdam_core::invariants::InvariantsError;
 use cofferdam_core::OptionsError;
 
 // Re-export all public types and functions from submodules
-pub use loader::{discover, load, FILE_NAME};
+pub use loader::{discover, load, path_key, FILE_NAME};
 pub use options::{options_for, options_for_raw, unknown_check_ids};
 pub use resolution::{
     resolve_for_targets, resolve_with_invariants, target_anchor, LoadDiagnostics,
 };
+pub use schema::{unknown_keys, KeySpec, Keys, SectionSpec, UnknownKey, SECTIONS};
 
 /// Parsed project config: per-check raw option bags + per-check
 /// severity overrides. Unknown check IDs are stored verbatim and
@@ -112,6 +115,19 @@ pub struct ProjectConfig {
     /// check`; `cofferdam baseline ratchet` lowers (never raises) these
     /// values to match the current finding count.
     pub budgets: BTreeMap<String, u32>,
+    /// `[[context_suppress]]` blocks (CD-212) — per-`check_id` path-glob
+    /// suppression for `cofferdam context` digest items. Unlike
+    /// `[[overrides]]`, these don't scope check *options*; they drop
+    /// matching `ContextItem`s from the digest entirely, advisory-only
+    /// (never fails `cofferdam context`, which always exits 0 outside
+    /// usage errors). Empty when none are declared.
+    pub context_suppress: Vec<ContextSuppressRule>,
+    /// Keys the file declares that no section of the schema recognises
+    /// (CD-311). Serde skips them, so without this they would be
+    /// silently inert — a rule that never fires and a green run. Surfaced
+    /// through `LoadDiagnostics` as warnings, the same way an unknown
+    /// check id is: a typo should be visible, not fatal.
+    pub unknown_keys: Vec<schema::UnknownKey>,
 }
 
 /// One `[[overrides]]` block: a set of path globs plus the per-check
@@ -151,28 +167,114 @@ pub struct OverrideCheck {
     pub disabled: Option<bool>,
 }
 
+/// Reduce an absolute, engine-promoted `file_key` to the
+/// project-relative form globs are written against: strip the absolute
+/// `root_key` prefix. Returns `None` when `file_key` isn't under
+/// `root_key` at all — callers must treat that as "does not match"
+/// rather than falling back to matching the raw (still-absolute) path,
+/// since a `**/…` pattern would otherwise match straight through an
+/// absolute-path prefix it was never meant to see (CD-226). Shared by
+/// [`OverrideBlock::is_match`] and [`ContextSuppressRule::is_match`].
+/// CD-225: the naive `file_key.strip_prefix(root_key)` this used to fall
+/// back to (without requiring a separator after the match) mis-strips a
+/// sibling directory whose name merely *extends* `root_key`'s — e.g.
+/// `root_key = "/repo"` against `file_key = "/repo-backup/a.ts"` yielded
+/// `"-backup/a.ts"`, a path that was never inside the project root but
+/// now reads as project-relative to the globset. The only case that
+/// fallback needs beyond the separator-anchored `with_slash` match above
+/// is `file_key == root_key` exactly (a directory, not a file, so no
+/// real caller passes it) — so it's handled explicitly instead. A
+/// leading `./` on `file_key` (a relative, non-engine-promoted path) is
+/// always project-relative already and is returned as-is.
+///
+/// CD-232: the out-of-root rejection must recognise every absolute or
+/// escaping form `file_key` can take, not just a leading `/`. `path_key`
+/// (loader.rs) normalises backslashes to `/` before either key reaches
+/// here, so a bare `\`-prefix check is dead code on Windows — but a
+/// Windows key still carries a `c:/`-style drive prefix (lowercased by
+/// `path_key`), which a leading-`/`-only check lets straight through as
+/// "already relative", reopening the CD-226 sibling-directory leak on
+/// Windows. A `../`-prefixed key (escaping the root upward) needs the
+/// same rejection for the same reason.
+fn relativize<'a>(root_key: &str, file_key: &'a str) -> Option<&'a str> {
+    if let Some(stripped) = file_key.strip_prefix("./") {
+        return Some(stripped);
+    }
+    // CD-231: trim any trailing slash on `root_key` before deriving
+    // both the prefix-with-slash and the exact-match comparison, so a
+    // caller-supplied `root_key` of "/repo/" behaves identically to
+    // "/repo" — without this, `file_key == root_key` never matched the
+    // trailing-slash form (it compared "/repo" against "/repo/"),
+    // silently falling through to `None` instead of `Some("")`.
+    let root_trimmed = root_key.trim_end_matches('/');
+    let with_slash = format!("{root_trimmed}/");
+    if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
+        Some(stripped)
+    } else if file_key == root_trimmed {
+        Some("")
+    } else if is_absolute_or_escaping(file_key) {
+        None
+    } else {
+        Some(file_key)
+    }
+}
+
+/// True when `key` is unambiguously not root-relative: a leading `/`
+/// (POSIX absolute), a drive-letter prefix (`c:/...`, Windows
+/// absolute), or a `../` escape upward out of the root. See
+/// [`relativize`]'s CD-232 doc note — anything not covered by this
+/// check falls through to being treated as already project-relative.
+fn is_absolute_or_escaping(key: &str) -> bool {
+    if key.starts_with('/') || key == ".." || key.starts_with("../") {
+        return true;
+    }
+    let bytes = key.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
 impl OverrideBlock {
     /// Test whether `file_key` (a forward-slash, normalised path — may
     /// be absolute or relative) is matched by this block's globs.
     /// Mirrors `public_api`'s matcher: strip the absolute root prefix
     /// (or a leading `./`) so root-relative patterns match an absolute
-    /// engine-promoted path.
+    /// engine-promoted path. A `file_key` outside `root_key` never
+    /// matches (CD-226) — it is not relativized and handed to the
+    /// globset as-is.
     pub fn is_match(&self, file_key: &str) -> bool {
-        let rel = {
-            let with_slash = if self.root_key.ends_with('/') {
-                self.root_key.clone()
-            } else {
-                format!("{}/", self.root_key)
-            };
-            if let Some(stripped) = file_key.strip_prefix(with_slash.as_str()) {
-                stripped
-            } else if let Some(stripped) = file_key.strip_prefix(&self.root_key) {
-                stripped.trim_start_matches('/')
-            } else {
-                file_key.trim_start_matches("./")
-            }
-        };
-        self.globset.is_match(rel)
+        match relativize(&self.root_key, file_key) {
+            Some(relative) => self.globset.is_match(relative),
+            None => false,
+        }
+    }
+}
+
+/// One `[[context_suppress]]` block (CD-212): drop `cofferdam context`
+/// digest items for `check_id` whose anchor file(s) match `paths`.
+#[derive(Debug, Clone)]
+pub struct ContextSuppressRule {
+    /// The `Context.*` provider this rule applies to (e.g.
+    /// `"Context.Precedent"`).
+    pub check_id: String,
+    /// Raw glob patterns as written, kept for diagnostics and hashing.
+    pub paths: Vec<String>,
+    /// Compiled matcher over `paths`.
+    pub globset: globset::GlobSet,
+    /// Normalised absolute root prefix, same convention as
+    /// [`OverrideBlock::root_key`].
+    pub root_key: String,
+    /// Optional human-readable justification, surfaced in diagnostics
+    /// only — not matched against.
+    pub reason: Option<String>,
+}
+
+impl ContextSuppressRule {
+    /// Test whether `file_key` (a forward-slash, normalised path) is
+    /// matched by this rule's globs. See [`OverrideBlock::is_match`].
+    pub fn is_match(&self, file_key: &str) -> bool {
+        match relativize(&self.root_key, file_key) {
+            Some(relative) => self.globset.is_match(relative),
+            None => false,
+        }
     }
 }
 
@@ -264,6 +366,128 @@ mod tests {
     }];
 
     #[test]
+    fn relativize_does_not_strip_a_root_key_that_is_only_a_string_prefix() {
+        // CD-225/CD-226 regression: `/repo-backup/...` must not be
+        // mistaken for a path under `/repo` just because "/repo" is a
+        // string prefix of "/repo-backup" — the missing separator means
+        // it's really a sibling directory, so relativize now returns
+        // `None` (not the untouched absolute path) for it.
+        assert_eq!(relativize("/repo", "/repo-backup/src/legacy/a.ts"), None);
+        // The genuinely-nested case still strips correctly.
+        assert_eq!(
+            relativize("/repo", "/repo/src/legacy/a.ts"),
+            Some("src/legacy/a.ts")
+        );
+        assert_eq!(relativize("/repo", "/repo"), Some(""));
+    }
+
+    #[test]
+    fn relativize_treats_a_trailing_slash_root_key_the_same_as_no_trailing_slash() {
+        // CD-231: a root_key of "/repo/" must relativize identically to
+        // "/repo" — both the exact-root match and a nested file.
+        assert_eq!(relativize("/repo/", "/repo"), Some(""));
+        assert_eq!(
+            relativize("/repo/", "/repo/src/legacy/a.ts"),
+            Some("src/legacy/a.ts")
+        );
+    }
+
+    #[test]
+    fn relativize_rejects_a_windows_drive_letter_sibling_directory() {
+        // CD-232: `path_key` lowercases and forward-slashes Windows
+        // paths, so a sibling directory looks like
+        // "c:/repo-backup/..." — a leading-`/`-only out-of-root check
+        // let this through as "already relative", reopening the
+        // CD-226 leak on Windows. The genuinely-nested case must still
+        // strip correctly.
+        assert_eq!(
+            relativize("c:/repo", "c:/repo-backup/src/legacy/a.ts"),
+            None
+        );
+        assert_eq!(
+            relativize("c:/repo", "c:/repo/src/legacy/a.ts"),
+            Some("src/legacy/a.ts")
+        );
+    }
+
+    #[test]
+    fn relativize_rejects_a_relative_key_that_escapes_the_root_upward() {
+        // CD-232: a `../`-prefixed file_key steps out of root_key
+        // entirely and must not be treated as project-relative.
+        assert_eq!(relativize("/repo", "../sibling/legacy/a.ts"), None);
+        assert_eq!(relativize("/repo", ".."), None);
+    }
+
+    fn glob_for(pattern: &str) -> globset::GlobSet {
+        let mut builder = globset::GlobSetBuilder::new();
+        builder.add(
+            globset::GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .build()
+                .expect("valid glob"),
+        );
+        builder.build().expect("valid globset")
+    }
+
+    #[test]
+    fn override_block_is_match_does_not_leak_into_a_sibling_directory() {
+        // CD-225: same repro at the OverrideBlock::is_match level — a
+        // rule scoped to "/repo" must not match a file under the
+        // sibling "/repo-backup" directory.
+        let block = OverrideBlock {
+            paths: vec!["legacy/**".into()],
+            globset: glob_for("legacy/**"),
+            root_key: "/repo".into(),
+            checks: BTreeMap::new(),
+        };
+        assert!(!block.is_match("/repo-backup/legacy/a.ts"));
+        assert!(block.is_match("/repo/legacy/a.ts"));
+    }
+
+    #[test]
+    fn override_block_is_match_does_not_leak_into_a_sibling_directory_via_leading_glob() {
+        // CD-226: a `**/…` pattern must not match straight through the
+        // out-of-root absolute-path prefix that CD-225 stopped stripping
+        // into a relative path but didn't stop from reaching the
+        // globset unmodified.
+        let block = OverrideBlock {
+            paths: vec!["**/legacy/**".into()],
+            globset: glob_for("**/legacy/**"),
+            root_key: "/repo".into(),
+            checks: BTreeMap::new(),
+        };
+        assert!(!block.is_match("/repo-backup/legacy/a.ts"));
+        assert!(block.is_match("/repo/src/legacy/a.ts"));
+    }
+
+    #[test]
+    fn context_suppress_rule_is_match_does_not_leak_into_a_sibling_directory() {
+        let rule = ContextSuppressRule {
+            check_id: "Context.Precedent".into(),
+            paths: vec!["legacy/**".into()],
+            globset: glob_for("legacy/**"),
+            root_key: "/repo".into(),
+            reason: None,
+        };
+        assert!(!rule.is_match("/repo-backup/legacy/a.ts"));
+        assert!(rule.is_match("/repo/legacy/a.ts"));
+    }
+
+    #[test]
+    fn context_suppress_rule_is_match_does_not_leak_into_a_sibling_directory_via_leading_glob() {
+        // CD-226: same repro as the OverrideBlock case above.
+        let rule = ContextSuppressRule {
+            check_id: "Context.Precedent".into(),
+            paths: vec!["**/legacy/**".into()],
+            globset: glob_for("**/legacy/**"),
+            root_key: "/repo".into(),
+            reason: None,
+        };
+        assert!(!rule.is_match("/repo-backup/legacy/a.ts"));
+        assert!(rule.is_match("/repo/src/legacy/a.ts"));
+    }
+
+    #[test]
     fn parse_minimal_config() {
         let raw = r#"
 [checks."Readability.MaxLineLength"]
@@ -349,17 +573,103 @@ enabled = true
             .checks
             .get("Readability.MaxLineLength")
             .expect("present");
-        // `limit` flows through to the per-check option bag; `severity`
-        // goes to `severity_overrides`; `enabled` is silently accepted
-        // (no behaviour wired today).
-        assert_eq!(bag.len(), 1);
+        // `limit` and `enabled` flow through to the per-check option
+        // bag; `severity` goes to `severity_overrides`.
+        assert_eq!(bag.len(), 2);
         assert!(bag.contains_key("limit"));
+        assert!(bag.contains_key("enabled"));
         assert!(!bag.contains_key("severity"));
-        assert!(!bag.contains_key("enabled"));
         assert_eq!(
             cfg.severity_overrides.get("Readability.MaxLineLength"),
             Some(&Severity::High)
         );
+    }
+
+    /// CD-324: `enabled` used to be stripped by the loader for every
+    /// check, which made `Refactor.PurityHeuristic` — whose only option
+    /// is called `enabled` — impossible to switch on. It now reaches the
+    /// option bag when the check declares it.
+    #[test]
+    fn enabled_reaches_a_check_that_declares_it() {
+        let raw = r#"
+[checks."Refactor.PurityHeuristic"]
+enabled = true
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        let schema = &[cofferdam_core::OptionSpec {
+            name: "enabled",
+            kind: cofferdam_core::OptionKind::Bool,
+            default: cofferdam_core::OptionDefault::Bool(false),
+            doc: "opt in",
+        }];
+        let opts = options_for(
+            &cfg,
+            Path::new("test.toml"),
+            "Refactor.PurityHeuristic",
+            schema,
+        )
+        .expect("validates");
+        assert_eq!(opts.get_bool("enabled"), Some(true));
+    }
+
+    /// ...and is still tolerated (dropped, not an error) for the checks
+    /// that do not, so configs written against the old placeholder keep
+    /// loading.
+    #[test]
+    fn enabled_is_dropped_for_a_check_that_does_not_declare_it() {
+        let raw = r#"
+[checks."Readability.MaxLineLength"]
+enabled = false
+"#;
+        let cfg = loader::parse(Path::new("test.toml"), raw).expect("parse");
+        let opts = options_for(
+            &cfg,
+            Path::new("test.toml"),
+            "Readability.MaxLineLength",
+            &[],
+        )
+        .expect("must not reject a legacy `enabled` key");
+        assert_eq!(opts.get_bool("enabled"), None);
+    }
+
+    #[test]
+    fn parse_context_suppress_block() {
+        let raw = r#"
+[[context_suppress]]
+check_id = "Context.Precedent"
+paths = ["src/legacy/**"]
+reason = "known false convention, see CD-999"
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.context_suppress.len(), 1);
+        let rule = &cfg.context_suppress[0];
+        assert_eq!(rule.check_id, "Context.Precedent");
+        assert_eq!(rule.paths, vec!["src/legacy/**"]);
+        assert_eq!(
+            rule.reason.as_deref(),
+            Some("known false convention, see CD-999")
+        );
+
+        let root = &rule.root_key;
+        assert!(rule.is_match(&format!("{root}/src/legacy/foo.ts")));
+        assert!(!rule.is_match(&format!("{root}/src/current/foo.ts")));
+    }
+
+    #[test]
+    fn no_context_suppress_yields_empty_vec() {
+        let cfg = loader::parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(cfg.context_suppress.is_empty());
+    }
+
+    #[test]
+    fn context_suppress_reason_is_optional() {
+        let raw = r#"
+[[context_suppress]]
+check_id = "Context.Knowledge"
+paths = ["docs/**"]
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        assert_eq!(cfg.context_suppress[0].reason, None);
     }
 
     #[test]
@@ -493,6 +803,58 @@ severity = 5
         assert!(matches!(err, ConfigError::SeverityNotString { .. }));
     }
 
+    /// CD-312: `loader::load` used to build the config with an
+    /// unconditional `layers: None`, so a `[layers]` block in
+    /// cofferdam.toml parsed, validated and was then discarded —
+    /// `Design.LayerViolation` fired only for layers declared in
+    /// cofferdam.invariants.toml. The config was accepted either way, so
+    /// the failure was silent: a green build with no enforcement.
+    #[test]
+    fn cofferdam_toml_layers_reach_the_config() {
+        let raw = r#"
+[layers]
+domain = ["src/domain/**"]
+ui = ["src/ui/**"]
+
+[layers.allow]
+domain = []
+ui = ["domain"]
+"#;
+        let cfg = loader::parse(Path::new("cofferdam.toml"), raw).expect("parse");
+        let layers = cfg
+            .layers
+            .expect("a [layers] block in cofferdam.toml must produce a LayersConfig");
+        assert_eq!(
+            layers.layers.get("domain").map(Vec::as_slice),
+            Some(["src/domain/**".to_string()].as_slice())
+        );
+        assert_eq!(
+            layers.allow.get("domain").map(Vec::as_slice),
+            Some([].as_slice()),
+            "an empty allow list means an isolated layer, not an absent one"
+        );
+    }
+
+    /// A malformed `[layers]` block must surface the same typed error the
+    /// rest of the config does, rather than being ignored along with the
+    /// valid ones.
+    #[test]
+    fn malformed_cofferdam_toml_layers_are_rejected() {
+        let err = loader::parse(Path::new("cofferdam.toml"), "[layers]\ndomain = 1\n")
+            .expect_err("a non-array layer value is not valid");
+        assert!(matches!(err, ConfigError::UnsupportedValue { .. }));
+    }
+
+    #[test]
+    fn no_layers_block_leaves_layers_unset() {
+        let cfg = loader::parse(Path::new("cofferdam.toml"), "").expect("parse");
+        assert!(
+            cfg.layers.is_none(),
+            "an absent [layers] block must stay None — Design.LayerViolation is a no-op \
+             for projects that have not declared an architecture"
+        );
+    }
+
     #[test]
     fn missing_top_level_checks_yields_empty_config() {
         let cfg = loader::parse(Path::new("test.toml"), "").expect("parse");
@@ -516,6 +878,8 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let opts = options_for(
@@ -553,6 +917,8 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let err = options_for(&project, Path::new("test.toml"), "X.Y", SCHEMA).unwrap_err();
@@ -575,6 +941,8 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         let registered = ["Readability.MaxLineLength"];
@@ -654,6 +1022,8 @@ severity = 5
             overrides: Vec::new(),
             budgets: BTreeMap::new(),
             engine_extra_extensions: Vec::new(),
+            context_suppress: Vec::new(),
+            unknown_keys: Vec::new(),
         };
         // Empty schema → every key is unknown to validate_options.
         options_for(&project, Path::new("test.toml"), check_id, &[]).unwrap_err()
@@ -668,7 +1038,7 @@ severity = 5
         //
         // The parse() step strips `limit` into the raw bag before
         // reaching options_for, but `plugins` (an array) would be kept
-        // as-is if it weren't in META_KEYS — so we test options_for
+        // as-is — so we test options_for
         // directly with `plugins` in the raw bag.
         let err = options_for_with_raw_key(
             "Readability.MaxLineLength",

@@ -56,6 +56,13 @@ pub enum Category {
     /// Likely bugs or footguns — `==` vs `===`, unhandled rejections,
     /// always-truthy conditions. Highest default severity.
     Warning,
+    /// Advisory context providers for `cofferdam context` (CD-156).
+    /// NOT a finding category: checks in this category are registered
+    /// via `all_context_providers()`, never `all_builtins()`, so
+    /// `cofferdam check` never runs them. Excluded from
+    /// `Category::ALL` deliberately — ALL enumerates the finding
+    /// categories that formatters and gen-docs group `Issue`s under.
+    Context,
 }
 
 impl Category {
@@ -337,15 +344,21 @@ impl<'a> FinalizeContext<'a> {
 /// byte-offset order to avoid span-shift bugs.
 pub trait Check: Send + Sync {
     fn meta(&self) -> &'static CheckMeta;
-    /// Source language this check targets. The engine consults this in
+    /// Source languages this check targets. The engine consults this in
     /// its per-file loop and only invokes `run` / `pass2` / `autofix`
-    /// when `file.language == self.language()`. `finalize` still fires
+    /// when the file's language is in the set. `finalize` still fires
     /// unconditionally (cross-file checks read corpus slots, not files).
     ///
     /// Defaults to `Language::TypeScript` so every existing built-in
-    /// compiles unchanged — only the Rust adapter's checks override.
-    fn language(&self) -> Language {
-        Language::TypeScript
+    /// compiles unchanged — only the Rust and HTML checks override.
+    ///
+    /// A set rather than one language because a prose rule and a code
+    /// rule are not the same shape: `Consistency.SpellingDialect` reads
+    /// comments in TypeScript and the whole file in Markdown, and
+    /// splitting that into two check ids would put two entries in the
+    /// catalogue for one convention (CD-316).
+    fn languages(&self) -> &'static [Language] {
+        &[Language::TypeScript]
     }
     /// Whether this check is eligible to run against `origin: build_output`
     /// files discovered by `cofferdam verify --dist` (CD-85). Defaults to
@@ -368,7 +381,45 @@ pub trait Check: Send + Sync {
     fn pass2(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
         Vec::new()
     }
+
+    /// Whether this check's `pass2` output for a given file depends
+    /// *only* on corpus evidence that file's own `run()` wrote in the
+    /// same call (CD-40 lever 4). `Engine::analyze_incremental` caches
+    /// pass-2 output per file and, when every registered consistency
+    /// check answers `true` here, skips recomputing it for files that
+    /// didn't change on that call — reusing the prior call's cached
+    /// issues instead.
+    ///
+    /// Defaults to `false`: safe for every check, since a `false`
+    /// answer only costs a skipped optimization, never a correctness
+    /// bug. Override to `true` ONLY if `pass2` reads NOTHING from the
+    /// corpus except the slot entry keyed by this file's own path,
+    /// written by this file's own `run()` in the same call — e.g. a
+    /// per-file "dominant style in this file" verdict. That excludes
+    /// reading another file's `run()` output, an engine-published
+    /// corpus slot like `ALL_PRE_FILTER_FINDINGS` (populated during
+    /// finalize, so its contents vary call to call), or any other
+    /// call-varying aggregate. A check whose `pass2` reads any of
+    /// those MUST leave this `false`, or an edit elsewhere in the
+    /// project would silently fail to update its unchanged files'
+    /// findings.
+    fn pass2_is_file_local(&self) -> bool {
+        false
+    }
     fn finalize(&self, _ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+
+    /// Emit advisory context items for a `cofferdam context` run.
+    /// Called after finalize Phase B — the corpus (including the
+    /// canonical graph slot) is complete. Only checks with
+    /// `meta().category == Category::Context` are invoked. Default:
+    /// nothing — ordinary checks never see this call.
+    fn context_items(
+        &self,
+        _changeset: &crate::changeset::ChangeSet,
+        _ctx: &mut FinalizeContext<'_>,
+    ) -> Vec<crate::context_item::ContextItem> {
         Vec::new()
     }
     /// Return the `TextEdit` that would fix `issue`, or `None` if this
@@ -434,5 +485,19 @@ mod tests {
     #[test]
     fn output_mode_defaults_to_false() {
         assert!(!DummyCheck.output_mode());
+    }
+
+    #[test]
+    fn context_items_default_is_empty() {
+        let check = DummyCheck;
+        let corpus = CorpusIndex::default();
+        let mut fctx = FinalizeContext::new(&corpus);
+        let cs = crate::changeset::ChangeSet::default();
+        assert!(check.context_items(&cs, &mut fctx).is_empty());
+    }
+
+    #[test]
+    fn category_all_excludes_context() {
+        assert!(!Category::ALL.contains(&Category::Context));
     }
 }

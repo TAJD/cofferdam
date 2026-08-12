@@ -6,7 +6,7 @@ default_severity: Medium
 options: []
 ---
 
-A file's import fan-in (files that import it) or fan-out (files it imports) is a statistical outlier versus the rest of the project — a likely "god module" (doing too much) or over-centralized dependency (too many things depend on one module), found without a hardcoded threshold.
+A file's import fan-out (files it imports) is a statistical outlier versus the rest of the project — a likely "god module" doing too much, found without a hardcoded threshold. A file whose fan-in (files that import it) and fan-out are both outliers is flagged as a genuine hub — over-centralised, pulling in half the project while everything else pulls it in too.
 
 ```ts
 // god.ts — imports a dozen unrelated modules; flagged for fan-out
@@ -16,10 +16,7 @@ import { c } from "./c";
 // ...ten more...
 ```
 
-```ts
-// utils.ts — imported by nearly every other file; flagged for fan-in
-export function formatDate() { /* ... */ }
-```
+Fan-in alone is never flagged: a shared utility imported by nearly every other file is doing exactly what a shared utility should. Only a file that is both heavily imported and itself imports heavily — high fan-in and high fan-out together — earns the fan-in finding.
 
 Not flagged — `index.ts` and `types.ts` barrels are excluded entirely, since a real aggregator's high fan-in/fan-out is by design, not a smell:
 
@@ -30,7 +27,9 @@ export * from "./b";
 export * from "./c";
 ```
 
-Statistics: computed only over in-project (resolved) import edges — an external package import (`react`, `lodash`) doesn't count toward either metric, including a bare specifier the resolver traced into `node_modules` (a vendor package's own internal import graph never counts toward fan-in/fan-out, and vendor files never enter the population). `index.*`/`types.*` basenames are excluded from the statistical population entirely (not just from being flagged), since including their legitimately extreme counts would inflate the mean/stddev for every other file. Below 8 non-excluded files in the project, or when a metric's standard deviation is 0 (every file has the same count), nothing is flagged for that metric — there isn't enough variation to call anything an outlier. A file's fan-in (or fan-out) must exceed the project mean plus 3 standard deviations to be flagged; a file can be flagged for both metrics independently.
+Statistics: computed only over in-project (resolved) import edges — an external package import (`react`, `lodash`) doesn't count toward either metric, including a bare specifier the resolver traced into `node_modules` (a vendor package's own internal import graph never counts toward fan-in/fan-out, and vendor files never enter the population). `index.*`/`types.*` basenames are excluded from the statistical population entirely (not just from being flagged), since including their legitimately extreme counts would inflate the mean/stddev for every other file. Below 8 non-excluded files in the project, or when a metric's standard deviation is 0 (every file has the same count), nothing is flagged for that metric — there isn't enough variation to call anything an outlier. A file's fan-out must exceed the project mean plus three standard deviations to be flagged on its own. Fan-in requires both: the file's fan-in must clear its own three-standard-deviation bar and its fan-out must clear the fan-out bar too.
+
+Each metric must also clear an absolute floor of eight, not merely the relative bar. In a project whose files import mainly from `node_modules` the in-project graph is sparse — a mean of 0.1 and a standard deviation of 0.3 put the relative threshold below one — so without the floor a file importing a single local module would read as an outlier. A file is reported at most once: a combined hub finding when both metrics qualify, a fan-out finding otherwise. Fan-in alone can never distinguish a healthy leaf module — reused everywhere, importing little — from a real god object, so the check no longer treats it as sufficient by itself. This makes fan-in findings rare by design: most true hubs show up on the fan-out branch anyway, and the fan-in branch now exists only to catch a hub that also gets pulled in from everywhere.
 
 Suppressing a legitimate hub: findings are pinned to line 1, column 1 of the file (it's a whole-file metric, not tied to a specific import), so the usual next-line `// cofferdam-ignore: Design.ImportFanOutOutlier` comment has no real "line 0" to sit on. Use the file-wide directive instead — `// cofferdam-ignore-file: Design.ImportFanOutOutlier: <reason>` anywhere in the file — which matches regardless of the finding's line number.
 

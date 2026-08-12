@@ -27,6 +27,11 @@ This document contains the help content for the `cofferdam` command-line program
 * [`cofferdam fix`↴](#cofferdam-fix)
 * [`cofferdam agents`↴](#cofferdam-agents)
 * [`cofferdam advise`↴](#cofferdam-advise)
+* [`cofferdam context`↴](#cofferdam-context)
+* [`cofferdam invariants`↴](#cofferdam-invariants)
+* [`cofferdam invariants show`↴](#cofferdam-invariants-show)
+* [`cofferdam invariants validate`↴](#cofferdam-invariants-validate)
+* [`cofferdam invariants normalize`↴](#cofferdam-invariants-normalize)
 * [`cofferdam gen-docs`↴](#cofferdam-gen-docs)
 * [`cofferdam lsp`↴](#cofferdam-lsp)
 * [`cofferdam typst`↴](#cofferdam-typst)
@@ -50,6 +55,8 @@ TypeScript code-quality analyzer
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
 * `agents` — Print the agent-onboarding prompt — a ready-to-paste markdown block that tells an AI coding agent how to use cofferdam in this repository. Covers `advise`, `advise --diff`, `check --robot`, and the `cofferdam.invariants.toml` contract. Output is version-pinned so AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a file to create or refresh an agent context fragment:
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
+* `context` — Start here — the default entrypoint into project context you don't already have. Run it first, before or right after making a change: it resolves the current diff, consults the knowledge graph, and emits a token-budgeted advisory digest — delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
+* `invariants` — Inspect the resolved architectural spec — the merge of `cofferdam.toml` `[layers]` and `cofferdam.invariants.toml` that `check` actually runs against (CD-308). Use it when a rule is not firing and you want to know what cofferdam loaded, rather than what you think you wrote
 * `gen-docs` — Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a schema-stable JSON index, an llms.txt root index, and the CLI reference page (from clap-markdown). Use `--check` to fail when the committed files are out of date — same shape as `cargo fmt --check`
 * `lsp` — Run the Language Server Protocol server over stdio (cd-9hp.4 cp5). Editors that speak LSP — VS Code (via the bundled extension stub at `editors/vscode`), Helix, neovim — connect and receive workspace diagnostics on save. The server hydrates the cp4 disk cache at startup and persists it on shutdown. Run with no arguments; the LSP transport handles its own configuration via the standard `initialize` request
 * `typst` — Lint a Typst package directory for Typst Universe submission hygiene (manifest fields, license, naming, README, bundle hygiene). Standalone from the AST engine — the unit of analysis is the package directory (`typst.toml` + `LICENSE` + `README.md` + bundle), not individual `.typ` files
@@ -108,13 +115,13 @@ Run all checks against files or directories. With no arguments, walks the curren
 
   Default value: `0`
 * `--quiet` — Suppress informational output: the trailing `N finding(s)` summary line, "no TypeScript files found" hints, and the "(showing N of M)" truncation note. Findings, warnings, and errors still print. Has no effect on JSON output (which is already terse)
-* `--hide-baselined` — Hide baselined findings from text output. The summary line still reports `(N new, M baselined)` counts so the CI gate remains visible. Has no effect on `--format=json` (which always includes the per-finding `baselined` flag) or on the `--fail-on` gate (which already ignores baselined findings). Useful for routine local runs against repos with substantial baselines (cd-k23 / gh #11)
+* `--hide-baselined` — Hide baselined findings from the output, in every format (text, json, compact, sarif). The summary/counts still report the full `(N new, M baselined)` totals so the CI gate remains visible — only the per-finding entries are dropped. Has no effect on the `--fail-on` gate (which already ignores baselined findings). Useful for routine local runs against repos with substantial baselines (cd-k23 / gh #11)
 * `--cache-dir <PATH>` — Directory for the disk-backed findings/run cache (cd-9hp.4 cp4). Defaults to `.cofferdam/cache/` under CWD. Each `cofferdam` build writes to a version-scoped subdir so an upgrade invalidates prior caches automatically. Add the directory to `.gitignore`
 * `--no-cache` — Disable disk caching entirely. Equivalent to deleting the cache directory before each run. Cold cost only; no correctness difference
 * `--fail-on-type-unavailable` — Exit with code 2 when a type-aware check is registered but the type oracle could not be started (Node unavailable, ts-morph not installed, or no tsconfig.json found). Default off: oracle failures print a warning and type-aware checks are silently skipped. Use in CI jobs that explicitly rely on type-aware coverage to catch silent regressions
 * `--time-checks` — Print a per-check + per-phase timing breakdown to stderr (discovery, run loop, pass 2, graph build, finalize A/B, and each check's accumulated time, sorted descending). Findings output (JSON/robot/text) is byte-identical with and without this flag (CD-34)
 * `--trend` — Append one `{date, category, count}` JSON row per category to `.cofferdam/trend.jsonl` (creating it if needed). Counts include baselined findings, same as `[budgets]` enforcement. Purely additive — no rendering or dashboard; pair with an external tool if you want a chart. (CD-64 D3)
-* `--only <CHECK_ID>` — Restrict output to findings from one check (dotted id, e.g. `Warning.IslandApiConvention`). Applied after plugin merge, so it covers both built-in and plugin-emitted findings; budgets, baseline, and the exit-code gate all see only this check's findings. Useful for a CI hook that gates on a single project-specific plugin check without turning on the full suite (CD-74). An id that matches no built-in check (and no plugins are configured) exits 2 rather than silently returning zero findings — a typo here must not make a CI gate pass
+* `--only <CHECK_ID>` — Restrict output to findings from the named checks (dotted ids, e.g. `Warning.IslandApiConvention`). Repeatable, and accepts a comma-separated list: `--only A --only B` and `--only A,B` are the same. Applied after plugin merge, so it covers both built-in and plugin-emitted findings; budgets, baseline, and the exit-code gate all see only these checks' findings. Useful for a CI hook that gates on a few project-specific plugin checks without turning on the full suite (CD-74, CD-307). If ANY id matches no known check, the run exits 2 rather than silently narrowing — a typo in one of several ids must not quietly shrink a CI gate
 
 
 
@@ -420,6 +427,111 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
   Possible values: `info`, `low`, `medium`, `high`, `critical`
 
 * `--analyze` — State-of-play mode (CD-65 A4): parse exactly one file (no project graph) and report `current`/`remaining` budget for the complexity/length checks (`Refactor.CyclomaticComplexity`, `Refactor.CognitiveComplexity`, `Readability.MaxFunctionLength`, `Readability.MaxLineLength`, `Design.MaxParameters`) alongside their configured `limit`. Requires exactly one path in `paths`. Always JSON; `--format`/`--diff` are ignored
+
+
+
+## `cofferdam context`
+
+Start here — the default entrypoint into project context you don't already have. Run it first, before or right after making a change: it resolves the current diff, consults the knowledge graph, and emits a token-budgeted advisory digest — delta-scoped findings, blast radius, precedent, and curated knowledge. Advisory only: always exits 0 (usage/git errors excepted). Markdown by default; `--format json` for harness integration
+
+**Usage:** `cofferdam context [OPTIONS] [PATHS]...`
+
+###### **Arguments:**
+
+* `<PATHS>` — Explicit changed files (no git required). Empty → resolve from git (staged + unstaged vs HEAD by default)
+
+###### **Options:**
+
+* `--staged` — Only staged changes (`git diff --cached`)
+* `--base <GIT-REF>` — Diff against merge-base(`<ref>`, HEAD) — everything on this branch, committed or not
+* `--budget <BUDGET>` — Token budget for the digest (crude 4-chars/token estimate)
+
+  Default value: `2000`
+* `--format <FORMAT>` — Output format: text (markdown, default) or json
+
+  Possible values: `text`, `json`
+
+* `--robot` — Shorthand: JSON output unless --format given
+* `--pretty` — Pretty-print JSON
+* `--config <PATH>` — Path to cofferdam.toml (same semantics as `check`)
+* `--no-config` — Disable config discovery
+* `--hidden` — Walk hidden files (default: skip)
+* `--no-ignore` — Disable .gitignore/.cofferdamignore filtering
+* `--lint-knowledge` — Validate every `.cofferdam/knowledge/*.md` file instead of producing a digest: selectors must parse, and every selector must match at least one file in the current repo (catches broken globs and orphan selectors). The one deliberate nonzero-exit carve-out for `cofferdam context` — exits nonzero when validation fails, so CI can gate on it. Ignores `paths`/`staged`/`base`/`budget`/`format`
+* `--lint-context-suppress` — Validate every `[[context_suppress]]` rule in cofferdam.toml instead of producing a digest: `check_id` must be a real `Context.*` provider id, and (unless `paths` is omitted — the wildcard "suppress everything this check_id emits" form) `paths` globs must match at least one file in the current repo (catches stale suppression rules left behind after the files they targeted moved or were deleted). Same nonzero-exit carve-out as `--lint-knowledge`. Ignores `paths`/`staged`/`base`/`budget`/`format`. See `docs/reference/context.md#context_suppress--suppressing-noisy-digest-items` for the block's schema
+
+
+
+## `cofferdam invariants`
+
+Inspect the resolved architectural spec — the merge of `cofferdam.toml` `[layers]` and `cofferdam.invariants.toml` that `check` actually runs against (CD-308). Use it when a rule is not firing and you want to know what cofferdam loaded, rather than what you think you wrote
+
+**Usage:** `cofferdam invariants <COMMAND>`
+
+###### **Subcommands:**
+
+* `show` — Print the resolved, merged spec: which files were read, which layers are in force and which file they came from, the public API, boundaries and invariants, plus any load warnings. Always exits 0 when the spec loads, including when nothing is declared
+* `validate` — Parse the spec and report problems without running the engine. Exits 1 when the spec fails to load — a malformed predicate, an unsupported schema version — so CI can gate on the config alone, separately from the findings it produces. Warnings do not fail the run unless `--strict` is set
+* `normalize` — Print the canonical TOML serialisation of `cofferdam.invariants.toml` — every optional field spelled out in the form `docs/schema-versioning.md` defines as canonical. Writes to stdout; redirect it yourself if you want to replace the file. Exits 1 when no `cofferdam.invariants.toml` is discoverable, since there is nothing to normalise
+
+
+
+## `cofferdam invariants show`
+
+Print the resolved, merged spec: which files were read, which layers are in force and which file they came from, the public API, boundaries and invariants, plus any load warnings. Always exits 0 when the spec loads, including when nothing is declared
+
+**Usage:** `cofferdam invariants show [OPTIONS] [PATH]`
+
+###### **Arguments:**
+
+* `<PATH>` — Directory to resolve from. Discovery walks up from here, the same way `check` does. Defaults to `.`
+
+  Default value: `.`
+
+###### **Options:**
+
+* `--format <FORMAT>` — Output format. Default: `text`. With `--robot` and no explicit `--format`, defaults to `json`
+
+  Possible values: `text`, `json`
+
+* `--robot` — Shorthand: JSON output unless `--format` is given
+* `--pretty` — Pretty-print JSON output
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Same discovery semantics as `check`
+* `--no-config` — Disable config-file discovery entirely
+
+
+
+## `cofferdam invariants validate`
+
+Parse the spec and report problems without running the engine. Exits 1 when the spec fails to load — a malformed predicate, an unsupported schema version — so CI can gate on the config alone, separately from the findings it produces. Warnings do not fail the run unless `--strict` is set
+
+**Usage:** `cofferdam invariants validate [OPTIONS] [PATH]`
+
+###### **Arguments:**
+
+* `<PATH>` — Directory to resolve from. Defaults to `.`
+
+  Default value: `.`
+
+###### **Options:**
+
+* `--strict` — Treat load warnings — a deprecated or missing `schema_version`, `[layers]` declared in both files — as failures
+* `--config <PATH>` — Path to a `cofferdam.toml` config file
+* `--no-config` — Disable config-file discovery entirely
+
+
+
+## `cofferdam invariants normalize`
+
+Print the canonical TOML serialisation of `cofferdam.invariants.toml` — every optional field spelled out in the form `docs/schema-versioning.md` defines as canonical. Writes to stdout; redirect it yourself if you want to replace the file. Exits 1 when no `cofferdam.invariants.toml` is discoverable, since there is nothing to normalise
+
+**Usage:** `cofferdam invariants normalize [PATH]`
+
+###### **Arguments:**
+
+* `<PATH>` — Directory to resolve from. Defaults to `.`
+
+  Default value: `.`
 
 
 

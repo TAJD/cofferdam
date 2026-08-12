@@ -4,8 +4,11 @@ use cofferdam_core::{
     Category, Check, CheckContext, CheckMeta, Issue, LineIndex, LineView, Lines, Location,
     OptionDefault, OptionKind, OptionSpec, Priority, Severity, SourceFile, Span,
 };
-use oxc_ast::ast::{ArrowFunctionExpression, Function, FunctionBody, Program, Statement};
-use oxc_ast_visit::Visit;
+use oxc_ast::ast::{
+    ArrowFunctionExpression, Function, FunctionBody, JSXAttribute, JSXAttributeValue, Program,
+    RegExpLiteral, Statement, StringLiteral, TemplateLiteral,
+};
+use oxc_ast_visit::{walk, Visit};
 use unicode_width::UnicodeWidthStr;
 
 use crate::count_skippable_lines;
@@ -23,17 +26,44 @@ use crate::count_skippable_lines;
 /// flagged. The `Span` byte offsets stay byte-based (the `Span` contract);
 /// only the limit comparison, the reported width, and the column are in
 /// display columns.
+///
+/// Two exceptions to the raw width comparison (CD-318, CD-322):
+/// - A line is skipped when it is **unwrappable**: its widest atomic
+///   token — a string/template/regex literal or a whole JSX attribute
+///   with a literal value, kept whole; or, elsewhere on the line, a
+///   plain whitespace-delimited run — exceeds `limit` once the line's
+///   own indentation is added, which is the narrowest a formatter could
+///   ever place it. A long prose comment or run of JSX text still
+///   reports because its words are ordinary-width; a long string, a
+///   Tailwind `className`, or an unbreakable identifier or import path
+///   does not.
+///   `report_unwrappable = true` restores flagging every over-limit line.
+/// - A line that is itself a cofferdam suppression directive is skipped
+///   outright — the engine has no mechanism to suppress a directive's
+///   own line, so flagging it makes documenting a suppression with a
+///   reason impossible without violating this check.
 pub struct MaxLineLength {
     limit: u32,
     meta: &'static CheckMeta,
 }
 
-const MLL_OPTIONS: &[OptionSpec] = &[OptionSpec {
-    name: "limit",
-    kind: OptionKind::Int,
-    default: OptionDefault::Int(120),
-    doc: "maximum line length in display columns",
-}];
+const MLL_OPTIONS: &[OptionSpec] = &[
+    OptionSpec {
+        name: "limit",
+        kind: OptionKind::Int,
+        default: OptionDefault::Int(120),
+        doc: "maximum line length in display columns",
+    },
+    OptionSpec {
+        name: "report_unwrappable",
+        kind: OptionKind::Bool,
+        default: OptionDefault::Bool(false),
+        doc: "report lines even when the overflow comes from a single atomic token \
+            (a string/template/regex literal, or a JSX attribute with a literal \
+            value) that no formatter can break; disabled by default since such \
+            lines can't be shortened by hand either",
+    },
+];
 
 const MLL_META: CheckMeta = CheckMeta {
     id: "Readability.MaxLineLength",
@@ -72,15 +102,44 @@ impl Check for MaxLineLength {
             .get_int("limit")
             .map(|v| v as u32)
             .unwrap_or(self.limit);
+        let report_unwrappable = ctx.options.get_bool("report_unwrappable").unwrap_or(false);
+
+        // One walk collecting every atomic-token span up front (CD-318) —
+        // resolving each over-limit line against it below is a cursor scan,
+        // not a re-walk. `None` when parsing failed or produced no AST;
+        // MLL then falls back to flagging every over-limit line, same as
+        // a check with no AST need.
+        let atomic = ctx.parsed.map(|parsed| {
+            let mut collector = AtomicTokenCollector { spans: Vec::new() };
+            collector.visit_program(parsed.program);
+            collector.spans.sort_unstable_by_key(|s| s.0);
+            (collector.spans, line_starts(&file.text))
+        });
+
         let mut out = Vec::new();
         let mut byte_offset: u32 = 0;
+        let mut cursor = 0usize;
+        let mut active: Vec<(u32, u32)> = Vec::new();
         for (line_no, line) in file.lines() {
             // Byte length advances the span cursor and bounds the `Span`
             // (which is byte-based by contract). Display width is what we
             // compare against the limit and report to the user (cd-c8aq).
             let byte_len = line.len() as u32;
+            if is_suppression_directive(line) {
+                byte_offset = byte_offset.saturating_add(byte_len + 1);
+                continue;
+            }
             let width = UnicodeWidthStr::width(line) as u32;
-            if width > limit {
+            let unwrappable = !report_unwrappable
+                && width > limit
+                && atomic.as_ref().is_some_and(|(spans, starts)| {
+                    starts
+                        .get((line_no - 1) as usize)
+                        .is_some_and(|&line_start| {
+                            is_unwrappable(line_start, line, limit, spans, &mut cursor, &mut active)
+                        })
+                });
+            if width > limit && !unwrappable {
                 out.push(Issue {
                     check_id: self.meta.id.to_string(),
                     message: format!("line is {} columns, exceeds limit of {}", width, limit),
@@ -108,6 +167,165 @@ impl Check for MaxLineLength {
         }
         out
     }
+}
+
+/// Byte offset of the start of every line in `text`, index 0 == line 1.
+/// Independent of the `byte_offset` cursor `MaxLineLength::run` advances
+/// over `SourceFile::lines()` output (which trims `\r`, so it drifts by
+/// one byte per CRLF line) — atomic-token spans come from oxc and are
+/// real file offsets, so resolving them against lines needs an accurate
+/// table, not the trimmed-length accumulation.
+fn line_starts(text: &str) -> Vec<u32> {
+    let mut starts = Vec::with_capacity(text.bytes().filter(|&b| b == b'\n').count() + 1);
+    starts.push(0u32);
+    for (i, b) in text.bytes().enumerate() {
+        if b == b'\n' {
+            starts.push(i as u32 + 1);
+        }
+    }
+    starts
+}
+
+/// True when the widest atomic token on this line, on its own, already
+/// exceeds `limit` — i.e. no formatter could bring the line under
+/// `limit` because that single token can't be broken (CD-318).
+///
+/// "Atomic token" here is: each string/template/JSX-text/regex literal
+/// overlapping the line (kept whole, spaces and all — `spans`), plus
+/// every whitespace-delimited run of the line's remaining text (which
+/// covers ordinary code tokens, long identifiers/import-path text, and
+/// comment words alike — comments get no special casing, so a long
+/// prose comment made of ordinary-width words still reports).
+///
+/// `spans` is sorted by start byte; `cursor`/`active` are threaded
+/// across consecutive calls so resolving the whole file is one forward
+/// scan, not a re-walk per line.
+fn is_unwrappable(
+    line_start: u32,
+    line_text: &str,
+    limit: u32,
+    spans: &[(u32, u32)],
+    cursor: &mut usize,
+    active: &mut Vec<(u32, u32)>,
+) -> bool {
+    let line_end = line_start + line_text.len() as u32;
+    // Pull in every span that starts before this line ends, THEN purge —
+    // a call can be skipped for several lines in a row (only over-limit
+    // lines invoke this), so a single catch-up pull may sweep in a span
+    // that both starts and ends before `line_start` (fully on an
+    // intervening skipped line). Purging first would miss it.
+    while *cursor < spans.len() && spans[*cursor].0 < line_end {
+        active.push(spans[*cursor]);
+        *cursor += 1;
+    }
+    active.retain(|&(_, end)| end > line_start);
+
+    let mut segments: Vec<(u32, u32)> = active
+        .iter()
+        .filter_map(|&(s, e)| {
+            let seg_start = s.max(line_start) - line_start;
+            let seg_end = e.min(line_end) - line_start;
+            (seg_start < seg_end).then_some((seg_start, seg_end))
+        })
+        .collect();
+    segments.sort_unstable();
+
+    let mut widest = 0u32;
+    let mut cur = 0u32;
+    for (seg_start, seg_end) in segments {
+        if cur < seg_start {
+            widest = widest.max(widest_word(&line_text[cur as usize..seg_start as usize]));
+        }
+        widest = widest
+            .max(UnicodeWidthStr::width(&line_text[seg_start as usize..seg_end as usize]) as u32);
+        cur = cur.max(seg_end);
+    }
+    if (cur as usize) < line_text.len() {
+        widest = widest.max(widest_word(&line_text[cur as usize..]));
+    }
+
+    // The best a formatter can do is put that token on a line of its own,
+    // and it still has to indent it at least as far as this line is
+    // indented. Counting the indentation is what catches the common JSX
+    // case — a class list comfortably under the limit that only breaches
+    // it once nesting is added.
+    let indent =
+        UnicodeWidthStr::width(&line_text[..line_text.len() - line_text.trim_start().len()]) as u32;
+    widest.saturating_add(indent) > limit
+}
+
+/// Widest whitespace-delimited run in `s`, in display columns. 0 for
+/// all-whitespace or empty input.
+fn widest_word(s: &str) -> u32 {
+    s.split_whitespace()
+        .map(|w| UnicodeWidthStr::width(w) as u32)
+        .max()
+        .unwrap_or(0)
+}
+
+/// String/template/regex literal spans — the "atomic" tokens a formatter
+/// cannot break (CD-318). Comments and JSX text are deliberately NOT
+/// collected: both are prose that reflows at spaces, so they must keep
+/// reporting like ordinary whitespace-split code.
+struct AtomicTokenCollector {
+    spans: Vec<(u32, u32)>,
+}
+
+impl<'a> Visit<'a> for AtomicTokenCollector {
+    fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
+        self.spans.push((it.span.start, it.span.end));
+        walk::walk_string_literal(self, it);
+    }
+
+    fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
+        self.spans.push((it.span.start, it.span.end));
+        walk::walk_template_literal(self, it);
+    }
+
+    fn visit_reg_exp_literal(&mut self, it: &RegExpLiteral<'a>) {
+        self.spans.push((it.span.start, it.span.end));
+        walk::walk_reg_exp_literal(self, it);
+    }
+
+    /// `className="…"` is atomic as a whole, not just its value: an
+    /// attribute is the smallest unit a formatter can move to a line of
+    /// its own, and it cannot break inside one. Without this, a class
+    /// list narrower than the limit but pushed over it by the attribute
+    /// name and its indentation reports with nothing anyone can do.
+    fn visit_jsx_attribute(&mut self, it: &JSXAttribute<'a>) {
+        if matches!(it.value, Some(JSXAttributeValue::StringLiteral(_))) {
+            self.spans.push((it.span.start, it.span.end));
+        }
+        walk::walk_jsx_attribute(self, it);
+    }
+}
+
+/// The suppression-directive markers recognised by
+/// `cofferdam-engine::suppress` (kept local per the "no cofferdam-checks
+/// -> cofferdam-engine dependency" rule — see the grammar doc at the top
+/// of `crates/cofferdam-engine/src/suppress.rs`). `cofferdam-ignore` is a
+/// substring of every Biome-style spelling (`-start`/`-end`/`-file`) and
+/// `cofferdam-disable` of every ESLint-style one (`-next-line`/`-file`),
+/// so three needles cover all documented spellings.
+const SUPPRESSION_MARKERS: [&str; 3] =
+    ["cofferdam-ignore", "cofferdam-disable", "cofferdam-enable"];
+
+/// True when `line`, trimmed, opens with a comment marker and contains a
+/// cofferdam suppression directive (CD-322). A prose comment that merely
+/// mentions one of these words in passing may false-negative here — the
+/// spec explicitly accepts that rather than parsing full directive
+/// grammar in a line-length check.
+fn is_suppression_directive(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let is_comment_line = trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("<!--")
+        // `{/* cofferdam-ignore: … */}` — the only way to write a
+        // directive inside a JSX tree.
+        || trimmed.starts_with("{/*");
+    is_comment_line && SUPPRESSION_MARKERS.iter().any(|m| trimmed.contains(m))
 }
 
 /// Widest line in the file, in display columns — independent of `limit`.
@@ -305,14 +523,51 @@ impl<'a> Visit<'a> for MFLCollector<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Check, CheckContext, SourceFile};
+    use cofferdam_core::parser::{parse_into, ParsedView};
+    use cofferdam_core::{
+        validate_options, Allocator, Check, CheckContext, CheckOptions, RawOptionValue, SourceFile,
+    };
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    /// Run `MaxLineLength` against `src` with the given column limit.
+    /// Run `MaxLineLength` against `src` with the given column limit, no AST
+    /// (`ctx.parsed` stays `None`) — exercises the plain-text fallback path.
     fn run_mll(src: &str, limit: u32) -> Vec<Issue> {
         let file = SourceFile::new(PathBuf::from("test.ts"), src);
         let mut ctx = CheckContext::new(&file);
         MaxLineLength::new(limit).run(&file, &mut ctx)
+    }
+
+    fn mll_opts(limit: i64, report_unwrappable: bool) -> CheckOptions {
+        let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
+        raw.insert("limit".to_string(), RawOptionValue::Int(limit));
+        raw.insert(
+            "report_unwrappable".to_string(),
+            RawOptionValue::Bool(report_unwrappable),
+        );
+        validate_options(MLL_META.id, MLL_OPTIONS, &raw).expect("valid options")
+    }
+
+    /// Parse `src` as TypeScript and run `MaxLineLength` with `opts` —
+    /// exercises the atomic-token-aware path (CD-318).
+    fn run_mll_parsed(src: &str, opts: &CheckOptions) -> Vec<Issue> {
+        run_mll_parsed_path(src, opts, "test.ts")
+    }
+
+    /// Like [`run_mll_parsed`] but with a caller-chosen path, so JSX
+    /// fixtures can parse under `.tsx`.
+    fn run_mll_parsed_path(src: &str, opts: &CheckOptions, path: &str) -> Vec<Issue> {
+        let file = SourceFile::new(PathBuf::from(path), src);
+        let allocator = Allocator::default();
+        let parser_return = parse_into(&allocator, &file);
+        let parsed = ParsedView {
+            program: &parser_return.program,
+            diagnostics: &parser_return.errors,
+        };
+        let mut ctx = CheckContext::new(&file)
+            .with_parsed(&parsed)
+            .with_options(opts);
+        MaxLineLength::new(120).run(&file, &mut ctx)
     }
 
     #[test]
@@ -378,5 +633,247 @@ mod tests {
             "end_byte must be the UTF-8 byte length (130 × 3), not the column count"
         );
         assert!(issues[0].message.contains("260 columns"));
+    }
+
+    // ── CD-322: suppression-directive lines are exempt ───────────────────
+
+    #[test]
+    fn long_suppression_directive_not_flagged() {
+        let reason = "x".repeat(90);
+        let src = format!("// cofferdam-ignore: Design.OrphanExport: {reason}");
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: directive line must actually be over-limit"
+        );
+        assert!(
+            run_mll(&src, 120).is_empty(),
+            "a suppression directive's own line must never flag, or reasons become undocumentable"
+        );
+    }
+
+    #[test]
+    fn every_documented_directive_spelling_is_exempt() {
+        let filler = "x".repeat(100);
+        let directives = [
+            format!("// cofferdam-ignore: Design.OrphanExport: {filler}"),
+            format!("// cofferdam-ignore-start: Design.OrphanExport {filler}"),
+            format!("// cofferdam-ignore-end {filler}"),
+            format!("// cofferdam-ignore-file: Design.OrphanExport {filler}"),
+            format!("// cofferdam-disable-next-line Design.OrphanExport {filler}"),
+            format!("/* cofferdam-disable Design.OrphanExport {filler} */"),
+            format!("/* cofferdam-enable Design.OrphanExport {filler} */"),
+            format!("// cofferdam-disable-file Design.OrphanExport {filler}"),
+            // The only way to write one inside a JSX tree.
+            format!("{{/* cofferdam-ignore: Design.OrphanExport: {filler} */}}"),
+        ];
+        for directive in directives {
+            assert!(
+                UnicodeWidthStr::width(directive.as_str()) as u32 > 120,
+                "sanity: directive line must actually be over-limit: {directive}"
+            );
+            assert!(
+                run_mll(&directive, 120).is_empty(),
+                "directive spelling must be exempt: {directive}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_comment_mentioning_word_ignore_still_flags() {
+        // Doesn't open with a directive marker at all — a prose comment
+        // that happens to use the word "ignore" is not a directive.
+        let src = format!(
+            "// please ignore how long this comment is, it is not a cofferdam directive {}",
+            "x".repeat(50)
+        );
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: comment line must actually be over-limit"
+        );
+        assert_eq!(
+            run_mll(&src, 120).len(),
+            1,
+            "a prose comment that isn't a directive must still flag"
+        );
+    }
+
+    // ── CD-318: unwrappable lines are skipped ─────────────────────────────
+
+    #[test]
+    fn string_literal_with_internal_spaces_not_flagged_by_default() {
+        let filler = "lorem ipsum ".repeat(10);
+        let src = format!("const msg = '{filler}';");
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let default_opts = mll_opts(120, false);
+        assert!(
+            run_mll_parsed(&src, &default_opts).is_empty(),
+            "a string literal wider than the limit on its own can't be wrapped, so it must not flag"
+        );
+
+        let report_opts = mll_opts(120, true);
+        let issues = run_mll_parsed(&src, &report_opts);
+        assert_eq!(
+            issues.len(),
+            1,
+            "report_unwrappable = true must restore flagging"
+        );
+    }
+
+    #[test]
+    fn tailwind_classname_string_not_flagged() {
+        let classes = "flex items-center justify-between p-4 mt-8 mb-8 mx-auto max-w-7xl \
+            text-center rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 \
+            bg-white dark:bg-gray-900";
+        let src = format!("const el = <div className=\"{classes}\" />;");
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert!(
+            run_mll_parsed_path(&src, &opts, "test.tsx").is_empty(),
+            "a Tailwind class-list string has no legal break point and must not flag"
+        );
+    }
+
+    /// The dominant real-world case: a class list comfortably under the
+    /// limit on its own, pushed over it by the attribute name and the
+    /// nesting it sits in. Counting the indentation is what catches it —
+    /// without that term this line reports and nobody can act on it.
+    #[test]
+    fn indented_classname_shorter_than_the_limit_is_still_unwrappable() {
+        let classes = "border-t border-ink/20 px-4 py-3 text-sm text-fg dark:border-bone/20 \
+             dark:text-fg-muted rounded-none bg-bone";
+        let indent = " ".repeat(14);
+        let src = format!("{indent}<div className=\"{classes}\">text</div>");
+        assert!(
+            UnicodeWidthStr::width(classes) as u32 <= 120,
+            "sanity: the class list alone is under the limit — the indent is what breaches it"
+        );
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert!(
+            run_mll_parsed_path(&src, &opts, "test.tsx").is_empty(),
+            "an attribute a formatter can only move, not break, must not flag"
+        );
+    }
+
+    /// JSX text is prose that reflows at spaces, exactly like a comment,
+    /// so it must keep reporting. Treating it as atomic silenced a long
+    /// paragraph in a component while the identical sentence in a comment
+    /// two lines above still flagged.
+    #[test]
+    fn long_jsx_prose_still_flags() {
+        let prose = "This is a very long paragraph of ordinary English prose that any \
+             formatter in the world would happily reflow at a space.";
+        let src = format!("const el = <p>{prose}</p>;");
+        assert!(
+            UnicodeWidthStr::width(src.as_str()) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert_eq!(
+            run_mll_parsed_path(&src, &opts, "test.tsx").len(),
+            1,
+            "JSX prose is wrappable and must report"
+        );
+    }
+
+    #[test]
+    fn long_call_chain_of_short_tokens_still_flags() {
+        let src = "const result = fooBarBaz(argOne, argTwo, argThree).quxQuux(argFour, argFive)\
+            .someMethod(argSix, argSeven).anotherOne(argEight).done();";
+        assert!(
+            UnicodeWidthStr::width(src) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert_eq!(
+            run_mll_parsed(src, &opts).len(),
+            1,
+            "many short, comma-separated tokens are wrappable and must still flag"
+        );
+    }
+
+    #[test]
+    fn long_prose_comment_still_flags() {
+        let src = "// this is a long, ordinary prose comment made of short words that runs \
+            well past the one hundred twenty column line length limit for this test case";
+        assert!(
+            UnicodeWidthStr::width(src) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert_eq!(
+            run_mll_parsed(src, &opts).len(),
+            1,
+            "a comment's words are ordinary-width and human-wrappable, so it must still flag"
+        );
+    }
+
+    #[test]
+    fn unbreakable_long_identifier_not_flagged() {
+        let src = "const x: ThisIsAVeryLongTypeNameThatExceedsOneHundredAndTwentyColumnsWhen\
+            WrittenOutInFullWithoutAnySpacesAtAllHereTodayForSureYesReallyLong = 1;";
+        assert!(
+            UnicodeWidthStr::width(src) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert!(
+            run_mll_parsed(src, &opts).is_empty(),
+            "a single unbreakable identifier wider than the limit must not flag"
+        );
+    }
+
+    #[test]
+    fn long_import_path_string_not_flagged() {
+        let src = "import { someExport } from \
+            './some/very/long/module/path/that/keeps/going/and/going/and/going/and/going/\
+            forever/across/many/nested/directories/and/subdirectories/mod';";
+        assert!(
+            UnicodeWidthStr::width(src) as u32 > 120,
+            "sanity: line must actually be over-limit"
+        );
+        let opts = mll_opts(120, false);
+        assert!(
+            run_mll_parsed(src, &opts).is_empty(),
+            "an unbreakable import-path string literal must not flag"
+        );
+    }
+
+    #[test]
+    fn unparsed_file_falls_back_to_flagging_every_over_limit_line() {
+        let filler = "lorem ipsum ".repeat(10);
+        let src = format!("const msg = '{filler}';");
+        assert_eq!(
+            run_mll(&src, 120).len(),
+            1,
+            "without ctx.parsed, MLL has no atomic-token info and must flag every over-limit line"
+        );
+    }
+
+    #[test]
+    fn boundary_token_width_exactly_limit_reports_one_more_skips() {
+        let opts = mll_opts(120, false);
+
+        let at_limit = format!("x {}", "a".repeat(120));
+        assert_eq!(
+            run_mll_parsed(&at_limit, &opts).len(),
+            1,
+            "a token whose width exactly equals the limit is still wrappable-adjacent and must flag"
+        );
+
+        let one_more = "a".repeat(121);
+        assert!(
+            run_mll_parsed(&one_more, &opts).is_empty(),
+            "one column over the limit tips the token into unwrappable"
+        );
     }
 }

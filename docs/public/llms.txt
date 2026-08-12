@@ -1,6 +1,6 @@
 # Cofferdam
 
-> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. Five-category model: Consistency, Design, Readability, Refactor, Warning. Priority-sorted output, baseline workflow, CI-friendly. Current version: 0.3.13.
+> TypeScript code-quality analyzer — Rust core, npm wrapper. Inspired by Elixir's Credo. Five-category model: Consistency, Design, Readability, Refactor, Warning. Priority-sorted output, baseline workflow, CI-friendly. Current version: 0.4.2.
 
 ## Install
 
@@ -35,11 +35,13 @@ Prebuilt binaries download on postinstall (Linux x64/arm64 glibc+musl, macOS x64
 - `cofferdam agents`: print a version-pinned onboarding prompt for AI coding agents — pipe into AGENTS.md / CLAUDE.md.
 - `cofferdam advise <file>`: print the rules and constraints that apply to a file — run this BEFORE editing.
 - `cofferdam advise --diff <git-ref>`: pre-flight a proposed change; reports `would_fire` / `would_clear` against the working tree.
+- `cofferdam context [paths...]`: post-edit context digest — delta-scoped findings, blast radius, precedent, and curated knowledge for the current diff.
 - `cofferdam baseline write`: snapshot accepted findings so future `check` runs ignore them.
 - `cofferdam baseline lint`: gate CI on findings not already in the baseline.
 - `cofferdam baseline diff`: compare two baselines (e.g. before/after a refactor).
 - `cofferdam init`: scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries.
 - `cofferdam explain <id> [--full]`: print metadata + (optionally) prose for one check.
+- `cofferdam invariants show|validate|normalize`: inspect the resolved architectural spec — what the run actually loaded, not what you think you wrote.
 - `cofferdam fix [paths...]`: apply autofixes for findings whose check supports it.
 - `cofferdam watch [paths...]`: re-run checks on file change.
 - `cofferdam doctor [--robot]`: diagnose install/config issues; ✓/⚠/✗ reporting.

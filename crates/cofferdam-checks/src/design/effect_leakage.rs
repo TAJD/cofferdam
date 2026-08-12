@@ -231,7 +231,8 @@ impl Check for EffectLeakage {
             .get_string_list("extra_side_effect_modules")
             .map(|xs| xs.to_vec())
             .unwrap_or_default();
-        let imports: Vec<ImportRecord> = ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.clone());
+        let imports: std::sync::Arc<Vec<ImportRecord>> =
+            ctx.corpus.with_slot(&GRAPH_IMPORTS, |slot| slot.to_vec());
 
         let mut issues = compute_leaks(&pure_files, &imports, &extra_modules);
         issues.extend(compute_function_leaks(

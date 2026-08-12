@@ -6,17 +6,10 @@ use std::path::{Path, PathBuf};
 use cofferdam_core::{RawOptionValue, Severity};
 use serde::Deserialize;
 
-use super::{ConfigError, OverrideBlock, OverrideCheck, ProjectConfig};
+use super::{ConfigError, ContextSuppressRule, OverrideBlock, OverrideCheck, ProjectConfig};
 
 /// Filename loaders look for during walk-up discovery.
 pub const FILE_NAME: &str = "cofferdam.toml";
-
-/// Meta-keys that may appear inside `[checks."X.Y"]` blocks but aren't
-/// per-check options. `severity` (cd-t1a) is now first-class — extracted
-/// into `ProjectConfig::severity_overrides` rather than passed through
-/// to `validate_options`. `enabled` is still a forward-compatible
-/// placeholder (no behaviour wired yet).
-const META_KEYS: &[&str] = &["severity", "enabled"];
 
 /// TOML document layout. Top-level sections grow additively here.
 #[derive(Debug, Deserialize, Default)]
@@ -47,6 +40,20 @@ pub struct TomlDoc {
     /// ratchet`; enforced by `cofferdam check`.
     #[serde(default)]
     pub budgets: BTreeMap<String, u32>,
+    /// `[[context_suppress]]` — per-`check_id` path-glob suppression of
+    /// `cofferdam context` digest items (CD-212).
+    #[serde(default)]
+    pub context_suppress: Vec<ContextSuppressTable>,
+}
+
+/// Raw `[[context_suppress]]` element.
+#[derive(Debug, Deserialize, Default)]
+pub struct ContextSuppressTable {
+    pub check_id: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Raw `[[overrides]]` element. `checks` keys are check ids; each value
@@ -117,6 +124,16 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         source,
     })?;
 
+    // CD-311: serde skips keys it does not recognise, so a typo or an
+    // invented key parses cleanly and does nothing. Re-parse as a plain
+    // table and diff against the declared schema so the CLI can say so.
+    // Warn rather than reject: the dangerous half of the problem is the
+    // silence, and rejecting outright would break every existing config
+    // carrying a stray key.
+    let unknown_keys = toml::from_str::<toml::Table>(raw)
+        .map(|t| super::schema::unknown_keys(&t))
+        .unwrap_or_default();
+
     let mut checks: BTreeMap<String, BTreeMap<String, RawOptionValue>> = BTreeMap::new();
     let mut severity_overrides: BTreeMap<String, Severity> = BTreeMap::new();
     for (check_id, value) in doc.checks {
@@ -134,9 +151,18 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
 
         let mut options: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         for (key, val) in table {
-            // Meta-keys are extracted into their own slots, not passed
-            // through to per-check option validation (which would
-            // reject them as UnknownKey).
+            // `severity` (cd-t1a) is a meta-key, extracted into its own
+            // slot rather than passed through to per-check option
+            // validation (which would reject it as UnknownKey).
+            //
+            // `enabled` used to get the same treatment, as a
+            // forward-compatible placeholder. That silently discarded
+            // the only option `Refactor.PurityHeuristic` has — its
+            // catalogue page tells the user to write `enabled = true` —
+            // leaving a registered check nobody could turn on (CD-324).
+            // It now reaches the option bag; `options_for_raw` drops it
+            // again for the checks that do not declare it, so configs
+            // written against the old placeholder keep loading.
             if key == "severity" {
                 let s = match &val {
                     toml::Value::String(s) => s.clone(),
@@ -154,11 +180,6 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
                     source,
                 })?;
                 severity_overrides.insert(check_id.clone(), sev);
-                continue;
-            }
-            if META_KEYS.contains(&key.as_str()) {
-                // `enabled` (and any future placeholders) — silently
-                // accepted, no behaviour wired today.
                 continue;
             }
             let raw = toml_to_raw(&val).ok_or_else(|| ConfigError::UnsupportedValue {
@@ -190,6 +211,7 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         .collect();
 
     let overrides = compile_overrides(path, doc.overrides)?;
+    let context_suppress = compile_context_suppress(path, doc.context_suppress);
 
     let engine_extra_extensions = doc
         .engine
@@ -200,10 +222,22 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         .map(str::to_string)
         .collect();
 
+    // CD-312: this used to be an unconditional `None`, so a `[layers]`
+    // block in cofferdam.toml parsed, validated, and was then discarded —
+    // `Design.LayerViolation` fired only for layers declared in
+    // cofferdam.invariants.toml. The config was accepted either way, so a
+    // team that declared its architecture here got a green build and no
+    // enforcement.
+    let layers = if doc.layers.is_empty() {
+        None
+    } else {
+        Some(super::options::parse_layers(path, doc.layers)?)
+    };
+
     Ok(ProjectConfig {
         checks,
         severity_overrides,
-        layers: None,
+        layers,
         plugins,
         invariants: None,
         layers_double_declaration: false,
@@ -211,13 +245,18 @@ pub fn parse(path: &Path, raw: &str) -> Result<ProjectConfig, ConfigError> {
         overrides,
         budgets: doc.budgets,
         engine_extra_extensions,
+        context_suppress,
+        unknown_keys,
     })
 }
 
 /// Forward-slash, lowercase-on-Windows path key. Mirrors the
 /// `path_key` helpers in the checks crate so override globs match the
-/// engine's absolute, forward-slashed file keys.
-fn path_key(p: &Path) -> String {
+/// engine's absolute, forward-slashed file keys. Public so callers
+/// outside this crate (e.g. `cofferdam-cli`'s `--context_suppress`
+/// filtering, CD-212) can build a matching key without duplicating
+/// this normalisation a fourth time.
+pub fn path_key(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
         s.to_lowercase()
@@ -281,6 +320,69 @@ pub fn compile_overrides(
         });
     }
     Ok(out)
+}
+
+/// Compile `[[context_suppress]]` tables into matchable
+/// [`ContextSuppressRule`]s (CD-212). Same glob-compilation convention
+/// as [`compile_overrides`]: an invalid glob is skipped rather than
+/// failing the whole config. A block with an entirely invalid `paths`
+/// list (every glob failed to compile) ends up with an empty globset
+/// but a non-empty `paths` field, so it's treated the same as any
+/// other non-matching path-scoped rule.
+///
+/// A block with `paths` genuinely omitted/empty in the TOML is
+/// different: `ContextSuppressRule::paths.is_empty()` is read by
+/// `context_cmd::suppress_items` (CD-227) as an explicit wildcard —
+/// "suppress every item this `check_id` emits", including items with
+/// no `related` spans that a path-scoped rule could never target at
+/// all (the CD-220 failure mode). `cofferdam context
+/// --lint-context-suppress` (see `context_cmd.rs`) exempts these
+/// wildcard rules from its "matches zero repo files" staleness check,
+/// since there's no file-match signal to validate them against; every
+/// other rule is still flagged when its glob matches zero *repo
+/// files*, per this repo's "warn loudly, never silently match
+/// nothing" policy. Note that's a proxy for "matches zero digest
+/// items", not the thing itself (CD-220): the lint doesn't run the
+/// Context providers, so a path-scoped rule can pass this check yet
+/// still never fire against an actual digest.
+pub fn compile_context_suppress(
+    path: &Path,
+    tables: Vec<ContextSuppressTable>,
+) -> Vec<ContextSuppressRule> {
+    use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+
+    if tables.is_empty() {
+        return Vec::new();
+    }
+    let config_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let root_abs = std::path::absolute(&config_dir).unwrap_or(config_dir);
+    let root_key = path_key(&root_abs);
+
+    let mut out = Vec::with_capacity(tables.len());
+    for table in tables {
+        let mut builder = GlobSetBuilder::new();
+        for raw in &table.paths {
+            let normalised = raw.trim_start_matches("./").replace('\\', "/");
+            if let Ok(g) = GlobBuilder::new(&normalised)
+                .literal_separator(true)
+                .build()
+            {
+                builder.add(g);
+            }
+        }
+        let globset = builder.build().unwrap_or_else(|_| GlobSet::empty());
+        out.push(ContextSuppressRule {
+            check_id: table.check_id,
+            paths: table.paths,
+            globset,
+            root_key: root_key.clone(),
+            reason: table.reason,
+        });
+    }
+    out
 }
 
 /// Parse one `[overrides.checks."X"]` sub-table into an

@@ -427,19 +427,27 @@ jobs:
       - name: Wait for npm registry to propagate
         # The npm CDN can lag a minute or two after `npm publish` returns,
         # especially on the macOS / Windows runners that pull from a
-        # different edge. Poll up to 2 minutes before giving up.
+        # different edge. `npm view` only resolves package *metadata*,
+        # which propagates before the tarball *blob* is fetchable —
+        # during the v0.4.1 release this step passed on the first attempt
+        # while the subsequent `npm install` still 404'd on the tarball
+        # URL for several minutes. Poll with `npm pack`, which performs
+        # the same tarball fetch `npm install` does, so a pass here means
+        # install will actually succeed. Poll up to 2 minutes before
+        # giving up.
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
+          tmpdir="$(mktemp -d)"
           for attempt in $(seq 1 12); do
-            if npm view "@cofferdam/cofferdam@$version" version > /dev/null 2>&1; then
-              echo "@cofferdam/cofferdam@$version visible on npm (attempt $attempt)"
+            if npm pack "@cofferdam/cofferdam@$version" --pack-destination "$tmpdir" > /dev/null 2>&1; then
+              echo "@cofferdam/cofferdam@$version tarball fetchable on npm (attempt $attempt)"
               exit 0
             fi
-            echo "waiting for @cofferdam/cofferdam@$version on npm... ($attempt/12)"
+            echo "waiting for @cofferdam/cofferdam@$version tarball on npm... ($attempt/12)"
             sleep 10
           done
-          echo "ERROR: @cofferdam/cofferdam@$version still not visible after 2 minutes"
+          echo "ERROR: @cofferdam/cofferdam@$version tarball still not fetchable after 2 minutes"
           exit 1
 
       - name: Run npm install smoke test

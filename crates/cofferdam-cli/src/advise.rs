@@ -343,15 +343,9 @@ pub fn build_advisories(
         project_config.as_ref().and_then(|p| p.invariants.as_ref());
     let public_api_matcher: Option<PublicApi> = invariants
         .map(|spec| public_api::resolve_public_api(&spec.public_api.exports, &spec.project_root));
-    let public_api_unresolved: Vec<String> = invariants
-        .map(|spec| {
-            spec.public_api
-                .exports
-                .iter()
-                .filter(|e| e.starts_with("package.json:"))
-                .cloned()
-                .collect()
-        })
+    let public_api_unresolved: Vec<String> = public_api_matcher
+        .as_ref()
+        .map(|m| m.unresolved().to_vec())
         .unwrap_or_default();
 
     // Load plugin check metadata so advise can include plugin-specific
@@ -404,11 +398,19 @@ fn build_advisory(
     ctx: &AdviseContext<'_>,
     plugin_metas: &[PluginCheckMeta],
 ) -> FileAdvisory {
+    // Must resolve against an absolutized path (matching `cfg.project_root`,
+    // which is always absolute) — the raw discovery-walk path can carry a
+    // leading `./` (e.g. root `.` for a no-path scan), which breaks
+    // `strip_prefix` inside `layer_for` (CD-192). NB: `fwd_path` below is
+    // deliberately left non-absolutized for `pathPattern`/`excludePatterns`
+    // glob matching — those globs tolerate a leading `./` via a `**/`-prefix
+    // fallback, so it's a pre-existing (harmless, but not identical to the
+    // runtime host's absolute-path matching) divergence, not a live bug.
+    let file_abs = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
     let layer = ctx
         .layers_cfg
-        .and_then(|cfg| layers::layer_for(ctx.layer_matchers, &cfg.project_root, file));
+        .and_then(|cfg| layers::layer_for(ctx.layer_matchers, &cfg.project_root, &file_abs));
 
-    let file_abs = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
     let file_key = public_api::path_key(&file_abs);
     let public_api = ctx
         .public_api_matcher
@@ -818,6 +820,7 @@ fn category_str(c: Category) -> &'static str {
         Category::Readability => "readability",
         Category::Refactor => "refactor",
         Category::Warning => "warning",
+        Category::Context => "context",
     }
 }
 
@@ -902,8 +905,9 @@ pub struct Constraint {
     pub exempt: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exempt_reason: Option<String>,
-    /// `[public_api].exports` entries this constraint could not resolve
-    /// (currently `package.json:<key>` pointers — resolution deferred).
+    /// `[public_api].exports` entries this constraint could not resolve —
+    /// a `package.json:<key>` pointer whose manifest is missing, malformed
+    /// or lacks that key.
     /// Present only on `Design.OrphanExport` when such entries exist, so
     /// callers relying on `public_api`/`exempt` know the allowlist is
     /// incomplete rather than silently treating it as fully resolved.
@@ -1107,6 +1111,65 @@ mod tests {
         let forbidden = c.forbidden.expect("forbidden populated");
         // "app" excluded (own layer), "domain" + "infra" allowed → none forbidden
         assert!(forbidden.is_empty());
+    }
+
+    /// CD-192: `cofferdam advise` with no path argument walks from `.`, so
+    /// the resulting file paths carry a leading `./` — same trigger as the
+    /// plugin-host bug. `build_advisory` must still resolve the file's
+    /// layer (and therefore still surface a `files.layers`-scoped plugin
+    /// constraint) instead of silently dropping it.
+    #[test]
+    fn build_advisory_resolves_layer_for_dot_relative_walk_path() {
+        let project_root = std::env::current_dir().unwrap();
+        let mut layers = BTreeMap::new();
+        layers.insert("web".to_string(), vec!["src/web/**".to_string()]);
+        let cfg = LayersConfig {
+            project_root,
+            layers,
+            allow: BTreeMap::new(),
+        };
+        let matchers = layers::build_matchers(&cfg);
+        let ctx = AdviseContext {
+            layers_cfg: Some(&cfg),
+            layer_matchers: &matchers,
+            invariants: None,
+            public_api_matcher: None,
+            public_api_unresolved: &[],
+        };
+        let plugin_metas = vec![PluginCheckMeta {
+            path: "./plugin.mjs".to_string(),
+            id: "WebOnlyCheck".to_string(),
+            category: "warning".to_string(),
+            base_priority: 0,
+            explanation: "web-only rationale".to_string(),
+            default_severity: "medium".to_string(),
+            body: None,
+            requires_types: false,
+            output_mode: false,
+            options: Vec::new(),
+            files: Some(PluginFileScope {
+                extensions: Vec::new(),
+                layers: vec!["web".to_string()],
+                path_pattern: None,
+                path_patterns: Vec::new(),
+                exclude_patterns: Vec::new(),
+            }),
+        }];
+
+        let file = PathBuf::from(".").join("src").join("web").join("foo.ts");
+        let advisory = build_advisory(&file, &[], &ctx, &plugin_metas);
+        assert_eq!(
+            advisory.layer.as_deref(),
+            Some("web"),
+            "a `./`-relative path under the `web` layer must still resolve to it"
+        );
+        assert!(
+            advisory
+                .constraints
+                .iter()
+                .any(|c| c.rule == "WebOnlyCheck"),
+            "the `web`-layer-scoped plugin check must still surface as a constraint"
+        );
     }
 
     #[test]

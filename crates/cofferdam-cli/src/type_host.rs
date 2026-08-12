@@ -16,11 +16,11 @@
 //!   - Worker dies mid-run → `type_at` returns `None`, silently
 //!     disabling type findings for the rest of the run.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use cofferdam_core::{LiteralFacts, TypeFacts, TypeOracle, UnionFacts};
@@ -70,26 +70,79 @@ fn current_user_tag() -> String {
 /// Materialise the embedded host script to the OS temp dir on first
 /// call, reuse the path on subsequent calls in this process. Same
 /// pattern as `plugins.rs::materialise_host_script`.
+///
+/// CD-277: only the success path is cached — `OnceLock<PathBuf>` rather
+/// than `OnceLock<io::Result<PathBuf>>`. Caching an `Err` disabled the
+/// type host for the rest of the process on the first failure, even a
+/// momentary one (a full/restrictive temp dir, an antivirus scanner
+/// holding the file, a `rename` racing a reader — see CD-266/CD-276).
+/// `INIT_LOCK` reproduces `OnceLock::get_or_init`'s "only one caller
+/// does the work, the rest wait" behaviour for the retry-on-failure
+/// case, which `get_or_try_init` would give for free but is still
+/// unstable (`once_cell_try`, rust-lang/rust#109737).
 fn materialise_host_script() -> std::io::Result<PathBuf> {
-    static CACHED: OnceLock<std::io::Result<PathBuf>> = OnceLock::new();
-    let result = CACHED.get_or_init(|| {
-        let dir = scripts_dir();
-        std::fs::create_dir_all(&dir)?;
+    static CACHED: OnceLock<PathBuf> = OnceLock::new();
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
 
-        // See `plugins.rs::materialise_host_script` — both host scripts
-        // share this file and each ensures it's present so either one
-        // can be spawned independently of the other.
-        let core_path = dir.join(CORE_SCRIPT_NAME);
-        std::fs::write(&core_path, CORE_SCRIPT)?;
-
-        let path = dir.join(HOST_SCRIPT_NAME);
-        std::fs::write(&path, HOST_SCRIPT)?;
-        Ok(path)
-    });
-    match result {
-        Ok(p) => Ok(p.clone()),
-        Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
     }
+    let _guard = INIT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(p) = CACHED.get() {
+        return Ok(p.clone());
+    }
+
+    let dir = scripts_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    // See `plugins.rs::materialise_host_script` — both host scripts
+    // share this file and each ensures it's present so either one
+    // can be spawned independently of the other.
+    //
+    // CD-266: `write_atomic`, not `fs::write` directly. `scripts_dir`
+    // is scoped by version and user (CD-89) but not by process — two
+    // same-version `cofferdam` invocations racing (a CI matrix
+    // sharing a runner, a watch-mode rebuild overlapping a manual
+    // run) could have one process's non-atomic truncate-then-write
+    // caught mid-write by another process's `node` opening the same
+    // path, producing a `SyntaxError` from a torn `.mjs` file that
+    // looks exactly like the class of flake CD-238 was filed for.
+    let core_path = dir.join(CORE_SCRIPT_NAME);
+    write_atomic(&core_path, CORE_SCRIPT)?;
+
+    let path = dir.join(HOST_SCRIPT_NAME);
+    write_atomic(&path, HOST_SCRIPT)?;
+    let _ = CACHED.set(path.clone());
+    Ok(path)
+}
+
+/// Write `contents` to `path` without a window where a concurrent
+/// reader could observe a truncated/partial file — write to a
+/// process- and call-site-unique sibling path, then `rename` into
+/// place. `rename` is atomic on both POSIX and Windows for a
+/// same-directory replace. Mirrors `plugins.rs::write_atomic`.
+///
+/// CD-276/CD-283: `path.with_extension(format!("tmp-{pid}"))` alone is
+/// unique per *process* but not per *call site* — `materialise_host_script`
+/// here and its twin in `plugins.rs` both write `CORE_SCRIPT_NAME` into
+/// the same `scripts_dir`, so a same-process run using both type-aware
+/// checks and plugins would have both compute the identical tmp path
+/// with no serialisation between them, reopening the torn-file window
+/// this function exists to close. The `-type-host` suffix keeps this
+/// call site's tmp path distinct from `plugins.rs`'s `-plugins` one even
+/// when both target the same destination.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp_path = tmp_sibling(path);
+    std::fs::write(&tmp_path, contents)?;
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+/// Pure helper behind [`write_atomic`]'s tmp-path computation, split out
+/// so the call-site discriminator (CD-276/CD-283) is unit-testable
+/// without depending on filesystem write timing.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    path.with_extension(format!("tmp-{}-type-host", std::process::id()))
 }
 
 /// Wall-clock budget for one type-host request. Default 60s; override
@@ -105,22 +158,94 @@ pub fn host_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// CD-282: each worker opens a full ts-morph `Project` (parses the whole
+/// TS program), so the default pool size is capped here rather than left
+/// to track `available_parallelism()` unbounded — a 64-core CI runner
+/// would otherwise spawn 64 concurrent full-project parses, a plausible
+/// OOM. The per-file engine loop is still single-threaded (CD-30 open),
+/// so today every worker past the first buys no throughput anyway; 4 is
+/// enough to keep a few requests in flight without the unbounded blast
+/// radius. `COFFERDAM_TYPE_HOST_POOL_SIZE` still overrides this
+/// unconditionally for anyone who has measured their own workload.
+const DEFAULT_POOL_SIZE_CAP: usize = 4;
+
 /// Number of Node workers in the type-host pool (CD-31). Default is the
-/// host's available parallelism (falling back to 1); override via
-/// `COFFERDAM_TYPE_HOST_POOL_SIZE=<n>`. Tying the default to core count
-/// means the pool roughly matches the eventual rayon thread count
-/// without hard-coding a dependency on the engine crate (which owns the
-/// actual rayon setup — CD-30).
+/// host's available parallelism, capped at [`DEFAULT_POOL_SIZE_CAP`]
+/// (falling back to 1 if parallelism can't be determined); override via
+/// `COFFERDAM_TYPE_HOST_POOL_SIZE=<n>`, which is not capped.
 pub fn pool_size() -> usize {
     std::env::var("COFFERDAM_TYPE_HOST_POOL_SIZE")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1)
+            default_pool_size(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+            )
         })
+}
+
+/// Pure capping logic behind [`pool_size`]'s uncapped-env-var-absent
+/// branch, split out so it's unit-testable without mutating process-wide
+/// env state (forbidden by the workspace's no-`unsafe` lint, which
+/// `std::env::set_var` requires since Rust 2024).
+fn default_pool_size(available_parallelism: usize) -> usize {
+    available_parallelism.min(DEFAULT_POOL_SIZE_CAP)
+}
+
+/// CD-262: bound on a single NDJSON response line read from a worker's
+/// stdout. Generous headroom for a legitimately large type-facts payload
+/// (a union with many literal members, say), but bounds worst-case
+/// memory if the worker ever writes to stdout without a trailing
+/// newline — the stdout twin of CD-259's stderr-drain bound.
+const MAX_RESPONSE_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read one NDJSON line from `reader` as raw bytes, bounded at
+/// [`MAX_RESPONSE_LINE_BYTES`] (CD-262). Mirrors `BufRead::read_line`'s
+/// EOF contract (`Ok(0)` only when nothing at all was read) but never
+/// hands ownership of unvalidated bytes to `String`'s UTF-8 check —
+/// unlike `read_line`, which on invalid UTF-8 returns `Err` with the
+/// already-consumed bytes discarded and the stream left mid-frame,
+/// desyncing every subsequent read. Bytes here are always returned to
+/// the caller (via `buf`) regardless of their encoding; validation is
+/// the caller's job (`String::from_utf8_lossy`).
+fn read_response_line_bounded(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<usize> {
+    let start_len = buf.len();
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            return Ok(buf.len() - start_len); // EOF
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&available[..=pos]);
+            reader.consume(pos + 1);
+            return Ok(buf.len() - start_len);
+        }
+        let n = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(n);
+        if buf.len() - start_len > MAX_RESPONSE_LINE_BYTES {
+            // CD-278: the oversized bytes are already `consume`d above
+            // with no newline found, so the stream is left mid-frame —
+            // the same desync shape as a resync-budget exhaustion, not a
+            // generic I/O failure. `InvalidData` (never produced by a
+            // real transport error from `fill_buf`) lets the caller tell
+            // the two apart and retire the worker rather than reuse it.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("response line exceeded {MAX_RESPONSE_LINE_BYTES} bytes without a newline"),
+            ));
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -276,6 +401,14 @@ pub enum TypeHostError {
     Io(String),
     #[error("type-host returned malformed JSON: {0}")]
     BadResponse(String),
+    /// CD-278/CD-285: the resync loop in [`Worker::request_nullable`] gave
+    /// up after [`MAX_RESPONSE_RESYNC_ATTEMPTS`] stray/mismatched lines.
+    /// Distinct from [`TypeHostError::BadResponse`] so callers can tell
+    /// "this response was malformed" (worker is otherwise fine) apart
+    /// from "this worker's stdout is desynced and will keep failing"
+    /// (worker must be retired, not reused).
+    #[error("type-host worker stdout desynced: {0}")]
+    Desynced(String),
     #[error("type-host request timed out after {0:?}")]
     Timeout(Duration),
     #[error("type-host error [{code}]: {message}")]
@@ -293,6 +426,173 @@ pub fn ping(project_root: &Path, params: PingParams) -> Result<PingResult, TypeH
     Ok(result)
 }
 
+/// Cap on retained stderr text (CD-245): a worker that dumps a large
+/// diagnostic (deprecation spam, a `console.error` in a big project)
+/// shouldn't grow this unboundedly for the lifetime of the worker —
+/// only the tail is useful for the CD-238 error message anyway.
+const STDERR_BUF_CAP: usize = 64 * 1024;
+
+/// CD-245: drain `stderr` on a background thread into a bounded shared
+/// buffer for the worker's whole lifetime, rather than leaving the pipe
+/// unread. An unread `Stdio::piped()` stderr fills its OS pipe buffer
+/// (typically 8-64 KB) once the worker writes past it — Node
+/// deprecation warnings, a ts-morph diagnostic dump, a stray
+/// `console.error` — at which point the worker blocks in `write(2)`
+/// and never produces its NDJSON response, hanging `Worker::request`
+/// (which has no read timeout). Draining continuously keeps the pipe
+/// empty so the worker can't wedge itself this way, and gives the
+/// CD-238 stdout-EOF error path a non-blocking source of diagnostics
+/// (previously it did a blocking `read_to_string`, which could hang
+/// forever if the child was still alive — CD-244).
+///
+/// CD-253: buffered as raw bytes rather than `String`. A worker's
+/// stderr isn't guaranteed to be valid UTF-8 or to break cleanly on
+/// character boundaries at the `STDERR_BUF_CAP` trim point — reading
+/// via `read_line`/`String` panicked `replace_range` on a multi-byte
+/// char straddling the cut, and `read_line` itself errors (treated as
+/// EOF, permanently stopping the drain) on invalid UTF-8. `read_until`
+/// has no such encoding concerns; decoding is deferred to
+/// [`Worker::request_nullable`]'s error path via `from_utf8_lossy`.
+///
+/// CD-254: also returns a `Receiver` that fires once when the drain
+/// loop exits (i.e. the child's stderr pipe has closed and everything
+/// written to it has been drained into the buffer). Nothing previously
+/// synchronised with this thread, so the stdout-EOF error path could
+/// snapshot the buffer before the last few already-written lines had
+/// been read out of the OS pipe — for the common "prints one stack
+/// trace and exits" failure shape, that raced the CD-238 diagnostic
+/// message back down to no stderr tail at all, nondeterministically.
+/// [`Worker::request_nullable`]'s EOF branch does a short bounded
+/// `recv_timeout` on this before snapshotting.
+///
+/// CD-259: reads fixed-size chunks via [`Read::read`] rather than
+/// line-framing via `read_until(b'\n', ...)`. `read_until` grows its
+/// destination `Vec` without limit until it finds the delimiter —
+/// `STDERR_BUF_CAP` was only ever applied *after* a full line had
+/// accumulated, so newline-free output (a `\r`-only progress bar, a
+/// `console.error` of one huge JSON blob) grew unboundedly and could
+/// OOM the whole CLI in a code path whose entire purpose is defensive
+/// robustness. A fixed chunk size bounds the transient allocation
+/// regardless of whether the input ever contains a newline.
+///
+/// CD-260: the loop no longer treats every `Err` or a poisoned lock as
+/// a reason to stop draining for the worker's remaining lifetime — both
+/// silently reopened the CD-245 deadlock this thread exists to prevent.
+/// See [`drain_into`].
+fn spawn_stderr_drain(stderr: ChildStderr) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let buf_writer = Arc::clone(&buf);
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        drain_into(stderr, &buf_writer);
+        let _ = done_tx.send(());
+    });
+    (buf, done_rx)
+}
+
+/// Read `reader` to EOF in fixed-size chunks, appending each into `buf`
+/// via [`append_capped`]. Split out from [`spawn_stderr_drain`] so the
+/// CD-259 bounded-memory behaviour is testable against a plain in-memory
+/// reader without a real child process.
+const DRAIN_CHUNK_SIZE: usize = 8 * 1024;
+
+/// CD-260: a genuine EOF (`Ok(0)`) is the only intended way out of the
+/// loop. A poisoned lock is ignored rather than treated as fatal — this
+/// buffer holds a lossy diagnostic tail with no invariant a panicking
+/// holder (`Worker::request_nullable`'s CD-238 error path) could
+/// corrupt, so honouring the poison and giving up on draining forever
+/// is strictly worse than reading through it.
+///
+/// CD-270: this arm is for errors that *might* be transient on some
+/// `R: Read` — `WouldBlock`/`TimedOut` — not "any error that isn't
+/// `Interrupted`". The real reader this runs against (`ChildStderr`, a
+/// blocking OS pipe) can't actually produce those; what it produces on
+/// failure is permanent errors (`BrokenPipe`, `EIO`, ...), which now
+/// break immediately instead of paying a pointless sleep first. That
+/// sleep used to delay the `done_tx` signal
+/// `Worker::request_nullable`'s CD-254 join waits on — harmless while
+/// the retry budget is small relative to that timeout, but a latent
+/// coupling between two unrelated constants. The bound exists for a
+/// hypothetical future non-`ChildStderr` reader (this helper is a
+/// generic `R: Read`, tested directly against synthetic readers) where
+/// `WouldBlock` is real.
+const MAX_TRANSIENT_READ_RETRIES: u32 = 8;
+
+/// CD-270: `Interrupted` (EINTR) is retried unconditionally — matching
+/// `std`'s own `read_to_end` — but must still be bounded. An unbounded
+/// retry here is exactly the "spin forever on a dead reader" risk this
+/// function exists to avoid, just relocated to a different error kind:
+/// a signal handler installed without `SA_RESTART` firing repeatedly
+/// would otherwise busy-spin this thread at 100% CPU forever and never
+/// send `done_tx`. Large (not `MAX_TRANSIENT_READ_RETRIES`-sized)
+/// because genuine EINTR storms under real interrupt load can
+/// legitimately recur far more than 8 times; still finite.
+const MAX_INTERRUPTED_RETRIES: u32 = 10_000;
+
+fn drain_into<R: Read>(mut reader: R, buf: &Mutex<Vec<u8>>) {
+    let mut chunk = [0u8; DRAIN_CHUNK_SIZE];
+    let mut transient_retries_left = MAX_TRANSIENT_READ_RETRIES;
+    let mut interrupted_retries_left = MAX_INTERRUPTED_RETRIES;
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                transient_retries_left = MAX_TRANSIENT_READ_RETRIES;
+                interrupted_retries_left = MAX_INTERRUPTED_RETRIES;
+                let mut bytes = buf.lock().unwrap_or_else(PoisonError::into_inner);
+                append_capped(&mut bytes, &chunk[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                if interrupted_retries_left == 0 {
+                    break;
+                }
+                interrupted_retries_left -= 1;
+                // No sleep — EINTR means "the syscall didn't run at
+                // all, try again immediately", not "wait for something
+                // to change".
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) && transient_retries_left > 0 =>
+            {
+                transient_retries_left -= 1;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// Bounded wait for the stderr drain thread to finish, used only on the
+/// stdout-EOF path (CD-254) — the child has just exited (or is about
+/// to), so its stderr pipe closes promptly; this exists to close the
+/// race, not to wait indefinitely. If the thread hasn't finished within
+/// the bound, snapshot whatever is buffered so far rather than block —
+/// CD-244's "never block indefinitely" property still holds.
+const STDERR_DRAIN_JOIN_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// CD-261: bound on how many stray (non-matching-id) stdout lines
+/// `Worker::request_nullable` will skip while resyncing before giving
+/// up and returning an error. Bounded so a worker stuck emitting
+/// endless non-RPC stdout output can't hang the caller reading forever.
+const MAX_RESPONSE_RESYNC_ATTEMPTS: u32 = 32;
+
+/// Append `chunk` to `buf`, trimming from the front once `buf` exceeds
+/// `STDERR_BUF_CAP`. Byte-indexed, not char-boundary-aware — `buf`
+/// holds raw stderr bytes of unknown/possibly-invalid encoding, so
+/// there is no "boundary" to respect (see [`spawn_stderr_drain`]'s
+/// CD-253 doc). Split out from the drain loop so it's unit-testable
+/// without a real child process.
+fn append_capped(buf: &mut Vec<u8>, chunk: &[u8]) {
+    buf.extend_from_slice(chunk);
+    if buf.len() > STDERR_BUF_CAP {
+        let excess = buf.len() - STDERR_BUF_CAP;
+        buf.drain(0..excess);
+    }
+}
+
 /// One running type-host process. Keeps stdin/stdout open so callers
 /// can issue multiple requests against a warm worker. Always drop via
 /// `close()` to flush stdin and reap the child; `Drop` falls back to
@@ -301,6 +601,13 @@ pub struct Worker {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    /// Tail of the worker's stderr output (raw bytes — CD-253), kept
+    /// current by a background drain thread spawned in [`spawn_worker`]
+    /// — see [`spawn_stderr_drain`].
+    stderr_buf: Arc<Mutex<Vec<u8>>>,
+    /// Fires once when the drain thread exits (CD-254) — see
+    /// [`spawn_stderr_drain`] and [`STDERR_DRAIN_JOIN_TIMEOUT`].
+    stderr_drain_done: mpsc::Receiver<()>,
 }
 
 impl Worker {
@@ -351,26 +658,25 @@ impl Worker {
             .flush()
             .map_err(|e| TypeHostError::Io(format!("flush request: {e}")))?;
 
-        // Read one NDJSON line. cp2 is synchronous: one request, one
-        // response, in order, so we don't need an out-of-order pairing
-        // layer yet. Batched type queries (a follow-up) will switch to
-        // a request-id index.
-        let mut buf = String::new();
-        let n = self
-            .stdout
-            .read_line(&mut buf)
-            .map_err(|e| TypeHostError::Io(format!("read response: {e}")))?;
-        if n == 0 {
-            return Err(TypeHostError::Io(
-                "worker stdout closed before response".into(),
-            ));
-        }
-
+        // CD-281: the id is checked against a *raw* envelope (result/error
+        // left as `serde_json::Value`) before ever attempting to deserialise
+        // into `R`/`HostErrorBody`. Deserialising those typed fields first
+        // meant a response that matched our id but didn't parse cleanly
+        // (e.g. an `ok:false` whose `error` body was missing `code`/
+        // `message`) fell into the "stray/malformed line" arm below and was
+        // discarded — silently consuming *our own* response and looping
+        // back into a `read_line` for a reply that will never come, since
+        // the worker already sent it.
         #[derive(Deserialize)]
-        struct ResponseEnvelope<R> {
-            #[allow(dead_code)]
+        struct RawResponseEnvelope {
             id: String,
             #[serde(default)]
+            ok: bool,
+            result: Option<serde_json::Value>,
+            error: Option<serde_json::Value>,
+        }
+        #[derive(Deserialize)]
+        struct ResponseEnvelope<R> {
             ok: bool,
             result: Option<R>,
             error: Option<HostErrorBody>,
@@ -380,8 +686,145 @@ impl Worker {
             code: String,
             message: String,
         }
-        let env: ResponseEnvelope<R> = serde_json::from_str(buf.trim_end())
-            .map_err(|e| TypeHostError::BadResponse(format!("{e}: {}", buf.trim_end())))?;
+
+        // CD-261: cp2 is synchronous (one request, one response, in
+        // order) but only for a *well-behaved* worker — a stray line on
+        // stdout (a `console.log` reached through user config, a Node
+        // loader/deprecation notice, ...) desyncs purely-positional
+        // pairing permanently: every later response answers the wrong
+        // request, silently attributing type facts to the wrong span
+        // for the worker's remaining lifetime. `next_id()` already
+        // generates unique ids; check them. On a mismatch, skip the
+        // stray line and keep reading (bounded) rather than trust it —
+        // resync, don't resign.
+        let mut resync_attempts = 0u32;
+        let env: ResponseEnvelope<R> = loop {
+            // Read one NDJSON line. CD-262: read as raw bytes rather than
+            // `read_line` into a `String` — `read_line` errors out (and
+            // discards the already-consumed bytes) on invalid UTF-8,
+            // leaving the stream mid-frame for every subsequent read.
+            let mut raw_buf = Vec::new();
+            let n = read_response_line_bounded(&mut self.stdout, &mut raw_buf).map_err(|e| {
+                // CD-278: a line over `MAX_RESPONSE_LINE_BYTES` leaves the
+                // stream mid-frame (bytes already consumed, no newline
+                // found) — that's a desync, not a transient I/O failure,
+                // so it must retire the worker via the same path as a
+                // resync-budget exhaustion rather than being swallowed
+                // into `None` by `.ok()?` and reused forever.
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    TypeHostError::Desynced(format!("read response: {e}"))
+                } else {
+                    TypeHostError::Io(format!("read response: {e}"))
+                }
+            })?;
+            let buf = String::from_utf8_lossy(&raw_buf);
+            if n == 0 {
+                // CD-238: the worker's stdout closed without a response —
+                // almost always because the child process already exited.
+                // Surface its exit status and any stderr output (a Node
+                // stack trace, an ESM resolution error, ...) rather than
+                // the bare "closed before response", which gave zero
+                // diagnostic signal for the flake this was originally
+                // reported as (CI-only "worker stdout closed before
+                // response" with no visible cause).
+                let status = self
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "still running".to_string());
+                // CD-254: give the drain thread a short bounded window to
+                // finish reading whatever the child already wrote before we
+                // snapshot — otherwise the last few lines still sitting in
+                // the OS pipe when we observed stdout EOF may not have been
+                // drained yet, and the diagnostic below nondeterministically
+                // comes back empty for the common "short trace, then exit"
+                // failure shape.
+                let _ = self
+                    .stderr_drain_done
+                    .recv_timeout(STDERR_DRAIN_JOIN_TIMEOUT);
+                // CD-244: read from the drain thread's buffer rather than
+                // the pipe directly — a direct `read_to_string` here blocks
+                // until the child closes stderr, which (per the `status`
+                // computed above) may never happen if the child is still
+                // running.
+                //
+                // CD-260: a poisoned lock (this call is itself the only
+                // realistic panic site touching this mutex) is read through
+                // rather than treated as "no diagnostics" — see
+                // `drain_into`'s CD-260 doc for why honouring poison here
+                // would be strictly worse than ignoring it.
+                let bytes = self
+                    .stderr_buf
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let stderr_text = String::from_utf8_lossy(&bytes).trim().to_string();
+                let stderr_text = stderr_text.as_str();
+                return Err(TypeHostError::Io(format!(
+                    "worker stdout closed before response (exit status: {status}){}",
+                    if stderr_text.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; stderr: {stderr_text}")
+                    }
+                )));
+            }
+
+            // A stray line — one that isn't valid JSON at all, or is
+            // valid JSON but answers a different request id — is
+            // discarded and reading continues, up to a bounded number
+            // of attempts. Both shapes count against the same budget:
+            // either one is evidence stdout is (or was, transiently)
+            // carrying something other than this request's response.
+            let raw: RawResponseEnvelope = match serde_json::from_str(buf.trim_end()) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    resync_attempts += 1;
+                    if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
+                        return Err(TypeHostError::Desynced(format!(
+                            "{e}: {} (gave up resyncing after {resync_attempts} \
+                             stray/malformed line(s))",
+                            buf.trim_end()
+                        )));
+                    }
+                    continue;
+                }
+            };
+            if raw.id != id {
+                resync_attempts += 1;
+                if resync_attempts > MAX_RESPONSE_RESYNC_ATTEMPTS {
+                    return Err(TypeHostError::Desynced(format!(
+                        "response id mismatch: expected {id:?}, got {:?} \
+                         (gave up resyncing after {resync_attempts} stray line(s) — \
+                         worker stdout may be permanently desynced)",
+                        raw.id
+                    )));
+                }
+                // Stray line that doesn't answer this request — discard it
+                // and keep reading for the real response.
+                continue;
+            }
+            // The id matches — this is our response. From here a parse
+            // failure is a real protocol error, not a stray line, so it
+            // must surface as `BadResponse` rather than being silently
+            // skipped.
+            let result = raw
+                .result
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| TypeHostError::BadResponse(format!("response {id:?} result: {e}")))?;
+            let error = raw
+                .error
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| TypeHostError::BadResponse(format!("response {id:?} error: {e}")))?;
+            break ResponseEnvelope {
+                ok: raw.ok,
+                result,
+                error,
+            };
+        };
         if env.ok {
             Ok(env.result)
         } else {
@@ -485,10 +928,24 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
         .stdout
         .take()
         .ok_or_else(|| TypeHostError::Io("no worker stdout".into()))?;
+    let (stderr_buf, stderr_drain_done) = match child.stderr.take() {
+        Some(stderr) => spawn_stderr_drain(stderr),
+        None => {
+            // No stderr pipe to drain — synthesize an already-closed
+            // channel so `recv_timeout` in the EOF path returns
+            // immediately (`Disconnected`) instead of waiting out the
+            // full timeout for a thread that was never spawned.
+            let (tx, rx) = mpsc::channel();
+            drop(tx);
+            (Arc::new(Mutex::new(Vec::new())), rx)
+        }
+    };
     Ok(Worker {
         child,
         stdin: Some(stdin),
         stdout: BufReader::new(stdout),
+        stderr_buf,
+        stderr_drain_done,
     })
 }
 
@@ -513,6 +970,18 @@ fn spawn_worker(project_root: &Path) -> Result<Worker, TypeHostError> {
 /// regressing unnoticed.
 pub struct WorkerTypeOracle {
     workers: Vec<Mutex<Worker>>,
+    /// CD-271: parallel to `workers` — `false` once a worker's mutex has
+    /// been observed poisoned. A panic while a `Worker`'s mutex is held
+    /// can leave a half-written request on stdin or an unread response
+    /// line on stdout, so reading through the poison risks desyncing the
+    /// NDJSON stream (the failure CD-261 guards against); retiring the
+    /// worker from round-robin rotation is safer than reusing it. Without
+    /// this, `next_worker`'s blind `fetch_add % len` keeps routing 1/N of
+    /// all subsequent queries to the poisoned worker for the rest of the
+    /// run, and every one of those silently returns `None` — the same
+    /// "no resolvable type" outcome as a query that legitimately found
+    /// nothing, so the lost coverage was previously invisible.
+    alive: Vec<AtomicBool>,
     tsconfig_path: String,
     next_id: AtomicU64,
     next_worker: AtomicUsize,
@@ -523,11 +992,59 @@ impl WorkerTypeOracle {
         format!("ta-{}", self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Pick the next worker round-robin. Panics only if the pool is
-    /// empty, which [`build_type_oracle`] never constructs.
-    fn next_worker(&self) -> &Mutex<Worker> {
-        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        &self.workers[idx]
+    /// Pick the next worker round-robin, skipping any worker already
+    /// marked dead (CD-271). Scans at most one full lap of the pool; if
+    /// every worker is dead, falls back to the raw round-robin index —
+    /// the same "no coverage" outcome as today, just without spinning.
+    /// Panics only if the pool is empty, which [`build_type_oracle`]
+    /// never constructs.
+    fn next_worker(&self) -> (usize, &Mutex<Worker>) {
+        let len = self.workers.len();
+        for _ in 0..len {
+            let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % len;
+            if self.alive[idx].load(Ordering::Relaxed) {
+                return (idx, &self.workers[idx]);
+            }
+        }
+        let idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % len;
+        (idx, &self.workers[idx])
+    }
+
+    /// Retire a worker from rotation, e.g. after its mutex was found
+    /// poisoned or its stdout stream desynced. Logs once per worker (the
+    /// `swap` guards against re-logging on every subsequent query that
+    /// happens to land on an already-dead index) so a run that lost a
+    /// share of its type coverage says so, per the CD-271 finding — the
+    /// prior behaviour was fully silent.
+    fn mark_dead(&self, idx: usize, reason: &str) {
+        if self.alive[idx].swap(false, Ordering::Relaxed) {
+            eprintln!(
+                "cofferdam: type-host worker {idx} {reason} — retiring it from the pool; \
+                 type-aware findings from its share of the run may be reduced"
+            );
+        }
+    }
+
+    /// CD-278/CD-285: a worker whose resync budget was exhausted
+    /// ([`TypeHostError::Desynced`]) is left mid-stream out of alignment
+    /// with its own stdout — every later request routed to it would pay
+    /// up to [`MAX_RESPONSE_RESYNC_ATTEMPTS`] blocking reads only to fail
+    /// again, forever. Retire it the same way CD-271 retires a
+    /// poisoned-mutex worker, via the same `alive` bitmap and `mark_dead`
+    /// log line, rather than returning it to `next_worker`'s rotation.
+    /// Any other error (a malformed-but-in-sync response, a transport
+    /// error, ...) passes through unchanged — those don't imply the
+    /// worker's stream is misaligned, so retiring it would discard a
+    /// worker that's still perfectly usable.
+    fn retire_on_desync<T>(
+        &self,
+        idx: usize,
+        result: Result<T, TypeHostError>,
+    ) -> Result<T, TypeHostError> {
+        if let Err(TypeHostError::Desynced(_)) = &result {
+            self.mark_dead(idx, "lost sync with its stdout stream");
+        }
+        result
     }
 }
 
@@ -541,8 +1058,17 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
-        let wire: Option<TypeFactsWire> = worker.request_nullable(&id, "typeAt", &params).ok()?;
+        let (idx, worker_mutex) = self.next_worker();
+        let mut worker = match worker_mutex.lock() {
+            Ok(w) => w,
+            Err(_) => {
+                self.mark_dead(idx, "poisoned by a prior panic");
+                return None;
+            }
+        };
+        let wire: Option<TypeFactsWire> = self
+            .retire_on_desync(idx, worker.request_nullable(&id, "typeAt", &params))
+            .ok()?;
         wire.map(Into::into)
     }
 
@@ -555,9 +1081,16 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
-        let wire: Option<LiteralFactsWire> = worker
-            .request_nullable(&id, "resolveLiteral", &params)
+        let (idx, worker_mutex) = self.next_worker();
+        let mut worker = match worker_mutex.lock() {
+            Ok(w) => w,
+            Err(_) => {
+                self.mark_dead(idx, "poisoned by a prior panic");
+                return None;
+            }
+        };
+        let wire: Option<LiteralFactsWire> = self
+            .retire_on_desync(idx, worker.request_nullable(&id, "resolveLiteral", &params))
             .ok()?;
         wire.map(Into::into)
     }
@@ -571,9 +1104,17 @@ impl TypeOracle for WorkerTypeOracle {
             end_byte,
         };
         let id = self.next_id();
-        let mut worker = self.next_worker().lock().ok()?;
-        let wire: Option<UnionFactsWire> =
-            worker.request_nullable(&id, "unionMembers", &params).ok()?;
+        let (idx, worker_mutex) = self.next_worker();
+        let mut worker = match worker_mutex.lock() {
+            Ok(w) => w,
+            Err(_) => {
+                self.mark_dead(idx, "poisoned by a prior panic");
+                return None;
+            }
+        };
+        let wire: Option<UnionFactsWire> = self
+            .retire_on_desync(idx, worker.request_nullable(&id, "unionMembers", &params))
+            .ok()?;
         wire.map(Into::into)
     }
 }
@@ -685,8 +1226,10 @@ fn build_type_oracle_with_pool_size(
         return Err(err);
     }
 
+    let alive = workers.iter().map(|_| AtomicBool::new(true)).collect();
     Ok(WorkerTypeOracle {
         workers: workers.into_iter().map(Mutex::new).collect(),
+        alive,
         tsconfig_path: tsconfig,
         next_id: AtomicU64::new(0),
         next_worker: AtomicUsize::new(0),
@@ -697,6 +1240,576 @@ fn build_type_oracle_with_pool_size(
 mod tests {
     use super::*;
     use cofferdam_core::TypeOracle;
+
+    fn node_present() -> bool {
+        Command::new("node")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// CD-253: a multi-byte UTF-8 character straddling the
+    /// `STDERR_BUF_CAP` cut point must not panic — the old
+    /// `String::replace_range` implementation panicked here because
+    /// its trim index wasn't guaranteed to land on a char boundary.
+    #[test]
+    fn append_capped_does_not_panic_when_the_cap_lands_mid_char() {
+        // A 3-byte UTF-8 char (e.g. '€') repeated so the cap boundary
+        // is very likely to fall inside one of its bytes for at least
+        // some cap/length combination; assert over a spread of chunk
+        // sizes so the test doesn't depend on hitting one exact offset.
+        for pad in 0..3 {
+            let mut buf = vec![b'x'; STDERR_BUF_CAP - 1 + pad];
+            let chunk = "€€€€€".as_bytes(); // 5 * 3 = 15 bytes, multi-byte throughout
+            append_capped(&mut buf, chunk);
+            assert!(buf.len() <= STDERR_BUF_CAP);
+            // Must not panic, and the lossy decode used at the actual
+            // call site must also not panic on a boundary-split lead
+            // byte.
+            let _ = String::from_utf8_lossy(&buf);
+        }
+    }
+
+    /// CD-253: invalid UTF-8 bytes must not stop the drain — the old
+    /// `read_line`-based loop treated a `read` returning `Err` (which
+    /// `BufRead::read_line` does on invalid UTF-8) the same as EOF,
+    /// silently and permanently ending the drain for the worker's
+    /// remaining lifetime. `append_capped` operates on raw bytes with
+    /// no encoding validation, so this is really a proof that invalid
+    /// UTF-8 round-trips harmlessly through it and its `from_utf8_lossy`
+    /// consumer.
+    #[test]
+    fn append_capped_tolerates_invalid_utf8() {
+        let mut buf = Vec::new();
+        let invalid = [0xFF, 0xFE, b'h', b'i', b'\n'];
+        append_capped(&mut buf, &invalid);
+        assert_eq!(buf, invalid);
+        assert!(String::from_utf8_lossy(&buf).contains("hi"));
+    }
+
+    /// CD-259: newline-free input must not grow the drain's transient
+    /// buffer past `DRAIN_CHUNK_SIZE` per read — before the fix,
+    /// `read_until(b'\n', ...)` accumulated the entire input into one
+    /// `Vec` before ever calling `append_capped`, so output with no `\n`
+    /// (a `\r`-only progress bar, one huge `console.error` blob) grew
+    /// unboundedly regardless of `STDERR_BUF_CAP`. Feeds several times
+    /// `STDERR_BUF_CAP` worth of newline-free bytes through the drain
+    /// helper directly (no child process needed) and asserts the final
+    /// buffer still respects the cap.
+    #[test]
+    fn drain_into_bounds_memory_on_newline_free_input() {
+        let data = vec![b'x'; STDERR_BUF_CAP * 4];
+        let buf = Mutex::new(Vec::new());
+        drain_into(std::io::Cursor::new(data), &buf);
+        let bytes = buf.lock().expect("lock");
+        assert!(
+            bytes.len() <= STDERR_BUF_CAP,
+            "expected the buffer to stay capped at {STDERR_BUF_CAP}, got {}",
+            bytes.len()
+        );
+    }
+
+    /// CD-262: `read_response_line_bounded` must return the line's bytes
+    /// (including the trailing newline) verbatim regardless of encoding
+    /// — unlike `BufRead::read_line`, which errors out and discards the
+    /// already-consumed bytes on invalid UTF-8, desyncing the stream for
+    /// every subsequent read.
+    #[test]
+    fn read_response_line_bounded_returns_invalid_utf8_verbatim_instead_of_erroring() {
+        let mut line = vec![b'{', 0xFF, 0xFE, b'}', b'\n'];
+        let trailer = b"next-line\n".to_vec();
+        let mut input = line.clone();
+        input.extend_from_slice(&trailer);
+        let mut reader = std::io::Cursor::new(input);
+        let mut buf = Vec::new();
+        let n = read_response_line_bounded(&mut reader, &mut buf).expect("read first line");
+        assert_eq!(n, line.len());
+        assert_eq!(buf, line);
+        line.clear();
+        buf.clear();
+        let n = read_response_line_bounded(&mut reader, &mut buf).expect("read second line");
+        assert_eq!(n, trailer.len());
+        assert_eq!(buf, trailer);
+    }
+
+    /// CD-262: a response line with no newline must not grow memory
+    /// unboundedly — mirrors CD-259's stderr-drain bound, applied to the
+    /// stdout transport instead of diagnostics. Errors out once the cap
+    /// is exceeded rather than the CD-259 buffer's trim-and-keep-going,
+    /// since a truncated JSON line can never be parsed regardless.
+    #[test]
+    fn read_response_line_bounded_errors_out_on_newline_free_flood() {
+        let data = vec![b'x'; MAX_RESPONSE_LINE_BYTES + 1];
+        let mut reader = std::io::Cursor::new(data);
+        let mut buf = Vec::new();
+        let err = read_response_line_bounded(&mut reader, &mut buf)
+            .expect_err("expected the bound to be hit");
+        assert!(err.to_string().contains("exceeded"));
+    }
+
+    /// CD-262: an invalid-UTF-8 stray line on stdout (e.g. a file path
+    /// with non-UTF-8 bytes echoed into an unrelated diagnostic) must be
+    /// treated as an ordinary stray line — resynced past, not left
+    /// mid-frame corrupting every later read. Before the fix,
+    /// `read_line` erroring on the invalid bytes discarded them without
+    /// consuming the trailing newline, so the *next* read started
+    /// mid-line and desynced permanently.
+    #[test]
+    fn request_nullable_resyncs_past_an_invalid_utf8_stray_line() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 process.stdout.write(Buffer.from([0x7b, 0xff, 0xfe, 0x7d, 0x0a])); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', (line) => { \
+                   const req = JSON.parse(line); \
+                   process.stdout.write(JSON.stringify({ id: req.id, ok: true, result: null }) + '\\n'); \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        match result {
+            Ok(None) => {}
+            other => panic!(
+                "expected Ok(None) after resyncing past the invalid-UTF-8 stray line, got {other:?}"
+            ),
+        }
+        let _ = worker.close();
+    }
+
+    /// CD-260: a panic while `stderr_buf` is locked elsewhere (the only
+    /// realistic site is `Worker::request_nullable`'s CD-238 error path)
+    /// must not permanently stop the drain — the buffer holds a lossy
+    /// diagnostic tail with no invariant a panic could corrupt, so
+    /// honouring the poison and giving up forever is strictly worse
+    /// than reading through it.
+    #[test]
+    fn drain_into_recovers_from_a_poisoned_lock() {
+        let buf = Mutex::new(Vec::new());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = buf.lock().expect("lock");
+            panic!("simulate a panic while holding the lock");
+        }));
+        assert!(poisoned.is_err());
+        assert!(buf.is_poisoned());
+
+        drain_into(std::io::Cursor::new(b"after poison\n".to_vec()), &buf);
+
+        let bytes = buf.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(&*bytes, b"after poison\n");
+    }
+
+    /// CD-260: a transient read error (e.g. `WouldBlock`) must not end
+    /// the drain permanently — before the fix, `Err(_) => break` treated
+    /// every error the same as EOF.
+    #[test]
+    fn drain_into_retries_transient_read_errors_instead_of_giving_up() {
+        struct FlakyThenData {
+            errors_left: u32,
+            payload: Option<Vec<u8>>,
+        }
+        impl Read for FlakyThenData {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.errors_left > 0 {
+                    self.errors_left -= 1;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "simulated transient error",
+                    ));
+                }
+                match self.payload.take() {
+                    Some(payload) => {
+                        out[..payload.len()].copy_from_slice(&payload);
+                        Ok(payload.len())
+                    }
+                    None => Ok(0),
+                }
+            }
+        }
+
+        let reader = FlakyThenData {
+            errors_left: MAX_TRANSIENT_READ_RETRIES - 1,
+            payload: Some(b"hi\n".to_vec()),
+        };
+        let buf = Mutex::new(Vec::new());
+        drain_into(reader, &buf);
+        let bytes = buf.lock().expect("lock");
+        assert_eq!(&*bytes, b"hi\n");
+    }
+
+    /// CD-260: a reader that errors forever must still make `drain_into`
+    /// return promptly (bounded retries) rather than hang the thread.
+    #[test]
+    fn drain_into_gives_up_after_exhausting_retries_on_a_persistently_erroring_reader() {
+        struct AlwaysErrors;
+        impl Read for AlwaysErrors {
+            fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("simulated persistent error"))
+            }
+        }
+        let buf = Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        drain_into(AlwaysErrors, &buf);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "should give up after bounded retries, not hang"
+        );
+    }
+
+    /// CD-270: a permanent error kind (anything that isn't `Interrupted`,
+    /// `WouldBlock`, or `TimedOut` — e.g. `BrokenPipe`, what a real
+    /// `ChildStderr` actually returns on failure) must break immediately,
+    /// not pay the `MAX_TRANSIENT_READ_RETRIES` sleep budget first. That
+    /// budget exists for a hypothetical non-blocking reader; wasting it
+    /// on an error class it can never fix just delays the `done_tx`
+    /// signal `Worker::request_nullable`'s CD-254 join is waiting on.
+    #[test]
+    fn drain_into_breaks_immediately_on_a_permanent_error_kind_without_retry_delay() {
+        struct AlwaysBrokenPipe;
+        impl Read for AlwaysBrokenPipe {
+            fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+        let buf = Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        drain_into(AlwaysBrokenPipe, &buf);
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "a permanent error kind should not be retried at all, took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// CD-270: `Interrupted` is retried unconditionally (matching
+    /// `std::io::Read::read_to_end`'s own behaviour) but must still be
+    /// bounded — an EINTR storm from a misbehaving signal handler must
+    /// not busy-spin the drain thread forever. Uses a reader that always
+    /// returns `Interrupted` and asserts `drain_into` still returns.
+    #[test]
+    fn drain_into_bounds_unconditional_interrupted_retries() {
+        struct AlwaysInterrupted;
+        impl Read for AlwaysInterrupted {
+            fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+            }
+        }
+        let buf = Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        drain_into(AlwaysInterrupted, &buf);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "an EINTR storm should still be bounded, not spin forever; took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// CD-244/CD-245: a worker that writes more than one OS pipe buffer
+    /// (typically 8-64 KB) to stderr and then exits without ever
+    /// producing a stdout response must not hang `request_nullable` —
+    /// before the drain thread existed, an unread stderr pipe would
+    /// block the child in `write(2)`, so it would never close stdout
+    /// and the read on line ~362 would block forever. Also proves the
+    /// EOF error message carries stderr diagnostics without doing a
+    /// blocking read on the (now already-drained) pipe (CD-244).
+    #[test]
+    fn stderr_drain_prevents_deadlock_and_surfaces_diagnostics_on_stdout_eof() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "for (let i = 0; i < 20000; i++) { console.error('x'.repeat(100)); } \
+                 process.exit(1);",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let start = std::time::Instant::now();
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("t", "ping", &());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "request_nullable should not block on the undrained stderr pipe; took {elapsed:?}"
+        );
+        match result {
+            Err(TypeHostError::Io(msg)) => {
+                assert!(
+                    msg.contains("stderr: "),
+                    "expected the drained stderr tail in the error message, got: {msg}"
+                );
+            }
+            other => panic!("expected TypeHostError::Io with stderr, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
+
+    /// CD-254: a worker that writes a single short line to stderr and
+    /// exits immediately — nothing here comes close to filling an OS
+    /// pipe buffer, so before the CD-254 fix this raced the drain
+    /// thread: the main thread could observe stdout EOF and snapshot
+    /// `stderr_buf` before the drain thread had scheduled at all,
+    /// nondeterministically losing the diagnostic. Run several times to
+    /// make a reintroduced race very likely to surface as a flake.
+    #[test]
+    fn stderr_drain_join_makes_short_lived_failure_diagnostics_deterministic() {
+        if !node_present() {
+            return;
+        }
+        for _ in 0..20 {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg("console.error('boom: short trace'); process.exit(1);")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn node");
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            let mut worker = Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            };
+
+            let result: Result<Option<PingResult>, TypeHostError> =
+                worker.request_nullable("t", "ping", &());
+            match result {
+                Err(TypeHostError::Io(msg)) => {
+                    assert!(
+                        msg.contains("boom: short trace"),
+                        "expected the short stderr line in the error message every time, got: {msg}"
+                    );
+                }
+                other => panic!("expected TypeHostError::Io with stderr, got {other:?}"),
+            }
+            let _ = worker.close();
+        }
+    }
+
+    /// CD-261: a stray line on the worker's stdout — malformed JSON, or
+    /// valid JSON that answers a different request id — must not
+    /// permanently desync purely-positional response pairing. Uses a
+    /// bare `node -e` "worker" (not the real type-host script) that
+    /// emits one non-JSON line before responding to each request over a
+    /// readline-framed stdin/stdout protocol, matching what
+    /// `Worker::request_nullable` speaks.
+    #[test]
+    fn request_nullable_resyncs_past_a_stray_stdout_line_instead_of_desyncing() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 console.log('stray line not json'); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', (line) => { \
+                   const req = JSON.parse(line); \
+                   process.stdout.write(JSON.stringify({ id: req.id, ok: true, result: null }) + '\\n'); \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        match result {
+            Ok(None) => {}
+            other => panic!("expected Ok(None) after resyncing past the stray line, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
+
+    /// CD-261: a response whose id never matches (a permanently desynced
+    /// worker, or a genuinely different in-flight request that will
+    /// never arrive) must give up after `MAX_RESPONSE_RESYNC_ATTEMPTS`
+    /// rather than block the caller forever reading stray lines.
+    #[test]
+    fn request_nullable_gives_up_resyncing_after_the_bounded_attempt_limit() {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', () => { \
+                   for (let i = 0; i < 64; i++) { \
+                     process.stdout.write(JSON.stringify({ id: 'never-matches', ok: true, result: null }) + '\\n'); \
+                   } \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let start = std::time::Instant::now();
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "should give up after bounded resync attempts, not block; took {elapsed:?}"
+        );
+        match result {
+            Err(TypeHostError::Desynced(msg)) => {
+                assert!(
+                    msg.contains("resyncing"),
+                    "expected a resync-exhausted error, got: {msg}"
+                );
+            }
+            other => panic!("expected TypeHostError::Desynced, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
+
+    /// CD-282: the default pool size must never exceed the cap, even on
+    /// a high-core-count host, but should stay under it on a low-core
+    /// host rather than always saturating the cap.
+    #[test]
+    fn default_pool_size_caps_high_parallelism_but_passes_through_low_parallelism() {
+        assert_eq!(default_pool_size(1), 1);
+        assert_eq!(default_pool_size(2), 2);
+        assert_eq!(
+            default_pool_size(DEFAULT_POOL_SIZE_CAP),
+            DEFAULT_POOL_SIZE_CAP
+        );
+        assert_eq!(default_pool_size(64), DEFAULT_POOL_SIZE_CAP);
+    }
+
+    /// CD-281: a response that matches our request id but fails to
+    /// deserialise its typed fields (here, an `ok:false` whose `error`
+    /// body is missing the required `code`/`message`) must surface as
+    /// `BadResponse` immediately — not be discarded as a "stray line" and
+    /// leave the caller blocked reading for a response the worker already
+    /// sent. Regression test for the id-vs-parse ordering bug: the id
+    /// must be checked on a raw envelope before attempting to deserialise
+    /// `result`/`error` into their typed shapes.
+    #[test]
+    fn request_nullable_surfaces_a_malformed_response_for_our_own_id_instead_of_treating_it_as_stray(
+    ) {
+        if !node_present() {
+            return;
+        }
+        let mut child = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const readline = require('readline'); \
+                 const rl = readline.createInterface({ input: process.stdin }); \
+                 rl.on('line', (line) => { \
+                   const req = JSON.parse(line); \
+                   process.stdout.write(JSON.stringify({ id: req.id, ok: false, error: {} }) + '\\n'); \
+                 });",
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let (stderr_buf, stderr_drain_done) =
+            spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+        let mut worker = Worker {
+            child,
+            stdin: Some(stdin),
+            stdout: BufReader::new(stdout),
+            stderr_buf,
+            stderr_drain_done,
+        };
+
+        let start = std::time::Instant::now();
+        let result: Result<Option<PingResult>, TypeHostError> =
+            worker.request_nullable("expected-id", "ping", &());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "must fail fast on our own malformed response, not block; took {elapsed:?}"
+        );
+        match result {
+            Err(TypeHostError::BadResponse(msg)) => {
+                assert!(
+                    msg.contains("expected-id"),
+                    "expected the response id in the error message, got: {msg}"
+                );
+            }
+            other => panic!("expected TypeHostError::BadResponse, got {other:?}"),
+        }
+        let _ = worker.close();
+    }
 
     /// CD-172: the Rust-side pre-check must agree with what
     /// `type-host-core.mjs`'s JS walk would find, in both directions —
@@ -752,6 +1865,271 @@ mod tests {
             Err(other) => panic!("expected HostError{{code: ts_morph_unavailable}}, got {other}"),
             Ok(_) => panic!("no node_modules/ts-morph anywhere under a fresh tempdir"),
         }
+    }
+
+    /// CD-271: a worker whose mutex is found poisoned must be retired
+    /// from round-robin rotation rather than continuing to claim 1/N of
+    /// all subsequent queries and silently returning `None` for each one
+    /// (the previously-silent "1/N of type findings quietly vanish"
+    /// hazard the ticket describes).
+    #[test]
+    fn poisoned_worker_is_retired_from_round_robin_rotation() {
+        if !node_present() {
+            return;
+        }
+        let spawn = |i: usize| -> Worker {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg("process.exit(0)")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|e| panic!("spawn worker {i}: {e}"));
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            }
+        };
+
+        let workers: Vec<Worker> = (0..3).map(spawn).collect();
+        let oracle = WorkerTypeOracle {
+            alive: workers.iter().map(|_| AtomicBool::new(true)).collect(),
+            workers: workers.into_iter().map(Mutex::new).collect(),
+            tsconfig_path: String::new(),
+            next_id: AtomicU64::new(0),
+            next_worker: AtomicUsize::new(0),
+        };
+
+        // Poison worker 0's mutex by panicking while holding its lock.
+        {
+            let guard = oracle.workers[0].lock().expect("lock worker 0");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = guard;
+                panic!("deliberate poison for CD-271 test");
+            }));
+            assert!(result.is_err(), "expected the deliberate panic to unwind");
+        }
+        assert!(oracle.workers[0].is_poisoned());
+
+        // Round-robin starts at index 0, so this query is the one that
+        // discovers the poison. `type_at` must degrade to `None` like any
+        // other transport failure, not panic or hang.
+        let result = oracle.type_at(Path::new("dummy.ts"), 0, 1);
+        assert!(result.is_none(), "poisoned worker must degrade to None");
+        assert!(
+            !oracle.alive[0].load(Ordering::Relaxed),
+            "worker 0 must be marked dead after its mutex was found poisoned"
+        );
+
+        // Subsequent round-robin picks must skip the retired worker.
+        for _ in 0..10 {
+            let (idx, _) = oracle.next_worker();
+            assert_ne!(idx, 0, "round robin must skip the retired worker");
+        }
+
+        for w in oracle.workers {
+            let _ = w
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .close();
+        }
+    }
+
+    /// CD-278/CD-285: a worker that exhausts its resync budget
+    /// ([`TypeHostError::Desynced`]) must be retired from round-robin
+    /// rotation, the same as a poisoned-mutex worker (CD-271) — otherwise
+    /// it keeps claiming 1/N of all later queries and paying
+    /// `MAX_RESPONSE_RESYNC_ATTEMPTS` blocking reads on each one, only to
+    /// fail again every time.
+    #[test]
+    fn desynced_worker_is_retired_from_round_robin_rotation() {
+        if !node_present() {
+            return;
+        }
+        let spawn_desynced = || -> Worker {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg(
+                    "const readline = require('readline'); \
+                     const rl = readline.createInterface({ input: process.stdin }); \
+                     rl.on('line', () => { \
+                       for (let i = 0; i < 64; i++) { \
+                         process.stdout.write(JSON.stringify({ id: 'never-matches', ok: true, result: null }) + '\\n'); \
+                       } \
+                     });",
+                )
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn desynced worker");
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            }
+        };
+        let spawn_healthy = || -> Worker {
+            let mut child = Command::new("node")
+                .arg("-e")
+                .arg("process.exit(0)")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn healthy worker");
+            let stdin = child.stdin.take().expect("child stdin");
+            let stdout = child.stdout.take().expect("child stdout");
+            let (stderr_buf, stderr_drain_done) =
+                spawn_stderr_drain(child.stderr.take().expect("child stderr"));
+            Worker {
+                child,
+                stdin: Some(stdin),
+                stdout: BufReader::new(stdout),
+                stderr_buf,
+                stderr_drain_done,
+            }
+        };
+
+        let workers: Vec<Worker> = vec![spawn_desynced(), spawn_healthy(), spawn_healthy()];
+        let oracle = WorkerTypeOracle {
+            alive: workers.iter().map(|_| AtomicBool::new(true)).collect(),
+            workers: workers.into_iter().map(Mutex::new).collect(),
+            tsconfig_path: String::new(),
+            next_id: AtomicU64::new(0),
+            next_worker: AtomicUsize::new(0),
+        };
+
+        // Round-robin starts at index 0 (the desynced worker), so this
+        // query is the one that exhausts its resync budget.
+        let result = oracle.type_at(Path::new("dummy.ts"), 0, 1);
+        assert!(result.is_none(), "desynced worker must degrade to None");
+        assert!(
+            !oracle.alive[0].load(Ordering::Relaxed),
+            "worker 0 must be marked dead after exhausting its resync budget"
+        );
+
+        // Subsequent round-robin picks must skip the retired worker —
+        // without this, every later query pays the full resync budget
+        // against worker 0 again before failing.
+        for _ in 0..10 {
+            let (idx, _) = oracle.next_worker();
+            assert_ne!(idx, 0, "round robin must skip the retired worker");
+        }
+
+        for w in oracle.workers {
+            let _ = w
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .close();
+        }
+    }
+
+    /// CD-266: `write_atomic` must leave the destination path either
+    /// absent or fully written — never a torn/partial file, since
+    /// that's exactly what a concurrent `node` process opening the
+    /// destination mid-write would otherwise observe (`SyntaxError:
+    /// Unexpected end of input`). Also asserts the temp sibling is
+    /// cleaned up (renamed away, not left behind).
+    #[test]
+    fn write_atomic_overwrite_leaves_no_partial_or_leftover_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("script.mjs");
+
+        write_atomic(&path, "short").expect("first write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "short");
+
+        let longer = "much longer content than before, to prove overwrite isn't append";
+        write_atomic(&path, longer).expect("second write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), longer);
+
+        let leftover_tmp: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|name| name != "script.mjs")
+            .collect();
+        assert!(
+            leftover_tmp.is_empty(),
+            "expected the tmp sibling to be renamed away, found: {leftover_tmp:?}"
+        );
+    }
+
+    /// CD-276/CD-283: this module's tmp path must carry a discriminator
+    /// distinguishing it from `plugins.rs::write_atomic`'s (asserted by
+    /// the mirror-image test in `plugins.rs`), since both materialise
+    /// the identical `CORE_SCRIPT_NAME` into the identical `scripts_dir`
+    /// — without a distinct suffix per call site, a same-process run
+    /// using both type-aware checks and plugins could have the two
+    /// computed tmp paths collide on the same destination.
+    #[test]
+    fn tmp_sibling_is_discriminated_from_the_plugins_call_site() {
+        let path = Path::new("/scripts/type-host-core.mjs");
+        let tmp = tmp_sibling(path).to_string_lossy().into_owned();
+        assert!(
+            tmp.contains("-type-host"),
+            "tmp sibling {tmp:?} must carry the type_host call-site discriminator"
+        );
+        assert!(
+            !tmp.contains("-plugins"),
+            "tmp sibling {tmp:?} must not collide with plugins.rs's discriminator"
+        );
+    }
+
+    /// CD-266: a reader polling the destination path while many writers
+    /// race `write_atomic` against it (the real production scenario —
+    /// concurrent same-version `cofferdam` processes materialising the
+    /// byte-identical embedded script) must never observe a prefix of
+    /// the content; only "doesn't exist yet" or "fully written" are
+    /// valid observations. Before the fix (`fs::write` directly, no
+    /// rename), a reader could open the file mid-truncate-and-write.
+    #[test]
+    fn write_atomic_never_exposes_a_torn_file_to_a_concurrent_reader() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("script.mjs");
+        let expected = "x".repeat(200_000); // large enough that a torn read is likely if unprotected
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader_path = path.clone();
+        let reader_expected = expected.clone();
+        let reader_stop = Arc::clone(&stop);
+        let reader = std::thread::spawn(move || {
+            let mut torn = None;
+            while !reader_stop.load(Ordering::Relaxed) {
+                if let Ok(contents) = std::fs::read_to_string(&reader_path) {
+                    if contents != reader_expected {
+                        torn = Some(contents.len());
+                        break;
+                    }
+                }
+            }
+            torn
+        });
+
+        for _ in 0..50 {
+            write_atomic(&path, &expected).expect("write");
+        }
+        stop.store(true, Ordering::Relaxed);
+        let torn_len = reader.join().expect("reader thread");
+        assert!(
+            torn_len.is_none(),
+            "reader observed a torn file of length {torn_len:?}, expected {}",
+            expected.len()
+        );
     }
 
     /// Real worker end-to-end test (cd-9hp.2 cp2). Gated on a ts-morph

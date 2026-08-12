@@ -30,13 +30,13 @@ use std::time::Instant;
 
 use std::collections::BTreeMap;
 
-use cofferdam_core::graph::{EXPORTS, IMPORTS};
+use cofferdam_core::graph::{FinalizeScope, EXPORTS, FINALIZE_SCOPE, IMPORTS};
 use cofferdam_core::parser::{parse_fatal, parse_into, ParsedView};
 use cofferdam_core::{
-    validate_options, Allocator, Check, CheckContext, CheckOptions, CorpusIndex, FinalizeContext,
-    InvariantsRuntime, InvariantsSpec, Issue, Language, LayersConfig, Location, OptionSpec,
-    Priority, RawOptionValue, Severity, SourceFile, Span, TypeOracle, ALL_PRE_FILTER_FINDINGS,
-    INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
+    validate_options, Allocator, Category, ChangeSet, Check, CheckContext, CheckOptions,
+    ContextItem, CorpusIndex, FinalizeContext, InvariantsRuntime, InvariantsSpec, Issue, Language,
+    LayersConfig, Location, OptionSpec, Priority, RawOptionValue, Severity, SourceFile, Span,
+    TypeOracle, ALL_PRE_FILTER_FINDINGS, INVARIANTS, LAYERS, REGISTERED_CHECK_IDS,
 };
 use cofferdam_graph::{apply_records, build_canonical_graph, CANONICAL_GRAPH};
 use cofferdam_html::{parse_html, HtmlParseTree};
@@ -55,6 +55,14 @@ pub enum EngineError {
         #[source]
         source: std::io::Error,
     },
+}
+
+/// Result of a `cofferdam context` engine run: the ordinary findings
+/// (feed Context.Findings summarization, CD-159) plus the advisory
+/// items from Context-category providers.
+pub struct ContextOutput {
+    pub issues: Vec<Issue>,
+    pub items: Vec<ContextItem>,
 }
 
 /// The analyzer's orchestrator. Owns the registered check set, their
@@ -148,6 +156,12 @@ pub struct AnalysisState {
     /// plain text map so `AnalysisState::sources()`'s public shape is
     /// unaffected.
     source_files: HashMap<PathBuf, SourceFile>,
+    /// Cached pass-2 (consistency-check) issues per currently-known
+    /// file (CD-40 lever 4). Only populated/consulted when every
+    /// registered consistency check is `pass2_is_file_local` — see
+    /// `analyze_incremental`, which skips recomputing pass 2 for
+    /// unchanged files in that case and reuses this cache instead.
+    pass2_issues: HashMap<PathBuf, Vec<Issue>>,
     /// Whether `register_removers`/`publish_static_slots` have already
     /// run against this state's corpus (CD-40 lever 2). Both are
     /// idempotent overwrites of engine-derived (not per-call) data, so
@@ -181,7 +195,10 @@ impl AnalysisState {
 }
 
 /// How [`Engine::finalize_and_filter`] should get the `CANONICAL_GRAPH`
-/// corpus slot to its post-this-call state (CD-40 lever 3).
+/// corpus slot to its post-this-call state (CD-40 lever 3). Also drives
+/// the `FINALIZE_SCOPE` corpus slot published for finalize-stage checks
+/// (CD-40 lever 5 PR 2).
+#[derive(Clone, Copy)]
 enum GraphUpdate<'a> {
     /// Build a fresh graph from every IMPORTS/EXPORTS record in the
     /// corpus. Used by every from-scratch `analyze_*` entry point,
@@ -194,7 +211,10 @@ enum GraphUpdate<'a> {
     /// called `corpus.remove_file` earlier in the same call; only
     /// `changed`'s freshly re-populated records still need replaying
     /// in via `apply_records`.
-    Incremental { changed: &'a [PathBuf] },
+    Incremental {
+        changed: &'a [PathBuf],
+        removed: &'a [PathBuf],
+    },
 }
 
 impl Engine {
@@ -478,7 +498,14 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        self.analyze_with_sources_full_impl(sources, parse_cache, findings_cache, run_cache, None)
+        self.analyze_with_sources_full_impl(
+            sources,
+            parse_cache,
+            findings_cache,
+            run_cache,
+            None,
+            None,
+        )
     }
 
     /// Same as [`Engine::analyze_with_sources_full`] but records
@@ -499,9 +526,33 @@ impl Engine {
             findings_cache,
             run_cache,
             Some(timing),
+            None,
         )
     }
 
+    /// Run a `cofferdam context` analysis: the normal from-scratch
+    /// analyze (no caches in v1 — cache reuse is a follow-up), then
+    /// Context-category providers with `changeset` against the
+    /// completed corpus. `issues` are the ordinary findings; the
+    /// caller decides what to do with them (CD-159 summarizes).
+    pub fn analyze_context(
+        &self,
+        sources: Vec<(PathBuf, String)>,
+        changeset: &ChangeSet,
+    ) -> ContextOutput {
+        let mut items = Vec::new();
+        let (issues, _texts) = self.analyze_with_sources_full_impl(
+            sources,
+            None,
+            None,
+            None,
+            None,
+            Some((changeset, &mut items)),
+        );
+        ContextOutput { issues, items }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn analyze_with_sources_full_impl(
         &self,
         sources: Vec<(PathBuf, String)>,
@@ -509,6 +560,7 @@ impl Engine {
         findings_cache: Option<&findings_cache::FindingsCache>,
         run_cache: Option<&run_cache::RunCache>,
         timing: Option<&TimingCollector>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Absolutize once, up front, so every returned `texts` map is
         // keyed identically to every returned `Issue.file` regardless
@@ -536,36 +588,46 @@ impl Engine {
                 return ((*cached).clone(), texts);
             }
             let (issues, texts) =
-                self.run_cache_miss_path(sources, parse_cache, findings_cache, timing);
+                self.run_cache_miss_path(sources, parse_cache, findings_cache, timing, context);
             rc.insert(key, issues.clone());
             return (issues, texts);
         }
-        self.run_cache_miss_path(sources, parse_cache, findings_cache, timing)
+        self.run_cache_miss_path(sources, parse_cache, findings_cache, timing, context)
     }
 
     /// The full analyze path used on a `RunCache` miss. Factored out
     /// so the outermost-cache branch can call it without code
     /// duplication.
+    #[allow(clippy::too_many_arguments)]
     fn run_cache_miss_path(
         &self,
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
         timing: Option<&TimingCollector>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
-        self.analyze_with_sources_caches_inner(sources, parse_cache, findings_cache, timing)
+        self.analyze_with_sources_caches_inner(
+            sources,
+            parse_cache,
+            findings_cache,
+            timing,
+            context,
+        )
     }
 
     /// Inner entry point — does the full per-file analysis through
     /// the parse + findings caches. Was the body of
     /// `analyze_with_sources_caches` before the cp3 outermost-layer
     /// `RunCache` was layered on top.
+    #[allow(clippy::too_many_arguments)]
     fn analyze_with_sources_caches_inner(
         &self,
         sources: Vec<(PathBuf, String)>,
         parse_cache: Option<&cache::ParseCache>,
         findings_cache: Option<&findings_cache::FindingsCache>,
         timing: Option<&TimingCollector>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> (Vec<Issue>, HashMap<PathBuf, String>) {
         // Two execution modes, chosen by whether the caller supplied a
         // long-lived `ParseCache` (CD-30):
@@ -769,6 +831,7 @@ impl Engine {
             &suppressions_by_file,
             timing,
             GraphUpdate::Rebuild,
+            context,
         );
         (issues, texts)
     }
@@ -823,6 +886,7 @@ impl Engine {
     ///
     /// `graph_update` (CD-40 lever 3) selects how the `CANONICAL_GRAPH`
     /// corpus slot gets to its post-this-call state: see [`GraphUpdate`].
+    #[allow(clippy::too_many_arguments)]
     fn finalize_and_filter(
         &self,
         corpus: &CorpusIndex,
@@ -830,6 +894,7 @@ impl Engine {
         suppressions_by_file: &HashMap<PathBuf, suppress::Suppressions>,
         timing: Option<&TimingCollector>,
         graph_update: GraphUpdate<'_>,
+        context: Option<(&ChangeSet, &mut Vec<ContextItem>)>,
     ) -> Vec<Issue> {
         // Canonical-graph build (cd-9hp.9 cp3; incrementalised in
         // CD-40 lever 3). Translates the flat IMPORTS / EXPORTS slots
@@ -845,12 +910,14 @@ impl Engine {
                 GraphUpdate::Rebuild => {
                     corpus.with_slot(&IMPORTS, |imports| {
                         corpus.with_slot(&EXPORTS, |exports| {
-                            let graph = build_canonical_graph(imports, exports);
+                            let all_imports = imports.to_vec();
+                            let all_exports = exports.to_vec();
+                            let graph = build_canonical_graph(&all_imports, &all_exports);
                             corpus.with_slot(&CANONICAL_GRAPH, |slot| *slot = graph);
                         });
                     });
                 }
-                GraphUpdate::Incremental { changed } => {
+                GraphUpdate::Incremental { changed, .. } => {
                     // `removed`/stale-`changed` contributions were
                     // already dropped from the persisted
                     // `CANONICAL_GRAPH` slot by the registered
@@ -863,16 +930,21 @@ impl Engine {
                     // the live graph, exactly like
                     // `Graph::remove_file`'s own doc comment describes
                     // for incremental callers.
+                    //
+                    // Per-file storage (CD-40 lever 5 PR 2) turns this
+                    // into O(|changed|) direct lookups instead of an
+                    // O(total records) scan filtered by
+                    // `changed.contains(..)` per record.
                     corpus.with_slot(&IMPORTS, |imports| {
                         corpus.with_slot(&EXPORTS, |exports| {
-                            let filtered_imports: Vec<_> = imports
+                            let filtered_imports: Vec<_> = changed
                                 .iter()
-                                .filter(|r| changed.contains(&r.from_file))
+                                .flat_map(|f| imports.for_file(f))
                                 .cloned()
                                 .collect();
-                            let filtered_exports: Vec<_> = exports
+                            let filtered_exports: Vec<_> = changed
                                 .iter()
-                                .filter(|r| changed.contains(&r.file))
+                                .flat_map(|f| exports.for_file(f))
                                 .cloned()
                                 .collect();
                             corpus.with_slot(&CANONICAL_GRAPH, |graph| {
@@ -886,6 +958,16 @@ impl Engine {
                 t.record_phase("graph_build", graph_build_start.elapsed());
             }
         }
+
+        corpus.with_slot(&FINALIZE_SCOPE, |scope| {
+            *scope = match graph_update {
+                GraphUpdate::Rebuild => FinalizeScope::Full,
+                GraphUpdate::Incremental { changed, removed } => FinalizeScope::Delta {
+                    changed: changed.to_vec(),
+                    removed: removed.to_vec(),
+                },
+            };
+        });
 
         // Two-phase finalize (cd-wqc; simplified in cd-9hp.5):
         //
@@ -959,6 +1041,21 @@ impl Engine {
         }
         if let Some(t) = timing {
             t.record_phase("finalize_b", finalize_b_start.elapsed());
+        }
+
+        // Context-category providers (CD-158): run only for
+        // `Engine::analyze_context` callers, after finalize Phase B so
+        // the corpus (including CANONICAL_GRAPH) is fully populated.
+        // Ordinary `cofferdam check` runs pass `context: None` and never
+        // reach this branch.
+        if let Some((changeset, items_out)) = context {
+            for (check, opts) in self.checks.iter().zip(self.options.iter()) {
+                if check.meta().category != Category::Context {
+                    continue;
+                }
+                let mut finalize_ctx = FinalizeContext::new(corpus).with_options(opts);
+                items_out.extend(check.context_items(changeset, &mut finalize_ctx));
+            }
         }
 
         // Per-glob `disabled` overrides (cd-97): `run()` call sites already
@@ -1112,7 +1209,7 @@ impl Engine {
                 }
             };
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != file.language {
+                if !check.languages().contains(&file.language) {
                     continue;
                 }
                 let (disabled, ov_opts) = match &file_key {
@@ -1153,7 +1250,7 @@ impl Engine {
                 }
             };
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != file.language {
+                if !check.languages().contains(&file.language) {
                     continue;
                 }
                 let (disabled, ov_opts) = match &file_key {
@@ -1187,12 +1284,13 @@ impl Engine {
         // Defensive catch-all for languages we recognise (via
         // `Language::from_path`) but haven't wired a parser for
         // yet. Falls through to the TS path so nothing crashes;
-        // matching checks (none today) would see `parsed_lang =
-        // None`.
+        // matching checks see `parsed_lang = None` and work off raw
+        // text. This is the branch that dispatches
+        // `Consistency.SpellingDialect` to Markdown (CD-316).
         #[allow(clippy::collapsible_if)]
         if file.language != Language::TypeScript {
             for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-                if check.language() != file.language {
+                if !check.languages().contains(&file.language) {
                     continue;
                 }
                 let (disabled, ov_opts) = match &file_key {
@@ -1295,7 +1393,7 @@ impl Engine {
         let content_hash = findings_cache.map(|_| cache::hash_text(&file.text));
 
         for (check, opts) in self.checks.iter().zip(self.options.iter()) {
-            if check.language() != Language::TypeScript {
+            if !check.languages().contains(&Language::TypeScript) {
                 continue;
             }
             // Type-aware routing (cd-9hp.2). A check declaring
@@ -1412,8 +1510,8 @@ impl Engine {
     /// — those differ on Windows (case-folding), and a mismatch here
     /// would silently no-op the removal, leaking stale graph nodes/edges.
     fn register_removers(&self, corpus: &CorpusIndex) {
-        corpus.register_removable(&IMPORTS, |slot, path| slot.retain(|r| r.from_file != path));
-        corpus.register_removable(&EXPORTS, |slot, path| slot.retain(|r| r.file != path));
+        corpus.register_removable(&IMPORTS, |slot, path| slot.remove_file(path));
+        corpus.register_removable(&EXPORTS, |slot, path| slot.remove_file(path));
         corpus.register_removable(&CANONICAL_GRAPH, |graph, path| {
             graph.remove_file(&cofferdam_graph::normalized_file_path(path));
         });
@@ -1471,6 +1569,7 @@ impl Engine {
             state.sources.remove(path);
             state.source_files.remove(path);
             state.pass1_issues.remove(path);
+            state.pass2_issues.remove(path);
             state.suppressions.remove(path);
         }
 
@@ -1501,17 +1600,26 @@ impl Engine {
 
         let mut issues: Vec<Issue> = state.pass1_issues.values().flatten().cloned().collect();
 
-        // Pass 2: consistency checks re-run over every currently-known
-        // file, not just `changed` — a consistency check's pass-2
-        // verdict for an untouched file can depend on pass-1 evidence
-        // from a file that DID change (e.g. a project-wide dominant
-        // style). Parses go through `state.parse_cache`, so unchanged
-        // files are a content-hash cache hit rather than a re-parse.
-        // Each file's `SourceFile` comes from `state.source_files`
-        // (CD-40 lever 1) instead of being rebuilt here — rebuilding
-        // meant a full text clone for every currently-known file on
-        // every incremental call, dominating the per-edit floor on
-        // large corpora.
+        // Pass 2: consistency checks normally re-run over every
+        // currently-known file, not just `changed` — a consistency
+        // check's pass-2 verdict for an untouched file can in general
+        // depend on pass-1 evidence from a file that DID change (e.g.
+        // a hypothetical project-wide dominant style). Parses go
+        // through `state.parse_cache`, so unchanged files are a
+        // content-hash cache hit rather than a re-parse. Each file's
+        // `SourceFile` comes from `state.source_files` (CD-40 lever 1)
+        // instead of being rebuilt here — rebuilding meant a full text
+        // clone for every currently-known file on every incremental
+        // call, dominating the per-edit floor on large corpora.
+        //
+        // CD-40 lever 4: when every registered consistency check is
+        // `pass2_is_file_local` (its verdict provably depends only on
+        // that file's own pass-1 evidence), an unchanged file's pass-2
+        // output cannot have shifted since the last call — skip the
+        // parse-cache lookup and `pass2` dispatch entirely and reuse
+        // `state.pass2_issues` instead. A single check that reads
+        // cross-file evidence in pass2 falls back to recomputing every
+        // file on every call, same as before this lever.
         let consistency_checks: Vec<(usize, &dyn Check)> = self
             .checks
             .iter()
@@ -1520,9 +1628,31 @@ impl Engine {
             .map(|(i, c)| (i, c.as_ref()))
             .collect();
         if !consistency_checks.is_empty() {
-            for file in state.source_files.values() {
+            let cacheable = consistency_checks
+                .iter()
+                .all(|(_, c)| c.pass2_is_file_local());
+            // A linear scan, not a `HashSet`: `changed` is almost always
+            // a single file (the common single-edit call this lever
+            // targets), where hashing costs more than it saves. Only
+            // built/consulted at all when `cacheable`.
+            let is_changed = |path: &Path| changed.iter().any(|(p, _)| p.as_path() == path);
+
+            for (path, file) in &state.source_files {
                 if file.language != Language::TypeScript {
                     continue;
+                }
+                // A cache miss here means this path was never populated —
+                // only reachable by reusing `state` against a different
+                // `Engine` (see `AnalysisState`'s doc comment), a usage
+                // no current caller does. Falling through to recompute
+                // rather than treating a miss as "zero issues" keeps
+                // that unsupported case merely stale instead of silently
+                // dropping findings.
+                if cacheable && !is_changed(path) {
+                    if let Some(cached) = state.pass2_issues.get(path) {
+                        issues.extend(cached.iter().cloned());
+                        continue;
+                    }
                 }
                 let file_issues = state.parse_cache.with_parsed(file, |parsed_return| {
                     if parse_fatal(parsed_return) {
@@ -1534,6 +1664,9 @@ impl Engine {
                     };
                     self.pass2_ts_file(file, &parsed, &consistency_checks, &state.corpus, None)
                 });
+                if cacheable {
+                    state.pass2_issues.insert(path.clone(), file_issues.clone());
+                }
                 issues.extend(file_issues);
             }
         }
@@ -1548,7 +1681,9 @@ impl Engine {
             None,
             GraphUpdate::Incremental {
                 changed: &changed_paths,
+                removed: &removed,
             },
+            None,
         )
     }
 

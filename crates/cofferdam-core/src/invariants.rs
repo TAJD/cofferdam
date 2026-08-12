@@ -243,10 +243,11 @@ impl Default for InvariantsSpec {
 /// and `Warning.UnusedImport`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PublicApiSpec {
-    /// Each entry is either a relative file path (`src/index.ts`) or a
-    /// `package.json:<key>` pointer (`package.json:exports`). The
-    /// `package.json:` form is resolved by the engine at load time; the
-    /// resolved set is stored here.
+    /// Each entry is a relative file path (`src/index.ts`), a glob
+    /// (`src/api/**/*.ts`) or a `package.json:<key>` pointer
+    /// (`package.json:exports`). Entries are stored verbatim;
+    /// `cofferdam_core::public_api::resolve_public_api` reads the
+    /// manifest and expands the pointer form.
     pub exports: Vec<String>,
 }
 
@@ -355,6 +356,132 @@ struct ScriptedToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     forbid: Option<String>,
     message: String,
+}
+
+// ─── Schema-version gate (CD-310) ───────────────────────────────────────────
+
+/// Reads the field names of the five `#[derive(Deserialize)]` structs
+/// that define what `cofferdam.invariants.toml` accepts, straight from
+/// this file's own source.
+///
+/// Source-reading is the point rather than a shortcut: a hand-maintained
+/// list would need updating for the very change it exists to catch, so
+/// it would catch nothing. Adding a field to any of these structs — the
+/// only way to widen the accepted TOML surface — moves this set without
+/// anyone remembering to.
+#[cfg(test)]
+mod schema_snapshot {
+    /// The checked-in field set of `cofferdam.invariants.toml`, paired
+    /// with the schema version it belongs to.
+    const SCHEMA_SNAPSHOT: &str = include_str!("invariants_schema.snapshot");
+
+    /// Struct names whose fields are the versioned TOML surface. A new
+    /// deserialised struct must be added here, which is itself a schema
+    /// change and so wants a version bump anyway.
+    const VERSIONED_STRUCTS: &[&str] = &[
+        "TomlDoc",
+        "PublicApiToml",
+        "BoundaryToml",
+        "InvariantToml",
+        "ScriptedToml",
+    ];
+
+    /// Every `<Struct>.<field>` the loader accepts, sorted.
+    fn live_field_set() -> Vec<String> {
+        // Normalise line endings: the file is CRLF in a Windows checkout
+        // and LF in CI, and the anchors below are line-based.
+        let source = include_str!("invariants.rs").replace("\r\n", "\n");
+        let mut out = Vec::new();
+        for name in VERSIONED_STRUCTS {
+            let header = format!("\nstruct {name} {{\n");
+            let start = source
+                .find(&header)
+                .unwrap_or_else(|| panic!("struct {name} not found — update VERSIONED_STRUCTS"))
+                + header.len();
+            let body = &source[start..];
+            let end = body
+                .find("\n}\n")
+                .unwrap_or_else(|| panic!("struct {name} has no closing brace"));
+            for line in body[..end].lines() {
+                let line = line.trim();
+                // Skip attributes, doc comments and blank lines; what is
+                // left is `field: Type,`.
+                if line.starts_with('#') || line.starts_with("//") || line.is_empty() {
+                    continue;
+                }
+                let Some((field, _)) = line.split_once(':') else {
+                    continue;
+                };
+                out.push(format!("{name}.{}", field.trim()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    fn snapshot_fields() -> Vec<String> {
+        let mut out: Vec<String> = SCHEMA_SNAPSHOT
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("schema_version"))
+            .map(str::to_string)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The gate. A change to the accepted TOML field set must be
+    /// accompanied by an update to the snapshot, which carries the schema
+    /// version — so the version bump cannot be forgotten in silence.
+    #[test]
+    fn matches_the_live_field_set() {
+        assert_eq!(
+            live_field_set(),
+            snapshot_fields(),
+            "\nThe field set of cofferdam.invariants.toml has changed.\n\
+             This is a schema change (docs/schema-versioning.md):\n\
+             \n\
+             - a new optional field is MINOR — bump CURRENT_SCHEMA_VERSION.minor\n\
+             - a removal, a rename or a changed meaning is MAJOR — bump .major,\n\
+               reset .minor, write the migration recipe, and add a\n\
+               `### Schema changes` block to the CHANGELOG\n\
+             \n\
+             Then update crates/cofferdam-core/src/invariants_schema.snapshot\n\
+             to the new field set and version.\n"
+        );
+    }
+
+    /// The snapshot's version and the constant must agree, so neither can
+    /// move without the other.
+    #[test]
+    fn declares_the_current_schema_version() {
+        let declared = SCHEMA_SNAPSHOT
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("schema_version = "))
+            .expect("snapshot declares a schema_version");
+        assert_eq!(
+            declared,
+            super::CURRENT_SCHEMA_VERSION.to_string(),
+            "invariants_schema.snapshot and CURRENT_SCHEMA_VERSION disagree"
+        );
+    }
+
+    /// The extractor must actually be reading fields; an empty result
+    /// would make the gate pass on any change at all.
+    #[test]
+    fn the_extractor_finds_the_fields_it_claims_to() {
+        let live = live_field_set();
+        assert!(live.len() >= 15, "{live:?}");
+        assert!(live.contains(&"TomlDoc.layers".to_string()), "{live:?}");
+        assert!(
+            live.contains(&"ScriptedToml.message".to_string()),
+            "a field with no serde attribute above it must still be read: {live:?}"
+        );
+        assert!(
+            !live.iter().any(|f| f.contains("serde")),
+            "attribute lines must not be read as fields: {live:?}"
+        );
+    }
 }
 
 /// Errors that can prevent `cofferdam.invariants.toml` from loading.

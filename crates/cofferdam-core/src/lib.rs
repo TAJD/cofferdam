@@ -6,7 +6,9 @@
 
 pub mod adapter;
 pub mod ast;
+pub mod changeset;
 pub mod check;
+pub mod context_item;
 pub mod corpus;
 pub mod dsl;
 pub mod edit;
@@ -19,6 +21,7 @@ pub mod location;
 pub mod options;
 pub mod parser;
 pub mod public_api;
+pub mod relevance;
 pub mod source;
 pub mod span_util;
 pub mod types;
@@ -26,10 +29,12 @@ pub mod util;
 
 pub use adapter::{Adapter, TypeScriptAdapter};
 pub use ast::{AstView, AstVisitor, NodeKind, NodeRef, Walk};
+pub use changeset::{ChangeSet, LineRange};
 pub use check::{
     docs_url, is_finalize_observer, Category, Check, CheckContext, CheckMeta, FinalizeContext,
     DOCS_BASE_URL, FINALIZE_OBSERVER_CHECK_IDS,
 };
+pub use context_item::ContextItem;
 pub use corpus::{CorpusError, CorpusIndex, CorpusKey};
 pub use edit::TextEdit;
 pub use graph::{

@@ -353,8 +353,14 @@ fn persist_caches(state: &ServerState) {
     let Some(dir) = state.cache_dir.as_deref() else {
         return;
     };
-    let _ = disk_cache::save_findings(dir, &state.findings_cache);
-    let _ = disk_cache::save_run(dir, &state.run_cache);
+    // Skip the rewrite when nothing new was cached since the last
+    // persist — the file on disk already matches (CD-185).
+    if state.findings_cache.is_dirty() {
+        let _ = disk_cache::save_findings(dir, &state.findings_cache);
+    }
+    if state.run_cache.is_dirty() {
+        let _ = disk_cache::save_run(dir, &state.run_cache);
+    }
 }
 
 #[allow(dead_code)] // future: typed request dispatch helper

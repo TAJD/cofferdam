@@ -21,20 +21,49 @@
 //! The default `<cache_dir>` is `.cofferdam/cache/` under the CLI
 //! invocation's CWD; callers can override.
 //!
-//! ## Format
+//! ## Format (v2 — CD-185)
 //!
-//! Plain JSON. cp4 sign-off picked JSON over postcard / bincode
-//! because:
+//! Still JSON (no new dependency, still greppable), but *normalised*.
+//! The v1 layout wrote one self-contained record per cache entry, and
+//! at 5000 files that was pathological:
 //!
-//! - `serde_json` is already a workspace dep (zero new crates).
-//! - Cache files for `bestefforttools` (~325 files × ~20 checks)
-//!   serialise to ~1–3 MB — well within the budget for sub-50ms
-//!   read/parse on modern SSDs.
-//! - JSON is greppable for debugging.
+//! - Every record carried its `content_hash` and `config_hash` as
+//!   `[u8; 32]`, which serde renders as a 32-element decimal array
+//!   (~110 bytes each). Across 140k findings entries that was ~31 MB
+//!   of nothing but hashes.
+//! - 133k of those 140k entries held an *empty* `issues` array — the
+//!   "this check found nothing here" fact, which is exactly what makes
+//!   the cache useful, but which was paying full key overhead.
+//! - Every `Issue` embedded its absolute path twice (`file` plus the
+//!   `file://`-prefixed `location.uri`) and its check id in full.
+//! - `run.json` accumulated one whole-project snapshot per input-set
+//!   fingerprint ever seen, so it grew by ~25 MB per edit, forever.
 //!
-//! If the cache ever grows past low-MB territory or ser/des becomes
-//! a measurable cost, the swap to postcard is a self-contained
-//! change.
+//! v2 fixes all four:
+//!
+//! - One string table per file; issues reference `check_id`, `message`,
+//!   `file` and `uri` by `u32` index.
+//! - Findings entries are grouped by content hash (hex string, one per
+//!   *file*, not one per file×check), with the checks that found
+//!   nothing listed as bare indices.
+//! - `LocationRange::Bytes` — the shape every TS finding uses — is a
+//!   4-element array rather than a tagged object; other variants fall
+//!   back to the full tagged form.
+//! - `save_run` persists only the most recently inserted entry.
+//!
+//! Measured on a 5000-file synthetic repo: `findings.json` 50.4 MB →
+//! 4.0 MB, `run.json` 25.0 MB (unbounded) → 5.5 MB (bounded).
+//!
+//! A v1 file fails to deserialise as v2 and is discarded by the
+//! corruption path below, which is the correct outcome — a build cache
+//! is rebuildable by definition.
+//!
+//! ## Skipping redundant writes
+//!
+//! Both caches track whether anything was *inserted* since they were
+//! hydrated. A re-run with no changes hits on everything, so the file
+//! on disk is already correct and the caller skips the rewrite
+//! entirely — see [`crate::findings_cache::FindingsCache::is_dirty`].
 //!
 //! ## Atomicity
 //!
@@ -52,15 +81,20 @@
 //! next save overwrites the bad file. A build cache is rebuildable
 //! by definition; surfacing the error to the user would be noise.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cofferdam_core::Issue;
+use cofferdam_core::{Issue, Location, LocationRange, Priority, RelatedSpan, Severity, Uri};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::ContentHash;
 use crate::findings_cache::{ConfigHash, FindingsCache, FindingsKey, ENGINE_VERSION};
-use crate::run_cache::{InputSetHash, RunCache, RunKey};
+use crate::run_cache::{RunCache, RunKey};
+
+/// On-disk layout revision. Bumped when the shape changes in a way a
+/// prior reader can't interpret; a mismatch drops the cache.
+const FORMAT_VERSION: u32 = 2;
 
 /// Errors surfacing from a disk-cache save. Loads never fail (see
 /// module docs — corruption is silently discarded), so this enum is
@@ -91,50 +125,223 @@ pub enum DiskCacheError {
     Serialize(#[source] serde_json::Error),
 }
 
-/// Sidecar shape for the `FindingsKey` on disk. `FindingsKey` in-
-/// memory uses `&'static str` for `check_id` (every registered ID
-/// is a `'static` string in the registry), which doesn't round-trip
-/// through `Deserialize`. The sidecar uses `String` and the loader
-/// rejects entries whose `check_id` doesn't match a currently-
-/// registered ID.
+// ---------------------------------------------------------------------------
+// hex helpers for the 32-byte hash keys
+// ---------------------------------------------------------------------------
+
+fn hex_encode(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('0'));
+        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap_or('0'));
+    }
+    s
+}
+
+fn hex_decode(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut out = [0u8; 32];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let hi = (bytes[i * 2] as char).to_digit(16)?;
+        let lo = (bytes[i * 2 + 1] as char).to_digit(16)?;
+        *slot = ((hi << 4) | lo) as u8;
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------
+// string interning
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct Interner {
+    map: HashMap<String, u32>,
+    list: Vec<String>,
+}
+
+impl Interner {
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(idx) = self.map.get(s) {
+            return *idx;
+        }
+        let idx = self.list.len() as u32;
+        self.list.push(s.to_string());
+        self.map.insert(s.to_string(), idx);
+        idx
+    }
+}
+
+fn resolve(strings: &[String], idx: u32) -> Option<&str> {
+    strings.get(idx as usize).map(String::as_str)
+}
+
+// ---------------------------------------------------------------------------
+// compact issue representation
+// ---------------------------------------------------------------------------
+
+/// `LocationRange::Bytes` — every TS finding — as a bare
+/// `[start, end, line, column]` array. Anything else round-trips
+/// through the full tagged enum. Untagged: an array and an object are
+/// unambiguous to serde.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct FindingsKeyOnDisk {
-    content_hash: ContentHash,
-    config_hash: ConfigHash,
-    check_id: String,
+#[serde(untagged)]
+enum RangeOnDisk {
+    Bytes([u32; 4]),
+    Other(LocationRange),
+}
+
+impl RangeOnDisk {
+    fn encode(range: &LocationRange) -> RangeOnDisk {
+        match range {
+            LocationRange::Bytes {
+                start,
+                end,
+                line,
+                column,
+            } => RangeOnDisk::Bytes([*start, *end, *line, *column]),
+            other => RangeOnDisk::Other(other.clone()),
+        }
+    }
+
+    fn decode(self) -> LocationRange {
+        match self {
+            RangeOnDisk::Bytes([start, end, line, column]) => LocationRange::Bytes {
+                start,
+                end,
+                line,
+                column,
+            },
+            RangeOnDisk::Other(r) => r,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct FindingsEntry {
-    key: FindingsKeyOnDisk,
-    issues: Vec<Issue>,
+struct RelatedOnDisk {
+    f: u32,
+    u: u32,
+    r: RangeOnDisk,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IssueOnDisk {
+    /// check id (string-table index)
+    c: u32,
+    /// message (string-table index)
+    m: u32,
+    /// file path (string-table index)
+    f: u32,
+    /// location uri (string-table index)
+    u: u32,
+    r: RangeOnDisk,
+    p: i8,
+    s: Severity,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rel: Vec<RelatedOnDisk>,
+}
+
+fn encode_issue(issue: &Issue, si: &mut Interner) -> IssueOnDisk {
+    IssueOnDisk {
+        c: si.intern(&issue.check_id),
+        m: si.intern(&issue.message),
+        f: si.intern(&issue.file.to_string_lossy()),
+        u: si.intern(issue.location.uri.as_str()),
+        r: RangeOnDisk::encode(&issue.location.range),
+        p: issue.priority.0,
+        s: issue.severity,
+        rel: issue
+            .related
+            .iter()
+            .map(|rs| RelatedOnDisk {
+                f: si.intern(&rs.file.to_string_lossy()),
+                u: si.intern(rs.location.uri.as_str()),
+                r: RangeOnDisk::encode(&rs.location.range),
+            })
+            .collect(),
+    }
+}
+
+/// `None` when any string-table index is out of range — i.e. the file
+/// is corrupt, and the caller discards the whole cache.
+fn decode_issue(d: IssueOnDisk, strings: &[String]) -> Option<Issue> {
+    let related = d
+        .rel
+        .into_iter()
+        .map(|r| {
+            Some(RelatedSpan {
+                file: PathBuf::from(resolve(strings, r.f)?),
+                location: Location {
+                    uri: Uri::new(resolve(strings, r.u)?),
+                    range: r.r.decode(),
+                },
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Issue {
+        check_id: resolve(strings, d.c)?.to_string(),
+        message: resolve(strings, d.m)?.to_string(),
+        file: PathBuf::from(resolve(strings, d.f)?),
+        location: Location {
+            uri: Uri::new(resolve(strings, d.u)?),
+            range: d.r.decode(),
+        },
+        priority: Priority(d.p),
+        severity: d.s,
+        related,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// findings.json
+// ---------------------------------------------------------------------------
+
+/// All cached results for one `(content_hash, config_hash)` pair — i.e.
+/// for one *file*, across every pure check that ran on it. `empty`
+/// lists the checks that found nothing (the common case by ~19:1) as
+/// bare string-table indices; `found` carries the rest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FindingsGroup {
+    /// content hash, hex
+    h: String,
+    /// config-hash-table index
+    g: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    empty: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    found: Vec<(u32, Vec<IssueOnDisk>)>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FindingsFile {
+    format: u32,
     /// Engine version this cache was written by. Read back for an
     /// extra integrity check; the directory layout already isolates
     /// versions, but a stray cache file in the wrong subtree gets
     /// caught here too.
     engine_version: String,
-    entries: Vec<FindingsEntry>,
+    strings: Vec<String>,
+    /// Distinct config hashes, hex. In practice one per file.
+    configs: Vec<String>,
+    groups: Vec<FindingsGroup>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RunKeyOnDisk {
-    input_set: InputSetHash,
-    config_hash: ConfigHash,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RunEntry {
-    key: RunKeyOnDisk,
-    issues: Vec<Issue>,
+    /// input-set hash, hex
+    input_set: String,
+    /// config hash, hex
+    config_hash: String,
+    issues: Vec<IssueOnDisk>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RunFile {
+    format: u32,
     engine_version: String,
+    strings: Vec<String>,
     entries: Vec<RunEntry>,
 }
 
@@ -174,26 +381,61 @@ pub fn load_findings(
     };
     let file: FindingsFile = match serde_json::from_slice(&bytes) {
         Ok(f) => f,
-        Err(_) => return Ok(0), // malformed — discard, rebuild next save
+        Err(_) => return Ok(0), // malformed (or a v1 file) — discard, rebuild next save
     };
-    if file.engine_version != ENGINE_VERSION {
-        return Ok(0); // wrong-version cache file in the right-version dir; discard
+    if file.format != FORMAT_VERSION || file.engine_version != ENGINE_VERSION {
+        return Ok(0);
     }
 
+    // Resolve the string table's check ids to `'static` slices once,
+    // rather than once per cached entry — v1 did a linear scan of the
+    // registry per entry, which is 140k × |registry| comparisons at
+    // 5000 files.
+    let static_ids: Vec<Option<&'static str>> = file
+        .strings
+        .iter()
+        .map(|s| registered_ids.iter().find(|id| *id == s).copied())
+        .collect();
+    let configs: Vec<Option<ConfigHash>> = file.configs.iter().map(|c| hex_decode(c)).collect();
+
     let mut hydrated = 0usize;
-    for entry in file.entries {
-        let static_id = match registered_ids.iter().find(|id| **id == entry.key.check_id) {
-            Some(id) => *id,
-            None => continue, // check was unregistered since the cache was written; drop
+    for group in file.groups {
+        let Some(content_hash) = hex_decode(&group.h) else {
+            continue;
         };
-        let key = FindingsKey {
-            content_hash: entry.key.content_hash,
-            config_hash: entry.key.config_hash,
-            check_id: static_id,
+        let Some(Some(config_hash)) = configs.get(group.g as usize).copied() else {
+            continue;
         };
-        cache.insert(key, entry.issues);
-        hydrated += 1;
+        let mut insert = |check_idx: u32, issues: Vec<Issue>| {
+            let Some(Some(check_id)) = static_ids.get(check_idx as usize).copied() else {
+                return; // check unregistered since the cache was written; drop
+            };
+            cache.insert(
+                FindingsKey {
+                    content_hash,
+                    config_hash,
+                    check_id,
+                },
+                issues,
+            );
+            hydrated += 1;
+        };
+        for check_idx in group.empty {
+            insert(check_idx, Vec::new());
+        }
+        for (check_idx, issues) in group.found {
+            let decoded: Option<Vec<Issue>> = issues
+                .into_iter()
+                .map(|i| decode_issue(i, &file.strings))
+                .collect();
+            match decoded {
+                Some(issues) => insert(check_idx, issues),
+                None => continue,
+            }
+        }
     }
+    // Everything we hold now matches the file on disk.
+    cache.mark_clean();
     Ok(hydrated)
 }
 
@@ -201,26 +443,52 @@ pub fn load_findings(
 /// findings.json under the version subdir. Returns the number of
 /// entries written.
 pub fn save_findings(cache_dir: &Path, cache: &FindingsCache) -> Result<usize, DiskCacheError> {
-    let entries: Vec<FindingsEntry> = cache
-        .snapshot()
-        .into_iter()
-        .map(|(k, v)| FindingsEntry {
-            key: FindingsKeyOnDisk {
-                content_hash: k.content_hash,
-                config_hash: k.config_hash,
-                check_id: k.check_id.to_string(),
-            },
-            issues: (*v).clone(),
-        })
-        .collect();
-    let count = entries.len();
+    let snapshot = cache.snapshot();
+    let count = snapshot.len();
+
+    let mut strings = Interner::default();
+    let mut config_idx: HashMap<ConfigHash, u32> = HashMap::new();
+    let mut configs: Vec<String> = Vec::new();
+    // (content_hash, config index) → group position
+    let mut group_idx: HashMap<(ContentHash, u32), usize> = HashMap::new();
+    let mut groups: Vec<FindingsGroup> = Vec::new();
+
+    for (key, issues) in snapshot {
+        let g = *config_idx.entry(key.config_hash).or_insert_with(|| {
+            configs.push(hex_encode(&key.config_hash));
+            (configs.len() - 1) as u32
+        });
+        let pos = *group_idx.entry((key.content_hash, g)).or_insert_with(|| {
+            groups.push(FindingsGroup {
+                h: hex_encode(&key.content_hash),
+                g,
+                empty: Vec::new(),
+                found: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        let check_idx = strings.intern(key.check_id);
+        if issues.is_empty() {
+            groups[pos].empty.push(check_idx);
+        } else {
+            let encoded = issues
+                .iter()
+                .map(|i| encode_issue(i, &mut strings))
+                .collect();
+            groups[pos].found.push((check_idx, encoded));
+        }
+    }
+
     let file = FindingsFile {
+        format: FORMAT_VERSION,
         engine_version: ENGINE_VERSION.to_string(),
-        entries,
+        strings: strings.list,
+        configs,
+        groups,
     };
     let bytes = serde_json::to_vec(&file).map_err(DiskCacheError::Serialize)?;
-    let dest = findings_path(cache_dir);
-    atomic_write(&dest, &bytes)?;
+    atomic_write(&findings_path(cache_dir), &bytes)?;
+    cache.mark_clean();
     Ok(count)
 }
 
@@ -237,43 +505,65 @@ pub fn load_run(cache_dir: &Path, cache: &RunCache) -> std::io::Result<usize> {
         Ok(f) => f,
         Err(_) => return Ok(0),
     };
-    if file.engine_version != ENGINE_VERSION {
+    if file.format != FORMAT_VERSION || file.engine_version != ENGINE_VERSION {
         return Ok(0);
     }
     let mut hydrated = 0usize;
     for entry in file.entries {
-        let key = RunKey {
-            input_set: entry.key.input_set,
-            config_hash: entry.key.config_hash,
+        let (Some(input_set), Some(config_hash)) =
+            (hex_decode(&entry.input_set), hex_decode(&entry.config_hash))
+        else {
+            continue;
         };
-        cache.insert(key, entry.issues);
+        let Some(issues) = entry
+            .issues
+            .into_iter()
+            .map(|i| decode_issue(i, &file.strings))
+            .collect::<Option<Vec<Issue>>>()
+        else {
+            continue;
+        };
+        cache.insert(
+            RunKey {
+                input_set,
+                config_hash,
+            },
+            issues,
+        );
         hydrated += 1;
     }
+    cache.mark_clean();
     Ok(hydrated)
 }
 
-/// Persist `cache`'s contents to disk. Returns the number of entries
-/// written.
+/// Persist the most recently inserted run-cache entry. Returns the
+/// number of entries written (0 or 1).
+///
+/// Only the latest entry is kept: a whole-run snapshot is the entire
+/// finding list for the project, and an input-set fingerprint the
+/// project has already moved past can never be hit again. Persisting
+/// every entry made `run.json` grow by a full snapshot per edit.
 pub fn save_run(cache_dir: &Path, cache: &RunCache) -> Result<usize, DiskCacheError> {
+    let mut strings = Interner::default();
     let entries: Vec<RunEntry> = cache
-        .snapshot()
+        .latest()
         .into_iter()
         .map(|(k, v)| RunEntry {
-            key: RunKeyOnDisk {
-                input_set: k.input_set,
-                config_hash: k.config_hash,
-            },
-            issues: (*v).clone(),
+            input_set: hex_encode(&k.input_set),
+            config_hash: hex_encode(&k.config_hash),
+            issues: v.iter().map(|i| encode_issue(i, &mut strings)).collect(),
         })
         .collect();
     let count = entries.len();
     let file = RunFile {
+        format: FORMAT_VERSION,
         engine_version: ENGINE_VERSION.to_string(),
+        strings: strings.list,
         entries,
     };
     let bytes = serde_json::to_vec(&file).map_err(DiskCacheError::Serialize)?;
-    let dest = run_path(cache_dir);
-    atomic_write(&dest, &bytes)?;
+    atomic_write(&run_path(cache_dir), &bytes)?;
+    cache.mark_clean();
     Ok(count)
 }
 
@@ -299,7 +589,7 @@ fn atomic_write(dest: &Path, bytes: &[u8]) -> Result<(), DiskCacheError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cofferdam_core::{Location, Priority, Severity, Span};
+    use cofferdam_core::Span;
     use tempfile::tempdir;
 
     fn mk_issue(check_id: &str, msg: &str) -> Issue {
@@ -339,6 +629,23 @@ mod tests {
     }
 
     #[test]
+    fn hex_round_trips() {
+        let h = [
+            0u8, 1, 15, 16, 255, 128, 7, 9, 10, 11, 12, 13, 14, 200, 3, 4,
+        ]
+        .repeat(2);
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&h);
+        assert_eq!(hex_decode(&hex_encode(&arr)), Some(arr));
+    }
+
+    #[test]
+    fn hex_decode_rejects_bad_input() {
+        assert_eq!(hex_decode("abc"), None);
+        assert_eq!(hex_decode(&"z".repeat(64)), None);
+    }
+
+    #[test]
     fn findings_roundtrip_preserves_entries() {
         let dir = tempdir().unwrap();
         let src = FindingsCache::new();
@@ -369,8 +676,69 @@ mod tests {
         let got = dst.get(&fkey(1, 0, "Warning.TripleEquals")).expect("hit");
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].message, "a");
+        assert_eq!(got[0].file, PathBuf::from("a.ts"));
+        assert_eq!(got[0].location.uri.as_str(), "file://a.ts");
         let got = dst.get(&fkey(2, 0, "Design.MaxParameters")).expect("hit");
         assert_eq!(got.len(), 2);
+    }
+
+    // The empty `Vec<Issue>` is the *point* of the findings cache — it
+    // records "this check found nothing here" so the check doesn't
+    // re-run. v2 stores those as bare indices; they must survive.
+    #[test]
+    fn findings_roundtrip_preserves_empty_results() {
+        let dir = tempdir().unwrap();
+        let src = FindingsCache::new();
+        src.insert(fkey(1, 0, "Warning.TripleEquals"), Vec::new());
+        save_findings(dir.path(), &src).unwrap();
+
+        let dst = FindingsCache::new();
+        assert_eq!(
+            load_findings(dir.path(), &dst, &["Warning.TripleEquals"]).unwrap(),
+            1
+        );
+        let got = dst.get(&fkey(1, 0, "Warning.TripleEquals")).expect("hit");
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn findings_roundtrip_preserves_related_spans() {
+        let dir = tempdir().unwrap();
+        let src = FindingsCache::new();
+        let other = PathBuf::from("b.ts");
+        let issue = Issue {
+            related: vec![RelatedSpan {
+                location: Location::from_span(
+                    &other,
+                    Span {
+                        start_byte: 5,
+                        end_byte: 9,
+                        line: 3,
+                        column: 2,
+                    },
+                ),
+                file: other,
+            }],
+            ..mk_issue("Refactor.DuplicateBlock", "dup")
+        };
+        src.insert(fkey(1, 0, "Refactor.DuplicateBlock"), vec![issue]);
+        save_findings(dir.path(), &src).unwrap();
+
+        let dst = FindingsCache::new();
+        load_findings(dir.path(), &dst, &["Refactor.DuplicateBlock"]).unwrap();
+        let got = dst.get(&fkey(1, 0, "Refactor.DuplicateBlock")).unwrap();
+        assert_eq!(got[0].related.len(), 1);
+        assert_eq!(got[0].related[0].file, PathBuf::from("b.ts"));
+        assert_eq!(got[0].related[0].location.uri.as_str(), "file://b.ts");
+        assert_eq!(
+            got[0].related[0].location.range,
+            LocationRange::Bytes {
+                start: 5,
+                end: 9,
+                line: 3,
+                column: 2,
+            }
+        );
     }
 
     #[test]
@@ -392,6 +760,35 @@ mod tests {
         let hydrated = load_findings(dir.path(), &dst, &["Warning.TripleEquals"]).expect("load");
         assert_eq!(hydrated, 1);
         assert!(dst.get(&fkey(1, 0, "Warning.TripleEquals")).is_some());
+    }
+
+    #[test]
+    fn findings_separate_config_hashes_stay_distinct() {
+        let dir = tempdir().unwrap();
+        let src = FindingsCache::new();
+        src.insert(
+            fkey(1, 0, "Warning.TripleEquals"),
+            vec![mk_issue("W", "cfg0")],
+        );
+        src.insert(
+            fkey(1, 9, "Warning.TripleEquals"),
+            vec![mk_issue("W", "cfg9")],
+        );
+        save_findings(dir.path(), &src).unwrap();
+
+        let dst = FindingsCache::new();
+        assert_eq!(
+            load_findings(dir.path(), &dst, &["Warning.TripleEquals"]).unwrap(),
+            2
+        );
+        assert_eq!(
+            dst.get(&fkey(1, 0, "Warning.TripleEquals")).unwrap()[0].message,
+            "cfg0"
+        );
+        assert_eq!(
+            dst.get(&fkey(1, 9, "Warning.TripleEquals")).unwrap()[0].message,
+            "cfg9"
+        );
     }
 
     #[test]
@@ -424,14 +821,15 @@ mod tests {
         let vdir = version_dir(dir.path());
         fs::create_dir_all(&vdir).unwrap();
         let bogus = FindingsFile {
+            format: FORMAT_VERSION,
             engine_version: "0.0.0-from-another-build".to_string(),
-            entries: vec![FindingsEntry {
-                key: FindingsKeyOnDisk {
-                    content_hash: [1; 32],
-                    config_hash: [0; 32],
-                    check_id: "Warning.TripleEquals".to_string(),
-                },
-                issues: vec![mk_issue("Warning.TripleEquals", "x")],
+            strings: vec!["Warning.TripleEquals".to_string()],
+            configs: vec![hex_encode(&[0u8; 32])],
+            groups: vec![FindingsGroup {
+                h: hex_encode(&[1u8; 32]),
+                g: 0,
+                empty: vec![0],
+                found: Vec::new(),
             }],
         };
         fs::write(
@@ -446,20 +844,60 @@ mod tests {
     }
 
     #[test]
-    fn run_cache_roundtrip_preserves_entries() {
+    fn wrong_format_version_is_discarded() {
+        let dir = tempdir().unwrap();
+        let vdir = version_dir(dir.path());
+        fs::create_dir_all(&vdir).unwrap();
+        let bogus = FindingsFile {
+            format: FORMAT_VERSION + 1,
+            engine_version: ENGINE_VERSION.to_string(),
+            strings: vec!["Warning.TripleEquals".to_string()],
+            configs: vec![hex_encode(&[0u8; 32])],
+            groups: vec![FindingsGroup {
+                h: hex_encode(&[1u8; 32]),
+                g: 0,
+                empty: vec![0],
+                found: Vec::new(),
+            }],
+        };
+        fs::write(
+            vdir.join("findings.json"),
+            serde_json::to_vec(&bogus).unwrap(),
+        )
+        .unwrap();
+
+        let dst = FindingsCache::new();
+        assert_eq!(
+            load_findings(dir.path(), &dst, &["Warning.TripleEquals"]).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn run_cache_roundtrip_preserves_latest_entry() {
         let dir = tempdir().unwrap();
         let src = RunCache::new();
         src.insert(rkey(1, 0), vec![mk_issue("Warning.TripleEquals", "a")]);
         src.insert(rkey(2, 0), vec![mk_issue("X", "b"), mk_issue("Y", "c")]);
 
+        // Only the most recent insert is persisted (CD-185).
         let saved = save_run(dir.path(), &src).expect("save");
-        assert_eq!(saved, 2);
+        assert_eq!(saved, 1);
 
         let dst = RunCache::new();
         let hydrated = load_run(dir.path(), &dst).expect("load");
-        assert_eq!(hydrated, 2);
-        assert_eq!(dst.get(&rkey(1, 0)).unwrap()[0].message, "a");
+        assert_eq!(hydrated, 1);
         assert_eq!(dst.get(&rkey(2, 0)).unwrap().len(), 2);
+        assert!(dst.get(&rkey(1, 0)).is_none());
+    }
+
+    #[test]
+    fn run_cache_save_is_a_noop_when_nothing_was_inserted() {
+        let dir = tempdir().unwrap();
+        let src = RunCache::new();
+        assert_eq!(save_run(dir.path(), &src).unwrap(), 0);
+        let dst = RunCache::new();
+        assert_eq!(load_run(dir.path(), &dst).unwrap(), 0);
     }
 
     #[test]
@@ -494,5 +932,30 @@ mod tests {
             dst.get(&fkey(1, 0, "Warning.TripleEquals")).unwrap()[0].message,
             "v2"
         );
+    }
+
+    // Hydrating from disk must leave the cache "clean" so a run that
+    // only reads it can skip the rewrite entirely (CD-185).
+    #[test]
+    fn load_leaves_caches_clean_and_insert_dirties_them() {
+        let dir = tempdir().unwrap();
+        let src = FindingsCache::new();
+        src.insert(fkey(1, 0, "Warning.TripleEquals"), Vec::new());
+        save_findings(dir.path(), &src).unwrap();
+
+        let dst = FindingsCache::new();
+        load_findings(dir.path(), &dst, &["Warning.TripleEquals"]).unwrap();
+        assert!(!dst.is_dirty());
+        dst.insert(fkey(2, 0, "Warning.TripleEquals"), Vec::new());
+        assert!(dst.is_dirty());
+
+        let rsrc = RunCache::new();
+        rsrc.insert(rkey(1, 0), vec![mk_issue("X", "a")]);
+        save_run(dir.path(), &rsrc).unwrap();
+        let rdst = RunCache::new();
+        load_run(dir.path(), &rdst).unwrap();
+        assert!(!rdst.is_dirty());
+        rdst.insert(rkey(2, 0), Vec::new());
+        assert!(rdst.is_dirty());
     }
 }

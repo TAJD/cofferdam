@@ -72,6 +72,13 @@ pub enum DslParseError {
         col: u32,
         escape_char: char,
     },
+
+    /// The predicate nested (parens / calls / `+` concatenation) more deeply
+    /// than [`MAX_PREDICATE_DEPTH`] allows. Guards against a stack overflow
+    /// on adversarial input (CD-206) — a well-formed predicate never needs
+    /// anywhere near this much nesting.
+    #[error("predicate nested too deeply (limit {limit}) at line {line}, col {col}")]
+    MaxDepthExceeded { line: u32, col: u32, limit: usize },
 }
 
 fn format_suggestions(suggestions: &[String]) -> String {
@@ -320,14 +327,47 @@ fn tokenise(src: &str) -> Result<Vec<Tok>, DslParseError> {
 // Parser state
 // ---------------------------------------------------------------------------
 
+/// Maximum predicate/operand nesting depth. Bounds both the parser's own
+/// recursion (parens, `and`/`or`/`not`, call arguments) and, transitively,
+/// the depth of the AST it produces — which in turn bounds the evaluator's
+/// recursion over that AST (CD-206). Generous for any realistic predicate,
+/// tight enough to never approach a stack overflow.
+const MAX_PREDICATE_DEPTH: usize = 100;
+
 struct Parser {
     tokens: Vec<Tok>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
     fn new(tokens: Vec<Tok>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    /// Enter one level of predicate nesting, erroring once
+    /// [`MAX_PREDICATE_DEPTH`] is exceeded. Pair with [`Parser::leave_predicate`].
+    fn enter_predicate(&mut self) -> Result<(), DslParseError> {
+        self.depth += 1;
+        if self.depth > MAX_PREDICATE_DEPTH {
+            let (line, col) = self.current_pos();
+            return Err(DslParseError::MaxDepthExceeded {
+                line,
+                col,
+                limit: MAX_PREDICATE_DEPTH,
+            });
+        }
+        Ok(())
+    }
+
+    /// Leave one level of predicate nesting entered via
+    /// [`Parser::enter_predicate`]. Only call after a successful `enter_predicate`.
+    fn leave_predicate(&mut self) {
+        self.depth -= 1;
     }
 
     fn peek(&self) -> Option<&Tok> {
@@ -516,7 +556,18 @@ fn parse_top_predicate(p: &mut Parser) -> Result<TopPredicate, DslParseError> {
 }
 
 /// `or_expr = and_expr ( "or" and_expr )*`
+///
+/// This is the mutual-recursion hub for predicate nesting: parenthesised
+/// atoms and call arguments both recurse back into `parse_or_expr`. Guarding
+/// entry here bounds recursion depth for both paths (CD-206).
 fn parse_or_expr(p: &mut Parser) -> Result<Predicate, DslParseError> {
+    p.enter_predicate()?;
+    let result = parse_or_expr_inner(p);
+    p.leave_predicate();
+    result
+}
+
+fn parse_or_expr_inner(p: &mut Parser) -> Result<Predicate, DslParseError> {
     let mut lhs = parse_and_expr(p)?;
     while p.try_consume_kw("or") {
         let rhs = parse_and_expr(p)?;
@@ -904,12 +955,28 @@ fn parse_op(p: &mut Parser) -> Result<Op, DslParseError> {
 }
 
 /// `operand = string | call | concat`  (concat is left-associative `+`)
+///
+/// This loop is iterative, not recursive, so it doesn't hit
+/// `Parser::enter_predicate`'s guard — but it still builds a left-nested
+/// `Operand::Concat` tree that the evaluator recurses over. Bound the chain
+/// length directly so a predicate with thousands of `+`s can't stack-overflow
+/// evaluation later (CD-206).
 fn parse_operand(p: &mut Parser) -> Result<Operand, DslParseError> {
     let mut lhs = parse_operand_atom(p)?;
+    let mut concat_len: usize = 1;
     while matches!(p.peek_token(), Some(Token::Plus)) {
         p.consume(); // `+`
         let rhs = parse_operand_atom(p)?;
         lhs = Operand::Concat(Box::new(lhs), Box::new(rhs));
+        concat_len += 1;
+        if concat_len > MAX_PREDICATE_DEPTH {
+            let (line, col) = p.current_pos();
+            return Err(DslParseError::MaxDepthExceeded {
+                line,
+                col,
+                limit: MAX_PREDICATE_DEPTH,
+            });
+        }
     }
     Ok(lhs)
 }

@@ -1,8 +1,8 @@
 //! Cofferdam CLI entry point.
 
 use cofferdam_cli::{
-    advise, advise_diff, agents, baseline_diff, baseline_lint, doctor, explain, gen_docs, init,
-    plugins, type_host, watch,
+    advise, advise_diff, agents, baseline_diff, baseline_lint, context_cmd, doctor, explain,
+    gen_docs, init, invariants_cmd, plugins, type_host, watch,
 };
 
 use std::collections::BTreeMap;
@@ -45,6 +45,12 @@ enum AdviseOutputFormat {
     /// Human-readable text grouped by file (default).
     Text,
     /// Machine-readable JSON array. One object per file.
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ContextOutputFormat {
+    Text,
     Json,
 }
 
@@ -163,13 +169,13 @@ enum Cmd {
         /// already terse).
         #[arg(long)]
         quiet: bool,
-        /// Hide baselined findings from text output. The summary line
-        /// still reports `(N new, M baselined)` counts so the CI gate
-        /// remains visible. Has no effect on `--format=json` (which
-        /// always includes the per-finding `baselined` flag) or on the
-        /// `--fail-on` gate (which already ignores baselined findings).
-        /// Useful for routine local runs against repos with substantial
-        /// baselines (cd-k23 / gh #11).
+        /// Hide baselined findings from the output, in every format
+        /// (text, json, compact, sarif). The summary/counts still report
+        /// the full `(N new, M baselined)` totals so the CI gate remains
+        /// visible — only the per-finding entries are dropped. Has no
+        /// effect on the `--fail-on` gate (which already ignores
+        /// baselined findings). Useful for routine local runs against
+        /// repos with substantial baselines (cd-k23 / gh #11).
         #[arg(long)]
         hide_baselined: bool,
         /// Directory for the disk-backed findings/run cache (cd-9hp.4
@@ -206,17 +212,19 @@ enum Cmd {
         /// external tool if you want a chart. (CD-64 D3)
         #[arg(long)]
         trend: bool,
-        /// Restrict output to findings from one check (dotted id, e.g.
-        /// `Warning.IslandApiConvention`). Applied after plugin merge, so
-        /// it covers both built-in and plugin-emitted findings; budgets,
-        /// baseline, and the exit-code gate all see only this check's
-        /// findings. Useful for a CI hook that gates on a single
-        /// project-specific plugin check without turning on the full
-        /// suite (CD-74). An id that matches no built-in check (and no
-        /// plugins are configured) exits 2 rather than silently returning
-        /// zero findings — a typo here must not make a CI gate pass.
-        #[arg(long, value_name = "CHECK_ID")]
-        only: Option<String>,
+        /// Restrict output to findings from the named checks (dotted ids,
+        /// e.g. `Warning.IslandApiConvention`). Repeatable, and accepts a
+        /// comma-separated list: `--only A --only B` and `--only A,B` are
+        /// the same. Applied after plugin merge, so it covers both
+        /// built-in and plugin-emitted findings; budgets, baseline, and
+        /// the exit-code gate all see only these checks' findings. Useful
+        /// for a CI hook that gates on a few project-specific plugin
+        /// checks without turning on the full suite (CD-74, CD-307). If
+        /// ANY id matches no known check, the run exits 2 rather than
+        /// silently narrowing — a typo in one of several ids must not
+        /// quietly shrink a CI gate.
+        #[arg(long, value_name = "CHECK_ID", value_delimiter = ',')]
+        only: Vec<String>,
     },
     /// Opt-in check mode for built HTML output (CD-85). Discovers only the
     /// given output directory (e.g. `dist/`, `.next/`, `build/`) and runs
@@ -478,6 +486,80 @@ enum Cmd {
         #[arg(long)]
         analyze: bool,
     },
+    /// Start here — the default entrypoint into project context you
+    /// don't already have. Run it first, before or right after making
+    /// a change: it resolves the current diff, consults the knowledge
+    /// graph, and emits a token-budgeted advisory digest — delta-scoped
+    /// findings, blast radius, precedent, and curated knowledge.
+    /// Advisory only: always exits 0 (usage/git errors excepted).
+    /// Markdown by default; `--format json` for harness integration.
+    Context {
+        /// Explicit changed files (no git required). Empty → resolve
+        /// from git (staged + unstaged vs HEAD by default).
+        paths: Vec<PathBuf>,
+        /// Only staged changes (`git diff --cached`).
+        #[arg(long, conflicts_with = "base")]
+        staged: bool,
+        /// Diff against merge-base(`<ref>`, HEAD) — everything on this
+        /// branch, committed or not.
+        #[arg(long, value_name = "GIT-REF")]
+        base: Option<String>,
+        /// Token budget for the digest (crude 4-chars/token estimate).
+        #[arg(long, default_value_t = 2000)]
+        budget: usize,
+        /// Output format: text (markdown, default) or json.
+        #[arg(long, value_enum, value_name = "FORMAT")]
+        format: Option<ContextOutputFormat>,
+        /// Shorthand: JSON output unless --format given.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON.
+        #[arg(long)]
+        pretty: bool,
+        /// Path to cofferdam.toml (same semantics as `check`).
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config discovery.
+        #[arg(long)]
+        no_config: bool,
+        /// Walk hidden files (default: skip).
+        #[arg(long)]
+        hidden: bool,
+        /// Disable .gitignore/.cofferdamignore filtering.
+        #[arg(long)]
+        no_ignore: bool,
+        /// Validate every `.cofferdam/knowledge/*.md` file instead of
+        /// producing a digest: selectors must parse, and every
+        /// selector must match at least one file in the current repo
+        /// (catches broken globs and orphan selectors). The one
+        /// deliberate nonzero-exit carve-out for `cofferdam context` —
+        /// exits nonzero when validation fails, so CI can gate on it.
+        /// Ignores `paths`/`staged`/`base`/`budget`/`format`.
+        #[arg(long)]
+        lint_knowledge: bool,
+        /// Validate every `[[context_suppress]]` rule in cofferdam.toml
+        /// instead of producing a digest: `check_id` must be a real
+        /// `Context.*` provider id, and (unless `paths` is omitted — the
+        /// wildcard "suppress everything this check_id emits" form)
+        /// `paths` globs must match at least one file in the current
+        /// repo (catches stale suppression rules left behind after the
+        /// files they targeted moved or were deleted). Same nonzero-exit
+        /// carve-out as `--lint-knowledge`. Ignores
+        /// `paths`/`staged`/`base`/`budget`/`format`. See
+        /// `docs/reference/context.md#context_suppress--suppressing-noisy-digest-items`
+        /// for the block's schema.
+        #[arg(long)]
+        lint_context_suppress: bool,
+    },
+    /// Inspect the resolved architectural spec — the merge of
+    /// `cofferdam.toml` `[layers]` and `cofferdam.invariants.toml` that
+    /// `check` actually runs against (CD-308). Use it when a rule is not
+    /// firing and you want to know what cofferdam loaded, rather than
+    /// what you think you wrote.
+    Invariants {
+        #[command(subcommand)]
+        cmd: InvariantsCmd,
+    },
     /// Regenerate the docs catalog from CheckMeta. Writes per-check
     /// markdown files, a schema-stable JSON index, an llms.txt root
     /// index, and the CLI reference page (from clap-markdown). Use
@@ -566,6 +648,69 @@ enum Cmd {
         /// themselves still print. Has no effect on JSON output.
         #[arg(long)]
         quiet: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum InvariantsCmd {
+    /// Print the resolved, merged spec: which files were read, which
+    /// layers are in force and which file they came from, the public
+    /// API, boundaries and invariants, plus any load warnings. Always
+    /// exits 0 when the spec loads, including when nothing is declared.
+    Show {
+        /// Directory to resolve from. Discovery walks up from here, the
+        /// same way `check` does. Defaults to `.`.
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Output format. Default: `text`. With `--robot` and no
+        /// explicit `--format`, defaults to `json`.
+        #[arg(long, value_enum)]
+        format: Option<ContextOutputFormat>,
+        /// Shorthand: JSON output unless `--format` is given.
+        #[arg(long)]
+        robot: bool,
+        /// Pretty-print JSON output.
+        #[arg(long)]
+        pretty: bool,
+        /// Path to a `cofferdam.toml` config file. Same discovery
+        /// semantics as `check`.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+    },
+    /// Parse the spec and report problems without running the engine.
+    /// Exits 1 when the spec fails to load — a malformed predicate, an
+    /// unsupported schema version — so CI can gate on the config alone,
+    /// separately from the findings it produces. Warnings do not fail
+    /// the run unless `--strict` is set.
+    Validate {
+        /// Directory to resolve from. Defaults to `.`.
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Treat load warnings — a deprecated or missing
+        /// `schema_version`, `[layers]` declared in both files — as
+        /// failures.
+        #[arg(long)]
+        strict: bool,
+        /// Path to a `cofferdam.toml` config file.
+        #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
+        config: Option<PathBuf>,
+        /// Disable config-file discovery entirely.
+        #[arg(long)]
+        no_config: bool,
+    },
+    /// Print the canonical TOML serialisation of
+    /// `cofferdam.invariants.toml` — every optional field spelled out in
+    /// the form `docs/schema-versioning.md` defines as canonical. Writes
+    /// to stdout; redirect it yourself if you want to replace the file.
+    /// Exits 1 when no `cofferdam.invariants.toml` is discoverable,
+    /// since there is nothing to normalise.
+    Normalize {
+        /// Directory to resolve from. Defaults to `.`.
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
     },
 }
 
@@ -716,6 +861,25 @@ enum BaselineAction {
 }
 
 fn main() -> ExitCode {
+    // Windows MSVC debug builds default to a 1MiB main-thread stack.
+    // clap's derived `Cli::parse()` codegen for this many
+    // subcommands/args (14 top-level `Cmd` variants, several with 15+
+    // fields) sits close enough to that limit that adding one more
+    // variant (`Cmd::Context`, CD-158) tipped a debug build over into a
+    // stack overflow before a single line of application logic ran —
+    // reproduced with `cofferdam hello`, so it's a parse-time cost, not
+    // anything specific to the new command. Running on a thread with a
+    // larger stack sidesteps it; release builds and non-Windows hosts
+    // had headroom already, so this is a no-op there.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+        .expect("failed to spawn main worker thread")
+        .join()
+        .unwrap_or_else(|_| ExitCode::from(101))
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
@@ -1007,6 +1171,39 @@ fn main() -> ExitCode {
             hidden,
             no_ignore,
         }),
+        Cmd::Context {
+            paths,
+            staged,
+            base,
+            budget,
+            format,
+            robot,
+            pretty,
+            config,
+            no_config,
+            hidden,
+            no_ignore,
+            lint_knowledge,
+            lint_context_suppress,
+        } => context_cmd::run(context_cmd::ContextArgs {
+            paths,
+            staged,
+            base,
+            budget,
+            format: format.map(|f| match f {
+                ContextOutputFormat::Text => context_cmd::ContextFormat::Text,
+                ContextOutputFormat::Json => context_cmd::ContextFormat::Json,
+            }),
+            robot,
+            pretty,
+            config_path: config,
+            no_config,
+            hidden,
+            no_ignore,
+            lint_knowledge,
+            lint_context_suppress,
+        }),
+        Cmd::Invariants { cmd } => run_invariants(cmd),
         Cmd::GenDocs { out, check } => gen_docs::run::<Cli>(out, check),
         Cmd::Lsp => run_lsp(),
         Cmd::TypeHost {
@@ -1088,10 +1285,7 @@ fn run_typst(args: TypstArgs) -> ExitCode {
 
     match format {
         OutputFormat::Text => {
-            let opts = TextRenderOpts {
-                quiet,
-                ..Default::default()
-            };
+            let opts = TextRenderOpts { quiet };
             print!("{}", TextFormatter::render_with_opts(&issues, opts));
         }
         OutputFormat::Json => {
@@ -1264,6 +1458,103 @@ fn find_tsconfig(start: &Path) -> Option<PathBuf> {
     None
 }
 
+fn run_invariants(cmd: InvariantsCmd) -> ExitCode {
+    match cmd {
+        InvariantsCmd::Show {
+            path,
+            format,
+            robot,
+            pretty,
+            config,
+            no_config,
+        } => {
+            let resolved = match invariants_cmd::resolve(config.as_deref(), &path, no_config) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            let format = format.unwrap_or(if robot {
+                ContextOutputFormat::Json
+            } else {
+                ContextOutputFormat::Text
+            });
+            match format {
+                ContextOutputFormat::Text => print!("{}", invariants_cmd::render_text(&resolved)),
+                ContextOutputFormat::Json => {
+                    let rendered = if pretty {
+                        serde_json::to_string_pretty(&resolved)
+                    } else {
+                        serde_json::to_string(&resolved)
+                    };
+                    match rendered {
+                        Ok(s) => println!("{s}"),
+                        Err(e) => {
+                            eprintln!("error: serializing spec: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        InvariantsCmd::Validate {
+            path,
+            strict,
+            config,
+            no_config,
+        } => {
+            let resolved = match invariants_cmd::resolve(config.as_deref(), &path, no_config) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            for w in &resolved.warnings {
+                eprintln!("warning: {w}");
+            }
+            if strict && !resolved.warnings.is_empty() {
+                eprintln!(
+                    "error: {} warning(s) with --strict",
+                    resolved.warnings.len()
+                );
+                return ExitCode::FAILURE;
+            }
+            println!("ok: spec loads");
+            ExitCode::SUCCESS
+        }
+        InvariantsCmd::Normalize { path } => {
+            let Some(found) = cofferdam_core::invariants::discover(&path) else {
+                eprintln!(
+                    "error: no {} found from {}",
+                    cofferdam_core::invariants::FILE_NAME,
+                    path.display()
+                );
+                return ExitCode::FAILURE;
+            };
+            let spec = match cofferdam_core::invariants::load(&found) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match invariants_cmd::normalize(&spec) {
+                Ok(s) => {
+                    print!("{s}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: serializing spec: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
+}
+
 fn run_lsp() -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match cofferdam_lsp::run_stdio_server(cwd) {
@@ -1349,7 +1640,7 @@ struct CheckArgs {
     fail_on_type_unavailable: bool,
     time_checks: bool,
     trend: bool,
-    only: Option<String>,
+    only: Vec<String>,
 }
 
 fn run_check(args: CheckArgs) -> ExitCode {
@@ -1696,59 +1987,64 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // both engine and plugin findings respect the narrowed output window.
     signed.retain(|(issue, _sig)| in_report_scope(&report_scope, &issue.file));
 
-    // --only <CheckId> (CD-74): restrict to one check's findings, applied
-    // after plugin merge so it covers plugin-emitted ids too. A check that
-    // legitimately found nothing this run must NOT error — so validate
-    // against the known-id registry, not against whether it fired here.
-    // Plugin ids aren't statically known (same reason the cofferdam.toml
-    // unknown-check-id warning above is silenced when plugins are
-    // configured), so skip the typo check in that case.
+    // --only <CheckId>... (CD-74, widened to a set in CD-307): restrict to
+    // the named checks' findings, applied after plugin merge so it covers
+    // plugin-emitted ids too. A check that legitimately found nothing this
+    // run must NOT error — so validate against the known-id registry, not
+    // against whether it fired here.
     //
     // A typo hard-errors (exit 2) rather than warning-and-continuing: the
-    // primary use case is a CI hook gating on one check's exit code, and a
-    // silently-empty `signed` from an unmatched id would make that gate
-    // pass regardless of real violations — the exact false-green failure
-    // mode `--fail-on-type-unavailable` (cd-260l) and the `[budgets]` key
-    // warning both exist to prevent.
-    if let Some(only_id) = only.as_deref() {
-        let plugin_cfg = project_config
+    // primary use case is a CI hook gating on these checks' exit code, and
+    // a silently-narrowed `signed` from an unmatched id would make that
+    // gate pass regardless of real violations — the exact false-green
+    // failure mode `--fail-on-type-unavailable` (cd-260l) and the
+    // `[budgets]` key warning both exist to prevent. With a set of ids
+    // that reasoning gets stronger, not weaker: one bad id out of four
+    // would otherwise quietly drop a quarter of the gate.
+    if !only.is_empty() {
+        let plugin_metas = project_config
             .as_ref()
-            .filter(|cfg| !cfg.plugins.is_empty());
-        // CD-96: when plugins are configured, `only_id` might be the bare
-        // id a plugin author wrote in their own `defineCheck({ id: ... })`
-        // rather than the category-prefixed id its findings actually
-        // carry at runtime. Resolve via plugin metadata (available even
-        // for a check that found nothing this run) so both forms work,
-        // and so a genuine typo still hard-errors instead of silently
-        // matching zero findings — the previous behaviour blanket-skipped
-        // this validation whenever any plugin was configured.
-        let resolved_only = match plugin_cfg {
-            Some(cfg) => {
+            .filter(|cfg| !cfg.plugins.is_empty())
+            .map(|cfg| {
                 let cfg_dir = resolved_config_path
                     .as_deref()
                     .and_then(Path::parent)
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| PathBuf::from("."));
-                let plugin_metas = plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir);
-                let matched = plugin_metas.iter().find(|m| {
-                    let prefixed = plugin_prefixed_id(m);
-                    m.id == only_id || prefixed == only_id
-                });
-                match matched {
-                    Some(m) => Some(plugin_prefixed_id(m)),
-                    None if registered.contains(&only_id) => Some(only_id.to_string()),
-                    None => None,
-                }
+                plugins::query_plugin_metadata(&cfg.plugins, &cfg_dir)
+            })
+            .unwrap_or_default();
+
+        let mut resolved: Vec<String> = Vec::with_capacity(only.len());
+        let mut unknown: Vec<&str> = Vec::new();
+        for only_id in only.iter().map(String::as_str) {
+            // CD-96: `only_id` might be the bare id a plugin author wrote
+            // in their own `defineCheck({ id: ... })` rather than the
+            // category-prefixed id its findings actually carry at runtime.
+            // Resolve via plugin metadata (available even for a check that
+            // found nothing this run) so both forms work, and so a genuine
+            // typo still hard-errors instead of silently matching zero.
+            let matched = plugin_metas
+                .iter()
+                .find(|m| m.id == only_id || plugin_prefixed_id(m) == only_id);
+            match matched {
+                Some(m) => resolved.push(plugin_prefixed_id(m)),
+                None if registered.contains(&only_id) => resolved.push(only_id.to_string()),
+                None => unknown.push(only_id),
             }
-            None => registered.contains(&only_id).then(|| only_id.to_string()),
-        };
-        let Some(resolved_only) = resolved_only else {
+        }
+        if !unknown.is_empty() {
             eprintln!(
-                "error: --only '{only_id}' matches no known check id (built-in or plugin) — check for a typo"
+                "error: --only {} matches no known check id (built-in or plugin) — check for a typo",
+                unknown
+                    .iter()
+                    .map(|id| format!("'{id}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             return ExitCode::from(2);
-        };
-        signed.retain(|(issue, _sig)| issue.check_id == resolved_only);
+        }
+        signed.retain(|(issue, _sig)| resolved.contains(&issue.check_id));
     }
 
     // COMMON: [budgets] enforcement + --trend (CD-64 D2/D3). Both tally
@@ -1859,15 +2155,23 @@ fn run_check(args: CheckArgs) -> ExitCode {
         let truncated_from = apply_max_issues(&mut tagged, max_issues);
         print_truncation_warning(quiet, format, tagged.len(), truncated_from);
 
+        // `--hide-baselined` (cd-315): filter once, here, so every
+        // formatter renders the same list — previously only the text
+        // formatter honoured the flag, so `--format=json` (and
+        // compact/sarif) silently printed baselined findings anyway.
+        // `tagged` stays the source of truth for summary counts
+        // (`render_with_baseline_filtered`'s `full` argument below);
+        // only the rendered `findings`/body shrinks.
+        let hidden: Option<Vec<(cofferdam_core::Issue, bool)>> =
+            hide_baselined.then(|| tagged.iter().filter(|(_, b)| !*b).cloned().collect());
+        let render_tagged: &[(cofferdam_core::Issue, bool)] = hidden.as_deref().unwrap_or(&tagged);
+
         match format {
             OutputFormat::Text => {
-                let opts = TextRenderOpts {
-                    quiet,
-                    hide_baselined,
-                };
+                let opts = TextRenderOpts { quiet };
                 print!(
                     "{}",
-                    TextFormatter::render_with_baseline_opts(&tagged, opts)
+                    TextFormatter::render_with_baseline_filtered(&tagged, render_tagged, opts)
                 );
             }
             OutputFormat::Json => {
@@ -1879,7 +2183,12 @@ fn run_check(args: CheckArgs) -> ExitCode {
                     all_builtins().iter().map(|c| *c.meta()).collect();
                 println!(
                     "{}",
-                    JsonFormatter::render_with_baseline_with_opts(&tagged, &metas, opts)
+                    JsonFormatter::render_with_baseline_filtered(
+                        &tagged,
+                        render_tagged,
+                        &metas,
+                        opts
+                    )
                 );
             }
             OutputFormat::Compact => {
@@ -1887,7 +2196,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 // render the underlying findings; users who need
                 // baseline info should use --format=json.
                 let issues_only: Vec<cofferdam_core::Issue> =
-                    tagged.iter().map(|(i, _)| i.clone()).collect();
+                    render_tagged.iter().map(|(i, _)| i.clone()).collect();
                 print!("{}", CompactFormatter::render(&issues_only));
             }
             OutputFormat::Sarif => {
@@ -1895,7 +2204,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 // --format=json when you need the per-finding `baselined`
                 // flag in the output.
                 let issues_only: Vec<cofferdam_core::Issue> =
-                    tagged.iter().map(|(i, _)| i.clone()).collect();
+                    render_tagged.iter().map(|(i, _)| i.clone()).collect();
                 let metas: Vec<cofferdam_core::CheckMeta> =
                     all_builtins().iter().map(|c| *c.meta()).collect();
                 println!(
@@ -1938,10 +2247,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
         match format {
             OutputFormat::Text => {
                 // --hide-baselined is a no-op here (nothing is baselined).
-                let opts = TextRenderOpts {
-                    quiet,
-                    ..Default::default()
-                };
+                let opts = TextRenderOpts { quiet };
                 print!("{}", TextFormatter::render_with_opts(&issues, opts));
             }
             OutputFormat::Json => {
@@ -1984,12 +2290,18 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // Persist disk cache after analyze (cd-9hp.4 cp4). Save failures
     // are non-fatal warnings — a corrupted save just means the next
     // run rebuilds from cold.
+    // A cache that hit on everything already matches the file on disk;
+    // rewriting it is pure cost (CD-185).
     if let Some(dir) = resolved_cache_dir.as_deref() {
-        if let Err(e) = cofferdam_engine::disk_cache::save_findings(dir, &findings_cache) {
-            eprintln!("warning: failed to save findings cache: {e}");
+        if findings_cache.is_dirty() {
+            if let Err(e) = cofferdam_engine::disk_cache::save_findings(dir, &findings_cache) {
+                eprintln!("warning: failed to save findings cache: {e}");
+            }
         }
-        if let Err(e) = cofferdam_engine::disk_cache::save_run(dir, &run_cache) {
-            eprintln!("warning: failed to save run cache: {e}");
+        if run_cache.is_dirty() {
+            if let Err(e) = cofferdam_engine::disk_cache::save_run(dir, &run_cache) {
+                eprintln!("warning: failed to save run cache: {e}");
+            }
         }
     }
 
@@ -2228,10 +2540,7 @@ fn run_verify(args: VerifyArgs) -> ExitCode {
                     println!("no output-mode findings");
                 }
             } else {
-                let opts = TextRenderOpts {
-                    quiet,
-                    ..Default::default()
-                };
+                let opts = TextRenderOpts { quiet };
                 print!("{}", TextFormatter::render_with_opts(&issues, opts));
             }
         }
@@ -2284,6 +2593,39 @@ fn plugin_prefixed_id(meta: &plugins::PluginCheckMeta) -> String {
     }
 }
 
+/// Per-path `[[overrides]]` resolution for one plugin finding (CD-321).
+/// Plugin checks run through the Node host in `plugins.rs`, entirely
+/// outside the engine's `self.checks` loop, so they never passed through
+/// `Engine::effective_options`/`effective_severity` — a `disabled = true`
+/// override matched a built-in check with identical `paths` but silently
+/// did nothing for a plugin check. Mirrors those two methods' last-match-
+/// wins semantics over the same `OverrideBlock` list the engine consults
+/// (plugin issues, like built-in ones, carry the category-prefixed
+/// `check_id` by the time they reach here).
+fn plugin_override_verdict(
+    overrides: &[cfg::OverrideBlock],
+    file_key: &str,
+    check_id: &str,
+) -> (bool, Option<Severity>) {
+    let mut disabled = false;
+    let mut severity = None;
+    for block in overrides {
+        if !block.is_match(file_key) {
+            continue;
+        }
+        let Some(oc) = block.checks.get(check_id) else {
+            continue;
+        };
+        if let Some(d) = oc.disabled {
+            disabled = d;
+        }
+        if let Some(s) = oc.severity {
+            severity = Some(s);
+        }
+    }
+    (disabled, severity)
+}
+
 /// Run Node-side plugins declared in `cofferdam.toml`, then re-apply the
 /// suppression directive parser to plugin findings (plugins bypass the
 /// engine's built-in suppression pass since they emit out-of-band).
@@ -2315,6 +2657,25 @@ fn run_plugins_filtered(
         tsconfig_path,
         warn_on_type_unavailable,
     );
+    let plugin_issues: Vec<cofferdam_core::Issue> = if cfg.overrides.is_empty() {
+        plugin_issues
+    } else {
+        plugin_issues
+            .into_iter()
+            .filter_map(|mut issue| {
+                let file_key = cfg::path_key(&issue.file);
+                let (disabled, severity) =
+                    plugin_override_verdict(&cfg.overrides, &file_key, &issue.check_id);
+                if disabled {
+                    return None;
+                }
+                if let Some(s) = severity {
+                    issue.severity = s;
+                }
+                Some(issue)
+            })
+            .collect()
+    };
     let suppression_cache: HashMap<PathBuf, cofferdam_engine::suppress::Suppressions> = files
         .iter()
         .filter_map(|p| {

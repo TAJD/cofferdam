@@ -107,6 +107,12 @@ pub struct RunCache {
     entries: RefCell<HashMap<RunKey, Arc<Vec<Issue>>>>,
     hits: Cell<u64>,
     misses: Cell<u64>,
+    /// Key of the most recent [`Self::insert`]. Only this entry is worth
+    /// persisting: a whole-run snapshot is ~500 bytes per finding, and a
+    /// stale input-set fingerprint can never be hit again by a project
+    /// that has moved on. Writing every entry ever seen made `run.json`
+    /// grow without bound (CD-185).
+    last: RefCell<Option<RunKey>>,
 }
 
 impl RunCache {
@@ -138,15 +144,40 @@ impl RunCache {
     /// after a full analyze has produced a result, so an overwrite
     /// means a corpus / engine change invalidated the prior entry.
     pub fn insert(&self, key: RunKey, issues: Vec<Issue>) {
+        *self.last.borrow_mut() = Some(key.clone());
         self.entries.borrow_mut().insert(key, Arc::new(issues));
+    }
+
+    /// The most recently inserted `(key, issues)` pair, or `None` when
+    /// nothing was inserted since construction (every lookup hit, or the
+    /// cache was only hydrated from disk). `crate::disk_cache::save_run`
+    /// persists exactly this entry.
+    pub fn latest(&self) -> Option<(RunKey, Arc<Vec<Issue>>)> {
+        let key = self.last.borrow().clone()?;
+        let issues = self.entries.borrow().get(&key).map(Arc::clone)?;
+        Some((key, issues))
     }
 
     /// Drop every cached entry. The watch loop calls this on config
     /// reload (when the file watcher fires on `cofferdam.toml`).
     pub fn clear(&self) {
         self.entries.borrow_mut().clear();
+        *self.last.borrow_mut() = None;
         self.hits.set(0);
         self.misses.set(0);
+    }
+
+    /// Forget which entry was inserted last, declaring the current
+    /// contents to match what's on disk. The disk-cache loader calls
+    /// this after hydrating so a run that only *reads* the cache leaves
+    /// `latest()` at `None` and the caller can skip the rewrite.
+    pub fn mark_clean(&self) {
+        *self.last.borrow_mut() = None;
+    }
+
+    /// True when an entry was inserted since the last [`Self::mark_clean`].
+    pub fn is_dirty(&self) -> bool {
+        self.last.borrow().is_some()
     }
 
     /// Hits since construction (or last `clear`).

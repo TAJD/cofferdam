@@ -108,7 +108,7 @@ cargo build --release -p cofferdam-cli
 
 ## Status
 
-Phase 4, in progress. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.
+Phase 4, in progress. Roadmap tracked on Projektor (Cofferdam project, key `CD`).
 
 ## Licence
 

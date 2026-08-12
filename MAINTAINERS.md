@@ -59,14 +59,9 @@ Both packages publish via OIDC Trusted Publisher pinned to `TAJD/cofferdam` → 
 
 The unscoped legacy name `cofferdam` (binary wrapper, owned by user `tajdickson`) was used through 0.2.2 and is now deprecated. New work goes only to the scoped name. The legacy name is kept reserved (npm doesn't release names) so nobody else can squat it; it should not be republished. Migration message users see when they `npm install -D cofferdam` is set with `npm deprecate cofferdam "..."` — see issue cd-gzm for the canonical message.
 
-## Phased build
+## Roadmap
 
-1. Rust engine + `Issue` + priority + report formatter + built-in checks across all 5 categories — **shipped**
-2. Two-pass consistency mode with `Consistency.QuoteStyle` as the canary — **shipped**
-3. Baseline + severity-axis + `--since` — biggest adoption-unlock — **shipped**
-4. napi-rs FFI + JS plugin host, ship `@cofferdam/cofferdam`, `@cofferdam/check-sdk`, and `@cofferdam/recommended` — **in progress** (plugin host + both npm packages shipped; napi FFI and `@cofferdam/recommended` outstanding)
-5. `@cofferdam/types-aware` package with `ts-morph` checks — type-host infrastructure + first type-aware check shipped early (cd-9hp.2); standalone package outstanding
-6. LSP server + SARIF + GitHub Code Scanning — SARIF and a workspace-aware LSP shipped early; Code Scanning integration outstanding
+Phase/roadmap tracking lives on Projektor (Cofferdam project, key `CD`), not in this file — see the CD-165 (engine performance) and CD-156 (cofferdam context) epics for what's next.
 
 ## Project structure
 

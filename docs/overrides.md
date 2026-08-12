@@ -87,4 +87,4 @@ This is the same mental model as ESLint's `overrides` array or cascading `.gitig
 
 - **Other checks keep running.** Disabling or relaxing one check on a glob leaves every other check fully active on those files — that's the whole point.
 - **`[layers]`, `[boundaries]`, `[invariants]`, `[public_api]`** are project-graph rules with their own path scoping; overrides target per-check options/severity, not those blocks.
-- **Inline suppressions and `.cofferdamignore`** are unaffected and compose normally: a file excluded by `.cofferdamignore` is never analyzed, so no override applies to it.
+- **Inline suppressions and `.cofferdamignore`** are unaffected and compose normally: a file excluded by `.cofferdamignore` is never analysed, so no override applies to it.

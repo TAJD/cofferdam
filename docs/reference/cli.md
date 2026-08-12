@@ -48,10 +48,10 @@ TypeScript code-quality analyzer
 * `check` — Run all checks against files or directories. With no arguments, walks the current directory
 * `verify` — Opt-in check mode for built HTML output (CD-85). Discovers only the given output directory (e.g. `dist/`, `.next/`, `build/`) and runs ONLY checks explicitly tagged as output-mode-eligible (`Check::output_mode() == true`) against it — plain `cofferdam check` runs never see this tree and are completely unaffected
 * `baseline` — Manage the baseline of accepted findings. The baseline lets you drop cofferdam into an existing project without immediately failing CI on every pre-existing finding
-* `explain` — Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog
+* `explain` — Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalogue
 * `init` — Scaffold cofferdam.toml + .cofferdam/baseline.json + .gitignore entries so a new project has a working `cofferdam check` after one command. Refuses to overwrite an existing cofferdam.toml without `--force`
 * `doctor` — Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗ with a one-line remediation hint on failure. Exit 0 on all-pass, 1 if any check fails. Diagnostic only — never modifies files
-* `watch` — Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
+* `watch` — Re-analyse on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
 * `fix` — Apply mechanical autofixes for supported checks. Runs the engine against the given paths, groups fixable findings by file, applies edits in reverse byte-offset order, and writes each modified file atomically (write to a temp path then rename). Unsupported checks are silently skipped. Prints a summary to stderr
 * `agents` — Print the agent-onboarding prompt — a ready-to-paste markdown block that tells an AI coding agent how to use cofferdam in this repository. Covers `advise`, `advise --diff`, `check --robot`, and the `cofferdam.invariants.toml` contract. Output is version-pinned so AGENTS.md / CLAUDE.md generators can detect staleness. Pipe into a file to create or refresh an agent context fragment:
 * `advise` — JIT architectural advisory for agents — emit the rules that apply to a given file or directory, INDEPENDENT of whether any current code violates them. Designed for agentic edit loops: an LLM agent shells out before editing a file, gets back layer membership and per-rule constraints, and adjusts its plan before writing code. Static projection — does not parse, does not run checks, does not build the project graph. With no arguments, walks the current directory
@@ -79,7 +79,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 
 ###### **Arguments:**
 
-* `<PATHS>` — Files or directories to analyze. Defaults to `.`
+* `<PATHS>` — Files or directories to analyse. Defaults to `.`
 
 ###### **Options:**
 
@@ -102,7 +102,7 @@ Run all checks against files or directories. With no arguments, walks the curren
 * `--baseline <PATH>` — Path to a baseline file. Defaults to `.cofferdam/baseline.json` when that file exists. Conflicts with `--no-baseline`
 * `--no-baseline` — Disable baseline detection entirely. Equivalent to running without a baseline file present
 * `--fail-on-new` — Only fail (exit 1) on findings absent from the baseline. Implicit when a baseline is active; pass explicitly to document intent in CI scripts. Has no effect without a baseline
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely. Equivalent to running without a `cofferdam.toml` present
 * `--since <GIT-REF>` — PR mode — report only findings on files changed in `<git-ref>...HEAD`. The full project tree is still analysed for cross-file soundness (OrphanExport, DeadExport, import cycles); only the reported findings are filtered to the diff
 * `--fail-on <LEVEL>` — Severity threshold for the exit-1 gate. Findings below this level still print; the process only exits 1 if at least one finding is at this level or above. Baselined findings never trigger the gate
@@ -157,7 +157,7 @@ Limitations (v1): CSR/SPA apps with no static HTML output are not supported (wou
   Possible values: `info`, `low`, `medium`, `high`, `critical`
 
 * `--quiet` — Suppress informational output
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 
 
@@ -170,7 +170,7 @@ Manage the baseline of accepted findings. The baseline lets you drop cofferdam i
 
 ###### **Subcommands:**
 
-* `write` — Run the analyzer and write the current set of findings to the baseline file. Subsequent `cofferdam check` runs ignore these findings for CI-gating purposes; they still print as `[baselined]` so the team can chip away at them
+* `write` — Run the analyser and write the current set of findings to the baseline file. Subsequent `cofferdam check` runs ignore these findings for CI-gating purposes; they still print as `[baselined]` so the team can chip away at them
 * `lint` — Report baseline entries that are also suppressed inline
 * `diff` — Compute delta between two baselines
 * `prune` — Remove baseline entries whose signature matches no current finding (a fixed finding, a deleted file, or a renamed check)
@@ -180,20 +180,20 @@ Manage the baseline of accepted findings. The baseline lets you drop cofferdam i
 
 ## `cofferdam baseline write`
 
-Run the analyzer and write the current set of findings to the baseline file. Subsequent `cofferdam check` runs ignore these findings for CI-gating purposes; they still print as `[baselined]` so the team can chip away at them
+Run the analyser and write the current set of findings to the baseline file. Subsequent `cofferdam check` runs ignore these findings for CI-gating purposes; they still print as `[baselined]` so the team can chip away at them
 
 **Usage:** `cofferdam baseline write [OPTIONS] [PATHS]...`
 
 ###### **Arguments:**
 
-* `<PATHS>` — Files or directories to analyze. Defaults to `.`
+* `<PATHS>` — Files or directories to analyse. Defaults to `.`
 
 ###### **Options:**
 
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
 * `--output <PATH>` — Where to write the baseline. Defaults to `.cofferdam/baseline.json` in the current directory
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--robot` — Machine-readable JSON output. Emits a `delta` block when a prior baseline existed; omitted on first run
 * `--pretty` — Pretty-print JSON output. No effect without `--robot`
@@ -245,14 +245,14 @@ Keeps the baseline from accumulating dead weight that never gets re-examined onc
 
 ###### **Arguments:**
 
-* `<PATHS>` — Files or directories to analyze. Defaults to `.`
+* `<PATHS>` — Files or directories to analyse. Defaults to `.`
 
 ###### **Options:**
 
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
 * `--baseline <PATH>` — Path to the baseline file. Defaults to auto-detected `.cofferdam/baseline.json`
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--dry-run` — List stale entries without writing. Always exits 0
 * `--check` — List stale entries without writing; exit 1 if any exist. For CI gating on baseline hygiene
@@ -269,13 +269,13 @@ Lower `[budgets]` entries in `cofferdam.toml` to match the current finding count
 
 ###### **Arguments:**
 
-* `<PATHS>` — Files or directories to analyze. Defaults to `.`
+* `<PATHS>` — Files or directories to analyse. Defaults to `.`
 
 ###### **Options:**
 
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--dry-run` — Compute and print the new budgets without writing them
 * `--robot` — Machine-readable JSON output
@@ -285,7 +285,7 @@ Lower `[budgets]` entries in `cofferdam.toml` to match the current finding count
 
 ## `cofferdam explain`
 
-Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalog.
+Print the metadata and prose explanation for one check (built-in or plugin). Use this when a finding's check ID isn't self-explanatory and you want the rationale, default severity, configurable options, and any relevant flags without leaving the terminal. Add `--full` to also render the companion markdown body (motivation, examples, config snippets) sourced from the check catalogue.
 
 Plugin checks: `explain` discovers plugin-declared checks from `cofferdam.toml`'s `plugins = [...]` and renders their `explanation` (and `body` for `--full`) the same way as built-ins. Plugins must be loadable from the current working directory; otherwise the unknown-check fallback prints suggestions only from built-ins.
 
@@ -341,7 +341,7 @@ Diagnose install and configuration issues. Reports each check as ✓ / ⚠ / ✗
 
 ## `cofferdam watch`
 
-Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
+Re-analyse on file change (cd-9hp.4 cp1b). Discovers files once, registers a recursive filesystem watcher, and re-runs the engine on each detected change. A shared in-memory parse cache survives across iterations, so unchanged files skip parse on every subsequent pass. Text output only — for scripted use cases keep `cofferdam check`
 
 **Usage:** `cofferdam watch [OPTIONS] [PATHS]...`
 
@@ -353,7 +353,7 @@ Re-analyze on file change (cd-9hp.4 cp1b). Discovers files once, registers a rec
 
 * `--hidden` — Walk hidden files/directories
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--debounce <MS>` — Debounce filesystem events by this many milliseconds. Lower = faster reaction to a save; higher = fewer duplicate runs when an editor emits multiple events per save. 100 ms is the typical sweet spot
 
@@ -417,7 +417,7 @@ JIT architectural advisory for agents — emit the rules that apply to a given f
 
 * `--robot` — Default to a machine-readable JSON array when `--format` is not set. Token-economical output for AI agents
 * `--pretty` — Pretty-print JSON output
-* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analyzed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
+* `--config <PATH>` — Path to a `cofferdam.toml` config file. Defaults to walking up from the analysed target path — falling back to the current directory — until one is found or a `.git` directory is reached. Conflicts with `--no-config`
 * `--no-config` — Disable config-file discovery entirely
 * `--hidden` — Walk hidden files/directories (default: skip)
 * `--no-ignore` — Disable `.gitignore` / `.cofferdamignore` filtering
@@ -442,7 +442,7 @@ Start here — the default entrypoint into project context you don't already hav
 
 ###### **Options:**
 
-* `--staged` — Only staged changes (`git diff --cached`)
+* `--staged` — Only staged changes (`git diff --cached`). Conflicts with `--base`
 * `--base <GIT-REF>` — Diff against merge-base(`<ref>`, HEAD) — everything on this branch, committed or not
 * `--budget <BUDGET>` — Token budget for the digest (crude 4-chars/token estimate)
 
@@ -543,7 +543,7 @@ Regenerate the docs catalog from CheckMeta. Writes per-check markdown files, a s
 
 ###### **Options:**
 
-* `--out <DIR>` — Output directory. The catalog lands at `<out>/checks.json`, `<out>/checks/<id>.md`, `<out>/checks/index.md`, `<out>/llms.txt`, `<out>/reference/cli.md`
+* `--out <DIR>` — Output directory. The catalogue lands at `<out>/checks.json`, `<out>/checks/<id>.md`, `<out>/checks/index.md`, `<out>/llms.txt`, `<out>/reference/cli.md`
 
   Default value: `docs`
 * `--check` — Don't write — only fail (exit 1) if the existing files would change. The CI gate uses this

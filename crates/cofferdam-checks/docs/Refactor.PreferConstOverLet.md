@@ -28,7 +28,7 @@ function increment() {
 }
 ```
 
-Declaration sites are scoped to simple-identifier bindings only in this version — a destructured `let` declaration (`let { a, b } = obj`) is skipped. Reassignment detection is broader: a `let`-declared name is recognized as reassigned when it's the target of a plain assignment (`x = v`), an object/array destructuring-assignment (`({ a, b } = v)`, `([a, b] = v)`, including renamed properties, rest elements, and defaults), or a `for...of`/`for...in` loop head (`for (x of xs)`, `for ([a, b] of pairs)`).
+Declaration sites are scoped to simple-identifier bindings only in this version — a destructured `let` declaration (`let { a, b } = obj`) is skipped. Reassignment detection is broader: a `let`-declared name is recognised as reassigned when it's the target of a plain assignment (`x = v`), an object/array destructuring-assignment (`({ a, b } = v)`, `([a, b] = v)`, including renamed properties, rest elements, and defaults), or a `for...of`/`for...in` loop head (`for (x of xs)`, `for ([a, b] of pairs)`).
 
 ```ts
 let token: string;

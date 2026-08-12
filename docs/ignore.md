@@ -95,17 +95,19 @@ In practice, the two files are almost always additive: `.gitignore` excludes `no
 
 ### `--no-ignore` flag
 
-`cofferdam check --no-ignore` disables both `.gitignore` and `.cofferdamignore` entirely for that run. Every `.ts`, `.tsx`, `.mts`, and `.cts` file under the scanned paths is included, regardless of ignore patterns.
+`cofferdam check --no-ignore` disables both `.gitignore` and `.cofferdamignore` for that run. Every `.ts`, `.tsx`, `.mts` and `.cts` file under the scanned paths is analysed, whatever the ignore patterns say.
 
-This flag is also available on the `cofferdam baseline write` and `cofferdam fix` subcommands. It is primarily useful for one-off audits where you want to see the full picture including vendored or generated code.
+Every subcommand that walks the tree takes the flag — `check`, `context`, `advise`, `baseline write`, `fix`, `doctor` and the rest. It earns its keep in one-off audits, where the point is to see the whole picture including vendored and generated code.
 
 ```sh
-cofferdam check --no-ignore src/    # analyze everything, including ignored paths
+cofferdam check --no-ignore src/    # analyse everything, including ignored paths
 ```
 
-### `cofferdam.toml` per-check `exclude` globs (future)
+The sibling flag `--hidden` walks dotfiles and dot-directories, which discovery skips by default. The two are independent: `--hidden` widens what the walker *visits*, `--no-ignore` stops it *filtering* what it found.
 
-Future versions of cofferdam will add a `[ignore]` section in `cofferdam.toml` for inline configuration of file exclusions at the config level. As of v0.2.0 this is unimplemented; see bead cd-4ms. When it lands, it will operate independently of `.cofferdamignore` — you will be able to use both mechanisms together.
+### There is no `exclude` key in `cofferdam.toml`
+
+Exclusion is a discovery-time decision, so it lives in `.cofferdamignore` and `.gitignore` alone. `cofferdam.toml` tunes checks on files that were already discovered: an `[[overrides]]` block can set `disabled = true` for a named check over a path glob, but it cannot take a file out of analysis altogether. If you want a file gone, ignore it.
 
 ---
 

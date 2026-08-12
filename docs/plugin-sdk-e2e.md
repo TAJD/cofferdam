@@ -1,14 +1,20 @@
-# Plugin SDK end-to-end fixture (cd-7e4)
+# Plugin SDK end-to-end fixture
 
-Status: design-only. The SDK epic (cd-81a) has no completed children, so this
-document describes the *target shape* the SDK must satisfy when it lands. It
-also doubles as the acceptance contract for cd-7e4.
+This was the acceptance contract written before the plugin SDK existed: the
+target shape the SDK had to satisfy when it landed. It has since landed. The
+fixture described here ships at
+[`examples-plugins/brand-casing/`](https://github.com/TAJD/cofferdam/tree/main/examples-plugins/brand-casing)
+and runs in CI alongside six others, and `@cofferdam/check-sdk` is published on
+npm.
+
+Read this page for *why* the SDK surface is shaped as it is — each requirement
+below traces to a concrete thing the fixture had to do. For how to write a
+plugin today, start with the [author guide](/plugin-sdk-guide).
 
 ## 1. Why BrandCasing
 
-Source: `C:/Users/tajdi/examplco-host/backend/dev_checks/examplco_host_credo/brand_casing.ex`.
-That Elixir/Credo check flags occurrences of `Examplco` (sentence case) in
-user-facing surfaces, exempting:
+The original was an Elixir/Credo check in a private codebase. It flags
+occurrences of `Examplco` (sentence case) in user-facing surfaces, exempting:
 
 - module identifiers (`alias Mix.Tasks.Examplco.Gen.ApiKey`, `defmodule …`)
 - comments (`# foo Examplco bar`)
@@ -16,12 +22,11 @@ user-facing surfaces, exempting:
 - the `dev_checks/` directory itself (the check references the trigger word)
 - any line preceded by `# brand:ignore — <why>`
 
-It is the smallest of the three examplco-host acceptance targets named in
-cd-81a.2 and exercises **only** Pattern A from the SDK design (line walk +
-magic-comment exemption). It does not need the AST surface (cd-81a.2) to be
-feature-complete to run, only to be wired enough that `file.lines()` can
-classify lines using token data — which means it doubles as a smoke test that
-LineView + the loader work before AST findAll/walk are stable.
+It was the smallest of the three acceptance targets, and exercises **only**
+Pattern A from the SDK design (line walk + magic-comment exemption). It needs
+no AST surface at all — only enough wiring for `file.lines()` to classify lines
+from token data — which is why it doubled as a smoke test that LineView and the
+loader worked before `findAll`/walk were stable.
 
 NoHttpClient (Pattern B) and TenantIsolation (Pattern C) get sibling fixtures
 later (see §6).

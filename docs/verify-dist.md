@@ -32,7 +32,7 @@ separate subcommand from `cofferdam check`, not a flag:
 cofferdam verify --dist dist/
 ```
 
-Findings are labeled with their build-output provenance in both output
+Findings are labelled with their build-output provenance in both output
 formats: JSON wraps findings in `{"origin": "build_output", "dist": "...",
 "findings": [...]}`, and text output prints a banner line noting `origin:
 build_output` before the findings.

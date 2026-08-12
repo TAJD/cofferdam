@@ -44,3 +44,5 @@ MCP server config; point `command` at your built binary.
 ## Scope
 
 No HTTP/SSE transport, no auth, no streaming, no caching — stdio only, stateless.
+
+`cofferdam context` has no MCP tool yet, so an agent working over MCP alone cannot fetch the digest that [the recommended workflow](/agents#how-the-commands-relate) opens with. Until it lands, call the CLI for that one step and MCP for the rest.

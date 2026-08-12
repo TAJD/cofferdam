@@ -120,11 +120,11 @@ cargo test --workspace
 Cofferdam runs against its own source on every pull request, for both the
 TypeScript SDK and the Rust workspace. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
-[MAINTAINERS.md](MAINTAINERS.md#phased-build) for the roadmap.
+[ROADMAP.md](ROADMAP.md) for the roadmap.
 
 ## Status
 
-Phase 4, in progress.
+See [ROADMAP.md](ROADMAP.md) for what's planned and what we've decided not to build. Detailed ticket tracking is private (Projektor, Cofferdam project, key `CD`).
 
 ## Licence
 

@@ -20,7 +20,7 @@ export function formatCurrency(cents: number): string {
 }
 ```
 
-Not flagged — the file only re-exports (a barrel) or only exports types, so there's no behavior of its own to test:
+Not flagged — the file only re-exports (a barrel) or only exports types, so there's no behaviour of its own to test:
 
 ```ts
 // index.ts

@@ -140,8 +140,27 @@ The flag has no effect when:
 
 ## Disabling a single type-aware check
 
-To keep the type host but silence one check, raise or lower it like any
-other — for example bump its severity so it doesn't gate, or scope it out
-through your normal suppression flow. The
-[`Design.UnionExhaustivenessGap`](/checks/Design.UnionExhaustivenessGap) page
-shows its configurable severity.
+A type-aware check is configured like any other, so keeping the type host
+while silencing one check needs nothing special. Drop its severity below
+your `--fail-on` threshold:
+
+```toml
+[checks."Design.UnionExhaustivenessGap"]
+severity = "info"
+```
+
+Or switch it off over a path glob with an [override](/overrides), leaving
+every other check running on those files:
+
+```toml
+[[overrides]]
+paths = ["src/legacy/**"]
+[overrides.checks."Design.UnionExhaustivenessGap"]
+disabled = true
+```
+
+Note the asymmetry with `[engine] type_aware = false`: disabling the last
+type-aware check this way does *not* stop the host from spawning. The
+auto opt-out keys on which checks are **registered**, not on which ones
+config left enabled, so the Node process still starts and still costs its
+200 MB. If the aim is to avoid that cost, set `type_aware = false`.

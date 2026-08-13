@@ -14,23 +14,15 @@ Drop-in workflows for the major CI systems. Each recipe runs `cofferdam check`, 
 | Findings on the PR + Security tab via SARIF | [§6 SARIF upload](#6-sarif-upload-to-github-code-scanning) |
 | Catching regressions in built HTML output | [§7 verify --dist](#_7-verifying-build-output-verify-dist) |
 | Validating `.cofferdam/knowledge/*.md` notes | [§8 context --lint-knowledge](#_8-validating-knowledge-notes-context---lint-knowledge) |
+| Gating on one check only (e.g. a plugin convention) | [§9 `--only`](#_9-gating-on-a-single-check-with-only) |
 
 Each recipe is shown for GitHub Actions first because it's the most common; GitLab / CircleCI / Drone equivalents are at the bottom.
 
 ## Universal flags
 
-A short cheat sheet for the flags that matter in CI. Full reference: [`docs/output-formats.md`](output-formats.md), [`docs/checks/`](checks/), or `cofferdam check --help`.
+Every `cofferdam check` flag, with its default and its exact effect on the gate, is in [the CLI reference](/reference/cli#cofferdam-check) — generated from the binary, so it cannot drift. The ones that come up in nearly every CI job are `--fail-on`, `--baseline`, `--since`, `--format` and `--only`; each has a recipe below.
 
-| Flag | Purpose |
-|---|---|
-| `--fail-on=<level>` | Severity threshold for exit-1 gate. `info` / `low` / `medium` / `high` / `critical`. Default `medium`. |
-| `--baseline=<path>` | Active baseline file. Auto-detected at `.cofferdam/baseline.json` when present. |
-| `--no-baseline` | Disable baseline detection entirely for this run. |
-| `--since=<git-ref>` | PR-only mode — only check files changed in `<git-ref>...HEAD`. |
-| `--robot` | Default to a machine-readable format. Pairs with `--format=compact` for AI shovelling. |
-| `--format=<text\|json\|compact\|sarif>` | Output format. `text` for humans, `json` for tools, `compact` for AI agents, `sarif` for GitHub Code Scanning + other static-analysis consumers. |
-| `--max-issues=<N>` | Cap rendered findings (gate still uses the full set). |
-| `--quiet` | Suppress info lines (decorative output, not findings). |
+One caveat the reference cannot state, because it is about how you use the tool rather than what it does: the findings cache can mask the change you are testing. See [below](#the-cache-can-mask-the-change-you-are-testing).
 
 ## GitHub Actions
 
@@ -152,6 +144,27 @@ For full-fidelity JSON (with baseline tags, related spans, truncation metadata):
 
 If your project already has a `package.json` and `package-lock.json` with cofferdam as a `devDependency`, the standard `npm ci` cache key handles cofferdam's binary too — no extra config needed.
 
+#### The cache can mask the change you are testing
+
+Separately from the npm cache above, cofferdam keeps a **findings cache** in
+`.cofferdam/cache/`, keyed on `(content, config, engine_version)`. In CI this is
+almost always what you want.
+
+It bites in one situation: evaluating a change to cofferdam itself, or to a
+plugin, against a repo you have already scanned with the *same* version. The key
+does not change, so the cached findings replay and the run appears to prove that
+your change did nothing.
+
+Pass `--no-cache` whenever you are validating a rule change:
+
+```bash
+cofferdam check apps/web/src --no-cache
+```
+
+Releases self-heal — the version bump invalidates the cache directory — so this
+only affects developers re-running one version against an already-scanned
+checkout.
+
 ### 6. SARIF upload to GitHub Code Scanning
 
 Emit SARIF 2.1.0 and let GitHub render findings on the PR diff and in the **Security → Code scanning** tab. No bespoke parsing — `github/codeql-action/upload-sarif` consumes the format directly.
@@ -237,6 +250,52 @@ It ignores `paths` / `--staged` / `--base` / `--budget` / `--format`, needs
 no git history, and is fast enough to run as its own step next to
 `cofferdam check`. See [knowledge notes](/knowledge-notes) for the note
 format.
+
+### 9. Gating on a single check with `--only`
+
+A repo often wants one project-specific rule to fail the build without turning on the
+full suite — a plugin check enforcing a local convention, say, in a directory that
+already carries unrelated findings. `--only` restricts the run to one check:
+
+```yaml
+      - name: Design system convention
+        run: |
+          pnpm --filter @acme/cofferdam-design-system build
+          npx --yes @cofferdam/cofferdam check apps/web/src --only Warning.DesignSystemConvention
+```
+
+The flag applies after plugin merge, so it covers plugin-emitted checks as well as
+built-ins. Budgets, the baseline and the exit-code gate all see only the named check's
+findings.
+
+The exit codes are the point:
+
+| Exit | Meaning |
+|---|---|
+| 0 | The named check found nothing |
+| 1 | The named check found something at or above `--fail-on` |
+| 2 | No check by that name exists |
+
+Exit 2 is what makes this worth using over a hand-rolled filter. The obvious
+alternative is to run the whole suite and grep the JSON:
+
+```sh
+# don't do this
+cofferdam check apps/web/src --format json \
+  | jq -e '[.findings[] | select(.check == "DesignSystemConvention")] | length == 0'
+```
+
+A filter over findings cannot tell "no violations" from "the check never ran". If the
+plugin fails to load — an unbuilt `dist/`, a bad path in `cofferdam.toml`, a typo in
+the check id — the findings array contains nothing matching, and the gate reports
+success against a check that never executed. This is not hypothetical: the projektor
+repo ran such a wrapper against a plugin whose build step CI never invoked. It printed
+`OK` and exited 0 on every pull request for as long as it was wired that way.
+
+`--only` fails loudly instead. A gate that cannot find its check exits 2.
+
+Build the plugin in the same step, as above. `dist/` directories are usually
+gitignored, so a fresh CI checkout has no plugin until something builds it.
 
 ## GitLab CI
 
@@ -367,4 +426,4 @@ Before wiring up a new CI pipeline, run [`cofferdam doctor --robot`](doctor.md) 
 
 ## What's not yet here
 
-- **Self-hosted runner notes** — cofferdam's npm postinstall downloads a Rust binary; air-gapped runners need either a local mirror or a `cargo install` from source. Detailed recipe is a follow-up bead.
+- **Self-hosted runner notes** — cofferdam's npm postinstall downloads a Rust binary, which an air-gapped runner cannot do. The mechanism is documented under [air-gapped installs](/install#air-gapped-installs) — `COFFERDAM_SKIP_DOWNLOAD=1` plus a pre-staged binary at `COFFERDAM_BINARY_PATH`, or `cargo install` from source. What is missing here is a worked CI recipe wrapping that, not the capability.

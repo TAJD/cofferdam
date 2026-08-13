@@ -52,4 +52,4 @@ Not flagged — a `.map`/`.filter` callback whose return value happens to be dis
 items.map((item) => process(item));
 ```
 
-Scope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry. Member/index assignment targets (`x.y = ...`, `x[y] = ...`) are only checked at the root receiver — a destructured local (`const { acc } = ctx;`) isn't recognized as local, a known name-based limitation.
+Scope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry. Member/index assignment targets (`x.y = ...`, `x[y] = ...`) are only checked at the root receiver — a destructured local (`const { acc } = ctx;`) isn't recognised as local, a known name-based limitation.

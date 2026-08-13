@@ -1,114 +1,130 @@
 # cofferdam
 
-> Your linter checks code after it's written. Cofferdam tells your agent the rules before it writes — and guarantees the debt only goes down.
+> One command tells your agent what it needs to know before it touches your repo — and guarantees the debt only goes down.
 
-`cofferdam` is a software architecture and code-quality analyzer for TypeScript with a Rust core. Layer rules, frozen boundaries, import invariants, and complexity budgets are declared once in `cofferdam.invariants.toml`, enforced in CI, and *advised* to AI coding agents just-in-time. Findings are bucketed into five categories — **Consistency**, **Design**, **Readability**, **Refactor**, **Warning** — and priority-sorted within each; the category model is inspired by Elixir's [Credo](https://github.com/rrrene/credo).
+Cofferdam is a software-architecture analyzer for TypeScript with a Rust core.
 
+Linters read code after it is written and judge it a line at a time. Cofferdam
+works a level up, on the questions a linter cannot answer: which modules may
+import which, what is frozen, what is public API, how complex a file may get,
+and how much known debt the team has agreed to tolerate. Those rules are
+declared once in `cofferdam.invariants.toml`, enforced in CI, and handed to AI
+coding agents before they write.
+
+Findings fall into five categories — **Consistency**, **Design**,
+**Readability**, **Refactor**, **Warning** — and are priority-sorted within
+each. The category model is inspired by Elixir's
+[Credo](https://github.com/rrrene/credo).
+
+## How it fits your workflow
+
+An agent starts a task by asking what matters. `cofferdam context` resolves the
+diff and returns a token-budgeted digest: findings scoped to the change, blast
+radius, how sibling files solved the same problem, and any curated knowledge
+notes that apply. It is advisory and always exits 0.
+
+```mermaid
+flowchart LR
+    S(["start of task"]) --> CTX["cofferdam context<br/>what matters here"]
+    CTX --> ADV["cofferdam advise &lt;file&gt;<br/>constraints on this file"]
+    ADV --> W["write the change"]
+    W --> CI["cofferdam check --baseline<br/>gates the build"]
+    CI --> M(["merge"])
+
+    style CTX fill:#6366f1,color:#fff,stroke:#4338ca
+    style CI fill:#6366f1,color:#fff,stroke:#4338ca
 ```
-   advise <file> ↓        ┌────────────────────────────────┐
-   advise --diff ↑        │  cofferdam                     │
-                           │  layers · invariants ·        │
-                           │  boundaries · baseline        │
-                           ├────────────────────────────────┤
-                           │  tsc                           │
-                           ├────────────────────────────────┤
-                           │  Biome / ESLint                │
-                           ├────────────────────────────────┤
-                           │  Biome / Prettier               │
-                           └────────────────────────────────┘
+
+Cofferdam does not replace your formatter or linter. It sits above them.
+
+```mermaid
+flowchart TB
+    A["cofferdam<br/>layers · invariants · boundaries · baseline"]
+    B["tsc<br/>types"]
+    C["Biome / ESLint<br/>correctness & style"]
+    D["Biome / Prettier<br/>formatting"]
+    A --- B --- C --- D
+
+    style A fill:#6366f1,color:#fff,stroke:#4338ca
+    style B fill:#94a3b8,color:#fff,stroke:#64748b
+    style C fill:#94a3b8,color:#fff,stroke:#64748b
+    style D fill:#cbd5e1,color:#1e293b,stroke:#94a3b8
 ```
 
-Cofferdam sits above your linter and type-checker, not instead of them — see
-[where cofferdam sits](https://tajd.github.io/cofferdam#where-cofferdam-sits)
-for the full picture.
-
-## Documentation
-
-Full docs site: **<https://tajd.github.io/cofferdam>**
-
-- [Check catalog](https://tajd.github.io/cofferdam/checks/) — every built-in check with bad/good examples
-- [CLI reference](https://tajd.github.io/cofferdam/reference/cli/) — flags and exit codes
-- [`advise` reference](https://tajd.github.io/cofferdam/reference/advise/) — the JSON envelope agents branch on
-- [llms.txt](https://tajd.github.io/cofferdam/llms.txt) — the entrypoint for LLM agents: version, subcommands, agent workflow, docs links
-- [Install guide](docs/install.md) — binary overrides, air-gapped installs, building from source
-- [CI recipes](docs/ci-recipes.md) — GitHub Actions, GitLab, CircleCI, Drone, pre-commit
-- [Suppression syntax](docs/suppression.md) — `// cofferdam-ignore` directives
-- [Ignore syntax](docs/ignore.md) — `.cofferdamignore` rules
-- [Per-path overrides](docs/overrides.md) — retune or disable single checks on matching globs via `[[overrides]]`
-- [Type-aware checks](docs/type-aware-checks.md) — checks backed by the TypeScript type system (requires Node + ts-morph; opt out with `[engine] type_aware = false`)
-- [Output formats](docs/output-formats.md) — text, JSON, compact, SARIF
-- [Architectural specs](docs/invariants.md) — `cofferdam.invariants.toml`, `Design.LayerViolation`, `Design.BoundaryFrozen`
-- [Budgets & ratchet](docs/budgets.md) — `[budgets]` hard caps, `baseline ratchet`/`prune`, `check --trend`
-- [AI agent workflow](docs/agents.md) — `cofferdam agents` onboarding prompt, plus `agents --hooks`
-- [Agent hooks](docs/hooks.md) — wire `advise` into a PreToolUse hook
-- [MCP server](docs/mcp.md) — `cofferdam-mcp` exposing advise/check/explain/invariants to agent hosts
-- [Doctor](docs/doctor.md) — environment + config diagnostics (`cofferdam doctor`)
+There is nothing to turn off. No built-in check duplicates a rule Biome or
+ESLint ships, so both tools run unmodified — `cofferdam doctor` will confirm
+that against the config it finds.
 
 ## Install
 
 ```sh
 npm install --save-dev @cofferdam/cofferdam
-pnpm add -D @cofferdam/cofferdam
-yarn add --dev @cofferdam/cofferdam
 ```
 
-The `postinstall` script downloads the matching prebuilt binary for your platform (Linux x64/arm64 glibc + musl, macOS x64/arm64, Windows x64). Node 16+ required. Binary overrides, air-gapped installs, and building from source (Rust 1.93+): [install guide](docs/install.md).
+`pnpm add -D` and `yarn add --dev` work the same way. The `postinstall` script
+downloads the prebuilt binary for your platform: Linux x64/arm64 on glibc and
+musl, macOS x64/arm64, Windows x64. Node 16+ required.
 
-## Usage
-
-```sh
-$ cofferdam advise src/app/checkout.ts
-src/app/checkout.ts
-  layer: app          public_api: no
-  Design.LayerViolation      imports must target layer(s) [domain, infra]
-  Design.InvariantViolation  "no-direct-db-access": must not import src/infra/db
-  Design.BoundaryFrozen      not frozen
-  Refactor.LongAndComplex    length_limit 75, cyclomatic_limit 15
-
-$ cofferdam advise --diff main
-would_fire: 1
-  src/app/checkout.ts:12  imports src/infra/db from layer `app`  (Design.InvariantViolation)
-would_clear: 0
-```
-
-An agent runs `advise` before editing and `advise --diff` before asking for a
-commit. For finding-level output on the code as it stands today, `cofferdam
-check` gives the same priority-sorted, severity-gated report any linter
-does — see the [agent workflow docs](https://tajd.github.io/cofferdam/agents) and
-[output formats](https://tajd.github.io/cofferdam/output-formats) for both.
-
-## CI
-
-One command in any runner with Node:
+In CI, one command in any runner with Node:
 
 ```sh
 npx --yes @cofferdam/cofferdam check
 ```
 
-Ready-made workflows (GitHub Actions, GitLab, CircleCI, Drone, pre-commit), PR-only mode, and baselines: **[`docs/ci-recipes.md`](docs/ci-recipes.md)**.
+## Documentation
+
+Full docs: **<https://tajd.github.io/cofferdam>**
+
+| | |
+|---|---|
+| [`context` reference](https://tajd.github.io/cofferdam/reference/context/) | The digest an agent reads first, and its JSON schema |
+| [`advise` reference](https://tajd.github.io/cofferdam/reference/advise/) | The per-file envelope agents branch on |
+| [Check catalog](https://tajd.github.io/cofferdam/checks/) | Every built-in check, with bad and good examples |
+| [CLI reference](https://tajd.github.io/cofferdam/reference/cli/) | Flags and exit codes |
+| [CI recipes](https://tajd.github.io/cofferdam/ci-recipes/) | GitHub Actions, GitLab, CircleCI, Drone, pre-commit |
+| [Architectural specs](https://tajd.github.io/cofferdam/invariants/) | `cofferdam.invariants.toml`, layers, frozen boundaries |
+| [Budgets and ratchet](https://tajd.github.io/cofferdam/budgets/) | Baselines, hard caps, paying debt down |
+| [AI agent workflow](https://tajd.github.io/cofferdam/agents/) | Onboarding prompt and `agents --hooks` |
+| [MCP server](https://tajd.github.io/cofferdam/mcp/) | advise, check, explain and invariants as tools |
+| [llms.txt](https://tajd.github.io/cofferdam/llms.txt) | Machine-readable entry point for agents |
 
 ## Languages
 
-TypeScript (TS / TSX / JS / JSX / MJS / CJS via `oxc`) is the primary surface. A Rust adapter ships as the second language and polylingual proof; SQL, IaC, and GraphQL adapters follow the same shape. Details: [language support](docs/languages.md).
+TypeScript — TS, TSX, JS, JSX, MJS and CJS, via `oxc` — is the primary surface.
+A Rust adapter ships as the second language and polylingual proof. SQL,
+infrastructure-as-code and GraphQL adapters follow the same shape. See
+[language support](https://tajd.github.io/cofferdam/languages/).
 
-## Dogfood
+## Building from source
 
-Cofferdam runs against its own source on every PR (cd-9tq, cd-91zc):
-
-- **TS SDK** — `packages/check-sdk/src/` is scanned by the `dogfood` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The repo-root [`cofferdam.invariants.toml`](cofferdam.invariants.toml) declares the SDK as `public_api` so leaf-package re-exports aren't flagged as orphans; the three legitimate complexity findings on `plugin-host.ts` ride in [`.cofferdam/baseline.json`](.cofferdam/baseline.json) and are tracked separately. CI fails on any new finding at `--fail-on=high`.
-- **Rust workspace** — the `dogfood-rust` job in the same workflow scans every workspace `src/` against [`.cofferdam/baseline-rust.json`](.cofferdam/baseline-rust.json).
-
-To run the same gate locally before pushing:
+Requires Rust 1.93 or newer.
 
 ```sh
-cargo build --release -p cofferdam-cli
-./target/release/cofferdam check packages/check-sdk/src \
-    --baseline .cofferdam/baseline.json --fail-on=high
+git clone https://github.com/TAJD/cofferdam
+cd cofferdam
+cargo build --workspace
+cargo test --workspace
 ```
+
+The binary lands at `target/debug/cofferdam`. For a release build, add
+`--release -p cofferdam-cli`.
+
+Before opening a pull request:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Cofferdam runs against its own source on every pull request, for both the
+TypeScript SDK and the Rust workspace. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
+[ROADMAP.md](ROADMAP.md) for the roadmap.
 
 ## Status
 
-Phase 4, in progress. See [MAINTAINERS.md](MAINTAINERS.md#phased-build) for the phased roadmap.
+See [ROADMAP.md](ROADMAP.md) for what's planned and what we've decided not to build. Detailed ticket tracking is private (Projektor, Cofferdam project, key `CD`).
 
 ## Licence
 

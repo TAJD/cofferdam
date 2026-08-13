@@ -135,16 +135,18 @@ Remediation for Warn: `re-run npm install @cofferdam/cofferdam` (for npm users).
 
 ### formatter-coexistence
 
-Looks for a `biome.json`/`biome.jsonc` or an eslint config (`eslint.config.{js,mjs,cjs,ts}`, `.eslintrc*`) in the current directory. If a linter/formatter is present, cofferdam has a handful of built-in checks that overlap rules biome and eslint both ship out of the box — `Consistency.QuoteStyle`, `Warning.TripleEquals`, `Warning.NoConsoleLog`, `Warning.NoDebugger`, `Refactor.PreferNullishCoalescing`, `Refactor.PreferOptionalChain`. Running both tools unmodified means the same line gets flagged twice.
+Looks for a `biome.json`/`biome.jsonc` or an eslint config (`eslint.config.{js,mjs,cjs,ts}`, `.eslintrc*`) in the current directory and confirms cofferdam will not double-report against it.
 
-This is informational, not a correctness problem — some teams want the belt-and-suspenders double coverage. `biome.json` takes precedence over an eslint config if both are present (most repos migrating to biome keep a stale `.eslintrc` around during the transition).
+This check used to warn, and name the built-ins that duplicated rules biome and eslint ship out of the box. It no longer can: cofferdam removed every one of those checks, so the catalogue is disjoint from a linter's by construction. Both tools run unmodified, and there is nothing to disable.
+
+`biome.json` takes precedence over an eslint config if both are present (most repos migrating to biome keep a stale `.eslintrc` around during the transition) — this only affects which tool the message names.
 
 | Status | Condition |
 |---|---|
 | Pass | No `biome.json`/eslint config found |
-| Warn | A `biome.json`/eslint config is present |
+| Pass | A `biome.json`/eslint config is present — reported as compatible |
 
-Remediation for Warn: disable the overlapping checks via `[[overrides]]` blocks in `cofferdam.toml` (`paths = ["**"]`, `disabled = true`, one block per check) — see [Per-path overrides](./overrides.md).
+This check has no failure mode. It is kept because users arriving from a linter reasonably expect an overlap, and the useful answer is that there isn't one.
 
 ---
 

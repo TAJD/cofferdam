@@ -2,7 +2,7 @@
 
 `cofferdam check` ships four rendering modes. Pick by `--format=<text|json|compact|sarif>`.
 
-**`--robot` flag:** defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins. `--robot` does nothing else — it does not set `--quiet`, does not suppress ANSI (there is none), and does not change exit-code behavior. Its only effect is the format default. The idiomatic AI-agent invocation is `--robot --format=compact`, which combines the intent signal with the most token-economical output.
+**`--robot` flag:** defaults to `--format=json` when no `--format` is set; otherwise the explicit `--format` wins. `--robot` does nothing else — it does not set `--quiet`, does not suppress ANSI (there is none), and does not change exit-code behaviour. Its only effect is the format default. The idiomatic AI-agent invocation is `--robot --format=compact`, which combines the intent signal with the most token-economical output.
 
 | Format    | Audience                                | Schema                | Byte-economy* |
 |-----------|-----------------------------------------|-----------------------|---------------|
@@ -18,16 +18,10 @@
 Priority and severity are two independent axes — the two-axis model
 Credo popularised, and easy to miss from a single sentence:
 
-```mermaid
-quadrantChart
-    title Priority (report order) vs. severity (CI gate)
-    x-axis Low severity --> High severity
-    y-axis Low priority --> High priority
-    quadrant-1 "High priority, high severity: read first, gates CI"
-    quadrant-2 "High priority, low severity: read first, doesn't gate CI"
-    quadrant-3 "Low priority, low severity: read last, doesn't gate CI"
-    quadrant-4 "Low priority, high severity: read last, still gates CI"
-```
+| | Low severity | High severity |
+|---|---|---|
+| **High priority** | Read first. Does not gate CI. | Read first. Gates CI. |
+| **Low priority** | Read last. Does not gate CI. | Read last. Still gates CI. |
 
 **Priority** is computed per finding (category base + check-specific
 adjustments) and decides *what to look at first* in the report.
@@ -103,7 +97,7 @@ Every field listed below is **stable** — field names and types are part of the
 |-------|------|----------------|-------------|
 | `id` | `string` | Yes | Dotted check ID, e.g. `Refactor.LongAndComplex`. Stable — safe to use as a map key or filter. |
 | `category` | `string` | Yes | Lowercase category: `consistency` \| `design` \| `readability` \| `refactor` \| `warning`. |
-| `docs_url` | `string` | Yes | Canonical docs-catalog URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Refactor.LongAndComplex`. Derived from `id` — no per-check configuration needed. |
+| `docs_url` | `string` | Yes | Canonical docs-catalogue URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Refactor.LongAndComplex`. Derived from `id` — no per-check configuration needed. |
 | `priority` | `integer` | Yes | Computed sort priority in the range `-20..=20`. Higher value = surfaces first. Not configurable; derived by the engine. |
 | `severity` | `string` | Yes | Configured severity: `info` \| `low` \| `medium` \| `high` \| `critical`. Matches `--fail-on=<level>` threshold values. |
 | `file` | `string` | Yes | Path to the file containing the finding. Forward-slash normalized (even on Windows) so it is safe to use as an editor link or CLI argument on any platform. |

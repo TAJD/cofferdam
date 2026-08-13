@@ -7,13 +7,12 @@ language pipeline declare its own identity: which `Language` it produces
 facts for, which files it claims, and which schema namespace its
 corpus/graph facts live under. It exists to formalize — as a type, not just
 prose in a module doc — the shape cofferdam's polylingual architecture
-already has (the TS pipeline via `oxc`, the Rust pipeline via `tree-sitter`
-in `crates/cofferdam-rust`), ahead of a larger future refactor that would
-route dispatch through it.
+already has (TypeScript via `oxc`, Rust and HTML via `tree-sitter`), ahead
+of a larger refactor that would route dispatch through it.
 
-This is a deliberately scoped-down slice of a larger ticket. It adds the
-trait and two thin implementations; it does not change how the engine
-actually parses or dispatches files today.
+This is a deliberately narrow slice. It adds the trait and three thin
+implementations; it does not change how the engine parses or dispatches
+files today.
 
 ## The trait
 
@@ -56,8 +55,12 @@ type-level description of intent, not a sandbox.
   existing tree-sitter-based Rust pipeline. `language()` returns
   `Language::Rust`; `file_globs()` returns `["*.rs"]`; `schema_namespace()`
   returns `"rust"`.
+- **`HtmlAdapter`** (`crates/cofferdam-html/src/lib.rs`) — describes the
+  tree-sitter-based HTML pipeline behind [`cofferdam verify --dist`](/verify-dist).
+  `language()` returns `Language::Html`; `file_globs()` returns
+  `["*.html", "*.htm"]`; `schema_namespace()` returns `"html"`.
 
-Both impls are additive metadata: they describe existing behavior without
+Both impls are additive metadata: they describe existing behaviour without
 changing it. Neither `cofferdam-engine`'s discovery loop nor its parse/
 dispatch loop routes through these impls yet — file-extension dispatch
 still happens via `Language::from_path` exactly as before.
@@ -73,7 +76,8 @@ The following are explicitly deferred, not implied by this change:
   configurable or discoverable via config today.
 - **Adapter identity scheme for non-byte-offset findings.** Tracked
   separately; not addressed here.
-- **A non-TS/non-Rust adapter** (e.g. a SQL migrations adapter) as
-  end-to-end proof-of-life that a third language fits the trait shape.
+- **An adapter for a language with a different fact model** — SQL
+  migrations, say. HTML made three, but all three are file-and-span
+  languages; nothing yet proves the shape holds for a domain that isn't.
 - **Engine rewiring.** `cofferdam-engine`'s discovery and parse/dispatch
   loops are untouched; they do not consult `Adapter` impls at runtime.

@@ -81,4 +81,4 @@ function parseId(raw: string) {
 }
 ```
 
-Scope: only inspects a function's own statements — nested functions (declarations, expressions, arrow functions) are separate scopes and are analyzed independently, not folded into the outer function's throw/return count. Arrow functions themselves aren't currently inspected as the outer subject of this check, only `function` declarations/expressions and class methods.
+Scope: only inspects a function's own statements — nested functions (declarations, expressions, arrow functions) are separate scopes and are analysed independently, not folded into the outer function's throw/return count. Arrow functions themselves aren't currently inspected as the outer subject of this check, only `function` declarations/expressions and class methods.

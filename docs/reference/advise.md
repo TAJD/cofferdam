@@ -83,20 +83,10 @@ cofferdam advise --robot --pretty
 ## Flags
 
 `advise` accepts the same set of discovery and config flags as `check`,
-plus the format pair shared with the rest of the CLI. The full reference
-is in [the CLI page](./cli.md#cofferdam-advise); the load-bearing ones
-are:
-
-| Flag | Effect |
-|---|---|
-| `[PATHS]...` | Files, directories, or globs. Defaults to `.`. Shell expansion is honoured first; the CLI also runs its own globset matcher for quoted patterns. |
-| `--format <text\|json>` | Output format. Default `text`; with `--robot` and no explicit `--format`, defaults to `json`. |
-| `--robot` | Switch the default to JSON. Token-economical for AI agents. |
-| `--pretty` | Pretty-print JSON. |
-| `--config <PATH>` | Path to a config file. Defaults to walking up from the analyzed target path, falling back to CWD, until one is found. |
-| `--no-config` | Disable config discovery entirely — every check uses its built-in defaults. |
-| `--hidden` | Walk hidden files/directories. |
-| `--no-ignore` | Disable `.gitignore` / `.cofferdamignore` filtering. |
+plus the format pair shared with the rest of the CLI. They are listed in
+[the CLI reference](/reference/cli#cofferdam-advise), which is generated
+from the binary and so cannot drift. The two flags that change what the
+command *does* — `--diff` and `--analyze` — have their own sections below.
 
 ## Text output
 
@@ -232,7 +222,7 @@ Both are a set difference over the same finding keys (`file`, `check_id`,
 `rule_signature`), computed both ways:
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Base ["findings at &lt;ref&gt;"]
         direction TB
         Clear["would_clear<br/>(base only — fixed by this edit)"]
@@ -268,7 +258,7 @@ is the same SHA-256-of-trimmed-span used by the baseline subsystem, so
 reformats and line shifts do **not** show up as spurious entries:
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["checkout.ts:12<br/>import db from 'src/infra/db'"] --> H["sha256(trimmed span)"]
     B["checkout.ts:31 (after reformat)<br/>import db from 'src/infra/db'"] --> H
     H --> R["same rule_signature<br/>→ not a new/cleared finding"]
@@ -325,7 +315,7 @@ explicit `[paths]...` arg. Renames are counted as add+delete in v0.
 `cofferdam advise` answers "what does my next edit need to respect?"
 
 For an agent that's about to rewrite a file, the second question is the
-useful one — a rules listing is shorter than a parse-and-analyze run,
+useful one — a rules listing is shorter than a parse-and-analyse run,
 shows constraints that aren't currently violated (so the agent doesn't
 introduce them), and is cheap enough to call on every edit hop.
 

@@ -6,7 +6,7 @@ default_severity: Low
 options: []
 ---
 
-A class with no behavior beyond storing fields — no methods other than a constructor that only assigns fields, no inheritance, no `implements` clause, no decorators — is a candidate for a plain type/interface instead of a class.
+A class with no behaviour beyond storing fields — no methods other than a constructor that only assigns fields, no inheritance, no `implements` clause, no decorators — is a candidate for a plain type/interface instead of a class.
 
 ```ts
 class Point {

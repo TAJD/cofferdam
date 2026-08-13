@@ -53,28 +53,31 @@ The output header includes the cofferdam version:
 When you upgrade cofferdam, re-run `cofferdam agents` and diff against the
 committed copy to pick up new workflow guidance.
 
-## The two loops
+## How the commands relate
 
-**The advisory loop** is for the edit: `advise` before you touch a file,
-`advise --diff` before you ask for a commit. **The debt loop** is for the
-repo: `baseline` snapshots accepted findings so CI only fails on new ones,
-and budgets ratchet down as debt is paid.
+Start with `context`. It is the only command that answers "what should I care
+about here?", and everything else follows from what it returns.
 
 ```mermaid
 flowchart TB
-    subgraph Advisory ["Advisory loop (per edit)"]
-        A1["advise &lt;file&gt;<br/>layer, invariants, boundaries, budget"] --> A2["write the change"] --> A3["advise --diff &lt;ref&gt;"]
-    end
-    subgraph Debt ["Debt loop (per repo)"]
-        B1["baseline write<br/>snapshot accepted findings"] --> B2["CI: check --baseline"]
-    end
-    A3 --> J{"would_fire empty?"}
-    B2 --> J
+    CTX["context<br/>what matters in this change"] --> ADV["advise &lt;file&gt;<br/>constraints on one file"]
+    ADV --> W["write the change"]
+    W --> D["advise --diff &lt;ref&gt;<br/>would_fire / would_clear"]
+    D --> J{"would_fire empty?"}
     J -->|yes| C1["commit"]
     J -->|no| C2["fix or justify"]
 
+    style CTX fill:#6366f1,color:#fff,stroke:#4338ca
     style J fill:#6366f1,color:#fff,stroke:#4338ca
 ```
+
+Two of these answer questions rather than run checks. `advise` is a projection
+of the rules — it reports what applies to a file whether or not the current code
+breaks it. `context` is advisory and always exits 0. Neither gates anything.
+
+`check` is the one that gates. In CI it reads the baseline, so it fails on new
+findings only; budgets ratchet down as debt is paid. See
+[budgets and ratchet](/budgets).
 
 ## Wiring it in so it's automatic
 

@@ -155,7 +155,8 @@ fn editing_one_file_invalidates_run_cache_but_findings_cache_still_helps() {
     disk_cache::save_run(dir.path(), &rc1).unwrap();
 
     // Edit a.ts; b.ts unchanged.
-    sources[0].1 = "export const x = 99;\nfunction f() { let y = x; return y; }\n".to_string();
+    sources[0].1 =
+        "export const x = 99;\nfunction f(items: number[]) { return items.length; }\n".to_string();
 
     // Fresh in-memory caches hydrated from disk.
     let fc2 = FindingsCache::new();
@@ -182,13 +183,13 @@ fn editing_one_file_invalidates_run_cache_but_findings_cache_still_helps() {
         "warm pass should serve unchanged file's pure checks from findings cache (hits={})",
         fc2.hits()
     );
-    // Newly-edited file should have a PreferConstOverLet finding.
+    // Newly-edited file should have a ReadonlyArrayParam finding.
     assert!(
         issues
             .iter()
-            .any(|i| i.check_id == "Refactor.PreferConstOverLet"
+            .any(|i| i.check_id == "Design.ReadonlyArrayParam"
                 && i.file.file_name().and_then(|n| n.to_str()) == Some("a.ts")),
-        "expected Refactor.PreferConstOverLet on the edited file"
+        "expected Design.ReadonlyArrayParam on the edited file"
     );
 }
 

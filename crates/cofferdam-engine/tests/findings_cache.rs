@@ -187,9 +187,10 @@ fn identical_content_files_each_report_their_own_path() {
     // before the fix it inherited the path of whichever file populated
     // the entry, so a warm-cache run pointed findings at the wrong file.
     let engine = engine();
-    // A never-reassigned `let` fires Refactor.PreferConstOverLet, which
-    // is a `pure_run` check — exactly the kind the findings cache serves.
-    let body = "let x = 1;\n".to_string();
+    // A never-mutated array parameter fires Design.ReadonlyArrayParam,
+    // which is a `pure_run` check — exactly the kind the findings cache
+    // serves.
+    let body = "export function f(items: number[]) {\n  return items.length;\n}\n".to_string();
     let sources = vec![
         (PathBuf::from("alpha.ts"), body.clone()),
         (PathBuf::from("beta.ts"), body),
@@ -202,14 +203,14 @@ fn identical_content_files_each_report_their_own_path() {
 
     let mll_files: Vec<String> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet")
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam")
         .map(|i| i.file.to_string_lossy().replace('\\', "/"))
         .collect();
 
     // Paths are absolutized by the engine, so match on the file name.
     assert!(
         mll_files.iter().any(|f| f.ends_with("/alpha.ts")),
-        "alpha.ts PreferConstOverLet finding missing: {mll_files:?}"
+        "alpha.ts ReadonlyArrayParam finding missing: {mll_files:?}"
     );
     assert!(
         mll_files.iter().any(|f| f.ends_with("/beta.ts")),
@@ -228,8 +229,8 @@ fn file_scoped_suppression_through_cache_not_flagged_stale() {
     // gh #47 / cd-5dnl regression, exercised through the findings cache.
     //
     // Two byte-identical files, each carrying a file-scoped suppression
-    // for a `pure_run` check (Refactor.PreferConstOverLet) over a
-    // never-reassigned `let`. The second file is served from the
+    // for a `pure_run` check (Design.ReadonlyArrayParam) over a
+    // never-mutated array parameter. The second file is served from the
     // findings cache. Before cd-mwr6 the cached finding inherited the
     // FIRST file's path, so the second file's entry vanished from the
     // ALL_PRE_FILTER_FINDINGS snapshot — and Consistency.UnusedSuppression
@@ -240,8 +241,8 @@ fn file_scoped_suppression_through_cache_not_flagged_stale() {
     let engine = engine();
 
     // Identical bytes in both files → shared cache entry.
-    let body = "// cofferdam-ignore-file: Refactor.PreferConstOverLet: on purpose\n\
-         let x = 1;\n"
+    let body = "// cofferdam-ignore-file: Design.ReadonlyArrayParam: on purpose\n\
+         export function f(items: number[]) {\n  return items.length;\n}\n"
         .to_string();
 
     let sources = vec![
@@ -254,14 +255,14 @@ fn file_scoped_suppression_through_cache_not_flagged_stale() {
     let (issues, _) =
         engine.analyze_with_sources_caches(sources, Some(&parse_cache), Some(&findings_cache));
 
-    // The directive does its job: no PreferConstOverLet survives on either file.
+    // The directive does its job: no ReadonlyArrayParam survives on either file.
     let mfl: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet")
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam")
         .collect();
     assert!(
         mfl.is_empty(),
-        "file-scoped directive should suppress PreferConstOverLet on both files: {mfl:?}"
+        "file-scoped directive should suppress ReadonlyArrayParam on both files: {mfl:?}"
     );
 
     // And the directive is NOT falsely reported as stale — on EITHER file,

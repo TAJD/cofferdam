@@ -164,7 +164,7 @@ const GRAPH_CHECK_IDS: &[&str] = &[
     "Design.ScriptedInvariant",
     "Design.DuplicateExportName",
     "Refactor.DeadExport",
-    "Refactor.DuplicateBlock",
+    "Refactor.NearDuplicateBlock",
 ];
 
 /// Checks `advise` gives file-specific, non-generic treatment to today

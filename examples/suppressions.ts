@@ -5,37 +5,37 @@
 // ============================================================
 
 // cofferdam-disable-next-line
-let a = 1;
-// This would normally trigger Refactor.PreferConstOverLet, but it's suppressed.
+export function a(items: number[]) { return items.length; }
+// This would normally trigger Design.ReadonlyArrayParam, but it's suppressed.
 
 // ============================================================
 // Next-line directive: suppress specific checks
 // ============================================================
 
-// cofferdam-disable-next-line Refactor.PreferConstOverLet
-let x = 1;
-// Only PreferConstOverLet is suppressed here; other checks still fire.
+// cofferdam-disable-next-line Design.ReadonlyArrayParam
+export function x(items: number[]) { return items.length; }
+// Only ReadonlyArrayParam is suppressed here; other checks still fire.
 
 // ============================================================
 // Block directive: suppress all checks
 // ============================================================
 
 /* cofferdam-disable */
-let c = 1;
+export function c(items: number[]) { return items.length; }
 // Everything suppressed inside this block.
 /* cofferdam-enable */
 
 // This one is NOT suppressed:
-let p = 1;
-// This should trigger Refactor.PreferConstOverLet normally.
+export function p(items: number[]) { return items.length; }
+// This should trigger Design.ReadonlyArrayParam normally.
 
 // ============================================================
 // Block directive: suppress specific checks
 // ============================================================
 
-/* cofferdam-disable Refactor.PreferConstOverLet */
-let m = 1;
-// Only PreferConstOverLet suppressed; other findings still appear.
+/* cofferdam-disable Design.ReadonlyArrayParam */
+export function m(items: number[]) { return items.length; }
+// Only ReadonlyArrayParam suppressed; other findings still appear.
 /* cofferdam-enable */
 
 // ============================================================
@@ -44,16 +44,16 @@ let m = 1;
 
 // cofferdam-disable-next-line
 
-let e = 1;
+export function e(items: number[]) { return items.length; }
 // The directive above applies to this line (first non-blank after directive).
 
 // ============================================================
 // Block with multiple check IDs
 // ============================================================
 
-/* cofferdam-disable Refactor.PreferConstOverLet, Design.MaxParameters */
-let g = 1;
-// Both PreferConstOverLet and MaxParameters are suppressed on this line.
+/* cofferdam-disable Design.ReadonlyArrayParam, Design.MaxParameters */
+export function g(items: number[]) { return items.length; }
+// Both ReadonlyArrayParam and MaxParameters are suppressed on this line.
 /* cofferdam-enable */
 
 // ============================================================

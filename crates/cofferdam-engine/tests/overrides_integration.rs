@@ -89,7 +89,7 @@ paths = ["**/*.test.ts"]
 disabled = true
 "#;
     let mut body = long_function();
-    body.push_str("let unused = 1;\n"); // Refactor.PreferConstOverLet bait
+    body.push_str("export function g(items: number[]) {\n  return items.length;\n}\n"); // Design.ReadonlyArrayParam bait
 
     let (issues, paths) = analyze_project(toml, &[("src/thing.test.ts", body)]);
     let test_file = &paths[0];
@@ -99,7 +99,7 @@ disabled = true
         "disabled override must skip MaxParameters on the test file"
     );
     assert!(
-        fired_on(&issues, "Refactor.PreferConstOverLet", test_file),
+        fired_on(&issues, "Design.ReadonlyArrayParam", test_file),
         "other checks must still run on the test file"
     );
 }
@@ -109,10 +109,10 @@ fn severity_override_applies_only_to_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.ts"]
-[overrides.checks."Refactor.PreferConstOverLet"]
+[overrides.checks."Design.ReadonlyArrayParam"]
 severity = "info"
 "#;
-    let body = "let a = 1;\n".to_string();
+    let body = "export function f(items: number[]) {\n  return items.length;\n}\n".to_string();
     let (issues, paths) =
         analyze_project(toml, &[("src/a.test.ts", body.clone()), ("src/a.ts", body)]);
     let test_file = &paths[0];
@@ -120,11 +120,11 @@ severity = "info"
 
     let test_sev = issues
         .iter()
-        .find(|i| i.check_id == "Refactor.PreferConstOverLet" && i.file == *test_file)
+        .find(|i| i.check_id == "Design.ReadonlyArrayParam" && i.file == *test_file)
         .map(|i| i.severity);
     let regular_sev = issues
         .iter()
-        .find(|i| i.check_id == "Refactor.PreferConstOverLet" && i.file == *regular_file)
+        .find(|i| i.check_id == "Design.ReadonlyArrayParam" && i.file == *regular_file)
         .map(|i| i.severity);
 
     assert_eq!(

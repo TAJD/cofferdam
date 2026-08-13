@@ -199,7 +199,7 @@ fn explain_builtin_check_still_works() {
     // Built-in lookup should be unaffected — no config needed for that path.
     let out = Command::new(cofferdam_bin())
         .arg("explain")
-        .arg("Refactor.PreferConstOverLet")
+        .arg("Refactor.NearDuplicateBlock")
         .arg("--no-config")
         .output()
         .expect("spawn cofferdam");
@@ -207,7 +207,7 @@ fn explain_builtin_check_still_works() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "expected exit 0; stdout={stdout}");
     assert!(
-        stdout.contains("Refactor.PreferConstOverLet"),
+        stdout.contains("Refactor.NearDuplicateBlock"),
         "should include check id; got: {stdout}"
     );
 }

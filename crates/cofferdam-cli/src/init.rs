@@ -44,13 +44,7 @@ pub const STARTER_TOML: &str = "\
 # [checks.\"Design.DuplicateExportName\"]
 # severity = \"medium\"
 
-# [checks.\"Refactor.CyclomaticComplexity\"]
-# severity = \"medium\"
-
-# [checks.\"Refactor.CognitiveComplexity\"]
-# severity = \"medium\"
-
-# [checks.\"Refactor.DuplicateBlock\"]
+# [checks.\"Refactor.NearDuplicateBlock\"]
 # severity = \"medium\"
 
 # [checks.\"Warning.TripleEquals\"]

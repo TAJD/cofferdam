@@ -38,7 +38,7 @@ fn unknown_budget_key_warns() {
 
 #[test]
 fn valid_budget_key_does_not_warn() {
-    let out = run_check_with_budget(r#""Refactor.CognitiveComplexity" = 5"#);
+    let out = run_check_with_budget(r#""Refactor.NearDuplicateBlock" = 5"#);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("no known check id"),

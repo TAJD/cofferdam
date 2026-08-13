@@ -5,15 +5,15 @@
 const a = 1;
 
 // OK — scoped form is auditable.
-// cofferdam-ignore: Refactor.PreferConstOverLet: legacy declaration preserved for parity
+// cofferdam-ignore: Design.ReadonlyArrayParam: legacy declaration preserved for parity
 let one = 1;
 
 // OK — scoped form with only the id.
-// cofferdam-ignore: Refactor.PreferConstOverLet
+// cofferdam-ignore: Design.ReadonlyArrayParam
 let two = 1;
 
 // OK — block / file variants are out of scope for this check.
-// cofferdam-ignore-start: Refactor.PreferConstOverLet
+// cofferdam-ignore-start: Design.ReadonlyArrayParam
 let three = 1;
 // cofferdam-ignore-end
 

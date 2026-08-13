@@ -63,7 +63,13 @@ fn analyze_context_still_returns_normal_issues() {
     let engine = Engine::new(cofferdam_checks::all_builtins());
     let src = PathBuf::from("/virtual/b.ts");
     let cs = ChangeSet::from_files([src.clone()]);
-    let out = engine.analyze_context(vec![(src, "let x = 1;\n".into())], &cs);
+    let out = engine.analyze_context(
+        vec![(
+            src,
+            "export function f(x: number[]) {\n  return x.length;\n}\n".into(),
+        )],
+        &cs,
+    );
     assert!(!out.issues.is_empty());
     assert!(out.items.is_empty());
 }
@@ -94,19 +100,20 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
     // `Design.MissingTestFile`) that would also fire on an isolated
     // fixture pair and muddy the fresh/legacy counts being asserted.
     let checks: Vec<Box<dyn Check>> = vec![
-        Box::new(cofferdam_checks::refactor::PreferOptionalChain),
-        Box::new(cofferdam_checks::refactor::UnusedVariable),
+        Box::new(cofferdam_checks::design::ReadonlyArrayParam),
+        Box::new(cofferdam_checks::design::MaxParameters::new(5)),
         Box::new(cofferdam_checks::context::findings::Findings),
     ];
     let engine = Engine::new(checks);
 
     // The diff only touched the `touched` function (lines 7-10); the
-    // `Refactor.PreferOptionalChain` finding on line 2 (inside `legacy`) is
+    // `Design.ReadonlyArrayParam` finding on line 1 (inside `legacy`) is
     // outside that range and so counts as legacy debt, while the
-    // `Refactor.UnusedVariable` finding on line 8 is fresh.
+    // `Design.MaxParameters` finding on line 8 (touched's 6-parameter
+    // signature) is fresh.
     let cs = ChangeSet {
         files: [dirty.clone(), clean.clone()].into_iter().collect(),
-        line_ranges: [(dirty.clone(), vec![LineRange { start: 7, end: 10 }])]
+        line_ranges: [(dirty.clone(), vec![LineRange { start: 8, end: 10 }])]
             .into_iter()
             .collect(),
     };
@@ -130,12 +137,12 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
         .find(|i| i.title.contains("in changed lines"))
         .expect("fresh-findings item");
     assert!(
-        fresh.body.contains("Refactor.UnusedVariable"),
+        fresh.body.contains("Design.MaxParameters"),
         "{}",
         fresh.body
     );
     assert!(
-        !fresh.body.contains("Refactor.PreferOptionalChain"),
+        !fresh.body.contains("Design.ReadonlyArrayParam"),
         "legacy finding must not appear in the fresh summary: {}",
         fresh.body
     );

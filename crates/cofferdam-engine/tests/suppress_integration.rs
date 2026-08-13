@@ -11,19 +11,19 @@ fn suppress_next_line_all_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "// cofferdam-disable-next-line\nlet a = 1;";
+    let code = "// cofferdam-disable-next-line\nexport function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Should have no PreferConstOverLet issue on line 2 due to suppression
-    let prefer_const_on_line_2: Vec<_> = issues
+    // Should have no ReadonlyArrayParam issue on line 2 due to suppression
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
     assert!(
-        prefer_const_on_line_2.is_empty(),
-        "expected no PreferConstOverLet on line 2 (should be suppressed)"
+        readonly_array_param_on_line_2.is_empty(),
+        "expected no ReadonlyArrayParam on line 2 (should be suppressed)"
     );
 }
 
@@ -33,17 +33,17 @@ fn suppress_next_line_specific_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "// cofferdam-disable-next-line Refactor.PreferConstOverLet\nlet a = 1;";
+    let code = "// cofferdam-disable-next-line Design.ReadonlyArrayParam\nexport function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Should have no PreferConstOverLet on line 2
-    let prefer_const_on_line_2: Vec<_> = issues
+    // Should have no ReadonlyArrayParam on line 2
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
-    assert!(prefer_const_on_line_2.is_empty());
+    assert!(readonly_array_param_on_line_2.is_empty());
 }
 
 #[test]
@@ -52,20 +52,20 @@ fn suppress_next_line_skips_blanks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "// cofferdam-disable-next-line\n\nlet a = 1;";
+    let code = "// cofferdam-disable-next-line\n\nexport function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
     // Blank line 2 should not suppress anything
     // Line 3 (first non-blank) should be suppressed
-    let prefer_const_on_line_3: Vec<_> = issues
+    let readonly_array_param_on_line_3: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 3)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 3)
         .collect();
     assert!(
-        prefer_const_on_line_3.is_empty(),
-        "expected no PreferConstOverLet on line 3 (suppressed by line 1 directive)"
+        readonly_array_param_on_line_3.is_empty(),
+        "expected no ReadonlyArrayParam on line 3 (suppressed by line 1 directive)"
     );
 }
 
@@ -75,29 +75,29 @@ fn suppress_block_all_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "/* cofferdam-disable */\nlet a = 1;\n/* cofferdam-enable */\nlet x = 2;";
+    let code = "/* cofferdam-disable */\nexport function a(items: number[]) { return items.length; }\n/* cofferdam-enable */\nexport function b(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
     // Line 2 should be suppressed
-    let prefer_const_on_line_2: Vec<_> = issues
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
     assert!(
-        prefer_const_on_line_2.is_empty(),
-        "expected no PreferConstOverLet on line 2 (inside disable block)"
+        readonly_array_param_on_line_2.is_empty(),
+        "expected no ReadonlyArrayParam on line 2 (inside disable block)"
     );
 
     // Line 4 should NOT be suppressed
-    let prefer_const_on_line_4: Vec<_> = issues
+    let readonly_array_param_on_line_4: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 4)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 4)
         .collect();
     assert!(
-        !prefer_const_on_line_4.is_empty(),
-        "expected PreferConstOverLet on line 4 (outside disable block)"
+        !readonly_array_param_on_line_4.is_empty(),
+        "expected ReadonlyArrayParam on line 4 (outside disable block)"
     );
 }
 
@@ -107,20 +107,19 @@ fn suppress_block_specific_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code =
-        "/* cofferdam-disable Refactor.PreferConstOverLet */\nlet a = 1;\n/* cofferdam-enable */";
+    let code = "/* cofferdam-disable Design.ReadonlyArrayParam */\nexport function a(items: number[]) { return items.length; }\n/* cofferdam-enable */";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Line 2 should suppress PreferConstOverLet but not other checks
-    let prefer_const_on_line_2: Vec<_> = issues
+    // Line 2 should suppress ReadonlyArrayParam but not other checks
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
     assert!(
-        prefer_const_on_line_2.is_empty(),
-        "expected no PreferConstOverLet on line 2"
+        readonly_array_param_on_line_2.is_empty(),
+        "expected no ReadonlyArrayParam on line 2"
     );
 }
 
@@ -130,26 +129,26 @@ fn suppress_block_no_matching_enable() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "/* cofferdam-disable Refactor.PreferConstOverLet */\nlet a = 1;\nlet x = 2;";
+    let code = "/* cofferdam-disable Design.ReadonlyArrayParam */\nexport function a(items: number[]) { return items.length; }\nexport function b(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
     // Both lines 2 and 3 should be suppressed (extends to EOF)
-    let prefer_const_on_line_2: Vec<_> = issues
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
-    let prefer_const_on_line_3: Vec<_> = issues
+    let readonly_array_param_on_line_3: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet" && i.location.line() == 3)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 3)
         .collect();
     assert!(
-        prefer_const_on_line_2.is_empty(),
+        readonly_array_param_on_line_2.is_empty(),
         "line 2 should be suppressed"
     );
     assert!(
-        prefer_const_on_line_3.is_empty(),
+        readonly_array_param_on_line_3.is_empty(),
         "line 3 should be suppressed (block extends to EOF)"
     );
 }
@@ -169,24 +168,24 @@ fn suppress_directive_at_eof() {
 }
 
 #[test]
-fn without_suppression_prefer_const_fires() {
+fn without_suppression_readonly_array_param_fires() {
     let engine = Engine::new(all_builtins());
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "let a = 1;";
+    let code = "export function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Should have a PreferConstOverLet issue on line 1
-    let prefer_const: Vec<_> = issues
+    // Should have a ReadonlyArrayParam issue on line 1
+    let readonly_array_param: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Refactor.PreferConstOverLet")
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam")
         .collect();
     assert!(
-        !prefer_const.is_empty(),
-        "expected at least one PreferConstOverLet issue without suppression"
+        !readonly_array_param.is_empty(),
+        "expected at least one ReadonlyArrayParam issue without suppression"
     );
 }
 

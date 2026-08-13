@@ -143,7 +143,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "check_id": {
                         "type": "string",
-                        "description": "Dotted check ID, e.g. 'Refactor.PreferConstOverLet'.",
+                        "description": "Dotted check ID, e.g. 'Design.ReadonlyArrayParam'.",
                     },
                     "full": {
                         "type": "boolean",
@@ -463,7 +463,7 @@ mod tests {
             "method": "tools/call",
             "params": {
                 "name": "cofferdam.explain",
-                "arguments": { "check_id": "Refactor.PreferConstOverLet" }
+                "arguments": { "check_id": "Design.ReadonlyArrayParam" }
             }
         })
         .to_string();
@@ -474,7 +474,7 @@ mod tests {
             .as_str()
             .expect("text content");
         let report: Value = serde_json::from_str(text).expect("valid JSON");
-        assert_eq!(report["id"], "Refactor.PreferConstOverLet");
+        assert_eq!(report["id"], "Design.ReadonlyArrayParam");
     }
 
     #[test]

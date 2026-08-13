@@ -551,52 +551,6 @@
       ]
     },
     {
-      "id": "Refactor.CognitiveComplexity",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Medium",
-      "explanation": "Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.",
-      "body": "---\nid: Refactor.CognitiveComplexity\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions:\n  - name: limit\n    kind: int\n    default: 15\n    doc: maximum cognitive complexity per function\n---\n\nSonar-style cognitive complexity per function — branching breaks plus a nesting penalty. Deeply nested code costs more than a long flat switch. Tracks `if`/`else if`, loops, ternaries, `switch`, `catch`, sequences of `&&`/`||`/`??`, and recursion-by-name. Default limit is `15`; override per-project with `[checks.\"Refactor.CognitiveComplexity\"] limit = N` in `cofferdam.toml`.\n\n```ts\n// flagged: nested branches stack a nesting penalty\nfunction classify(record: Record) {\n  if (record.kind === \"user\") {\n    if (record.active) {\n      for (const role of record.roles) {\n        if (role.permissions.includes(\"admin\")) {\n          return \"active-admin\";\n        }\n      }\n    }\n  }\n  return \"other\";\n}\n```\n\n```ts\n// fix: flatten via early returns and helpers\nfunction classify(record: Record) {\n  if (record.kind !== \"user\" || !record.active) return \"other\";\n  return hasAdmin(record.roles) ? \"active-admin\" : \"other\";\n}\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum cognitive complexity per function",
-          "default": 15
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
-      "id": "Refactor.CyclomaticComplexity",
-      "category": "Refactor",
-      "base_priority": 8,
-      "default_severity": "Medium",
-      "explanation": "McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.",
-      "body": "---\nid: Refactor.CyclomaticComplexity\ncategory: Refactor\nbase_priority: 8\ndefault_severity: Medium\noptions:\n  - name: limit\n    kind: int\n    default: 10\n    doc: maximum cyclomatic complexity per function\n---\n\nMcCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`; override per-project with `[checks.\"Refactor.CyclomaticComplexity\"] limit = N` in `cofferdam.toml`.\n\nCyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures \"how many test cases do I need\", cognitive captures \"how hard is this to read\". Run them together; the worst offenders fail both.\n\n```ts\n// flagged: 11 independent paths via &&/case/if combinations\nfunction dispatch(event: Event) {\n  switch (event.kind) {\n    case \"create\": return event.payload && event.payload.id ? handleCreate(event) : null;\n    case \"update\": return event.payload && event.payload.id ? handleUpdate(event) : null;\n    case \"delete\": return event.payload && event.payload.id ? handleDelete(event) : null;\n    case \"ping\": return null;\n    default: return null;\n  }\n}\n```\n\n```ts\n// fix: dispatch table flattens the case explosion\nconst handlers = { create: handleCreate, update: handleUpdate, delete: handleDelete } as const;\nfunction dispatch(event: Event) {\n  const handler = handlers[event.kind as keyof typeof handlers];\n  if (!handler || !event.payload?.id) return null;\n  return handler(event);\n}\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum cyclomatic complexity per function",
-          "default": 10
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
       "id": "Refactor.DeadExport",
       "category": "Refactor",
       "base_priority": 4,
@@ -609,53 +563,6 @@
       "options": [],
       "badges": [
         "graph"
-      ]
-    },
-    {
-      "id": "Refactor.DuplicateBlock",
-      "category": "Refactor",
-      "base_priority": 12,
-      "default_severity": "Medium",
-      "explanation": "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
-      "body": "---\nid: Refactor.DuplicateBlock\ncategory: Refactor\nbase_priority: 12\ndefault_severity: Medium\noptions: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]\n---\n\nRuns of statements that recur, verbatim, in multiple files. Likely copy-paste — extract a shared helper. Canonicalisation maps identifier tokens to per-window local indices so renamed copies still match; a block that is otherwise identical but carries different string or number literal values is not this check's concern — it is reported separately, at low severity, by [`Refactor.NearDuplicateBlock`](Refactor.NearDuplicateBlock.md), since a near-clone is a weaker and noisier signal than a byte-identical one and should not trip a default CI gate on its own. The `normalize_literals` option controls which of the two checks a given block lands on (see that page), not whether it is reported at all. `import` declarations and re-exports (`export { x } from './y'`) are never windowed at all — an import block can't be extracted into a shared helper, so treating one run of imports as a duplicate of another is never actionable, and normalizing their module-specifier string literals would otherwise make every same-length import block in a project match every other. A plain `export { x }` or `export function f() {}` (no `source`) is ordinary code and is unaffected. Minimum window is `6` consecutive statements (and `80` characters) to keep noise low. Cross-file: per-file `run` writes fingerprints into a corpus slot shared with `Refactor.NearDuplicateBlock`; `finalize` groups by hash, runs one overlap-claim pass across both checks' candidates together (so the two never report overlapping spans), and emits one `Issue` per verbatim-duplicate set with `related` spans pointing at every other occurrence.\n\n```ts\n// src/orders.ts:42\nconst items = parseItems(input);\nconst validated = validateItems(items);\nconst priced = priceItems(validated, currency);\nconst taxed = applyTax(priced, region);\nconst total = sumItems(taxed);\nreturn { items: taxed, total };\n```\n\n```ts\n// src/quotes.ts:88 — same shape, renamed: flagged as related\nconst products = parseItems(input);\nconst checkedProducts = validateItems(products);\nconst pricedProducts = priceItems(checkedProducts, currency);\nconst taxedProducts = applyTax(pricedProducts, region);\nconst total = sumItems(taxedProducts);\nreturn { items: taxedProducts, total };\n```\n\n```ts\n// fix: extract once\nexport function pipeline(input: RawInput, currency: Currency, region: Region) {\n  const items = parseItems(input);\n  const validated = validateItems(items);\n  const priced = priceItems(validated, currency);\n  const taxed = applyTax(priced, region);\n  return { items: taxed, total: sumItems(taxed) };\n}\n```\n\n**Suppressing:** each duplicate group is emitted as a single `Issue` covering every\noccurrence — one primary location plus `related` spans for the rest. A\n`cofferdam-ignore: Refactor.DuplicateBlock` comment placed at *any* occurrence (the\nprimary one or any related one) suppresses the whole finding, not just that copy.\nYou don't need to find and suppress every occurrence individually — one ignore\ncomment on either side of a duplicated pair is enough. Suppression targets the\ncomment's next non-blank line, not a range, so anchor it to the first *statement*\nof the duplicated run — not to an import or other declaration preceding it. Import\nand re-export statements are excluded from windows entirely, so a comment sitting\nabove one no longer covers the block that follows.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "min_statements",
-          "kind": "integer",
-          "doc": "minimum number of consecutive statements required to flag a duplicate block",
-          "default": 6
-        },
-        {
-          "id": "min_chars",
-          "kind": "integer",
-          "doc": "minimum raw byte length of a duplicate window; prevents trivial single-liner runs from firing",
-          "default": 80
-        },
-        {
-          "id": "include_tokens",
-          "kind": "boolean",
-          "doc": "also run a sliding token-window pass that catches duplicates spanning non-statement boundaries",
-          "default": false
-        },
-        {
-          "id": "include_ast",
-          "kind": "boolean",
-          "doc": "run the AST statement-window pass (disable to use token-mode only)",
-          "default": true
-        },
-        {
-          "id": "normalize_literals",
-          "kind": "boolean",
-          "doc": "treat string and number literals as positional placeholders, so blocks differing only in their literal values are still reported as duplicates",
-          "default": true
-        }
-      ],
-      "badges": [
-        "graph",
-        "advisable"
       ]
     },
     {
@@ -703,21 +610,6 @@
       ]
     },
     {
-      "id": "Refactor.MutatedParameter",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Medium",
-      "explanation": "Reassigning or mutating a function parameter breaks pure input→output semantics, making the function harder to test and reason about in isolation.",
-      "body": "---\nid: Refactor.MutatedParameter\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\nA function reassigns or mutates one of its own parameters. Callers pass a value expecting the function to compute a result from it, not to have their argument silently changed underneath them — and a function that only reads its parameters is trivially testable input→output, with no need to inspect or snapshot the argument afterward.\n\n```ts\nfunction withDiscount(price: number, rate: number) {\n  price = price - price * rate;   // flagged — reassigns the `price` parameter\n  return price;\n}\n\nfunction tagAsProcessed(item: { status: string }) {\n  item.status = \"processed\";      // flagged — mutates the `item` parameter\n  return item;\n}\n```\n\n```ts\n// fix: compute a new value instead of writing back into the parameter\nfunction withDiscount(price: number, rate: number) {\n  const discounted = price - price * rate;\n  return discounted;\n}\n\nfunction tagAsProcessed(item: { status: string }) {\n  return { ...item, status: \"processed\" };\n}\n```\n\nScoped to simple-identifier parameters only — destructured (`{ a, b }`) and rest (`...rest`) parameters aren't tracked in this first version. Only single-level member/index writes are detected (`x.foo = ...`, `x[0] = ...`); nested writes (`x.a.b = ...`) and `delete x.foo` are not. A nested function inherits its enclosing function's watched parameters, so a closure mutating an outer parameter still flags — but tracking is name-based, so a nested local that happens to share a parameter's name is also flagged as if it were that parameter, a known false-positive edge case for this first version.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
       "id": "Refactor.NearDuplicateBlock",
       "category": "Refactor",
       "base_priority": 10,
@@ -727,69 +619,41 @@
       "requires_types": false,
       "consistency": false,
       "autofix": false,
-      "options": [],
+      "options": [
+        {
+          "id": "min_statements",
+          "kind": "integer",
+          "doc": "minimum number of consecutive statements required to flag a duplicate block",
+          "default": 6
+        },
+        {
+          "id": "min_chars",
+          "kind": "integer",
+          "doc": "minimum raw byte length of a duplicate window; prevents trivial single-liner runs from firing",
+          "default": 80
+        },
+        {
+          "id": "include_tokens",
+          "kind": "boolean",
+          "doc": "also run a sliding token-window pass that catches duplicates spanning non-statement boundaries",
+          "default": false
+        },
+        {
+          "id": "include_ast",
+          "kind": "boolean",
+          "doc": "run the AST statement-window pass (disable to use token-mode only)",
+          "default": true
+        },
+        {
+          "id": "normalize_literals",
+          "kind": "boolean",
+          "doc": "treat string and number literals as positional placeholders, so blocks differing only in their literal values are still reported as duplicates",
+          "default": true
+        }
+      ],
       "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferArrayMethodOverLoop",
-      "category": "Refactor",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "A loop whose entire body pushes one computed value (optionally gated by a single `if`) onto an accumulator array is more clearly expressed as `.map()`/`.filter()`.",
-      "body": "---\nid: Refactor.PreferArrayMethodOverLoop\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `for`/`for-of` loop whose entire body builds one accumulator array by pushing a computed value each iteration is more clearly expressed with `.map()` (unconditional) or `.filter()` (gated by a single `if`).\n\n```ts\nconst doubled: number[] = [];\nfor (const n of nums) {\n  doubled.push(n * 2); // flagged — could be `.map()`\n}\n```\n\n```ts\n// fix\nconst doubled = nums.map((n) => n * 2);\n```\n\n```ts\nconst evens: number[] = [];\nfor (const n of nums) {\n  if (n % 2 === 0) {\n    evens.push(n); // flagged — could be `.filter()`\n  }\n}\n```\n\n```ts\n// fix\nconst evens = nums.filter((n) => n % 2 === 0);\n```\n\nWhen the `if`'s consequent pushes a separately computed value rather than the raw iterated element, the suggestion is `.filter().map()` (a filter, then a transform) rather than a plain `.filter()`, since the loop is doing both:\n\n```ts\nconst labels: string[] = [];\nfor (const n of nums) {\n  if (n % 2 === 0) {\n    const label = `even:${n}`; // flagged — `.filter().map()`, not just `.filter()`\n    labels.push(label);\n  }\n}\n```\n\nDeliberately narrow to avoid false positives: the loop body (or the `if`'s consequent, for the filter shape) must match one of exactly two shapes and nothing else —\n\n1. a single `arr.push(<expr>)` statement, or\n2. a `const`/`let` declaration with an initializer, immediately followed by `arr.push(<thatName>)`.\n\nAny other statement in the body — an early `break`/`continue`, a second accumulator, a side effect beyond the single push, an `if`/`else` — disqualifies the match entirely and the loop is left alone.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferArrayMethodOverLoop\"]\nseverity = \"medium\"   # raise if your project prefers array methods strongly\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferConstOverLet",
-      "category": "Refactor",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "A `let` binding that's never reassigned should be `const` — it signals the value doesn't change and rules out reassignment bugs at compile time.",
-      "body": "---\nid: Refactor.PreferConstOverLet\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `let` binding that's never reassigned anywhere in the file should be `const` — it signals to a reader that the value doesn't change, and rules out an entire class of reassignment bugs at compile time.\n\n```ts\nlet total = price + tax; // flagged — never reassigned\nreturn total;\n```\n\n```ts\n// fix\nconst total = price + tax;\nreturn total;\n```\n\nReassignment is tracked by name across the whole file, including inside nested closures — a closure that captures and reassigns an outer `let` still counts, so the outer binding is correctly left alone:\n\n```ts\nlet count = 0;\nfunction increment() {\n  count += 1; // reassignment, found even though it's in a nested function\n}\n```\n\nDeclaration sites are scoped to simple-identifier bindings only in this version — a destructured `let` declaration (`let { a, b } = obj`) is skipped. Reassignment detection is broader: a `let`-declared name is recognized as reassigned when it's the target of a plain assignment (`x = v`), an object/array destructuring-assignment (`({ a, b } = v)`, `([a, b] = v)`, including renamed properties, rest elements, and defaults), or a `for...of`/`for...in` loop head (`for (x of xs)`, `for ([a, b] of pairs)`).\n\n```ts\nlet token: string;\nlet slug: string;\n({ token, slug } = await fetchPair()); // reassignment — not flagged\n```\n\nTracking is name-based rather than true lexical scope: a shadowed `let` that shares a name with a reassigned variable in a different scope won't be flagged even if that specific binding is itself never reassigned. This is a deliberate false-negative, not a false-positive — the safer direction for a \"should be const\" suggestion.\n\nOverlap with ESLint's `prefer-const` rule is expected and acceptable.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferConstOverLet\"]\nseverity = \"medium\"   # raise if your project treats this as more than a style nit\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferNullishCoalescing",
-      "category": "Refactor",
-      "base_priority": 3,
-      "default_severity": "Low",
-      "explanation": "`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`.",
-      "body": "---\nid: Refactor.PreferNullishCoalescing\ncategory: Refactor\nbase_priority: 3\ndefault_severity: Low\noptions: []\n---\n\n`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`. Today the check ships the narrow high-confidence shape: `member-access || default-literal` (string / number / bool / `null` / bare `undefined` / array literal / object literal). Bare-identifier LHS, function-call LHS, and arithmetic LHS are deliberately not flagged — they're too often genuine alt-branch logic without type info. The rule broadens once the type-aware tier lands.\n\n```ts\n// flagged\nconst timeout = config.timeout || 5000;     // 0 should NOT fall through\nconst name = user.name || \"anonymous\";      // \"\" should NOT fall through\n```\n\n```ts\n// fix\nconst timeout = config.timeout ?? 5000;\nconst name = user.name ?? \"anonymous\";\n```\n\n```ts\n// not flagged (intentional falsy fallthrough)\nconst flag = isAdmin || isOwner;            // bare identifier — alt branch\nconst value = compute() || 0;              // call result — return type ambiguous\nconst sum = (a + b) || 1;                  // arithmetic — clearly wants falsy\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferOptionalChain",
-      "category": "Refactor",
-      "base_priority": 5,
-      "default_severity": "Low",
-      "explanation": "`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.",
-      "body": "---\nid: Refactor.PreferOptionalChain\ncategory: Refactor\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\n`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on `null`/`undefined`. The check flags `lhs && rhs` where the LHS is a \"safe to repeat\" expression (identifier, `this`, or a pure member chain — never contains a `CallExpression` or `NewExpression`) and the RHS is a member access (or call on a member access) whose object span renders to the same source bytes as the LHS span.\n\n```ts\n// flagged\nreturn user && user.profile;\nreturn user && user.profile && user.profile.name;\nreturn arr && arr[0];\n```\n\n```ts\n// fix\nreturn user?.profile;\nreturn user?.profile?.name;\nreturn arr?.[0];\n```\n\n```ts\n// not flagged (LHS is a call — rewriting would halve the call count)\nreturn get() && get().profile;\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
+        "graph",
+        "advisable"
       ]
     },
     {
@@ -822,21 +686,6 @@
       "default_severity": "Low",
       "explanation": "A .map/.filter callback that mutates outer-scope state or calls a known side-effecting function isn't purely computing a value — it's a loop wearing a map costume.",
       "body": "---\nid: Refactor.SideEffectInMapCallback\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA callback passed to `.map`/`.filter` that mutates something outside itself (an outer-scope variable) or calls a known side-effecting function (`console.*`), instead of purely computing and returning a value — a loop wearing a map costume.\n\n```ts\nconst seen: number[] = [];\nconst doubled = items.map((item) => {\n  seen.push(item); // mutates outer-scope `seen`\n  return item * 2;\n});\n```\n\n```ts\n// fix — separate the accumulation from the transform\nconst doubled = items.map((item) => item * 2);\nitems.forEach((item) => seen.push(item));\n```\n\nNot flagged — the callback only mutates/declares locals of its own:\n\n```ts\nconst doubled = items.map((item) => {\n  const scaled = item * 2;\n  return scaled;\n});\n```\n\nAlso flagged — writing into an outer-scope object property or array index, not just calling an array-mutating method:\n\n```ts\nconst state = { count: 0 };\nconst withCount = items.map((item) => {\n  state.count += 1; // writes into outer-scope `state`\n  return item;\n});\n```\n\nNot flagged — a `.map`/`.filter` callback whose return value happens to be discarded, with no other side effect, is a distinct \"use `.forEach` instead\" concern this check doesn't cover (v1 scope, per the ticket):\n\n```ts\nitems.map((item) => process(item));\n```\n\nScope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry. Member/index assignment targets (`x.y = ...`, `x[y] = ...`) are only checked at the root receiver — a destructured local (`const { acc } = ctx;`) isn't recognized as local, a known name-based limitation.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.UnusedVariable",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Low",
-      "explanation": "Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).",
-      "body": "---\nid: Refactor.UnusedVariable\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Low\noptions: []\n---\n\nVariables declared but never read are dead code. They add noise, mislead readers, and often indicate a logic error — the value was computed but never actually used. The check covers `let`/`const`/`var` bindings, function declarations, class declarations, catch-clause variables, and function parameters.\n\n```ts\n// flagged: count is declared but never read\nfunction summarise(items: Item[]) {\n  const count = items.length;   // unused\n  return items.map(i => i.name).join(\", \");\n}\n```\n\n```ts\n// fix: remove or use the binding\nfunction summarise(items: Item[]) {\n  return items.map(i => i.name).join(\", \");\n}\n```\n\n```ts\n// opt-out: prefix with _ to signal intentionally unused\nfunction handler(_event: Event, context: Context) {\n  return context.respond(\"ok\");\n}\n```\n\nThe check skips: ESM imports (tree-shaker territory), type-only symbols (TypeAlias, Interface, Enum — deferred to the type-aware tier), rest-pattern bindings (`...rest`), and all module-scope (top-level) bindings (which may be exported without the export being visible to the AST-only pass). Use the `_` prefix convention to opt out of flagging for positional parameters you cannot remove.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,

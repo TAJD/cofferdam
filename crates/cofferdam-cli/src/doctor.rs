@@ -804,8 +804,6 @@ const OVERLAPPING_STYLE_CHECKS: &[&str] = &[
     "Warning.TripleEquals",
     "Warning.NoConsoleLog",
     "Warning.NoDebugger",
-    "Refactor.PreferNullishCoalescing",
-    "Refactor.PreferOptionalChain",
 ];
 
 /// Warn (informational, not a Fail — coexistence is a style preference, not

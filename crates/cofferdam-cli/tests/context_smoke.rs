@@ -247,8 +247,8 @@ fn check_output_is_byte_for_byte_unaffected_by_context_providers() {
     let tmp = TempDir::new().expect("temp dir");
     let dir = tmp.path();
     init_repo(dir);
-    // A never-reassigned `let` trips `Refactor.PreferConstOverLet`, a
-    // real builtin finding.
+    // An export with no importer and no matching test file trips
+    // `Design.OrphanExport`, a real builtin finding.
     std::fs::write(
         dir.join("a.ts"),
         "export function f(x: number) {\n  let y = x;\n  return y;\n}\n",
@@ -271,7 +271,7 @@ fn check_output_is_byte_for_byte_unaffected_by_context_providers() {
         "cofferdam check output must be deterministic across repeated runs"
     );
     assert!(
-        first.contains("Refactor.PreferConstOverLet"),
+        first.contains("Design.OrphanExport"),
         "expected fixture to trip a real builtin finding; got: {first}"
     );
     assert!(

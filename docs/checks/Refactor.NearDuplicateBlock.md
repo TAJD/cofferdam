@@ -4,7 +4,7 @@ title: Refactor.NearDuplicateBlock
 category: Refactor
 base_priority: 10
 default_severity: Low
-options: []
+options: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]
 autofix: false
 ---
 

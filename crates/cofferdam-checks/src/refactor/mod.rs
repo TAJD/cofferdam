@@ -575,11 +575,12 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_block_exact_clone_is_collected_but_not_reported_by_near() {
+    fn duplicate_block_exact_clone_is_reported_by_near() {
         // Refactor.DuplicateBlock (the exact-clone half of the CD-331
-        // split) was cut in CD-357 pass 2 — a verbatim clone is still
-        // collected into the shared corpus slot (for the windowing/dedup
-        // pass) but is no longer surfaced by any check.
+        // split) was cut in CD-357, so NearDuplicateBlock reports both
+        // halves. A verbatim clone must still produce a finding —
+        // leaving it unreported let it claim territory and silently
+        // suppress an overlapping literal-drift finding.
         let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source = make_duplicate_source();
@@ -591,10 +592,43 @@ mod tests {
             "expected exactly one claimed group for a verbatim clone, got {:?}",
             all_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
-        assert!(
-            near_issues.is_empty(),
-            "a verbatim clone must not be reported by Refactor.NearDuplicateBlock, got {:?}",
+        assert_eq!(
+            near_issues.len(),
+            1,
+            "a verbatim clone must be reported, got {:?}",
             near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert!(
+            !near_issues[0].message.contains("literal values"),
+            "verbatim clones use the plain wording, got {:?}",
+            near_issues[0].message
+        );
+    }
+
+    /// The regression this pins: an exact group claims territory during
+    /// `partition_claimed_groups`. While only the near half was emitted,
+    /// that claim discarded any overlapping literal-drift finding —
+    /// so adding a verbatim copy of a file made cofferdam report
+    /// strictly *less* than before it was added.
+    #[test]
+    fn exact_clone_does_not_suppress_an_overlapping_near_duplicate() {
+        let check = NearDuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let base = make_duplicate_source();
+        let drifted = base.replace("gold-membership", "silver-membership");
+
+        let (_, without_exact) = run_both_checks_two_sources(&check, &base, &drifted, &opts);
+        assert!(
+            !without_exact.is_empty(),
+            "baseline: the literal-drift pair must be reported"
+        );
+
+        // `b.ts` is now a verbatim clone of `a.ts` covering the same
+        // region the near-duplicate pair covers.
+        let (_, with_exact) = run_both_checks_two_sources(&check, &base, &base, &opts);
+        assert!(
+            !with_exact.is_empty(),
+            "adding a verbatim clone must not make the region report nothing"
         );
     }
 
@@ -649,12 +683,11 @@ mod tests {
     #[test]
     fn duplicate_block_exact_and_near_groups_never_overlap_spans() {
         // Mix a verbatim-clone pair with a literal-drift pair across the
-        // same two files and assert that no span (primary or related)
-        // reported by the near-only check overlaps a span claimed by an
-        // exact-clone group — pinning that `partition_claimed_groups`
-        // runs its overlap-claim pass once, across every candidate group
-        // together, rather than the exact and near halves claiming
-        // independently.
+        // same two files. Both are now reported under one check id, so
+        // what this pins is that `partition_claimed_groups` runs its
+        // overlap-claim pass once across every candidate group together:
+        // the two findings must cover disjoint regions, never
+        // double-reporting the same lines.
         let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let exact = make_duplicate_source();
@@ -671,8 +704,8 @@ mod tests {
         );
         assert_eq!(
             near_issues.len(),
-            1,
-            "expected the literal-drift clone, got {near_issues:?}"
+            2,
+            "both halves report under one id since CD-357, got {near_issues:?}"
         );
 
         let spans_of = |issues: &[CoreIssue]| -> Vec<(PathBuf, u32, u32)> {
@@ -687,21 +720,24 @@ mod tests {
                 })
                 .collect()
         };
-        let exact_issues: Vec<CoreIssue> = all_issues
-            .into_iter()
-            .filter(|i| {
-                !near_issues
-                    .iter()
-                    .any(|n| n.location.line() == i.location.line() && n.file == i.file)
-            })
+        let exact_issues: Vec<CoreIssue> = near_issues
+            .iter()
+            .filter(|i| !i.message.contains("literal values"))
+            .cloned()
             .collect();
-        let exact_spans = spans_of(&exact_issues);
-        let near_spans = spans_of(&near_issues);
-        for (efile, eline, _) in &exact_spans {
-            for (nfile, nline, _) in &near_spans {
+        let drift_issues: Vec<CoreIssue> = near_issues
+            .iter()
+            .filter(|i| i.message.contains("literal values"))
+            .cloned()
+            .collect();
+        assert_eq!(exact_issues.len(), 1, "one verbatim-clone finding");
+        assert_eq!(drift_issues.len(), 1, "one literal-drift finding");
+
+        for (efile, eline, _) in &spans_of(&exact_issues) {
+            for (nfile, nline, _) in &spans_of(&drift_issues) {
                 assert!(
                     !(efile == nfile && eline == nline),
-                    "the exact-clone group and Refactor.NearDuplicateBlock reported the same \
+                    "the verbatim-clone and literal-drift findings reported the same \
                      location {efile:?}:{eline}"
                 );
             }

@@ -851,7 +851,11 @@ fn check_formatter_coexistence_at(start: &Path) -> CheckResult {
         ),
         Some((tool, file)) => CheckResult::pass(
             NAME,
-            format!("{file} found — no built-in check overlaps {tool}, so both can run unmodified"),
+            format!(
+                "{file} found — no built-in duplicates a {tool} style or formatting rule; \
+                 only Refactor.LongAndComplex overlaps, and only if you enable {tool}'s \
+                 complexity rules"
+            ),
         ),
     }
 }

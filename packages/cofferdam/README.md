@@ -121,7 +121,7 @@ Inline directives let you silence a finding with an auditable reason
 field. Canonical form:
 
 ```ts
-// cofferdam-ignore: Warning.NoEval: codegen bootstrap, not user input
+// cofferdam-ignore: Refactor.NearDuplicateBlock: codegen bootstrap, not user input
 eval(generatedCode);
 ```
 

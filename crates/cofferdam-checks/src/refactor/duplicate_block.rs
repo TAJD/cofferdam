@@ -108,15 +108,10 @@ pub struct NearDuplicateBlock {
     /// Off by default — duplicates the work of AST mode for most
     /// hits, only paying off where copy-paste spans non-statement
     /// boundaries (a multi-line conditional broken across statements
-    /// differently in two places, JSX runs, etc.). NOTE: token-mode
+    /// differently in two places, JSX runs, etc.). Token-mode
     /// fingerprints never differ in `exact_hash` vs `hash` (see
-    /// `collect_token_fingerprints`), so they can only ever land in
-    /// `partition_claimed_groups`'s exact-groups bucket — which this
-    /// check does not emit. Token mode is currently inert here; it
-    /// survives only because the old `Refactor.DuplicateBlock` (the
-    /// exact-clone check, cut in CD-357 pass 2) was its sole consumer
-    /// and this trim kept the collection machinery rather than
-    /// deleting it outright.
+    /// `collect_token_fingerprints`), so they always report through the
+    /// exact-clone path rather than the literal-drift one.
     include_tokens: bool,
     /// AST-mode enabled (default: true). Can be disabled to run
     /// token-mode only. Configurable via cofferdam.toml.
@@ -176,10 +171,9 @@ impl Default for NearDuplicateBlock {
 
 impl NearDuplicateBlock {
     /// Construct with token-mode enabled and the given window size.
-    /// AST mode stays on at default thresholds. See the `include_tokens`
-    /// field doc: token-mode fingerprints never surface as findings on
-    /// this check, so this constructor is currently only exercised for
-    /// its (inert) effect on corpus collection.
+    /// AST mode stays on at default thresholds. Token-mode fingerprints
+    /// always have `exact_hash == hash`, so they report through the
+    /// exact-clone path.
     pub fn with_tokens(min_tokens: usize) -> Self {
         Self {
             include_tokens: true,
@@ -193,11 +187,9 @@ impl NearDuplicateBlock {
 /// (CD-357 pass 2: absorbed `Refactor.DuplicateBlock`'s collection
 /// logic when that check — the exact-clone half of the CD-331 split —
 /// was cut as a linter-level check with no policy/graph angle). Reports
-/// AST-mode groups whose members are structurally identical yet differ
-/// in a string/number literal value; verbatim clones are collected into
-/// the same corpus slot (for the self-overlap / cross-group dedup pass
-/// in `partition_claimed_groups`) but are no longer surfaced by any
-/// check — see `docs/Refactor.NearDuplicateBlock.md`.
+/// every claimed group — verbatim clones and literal-drift near-clones
+/// alike — under this one id, distinguished only by message wording.
+/// See `docs/Refactor.NearDuplicateBlock.md`.
 const DUP_NEAR_META: CheckMeta = CheckMeta {
     id: "Refactor.NearDuplicateBlock",
     category: Category::Refactor,
@@ -295,22 +287,34 @@ impl Check for NearDuplicateBlock {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        // Only the literal-drift half belongs to this check id (CD-331
-        // follow-up split); the exact half (verbatim clones, plus all
-        // token-mode groups — token mode's exact_hash always equals
-        // hash, see `collect_token_fingerprints`) is collected into the
-        // same corpus slot for the dedup pass but is no longer surfaced
-        // by any check, since `Refactor.DuplicateBlock` was cut in
-        // CD-357 pass 2.
-        let (_exact_groups, near_groups) = partition_claimed_groups(ctx);
-        near_groups
+        // Both halves belong to this check id. `Refactor.DuplicateBlock`
+        // owned the exact half until CD-357 cut it; the claim pass still
+        // has to consider exact groups, because a verbatim clone and a
+        // literal-drift one can cover the same region and only one of
+        // them may be reported. Emitting only the near half meant an
+        // exact group claimed the region and was then discarded, so the
+        // overlapping near-duplicate vanished with it — adding a
+        // verbatim copy of a file made cofferdam report strictly less.
+        let (exact_groups, near_groups) = partition_claimed_groups(ctx);
+        exact_groups
             .into_iter()
             .map(|group| {
+                let message = format!(
+                    "duplicate {}-statement block, also at {} other location(s)",
+                    group[0].stmt_count,
+                    group.len() - 1
+                );
+                (group, message)
+            })
+            .chain(near_groups.into_iter().map(|group| {
                 let message = format!(
                     "duplicate {}-statement block differing only in literal values, also at {} other location(s)",
                     group[0].stmt_count,
                     group.len() - 1
                 );
+                (group, message)
+            }))
+            .map(|(group, message)| {
                 build_issue(DUP_NEAR_META.id, DUP_NEAR_META.base_priority, message, &group)
             })
             .collect()
@@ -321,31 +325,14 @@ impl Check for NearDuplicateBlock {
 /// *and* literal-drift near-duplicates), not just the near half that
 /// `NearDuplicateBlock::finalize` surfaces in production. The windowing
 /// / dedup / exclusion logic under `partition_claimed_groups` is shared
-/// by both halves regardless of which check (if any) reports a given
-/// group, so the CD-147 / CD-331 / CD-339 regression tests in
-/// `refactor::tests` use this to keep exercising that shared logic via
-/// verbatim-clone fixtures, even though `Refactor.DuplicateBlock` (the
-/// check that used to report the exact half) was cut in CD-357 pass 2.
+/// by both halves, and since CD-357 both are reported under
+/// `Refactor.NearDuplicateBlock`, so this simply delegates to the real
+/// `finalize`. It is kept as a named entry point because the CD-147 /
+/// CD-331 / CD-339 regression tests read better naming what they assert
+/// over, and because a future re-split would give it a body again.
 #[cfg(test)]
 pub(crate) fn finalize_all_groups_for_test(ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-    let (exact_groups, near_groups) = partition_claimed_groups(ctx);
-    exact_groups
-        .into_iter()
-        .chain(near_groups)
-        .map(|group| {
-            let message = format!(
-                "duplicate {}-statement block, also at {} other location(s)",
-                group[0].stmt_count,
-                group.len() - 1
-            );
-            build_issue(
-                DUP_NEAR_META.id,
-                DUP_NEAR_META.base_priority,
-                message,
-                &group,
-            )
-        })
-        .collect()
+    NearDuplicateBlock::default().finalize(ctx)
 }
 
 /// `Issue` construction for `NearDuplicateBlock` findings.

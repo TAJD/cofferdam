@@ -329,3 +329,58 @@ fn long_and_complex_only_flags_tangled_function() {
         lac[0].message
     );
 }
+
+/// CD-77: a `cofferdam-ignore` placed at the *related* (non-primary)
+/// occurrence of a duplicate pair must suppress the finding just as
+/// effectively as one placed at the primary occurrence — the engine emits a
+/// single `Issue` per duplicate group, so either side should work.
+///
+/// This asserts the finding fires first. Asserting only its absence would
+/// pass just as happily if the check stopped firing altogether, which is how
+/// this test's original version (pointed at the since-removed
+/// `Refactor.DuplicateBlock`) could have gone quietly vacuous.
+#[test]
+fn duplicate_block_suppressed_from_either_occurrence() {
+    let shared = "\
+export const aVal = 111;
+export const bVal = 222;
+export const cVal = 333;
+export const dVal = 444;
+export const eVal = 555;
+export const fVal = 666;
+";
+    let temp_dir = TempDir::new().expect("temp dir");
+    let path_a = temp_dir.path().join("a.ts");
+    let path_b = temp_dir.path().join("b.ts");
+    std::fs::write(&path_a, shared).expect("write a");
+    std::fs::write(&path_b, shared).expect("write b");
+
+    use cofferdam_checks::refactor::NearDuplicateBlock;
+    let fires = Engine::new(vec![Box::new(NearDuplicateBlock::default())])
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
+    assert!(
+        fires
+            .iter()
+            .any(|i| i.check_id == "Refactor.NearDuplicateBlock"),
+        "precondition: the duplicate pair must be reported before we assert \
+         a comment suppresses it. Got: {fires:?}"
+    );
+
+    // Same statement run, with an ignore comment directly above the first
+    // duplicated statement in the *related* file (suppression targets the
+    // next non-blank line after the directive).
+    let suppressed_b = format!("// cofferdam-ignore: Refactor.NearDuplicateBlock\n{shared}");
+    std::fs::write(&path_b, &suppressed_b).expect("write b");
+
+    let issues = Engine::new(vec![Box::new(NearDuplicateBlock::default())])
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
+    assert!(
+        issues
+            .iter()
+            .all(|i| i.check_id != "Refactor.NearDuplicateBlock"),
+        "an ignore comment at the related (non-primary) occurrence should \
+         suppress the whole finding. Got: {issues:?}"
+    );
+}

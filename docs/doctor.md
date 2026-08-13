@@ -137,7 +137,9 @@ Remediation for Warn: `re-run npm install @cofferdam/cofferdam` (for npm users).
 
 Looks for a `biome.json`/`biome.jsonc` or an eslint config (`eslint.config.{js,mjs,cjs,ts}`, `.eslintrc*`) in the current directory and confirms cofferdam will not double-report against it.
 
-This check used to warn, and name the built-ins that duplicated rules biome and eslint ship out of the box. It no longer can: cofferdam removed every one of those checks, so the catalogue is disjoint from a linter's by construction. Both tools run unmodified, and there is nothing to disable.
+This check used to warn, and name the built-ins that duplicated rules biome and eslint ship out of the box. It no longer can: CD-357 removed every one of those checks, so no built-in duplicates a style or formatting rule and both tools run unmodified.
+
+One genuine overlap survives, and the check names it rather than claiming there is none. `Refactor.LongAndComplex` covers the same ground as ESLint's `complexity` and `max-lines-per-function`, and Biome's `noExcessiveCognitiveComplexity` — but only if you have opted into those rules, which neither tool enables by default. If you have, disable one side or the other; cofferdam's version fires only when a function is long **and** complex, so it is the quieter of the two.
 
 `biome.json` takes precedence over an eslint config if both are present (most repos migrating to biome keep a stale `.eslintrc` around during the transition) — this only affects which tool the message names.
 

@@ -349,6 +349,13 @@ fn build_index_md(metas: &[&'static CheckMeta]) -> String {
     );
 
     for cat in Category::ALL {
+        // A category with no registered checks renders as a bare heading
+        // followed by nothing, which reads as a rendering bug rather than a
+        // deliberate state. CD-357 emptied Readability; skip rather than
+        // publish an empty section.
+        if !metas.iter().any(|m| m.category == cat) {
+            continue;
+        }
         let cat_name = category_pascal(cat);
         out.push('\n');
         out.push_str(&format!("## {}\n", cat_name));

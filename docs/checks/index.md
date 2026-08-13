@@ -35,9 +35,6 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.UnionExhaustivenessGap`](Design.UnionExhaustivenessGap.md) `file` `type-aware` — A switch over a discriminated union's tag doesn't handle every variant and has no default case — adding a new variant later can silently fall through unhandled.
 - [`Rust.MissingPubDoc`](Rust.MissingPubDoc.md) `file` — Public items in a library crate compose the published API surface. Document each `pub fn` / `pub struct` / `pub enum` / `pub trait` with a `///` doc comment so consumers can understand what to call.
 
-## Readability
-
-
 ## Refactor
 
 - [`Refactor.DeadExport`](Refactor.DeadExport.md) `graph` — Every importer of this export imports its local binding and never references it. The export is dead even though it appears used.

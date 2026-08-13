@@ -13,7 +13,7 @@ Four primary forms. All are single-line comments beginning with `// cofferdam-`.
 ### Next-line suppression (default)
 
 ```ts
-// cofferdam-ignore: Warning.NoEval: codegen bootstrap, not user input
+// cofferdam-ignore: Refactor.NearDuplicateBlock: codegen bootstrap, not user input
 eval(generatedCode);
 ```
 
@@ -83,11 +83,11 @@ For teams migrating from ESLint, cofferdam also accepts the following aliases. T
 The reason field is the text after the second `:` in a `cofferdam-ignore` directive:
 
 ```ts
-// cofferdam-ignore: Warning.NoEval: legacy codegen bootstrap, not user input
+// cofferdam-ignore: Refactor.NearDuplicateBlock: legacy codegen bootstrap, not user input
 eval(generatedCode);
 ```
 
-**When required:** by default the reason field is required for any check in the `Warning` category. Omitting it produces an info-level diagnostic: `"suppression of Warning.NoEval at line N: reason required"`. The finding is still suppressed.
+**When required:** by default the reason field is required for any check in the `Warning` category. Omitting it produces an info-level diagnostic: `"suppression of Refactor.NearDuplicateBlock at line N: reason required"`. The finding is still suppressed.
 
 **Per-check override:** a check can declare its own reason-field policy via `OptionSpec`. A check might relax the requirement (`reason = "optional"`) or tighten it (`reason = "required"` for non-Warning categories). See `cofferdam explain <CheckId> --robot` for the `reason_required` field when it lands.
 
@@ -104,7 +104,7 @@ someCallWeAreChoosingToIgnoreEntirely();
 
 ID-less suppression is accepted and does suppress all findings on the next line (or in the range, or in the file). The engine also emits an info-level `"broad suppression"` diagnostic at that location.
 
-The diagnostic exists because broad suppressions hide future findings. If a new check lands after the suppression was written, it will be silently hidden. ID-specific suppressions (`// cofferdam-ignore: Warning.NoEval`) are unaffected by new checks — they suppress only what they name. Broad suppressions grow in scope as the check catalog grows.
+The diagnostic exists because broad suppressions hide future findings. If a new check lands after the suppression was written, it will be silently hidden. ID-specific suppressions (`// cofferdam-ignore: Refactor.NearDuplicateBlock`) are unaffected by new checks — they suppress only what they name. Broad suppressions grow in scope as the check catalog grows.
 
 For the same reason, `cofferdam explain` will eventually surface "files with broad suppressions" as a metric, and a future "unused + broad suppression" lint check (separate bead) will help you clean them up.
 
@@ -129,7 +129,7 @@ Suppressed findings **do not count toward the `--fail-on` threshold**.
 The engine removes suppressed findings from the issue list before the severity gate is evaluated. This means:
 
 ```ts
-// cofferdam-ignore: Warning.NoEval: codegen bootstrap
+// cofferdam-ignore: Refactor.NearDuplicateBlock: codegen bootstrap
 eval(generatedCode);
 ```
 

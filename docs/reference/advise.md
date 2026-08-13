@@ -85,8 +85,8 @@ cofferdam advise --robot --pretty
 `advise` accepts the same set of discovery and config flags as `check`,
 plus the format pair shared with the rest of the CLI. They are listed in
 [the CLI reference](/reference/cli#cofferdam-advise), which is generated
-from the binary and so cannot drift. The two flags that change what the
-command *does* — `--diff` and `--analyze` — have their own sections below.
+from the binary and so cannot drift. The one flag that changes what the
+command *does* — `--diff` — has its own section below.
 
 ## Text output
 

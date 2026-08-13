@@ -62,7 +62,7 @@ The unscoped legacy name `cofferdam` (binary wrapper, owned by user `tajdickson`
 ## Phased build
 
 1. Rust engine + `Issue` + priority + report formatter + built-in checks across all 5 categories — **shipped**
-2. Two-pass consistency mode with `Consistency.QuoteStyle` as the canary — **shipped**
+2. Two-pass consistency mode — **shipped** (its canary, `Consistency.QuoteStyle`, was removed in CD-357; no built-in drives pass-2 today — CD-396)
 3. Baseline + severity-axis + `--since` — biggest adoption-unlock — **shipped**
 4. napi-rs FFI + JS plugin host, ship `@cofferdam/cofferdam`, `@cofferdam/check-sdk`, and `@cofferdam/recommended` — **in progress** (plugin host + both npm packages shipped; napi FFI and `@cofferdam/recommended` outstanding)
 5. `@cofferdam/types-aware` package with `ts-morph` checks — type-host infrastructure + first type-aware check shipped early (cd-9hp.2); standalone package outstanding

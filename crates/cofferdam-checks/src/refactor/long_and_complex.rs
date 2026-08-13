@@ -18,9 +18,9 @@ use oxc_ast_visit::Visit;
 /// complexity). The intersection is much narrower and almost always a
 /// real candidate.
 ///
-/// Length is measured the same way `Readability.MaxFunctionLength`
-/// measures it — body lines minus blanks and pure-comment lines.
-/// Cyclomatic count follows the same rules as `Refactor.CyclomaticComplexity`.
+/// Length is body lines minus blanks and pure-comment lines. Cyclomatic
+/// count is one plus each branch, loop, `case`, `catch` and short-circuit
+/// operator.
 pub struct LongAndComplex {
     length_limit: u32,
     cyclomatic_limit: u32,

@@ -13,7 +13,7 @@
 #      at target/release/cofferdam[.exe]
 #   3. npx cofferdam check examples/smoke_fixture.ts --format json
 #   4. assert exit code (0 or 1 — findings produce exit 1), JSON contains
-#      a Design.MaxParameters issue, and node_modules/@cofferdam/cofferdam/bin/<bin>
+#      a Design.ReadonlyArrayParam issue, and node_modules/@cofferdam/cofferdam/bin/<bin>
 #      exists.
 #
 # Local repro:
@@ -91,9 +91,10 @@ OUT=$(npx --no-install cofferdam check "$FIXTURE" --format json)
 EC=$?
 set -e
 
-# Findings present → exit 1 (default --fail-on=medium and Design.MaxParameters
-# clears the bar). 0 would mean no findings, which is itself a fail for this
-# fixture. >1 is a binary error.
+# Design.ReadonlyArrayParam is Low severity, below the default
+# --fail-on=medium bar, so a clean run here exits 0 with the finding still
+# reported in the JSON body (--fail-on only gates the exit code, not what's
+# listed). >1 is a binary error.
 if [[ "$EC" -ne 0 && "$EC" -ne 1 ]]; then
   echo "FAIL: unexpected exit code $EC from cofferdam check" >&2
   echo "--- stdout ---" >&2
@@ -121,13 +122,13 @@ node -e '
     console.error("FAIL: zero findings against examples/smoke_fixture.ts");
     process.exit(1);
   }
-  const maxParams = r.findings.find(f => f.id === "Design.MaxParameters");
-  if (!maxParams) {
+  const readonlyArrayParam = r.findings.find(f => f.id === "Design.ReadonlyArrayParam");
+  if (!readonlyArrayParam) {
     const ids = r.findings.map(f => f.id).join(", ");
-    console.error("FAIL: Design.MaxParameters not in findings (got: " + ids + ")");
+    console.error("FAIL: Design.ReadonlyArrayParam not in findings (got: " + ids + ")");
     process.exit(1);
   }
-  console.log("OK: Design.MaxParameters at " + (maxParams.file || "?") + ":" + (maxParams.line || "?"));
+  console.log("OK: Design.ReadonlyArrayParam at " + (readonlyArrayParam.file || "?") + ":" + (readonlyArrayParam.line || "?"));
 ' "$OUT"
 
 echo

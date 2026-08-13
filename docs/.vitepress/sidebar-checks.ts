@@ -13,8 +13,6 @@ export const checksItems = [
     items: [
       { text: 'BroadSuppression', link: '/checks/Consistency.BroadSuppression' },
       { text: 'ErrorHandlingIdiom', link: '/checks/Consistency.ErrorHandlingIdiom' },
-      { text: 'QuoteStyle', link: '/checks/Consistency.QuoteStyle' },
-      { text: 'SpellingDialect', link: '/checks/Consistency.SpellingDialect' },
       { text: 'UnusedSuppression', link: '/checks/Consistency.UnusedSuppression' },
     ],
   },
@@ -32,7 +30,6 @@ export const checksItems = [
       { text: 'ImportFanOutOutlier', link: '/checks/Design.ImportFanOutOutlier' },
       { text: 'InvariantViolation', link: '/checks/Design.InvariantViolation' },
       { text: 'LayerViolation', link: '/checks/Design.LayerViolation' },
-      { text: 'MaxParameters', link: '/checks/Design.MaxParameters' },
       { text: 'MissingTestFile', link: '/checks/Design.MissingTestFile' },
       { text: 'OrphanExport', link: '/checks/Design.OrphanExport' },
       { text: 'ReadonlyArrayParam', link: '/checks/Design.ReadonlyArrayParam' },

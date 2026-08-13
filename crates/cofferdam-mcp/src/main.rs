@@ -367,7 +367,7 @@ mod tests {
         assert!(findings["summary"]["total"].as_u64().unwrap() > 0);
         assert!(!findings["findings"].as_array().unwrap().is_empty());
         let first = &findings["findings"][0];
-        assert_eq!(first["id"], "Design.MaxParameters");
+        assert_eq!(first["id"], "Design.ReadonlyArrayParam");
         assert!(first["file"]
             .as_str()
             .unwrap()

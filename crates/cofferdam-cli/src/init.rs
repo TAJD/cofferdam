@@ -37,10 +37,6 @@ pub const STARTER_TOML: &str = "\
 # limit = 50
 # severity = \"low\"
 
-# [checks.\"Design.MaxParameters\"]
-# limit = 5
-# severity = \"medium\"
-
 # [checks.\"Design.DuplicateExportName\"]
 # severity = \"medium\"
 
@@ -49,9 +45,6 @@ pub const STARTER_TOML: &str = "\
 
 # [checks.\"Warning.TripleEquals\"]
 # severity = \"high\"
-
-# [checks.\"Consistency.QuoteStyle\"]
-# severity = \"low\"
 ";
 
 /// What `init` should do about a baseline. `Auto` triggers an

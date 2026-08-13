@@ -14,8 +14,6 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 - [`Consistency.BroadSuppression`](Consistency.BroadSuppression.md) `file` — Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to a scoped form so suppression intent is auditable: `// cofferdam-ignore: <CheckId>: <reason>` (colon-separator) or `// cofferdam-ignore <CheckId> — <reason>` (space-separator, em-dash or hyphen reason).
 - [`Consistency.ErrorHandlingIdiom`](Consistency.ErrorHandlingIdiom.md) `file` — The project predominantly uses one error-handling idiom (throwing, or returning an error-shaped value) — this file deviates from it, hurting consistency of error paths for callers.
-- [`Consistency.QuoteStyle`](Consistency.QuoteStyle.md) `file` — Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.
-- [`Consistency.SpellingDialect`](Consistency.SpellingDialect.md) `file` `advisable` — The project spells one way in most of its prose and another way here. Two spellings of the same word are not two conventions — they are one convention and some outliers.
 - [`Consistency.UnusedSuppression`](Consistency.UnusedSuppression.md) `file` — A `cofferdam-ignore` directive (next-line, range, or file-wide) targets a check ID that has no current finding in scope. The underlying issue was likely fixed or the code was deleted — the directive is now dead weight.
 
 ## Design
@@ -30,7 +28,6 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.ImportFanOutOutlier`](Design.ImportFanOutOutlier.md) `file` — A file's import fan-in or fan-out is a statistical outlier versus the rest of the project — a likely "god module" (doing too much) or over-centralized dependency (too many things depend on one module).
 - [`Design.InvariantViolation`](Design.InvariantViolation.md) `graph` `advisable` — An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.
 - [`Design.LayerViolation`](Design.LayerViolation.md) `graph` `advisable` — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
-- [`Design.MaxParameters`](Design.MaxParameters.md) `file` `advisable` — Functions with too many parameters are hard to call correctly. Pass an options object instead.
 - [`Design.MissingTestFile`](Design.MissingTestFile.md) `file` `advisable` — A file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.
 - [`Design.OrphanExport`](Design.OrphanExport.md) `graph` `advisable` — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
 - [`Design.ReadonlyArrayParam`](Design.ReadonlyArrayParam.md) `file` — A function parameter typed as a mutable array or object, but never mutated in the body, is a missed `readonly` guarantee — a type-checker-enforced promise to callers that's cheap to add and cheap for them to trust.

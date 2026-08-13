@@ -57,12 +57,9 @@ pub(crate) fn count_skippable_lines(views: &[LineView<'_>], lo: u32, hi: u32) ->
 /// `SourceFile.language`) ensures they only fire on `.rs` files.
 pub fn all_builtins() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = vec![
-        Box::new(consistency::QuoteStyle),
         Box::new(consistency::BroadSuppression),
         Box::new(consistency::UnusedSuppression),
         Box::new(consistency::ErrorHandlingIdiom),
-        Box::new(consistency::SpellingDialect),
-        Box::new(design::MaxParameters::new(5)),
         Box::new(design::BarrelReexportBloat),
         Box::new(design::DuplicateExportName),
         Box::new(design::DuplicateTypeShape),

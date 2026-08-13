@@ -51,9 +51,9 @@ export function e(items: number[]) { return items.length; }
 // Block with multiple check IDs
 // ============================================================
 
-/* cofferdam-disable Design.ReadonlyArrayParam, Design.MaxParameters */
+/* cofferdam-disable Design.ReadonlyArrayParam, Design.ClassAsDataBag */
 export function g(items: number[]) { return items.length; }
-// Both ReadonlyArrayParam and MaxParameters are suppressed on this line.
+// Both ReadonlyArrayParam and ClassAsDataBag are suppressed on this line.
 /* cofferdam-enable */
 
 // ============================================================
@@ -68,7 +68,7 @@ function testFunction(
   e: number,
   f: number
 ) {
-  // This function has more than 5 parameters (Design.MaxParameters would flag it).
+  // This function has more than 5 parameters.
   if (a == 0) {
     return b;
   }

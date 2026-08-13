@@ -101,7 +101,7 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
     // fixture pair and muddy the fresh/legacy counts being asserted.
     let checks: Vec<Box<dyn Check>> = vec![
         Box::new(cofferdam_checks::design::ReadonlyArrayParam),
-        Box::new(cofferdam_checks::design::MaxParameters::new(5)),
+        Box::new(cofferdam_checks::refactor::SideEffectInMapCallback),
         Box::new(cofferdam_checks::context::findings::Findings),
     ];
     let engine = Engine::new(checks);
@@ -109,8 +109,8 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
     // The diff only touched the `touched` function (lines 7-10); the
     // `Design.ReadonlyArrayParam` finding on line 1 (inside `legacy`) is
     // outside that range and so counts as legacy debt, while the
-    // `Design.MaxParameters` finding on line 8 (touched's 6-parameter
-    // signature) is fresh.
+    // `Refactor.SideEffectInMapCallback` finding on line 8 (touched's
+    // `.map()` callback mutating the outer `seen` array) is fresh.
     let cs = ChangeSet {
         files: [dirty.clone(), clean.clone()].into_iter().collect(),
         line_ranges: [(dirty.clone(), vec![LineRange { start: 8, end: 10 }])]
@@ -137,7 +137,7 @@ fn context_findings_provider_distinguishes_fresh_from_legacy() {
         .find(|i| i.title.contains("in changed lines"))
         .expect("fresh-findings item");
     assert!(
-        fresh.body.contains("Design.MaxParameters"),
+        fresh.body.contains("Refactor.SideEffectInMapCallback"),
         "{}",
         fresh.body
     );

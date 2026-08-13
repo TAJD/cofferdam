@@ -5,6 +5,6 @@ export function legacy(obj: { b: number } | null, items: number[]) {
   return items.length;
 }
 
-export function touched(a: number, b: number, c: number, d: number, e: number, f: number) {
-  return a + b + c + d + e + f;
+export function touched(a: number, b: number) {
+  const seen: number[] = []; return [a, b].map((x) => { seen.push(x); return x; })[0];
 }

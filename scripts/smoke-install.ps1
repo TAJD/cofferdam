@@ -105,14 +105,14 @@ try {
         exit 1
       }
 
-      $maxParams = $report.findings | Where-Object { $_.id -eq "Design.MaxParameters" } | Select-Object -First 1
-      if (-not $maxParams) {
+      $readonlyArrayParam = $report.findings | Where-Object { $_.id -eq "Design.ReadonlyArrayParam" } | Select-Object -First 1
+      if (-not $readonlyArrayParam) {
         $ids = ($report.findings | ForEach-Object { $_.id }) -join ", "
-        Write-Error "FAIL: Design.MaxParameters not in findings (got: $ids)"
+        Write-Error "FAIL: Design.ReadonlyArrayParam not in findings (got: $ids)"
         exit 1
       }
-      $loc = "$($maxParams.file):$($maxParams.line)"
-      Write-Host "OK: Design.MaxParameters at $loc"
+      $loc = "$($readonlyArrayParam.file):$($readonlyArrayParam.line)"
+      Write-Host "OK: Design.ReadonlyArrayParam at $loc"
 
       Write-Host ""
       Write-Host "[OK] smoke install passed (binary=$Binary)"

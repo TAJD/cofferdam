@@ -13,10 +13,17 @@ use cofferdam_core::{Issue, Severity};
 use cofferdam_engine::{config, Engine};
 use tempfile::TempDir;
 
-/// A 6-parameter function — over the default `Design.MaxParameters`
-/// limit of 5, under a relaxed limit like 10.
+/// A function with ~90 non-blank body lines and cyclomatic complexity
+/// ~91 — over the default `Refactor.LongAndComplex` length limit of 75
+/// (and its cyclomatic limit of 15, which stays untouched by every test
+/// below so length is always the binding constraint).
 fn long_function() -> String {
-    "export function big(a, b, c, d, e, f) {\n  return a + b + c + d + e + f;\n}\n".to_string()
+    let mut body = String::from("export function big(x: number) {\n  let total = 0;\n");
+    for i in 0..90 {
+        body.push_str(&format!("  if (x === {i}) {{ total += {i}; }}\n"));
+    }
+    body.push_str("  return total;\n}\n");
+    body
 }
 
 /// Write `cofferdam.toml` + the given `(relative_path, contents)` files
@@ -55,8 +62,8 @@ fn relaxed_limit_only_affects_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Design.MaxParameters"]
-limit = 10
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 110
 "#;
     let (issues, paths) = analyze_project(
         toml,
@@ -69,12 +76,12 @@ limit = 10
     let regular_file = &paths[1];
 
     assert!(
-        !fired_on(&issues, "Design.MaxParameters", test_file),
-        "relaxed limit (10) should silence the test file's 6-param function"
+        !fired_on(&issues, "Refactor.LongAndComplex", test_file),
+        "relaxed limit (110) should silence the test file's ~90-line function"
     );
     assert!(
-        fired_on(&issues, "Design.MaxParameters", regular_file),
-        "the non-matching regular file keeps the default limit (5) and still fires"
+        fired_on(&issues, "Refactor.LongAndComplex", regular_file),
+        "the non-matching regular file keeps the default limit (75) and still fires"
     );
 }
 
@@ -85,7 +92,7 @@ fn disabled_skips_only_that_check_on_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.ts"]
-[overrides.checks."Design.MaxParameters"]
+[overrides.checks."Refactor.LongAndComplex"]
 disabled = true
 "#;
     let mut body = long_function();
@@ -95,8 +102,8 @@ disabled = true
     let test_file = &paths[0];
 
     assert!(
-        !fired_on(&issues, "Design.MaxParameters", test_file),
-        "disabled override must skip MaxParameters on the test file"
+        !fired_on(&issues, "Refactor.LongAndComplex", test_file),
+        "disabled override must skip LongAndComplex on the test file"
     );
     assert!(
         fired_on(&issues, "Design.ReadonlyArrayParam", test_file),
@@ -145,21 +152,21 @@ fn last_matching_block_wins() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Design.MaxParameters"]
-limit = 10
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 110
 
 [[overrides]]
 paths = ["src/**"]
-[overrides.checks."Design.MaxParameters"]
-limit = 3
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 50
 "#;
     let (issues, paths) = analyze_project(toml, &[("src/Lobby.test.tsx", long_function())]);
     let test_file = &paths[0];
 
-    // The second block (limit 3) wins → the 6-param function fires again.
+    // The second block (length_limit 50) wins → the ~90-line function fires again.
     assert!(
-        fired_on(&issues, "Design.MaxParameters", test_file),
-        "last matching block (limit 3) should win over the earlier limit 10"
+        fired_on(&issues, "Refactor.LongAndComplex", test_file),
+        "last matching block (length_limit 50) should win over the earlier length_limit 110"
     );
 }
 
@@ -194,7 +201,7 @@ fn no_overrides_is_unaffected() {
     // Sanity: a config with no [[overrides]] behaves exactly as before.
     let (issues, paths) = analyze_project("", &[("src/Lobby.tsx", long_function())]);
     assert!(
-        fired_on(&issues, "Design.MaxParameters", &paths[0]),
+        fired_on(&issues, "Refactor.LongAndComplex", &paths[0]),
         "without overrides, the default limit applies"
     );
 }

@@ -13,8 +13,8 @@
 //! [checks."Readability.MaxFunctionLength"]
 //! limit = 50
 //!
-//! [checks."Design.MaxParameters"]
-//! limit = 5
+//! [checks."Design.ReadonlyArrayParam"]
+//! severity = "medium"
 //! ```
 //!
 //! ## Discovery

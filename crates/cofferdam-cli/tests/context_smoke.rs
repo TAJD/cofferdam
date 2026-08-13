@@ -247,8 +247,13 @@ fn check_output_is_byte_for_byte_unaffected_by_context_providers() {
     let tmp = TempDir::new().expect("temp dir");
     let dir = tmp.path();
     init_repo(dir);
-    // `==` trips `Warning.TripleEquals`, a real builtin finding.
-    std::fs::write(dir.join("a.ts"), "export function f(x: number) {\n  if (x == 1) {\n    return true;\n  }\n  return false;\n}\n").expect("write");
+    // An export with no importer and no matching test file trips
+    // `Design.OrphanExport`, a real builtin finding.
+    std::fs::write(
+        dir.join("a.ts"),
+        "export function f(x: number) {\n  let y = x;\n  return y;\n}\n",
+    )
+    .expect("write");
     commit_all(dir, "init");
 
     let run = || {
@@ -266,7 +271,7 @@ fn check_output_is_byte_for_byte_unaffected_by_context_providers() {
         "cofferdam check output must be deterministic across repeated runs"
     );
     assert!(
-        first.contains("Warning.TripleEquals"),
+        first.contains("Design.OrphanExport"),
         "expected fixture to trip a real builtin finding; got: {first}"
     );
     assert!(

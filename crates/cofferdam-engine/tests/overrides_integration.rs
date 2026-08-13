@@ -13,15 +13,17 @@ use cofferdam_core::{Issue, Severity};
 use cofferdam_engine::{config, Engine};
 use tempfile::TempDir;
 
-/// 60-statement function body — well over the default
-/// `Readability.MaxFunctionLength` limit of 50, under a relaxed 400.
+/// A function with ~90 non-blank body lines and cyclomatic complexity
+/// ~91 — over the default `Refactor.LongAndComplex` length limit of 75
+/// (and its cyclomatic limit of 15, which stays untouched by every test
+/// below so length is always the binding constraint).
 fn long_function() -> String {
-    let mut s = String::from("export function big() {\n");
-    for i in 0..60 {
-        s.push_str(&format!("  const v{i} = {i};\n"));
+    let mut body = String::from("export function big(x: number) {\n  let total = 0;\n");
+    for i in 0..90 {
+        body.push_str(&format!("  if (x === {i}) {{ total += {i}; }}\n"));
     }
-    s.push_str("  return v0;\n}\n");
-    s
+    body.push_str("  return total;\n}\n");
+    body
 }
 
 /// Write `cofferdam.toml` + the given `(relative_path, contents)` files
@@ -60,8 +62,8 @@ fn relaxed_limit_only_affects_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 400
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 110
 "#;
     let (issues, paths) = analyze_project(
         toml,
@@ -74,12 +76,12 @@ limit = 400
     let regular_file = &paths[1];
 
     assert!(
-        !fired_on(&issues, "Readability.MaxFunctionLength", test_file),
-        "relaxed limit (400) should silence the test file's long function"
+        !fired_on(&issues, "Refactor.LongAndComplex", test_file),
+        "relaxed limit (110) should silence the test file's ~90-line function"
     );
     assert!(
-        fired_on(&issues, "Readability.MaxFunctionLength", regular_file),
-        "the non-matching regular file keeps the default limit (50) and still fires"
+        fired_on(&issues, "Refactor.LongAndComplex", regular_file),
+        "the non-matching regular file keeps the default limit (75) and still fires"
     );
 }
 
@@ -90,21 +92,21 @@ fn disabled_skips_only_that_check_on_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.ts"]
-[overrides.checks."Readability.MaxFunctionLength"]
+[overrides.checks."Refactor.LongAndComplex"]
 disabled = true
 "#;
     let mut body = long_function();
-    body.push_str("const wrong = (1 == 2);\n"); // Warning.TripleEquals bait
+    body.push_str("export function g(items: number[]) {\n  return items.length;\n}\n"); // Design.ReadonlyArrayParam bait
 
     let (issues, paths) = analyze_project(toml, &[("src/thing.test.ts", body)]);
     let test_file = &paths[0];
 
     assert!(
-        !fired_on(&issues, "Readability.MaxFunctionLength", test_file),
-        "disabled override must skip MaxFunctionLength on the test file"
+        !fired_on(&issues, "Refactor.LongAndComplex", test_file),
+        "disabled override must skip LongAndComplex on the test file"
     );
     assert!(
-        fired_on(&issues, "Warning.TripleEquals", test_file),
+        fired_on(&issues, "Design.ReadonlyArrayParam", test_file),
         "other checks must still run on the test file"
     );
 }
@@ -114,10 +116,10 @@ fn severity_override_applies_only_to_matching_files() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.ts"]
-[overrides.checks."Warning.TripleEquals"]
+[overrides.checks."Design.ReadonlyArrayParam"]
 severity = "info"
 "#;
-    let body = "export const a = (1 == 2);\n".to_string();
+    let body = "export function f(items: number[]) {\n  return items.length;\n}\n".to_string();
     let (issues, paths) =
         analyze_project(toml, &[("src/a.test.ts", body.clone()), ("src/a.ts", body)]);
     let test_file = &paths[0];
@@ -125,11 +127,11 @@ severity = "info"
 
     let test_sev = issues
         .iter()
-        .find(|i| i.check_id == "Warning.TripleEquals" && i.file == *test_file)
+        .find(|i| i.check_id == "Design.ReadonlyArrayParam" && i.file == *test_file)
         .map(|i| i.severity);
     let regular_sev = issues
         .iter()
-        .find(|i| i.check_id == "Warning.TripleEquals" && i.file == *regular_file)
+        .find(|i| i.check_id == "Design.ReadonlyArrayParam" && i.file == *regular_file)
         .map(|i| i.severity);
 
     assert_eq!(
@@ -150,21 +152,21 @@ fn last_matching_block_wins() {
     let toml = r#"
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 400
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 110
 
 [[overrides]]
 paths = ["src/**"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 10
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 50
 "#;
     let (issues, paths) = analyze_project(toml, &[("src/Lobby.test.tsx", long_function())]);
     let test_file = &paths[0];
 
-    // The second block (limit 10) wins → the 60-line function fires again.
+    // The second block (length_limit 50) wins → the ~90-line function fires again.
     assert!(
-        fired_on(&issues, "Readability.MaxFunctionLength", test_file),
-        "last matching block (limit 10) should win over the earlier limit 400"
+        fired_on(&issues, "Refactor.LongAndComplex", test_file),
+        "last matching block (length_limit 50) should win over the earlier length_limit 110"
     );
 }
 
@@ -199,7 +201,7 @@ fn no_overrides_is_unaffected() {
     // Sanity: a config with no [[overrides]] behaves exactly as before.
     let (issues, paths) = analyze_project("", &[("src/Lobby.tsx", long_function())]);
     assert!(
-        fired_on(&issues, "Readability.MaxFunctionLength", &paths[0]),
+        fired_on(&issues, "Refactor.LongAndComplex", &paths[0]),
         "without overrides, the default limit applies"
     );
 }

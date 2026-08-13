@@ -7,7 +7,7 @@
 
 A `[checks."X"]` block, by contrast, configures a check **globally**. Overrides fill the gap: relax or retune one check for a path pattern without silencing it everywhere or annotating every file.
 
-The canonical motivating case: test files (`**/*.test.ts(x)`) legitimately have long `describe`/`it` callbacks, so `Readability.MaxFunctionLength` flags them as noise — but you still want layer rules, unused-import detection, and everything else running on those files.
+The canonical motivating case: test files (`**/*.test.ts(x)`) legitimately have long, branchy `describe`/`it` callbacks, so `Refactor.LongAndComplex` flags them as noise — but you still want layer rules, unused-import detection, and everything else running on those files.
 
 ---
 
@@ -17,15 +17,15 @@ Each `[[overrides]]` block has a `paths` array of globs and a `[overrides.checks
 
 ```toml
 # Global defaults still apply everywhere unless an override changes them.
-[checks."Readability.MaxFunctionLength"]
-limit = 50
+[checks."Refactor.LongAndComplex"]
+length_limit = 75
 
 [[overrides]]
 paths = ["**/*.test.ts", "**/*.test.tsx"]
 
-# Relax the function-length limit for test files...
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 400
+# Relax the length limit for test files...
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 400
 
 # ...and turn off orphan-export detection on them entirely.
 [overrides.checks."Design.OrphanExport"]
@@ -33,7 +33,7 @@ disabled = true
 
 [[overrides]]
 paths = ["src/legacy/**"]
-[overrides.checks."Refactor.CyclomaticComplexity"]
+[overrides.checks."Refactor.NearDuplicateBlock"]
 severity = "info"
 ```
 
@@ -68,16 +68,16 @@ Overrides cascade. The global `[checks."X"]` value (or the check's built-in defa
 ```toml
 [[overrides]]
 paths = ["src/**"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 200
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 200
 
 [[overrides]]
 paths = ["**/*.test.tsx"]
-[overrides.checks."Readability.MaxFunctionLength"]
-limit = 400
+[overrides.checks."Refactor.LongAndComplex"]
+length_limit = 400
 ```
 
-A file at `src/Lobby.test.tsx` matches both blocks; the second is declared later, so its `limit = 400` wins. Reorder the blocks to flip the precedence.
+A file at `src/Lobby.test.tsx` matches both blocks; the second is declared later, so its `length_limit = 400` wins. Reorder the blocks to flip the precedence.
 
 This is the same mental model as ESLint's `overrides` array or cascading `.gitignore` rules: order is meaningful, later entries refine earlier ones.
 

@@ -30,13 +30,9 @@ oxc_semantic = "0.128.0"
 oxc_span = { workspace = true }
 oxc_syntax = "0.128"
 # unicode-ident already lives in the dep tree via oxc transitively;
-# pull it in directly so DuplicateBlock's tokeniser can recognise
+# pull it in directly so NearDuplicateBlock's tokeniser can recognise
 # Unicode identifiers (TS allows `λ`, `α`, Han characters, etc.).
 unicode-ident = "1"
-# unicode-width is already in the tree via oxc-miette → textwrap; pull it
-# in directly so MaxLineLength measures display columns, not UTF-8 bytes
-# (cd-c8aq). Same version, so no extra compilation.
-unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -19,9 +19,8 @@
 //!   padding — only changes when the offending tokens themselves change.
 //!
 //! - **Per-check override (cd-9, "rulesig"): function-scoped checks hash
-//!   the enclosing function's header, not its body.** `Readability.MaxFunctionLength`,
-//!   `Refactor.CyclomaticComplexity`, and `Refactor.CognitiveComplexity` all
-//!   flag a whole function/method — hashing the full span text meant ANY
+//!   the enclosing function's header, not its body.** `Refactor.LongAndComplex`
+//!   flags a whole function/method — hashing the full span text meant ANY
 //!   edit inside a large flagged function (even one that doesn't change its
 //!   size/complexity classification) drifted the signature and forced a
 //!   spurious re-baseline. See [`FUNCTION_SCOPED_SIGNATURE_CHECK_IDS`] and
@@ -199,15 +198,11 @@ pub fn signature_for_span(file_text: &str, location: &cofferdam_core::Location) 
 /// finding". For these, [`signature_for_issue`] hashes the function's
 /// header (name + parameter list) instead of the full span text, so an
 /// edit anywhere in the body that doesn't change the reported
-/// classification (line count, cyclomatic/cognitive complexity) doesn't
-/// drift the baseline signature. Every other check keeps hashing the
-/// full span text via [`signature_for_span`] — that's still correct
-/// there because the span IS the offending content.
-pub const FUNCTION_SCOPED_SIGNATURE_CHECK_IDS: &[&str] = &[
-    "Readability.MaxFunctionLength",
-    "Refactor.CyclomaticComplexity",
-    "Refactor.CognitiveComplexity",
-];
+/// classification (line count, cyclomatic complexity) doesn't drift the
+/// baseline signature. Every other check keeps hashing the full span
+/// text via [`signature_for_span`] — that's still correct there because
+/// the span IS the offending content.
+pub const FUNCTION_SCOPED_SIGNATURE_CHECK_IDS: &[&str] = &["Refactor.LongAndComplex"];
 
 /// Compute the canonical signature for one issue, dispatching to the
 /// function-header strategy for [`FUNCTION_SCOPED_SIGNATURE_CHECK_IDS`]
@@ -624,11 +619,11 @@ mod tests {
         let renamed = "function bar(a, b) {\n  return a + b;\n}";
         let sig_original = signature_for_issue(
             original,
-            &whole_file_issue("Refactor.CyclomaticComplexity", original),
+            &whole_file_issue("Refactor.LongAndComplex", original),
         );
         let sig_renamed = signature_for_issue(
             renamed,
-            &whole_file_issue("Refactor.CyclomaticComplexity", renamed),
+            &whole_file_issue("Refactor.LongAndComplex", renamed),
         );
         assert_ne!(
             sig_original, sig_renamed,

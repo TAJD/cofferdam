@@ -1,9 +1,9 @@
 //! Source-file representation passed to checks.
 //!
 //! Phase 0 holds raw text plus a path. Once oxc lands (phase 1+), this struct
-//! grows an AST handle and a token map. Checks that only need lines (e.g.
-//! `Readability.MaxLineLength`) operate on `text` directly without paying the
-//! parse cost — the engine decides per-check whether to parse.
+//! grows an AST handle and a token map. Checks that only need lines operate
+//! on `text` directly without paying the parse cost — the engine decides
+//! per-check whether to parse.
 
 use std::path::{Path, PathBuf};
 
@@ -28,10 +28,10 @@ pub enum Language {
     /// Markdown / MDX — not parsed as a whole file (CD-68). Text-corpus
     /// content (blog posts, docs) reaches plugin checks as raw
     /// `file.text` + `LineView`s with no AST (`ast: null` on the wire);
-    /// `Consistency.SpellingDialect` is the one built-in that declares
-    /// it, reading the document as prose (CD-316). Discovery only walks
-    /// `.md`/`.mdx` files when a project opts in via `cofferdam.toml`
-    /// `[engine] extra_extensions`.
+    /// no built-in check declares this language today (CD-357 removed the
+    /// last one, `Consistency.SpellingDialect`) — plugin checks can still
+    /// opt in. Discovery only walks `.md`/`.mdx` files when a project opts
+    /// in via `cofferdam.toml` `[engine] extra_extensions`.
     Markdown,
 }
 
@@ -84,8 +84,8 @@ impl SourceFile {
     /// Iterate lines with their 1-based line number.
     ///
     /// Uses byte length per line; once we have a real AST we'll switch to
-    /// grapheme- or column-aware widths for `MaxLineLength` to handle tabs and
-    /// wide chars correctly.
+    /// grapheme- or column-aware widths for line-length checks to handle tabs
+    /// and wide chars correctly.
     pub fn lines(&self) -> impl Iterator<Item = (u32, &str)> {
         self.text
             .split('\n')

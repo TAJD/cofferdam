@@ -8,12 +8,12 @@
 //
 //   1. ENABLED: `cofferdam check` with type-aware checks on resolves real
 //      TypeScript types through the live Node worker and flags every
-//      redundant null guard in the fixture — including a CROSS-FILE case
-//      whose operand type comes from an imported interface, which only
-//      fires if project-wide resolution works.
+//      non-exhaustive switch in the fixture — including a CROSS-FILE case
+//      whose discriminant's literal-union type comes from an imported
+//      type alias, which only fires if project-wide resolution works.
 //   2. OPT-OUT: the same run with `[engine] type_aware = false` produces
-//      ZERO Warning.UnusedNullCheck findings — the escape hatch for CI
-//      machines without a Node runtime.
+//      ZERO Design.UnionExhaustivenessGap findings — the escape hatch for
+//      CI machines without a Node runtime.
 //   3. COLD-START: `cofferdam type-host --ping` reports a project-init
 //      time below a generous ceiling, pinning the worker against a
 //      catastrophic startup regression (the number is logged either way).
@@ -42,8 +42,8 @@ const COFFERDAM_BIN = process.env.COFFERDAM_BIN ?? join(
 // a cold CI runner is slower but nowhere near this. The point is catching
 // a 10x regression or a hang, not micro-benchmarking — so no flakes.
 const PROJECT_INIT_CEILING_MS = 60_000;
-const CHECK_ID = "Warning.UnusedNullCheck";
-const EXPECTED_FLAGGED = 4; // 3 single-file + 1 cross-file (Widget.id)
+const CHECK_ID = "Design.UnionExhaustivenessGap";
+const EXPECTED_FLAGGED = 3; // 2 single-file + 1 cross-file (Widget.status)
 
 if (!existsSync(COFFERDAM_BIN)) {
   console.error(`cofferdam binary not found at ${COFFERDAM_BIN}.`);

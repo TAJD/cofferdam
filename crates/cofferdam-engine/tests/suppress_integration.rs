@@ -11,19 +11,19 @@ fn suppress_next_line_all_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "// cofferdam-disable-next-line\nif (a == b) { }";
+    let code = "// cofferdam-disable-next-line\nexport function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Should have no triple-equals issue on line 2 due to suppression
-    let triple_equals_on_line_2: Vec<_> = issues
+    // Should have no ReadonlyArrayParam issue on line 2 due to suppression
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
     assert!(
-        triple_equals_on_line_2.is_empty(),
-        "expected no TripleEquals on line 2 (should be suppressed)"
+        readonly_array_param_on_line_2.is_empty(),
+        "expected no ReadonlyArrayParam on line 2 (should be suppressed)"
     );
 }
 
@@ -33,17 +33,17 @@ fn suppress_next_line_specific_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "// cofferdam-disable-next-line Warning.TripleEquals\nif (a == b) { }";
+    let code = "// cofferdam-disable-next-line Design.ReadonlyArrayParam\nexport function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Should have no TripleEquals on line 2
-    let triple_equals_on_line_2: Vec<_> = issues
+    // Should have no ReadonlyArrayParam on line 2
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
-    assert!(triple_equals_on_line_2.is_empty());
+    assert!(readonly_array_param_on_line_2.is_empty());
 }
 
 #[test]
@@ -52,20 +52,20 @@ fn suppress_next_line_skips_blanks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "// cofferdam-disable-next-line\n\nif (a == b) { }";
+    let code = "// cofferdam-disable-next-line\n\nexport function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
     // Blank line 2 should not suppress anything
     // Line 3 (first non-blank) should be suppressed
-    let triple_equals_on_line_3: Vec<_> = issues
+    let readonly_array_param_on_line_3: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 3)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 3)
         .collect();
     assert!(
-        triple_equals_on_line_3.is_empty(),
-        "expected no TripleEquals on line 3 (suppressed by line 1 directive)"
+        readonly_array_param_on_line_3.is_empty(),
+        "expected no ReadonlyArrayParam on line 3 (suppressed by line 1 directive)"
     );
 }
 
@@ -75,29 +75,29 @@ fn suppress_block_all_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "/* cofferdam-disable */\nif (a == b) { }\n/* cofferdam-enable */\nif (x == y) { }";
+    let code = "/* cofferdam-disable */\nexport function a(items: number[]) { return items.length; }\n/* cofferdam-enable */\nexport function b(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
     // Line 2 should be suppressed
-    let triple_equals_on_line_2: Vec<_> = issues
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
     assert!(
-        triple_equals_on_line_2.is_empty(),
-        "expected no TripleEquals on line 2 (inside disable block)"
+        readonly_array_param_on_line_2.is_empty(),
+        "expected no ReadonlyArrayParam on line 2 (inside disable block)"
     );
 
     // Line 4 should NOT be suppressed
-    let triple_equals_on_line_4: Vec<_> = issues
+    let readonly_array_param_on_line_4: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 4)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 4)
         .collect();
     assert!(
-        !triple_equals_on_line_4.is_empty(),
-        "expected TripleEquals on line 4 (outside disable block)"
+        !readonly_array_param_on_line_4.is_empty(),
+        "expected ReadonlyArrayParam on line 4 (outside disable block)"
     );
 }
 
@@ -107,20 +107,19 @@ fn suppress_block_specific_checks() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code =
-        "/* cofferdam-disable Warning.TripleEquals */\nif (a == b) { }\n/* cofferdam-enable */";
+    let code = "/* cofferdam-disable Design.ReadonlyArrayParam */\nexport function a(items: number[]) { return items.length; }\n/* cofferdam-enable */";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Line 2 should suppress TripleEquals but not other checks
-    let triple_equals_on_line_2: Vec<_> = issues
+    // Line 2 should suppress ReadonlyArrayParam but not other checks
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
     assert!(
-        triple_equals_on_line_2.is_empty(),
-        "expected no TripleEquals on line 2"
+        readonly_array_param_on_line_2.is_empty(),
+        "expected no ReadonlyArrayParam on line 2"
     );
 }
 
@@ -130,26 +129,26 @@ fn suppress_block_no_matching_enable() {
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "/* cofferdam-disable Warning.TripleEquals */\nif (a == b) { }\nif (x == y) { }";
+    let code = "/* cofferdam-disable Design.ReadonlyArrayParam */\nexport function a(items: number[]) { return items.length; }\nexport function b(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
     // Both lines 2 and 3 should be suppressed (extends to EOF)
-    let triple_equals_on_line_2: Vec<_> = issues
+    let readonly_array_param_on_line_2: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 2)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 2)
         .collect();
-    let triple_equals_on_line_3: Vec<_> = issues
+    let readonly_array_param_on_line_3: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals" && i.location.line() == 3)
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam" && i.location.line() == 3)
         .collect();
     assert!(
-        triple_equals_on_line_2.is_empty(),
+        readonly_array_param_on_line_2.is_empty(),
         "line 2 should be suppressed"
     );
     assert!(
-        triple_equals_on_line_3.is_empty(),
+        readonly_array_param_on_line_3.is_empty(),
         "line 3 should be suppressed (block extends to EOF)"
     );
 }
@@ -169,24 +168,24 @@ fn suppress_directive_at_eof() {
 }
 
 #[test]
-fn without_suppression_triple_equals_fires() {
+fn without_suppression_readonly_array_param_fires() {
     let engine = Engine::new(all_builtins());
     let temp_dir = TempDir::new().expect("temp dir");
     let file_path = temp_dir.path().join("test.ts");
 
-    let code = "if (a == b) { }";
+    let code = "export function f(items: number[]) { return items.length; }";
     std::fs::write(&file_path, code).expect("write file");
 
     let issues = engine.analyze(&[&file_path]).expect("analyze");
 
-    // Should have a TripleEquals issue on line 1
-    let triple_equals: Vec<_> = issues
+    // Should have a ReadonlyArrayParam issue on line 1
+    let readonly_array_param: Vec<_> = issues
         .iter()
-        .filter(|i| i.check_id == "Warning.TripleEquals")
+        .filter(|i| i.check_id == "Design.ReadonlyArrayParam")
         .collect();
     assert!(
-        !triple_equals.is_empty(),
-        "expected at least one TripleEquals issue without suppression"
+        !readonly_array_param.is_empty(),
+        "expected at least one ReadonlyArrayParam issue without suppression"
     );
 }
 
@@ -194,84 +193,9 @@ fn without_suppression_triple_equals_fires() {
 // cd-wqc regression: finalize-only emitters + UnusedSuppression
 // ============================================================
 
-/// A `cofferdam-ignore-file: Warning.UnusedImport` directive over a barrel
-/// that genuinely re-exports an unconsumed symbol must NOT produce
-/// `Consistency.UnusedSuppression`.  Before the two-phase finalize fix, the
-/// snapshot was taken before `Warning.UnusedImport::finalize` ran, so the
-/// directive appeared stale even though it was actively suppressing 1 finding.
-#[test]
-fn unused_import_suppress_file_directive_not_flagged_as_stale() {
-    let engine = Engine::new(all_builtins());
-    let temp_dir = TempDir::new().expect("temp dir");
-
-    // foo.ts — declares Foo; this is NOT a re-export, so UnusedImport won't
-    // flag foo.ts itself.
-    let foo_path = temp_dir.path().join("foo.ts");
-    std::fs::write(&foo_path, "export class Foo {}").expect("write foo.ts");
-
-    // index.ts — re-exports Foo from foo.ts, but nobody imports Foo from
-    // index.ts anywhere. The file-wide suppress directive covers the
-    // Warning.UnusedImport finding that finalize() would emit.
-    let index_path = temp_dir.path().join("index.ts");
-    std::fs::write(
-        &index_path,
-        "// cofferdam-ignore-file: Warning.UnusedImport\nexport { Foo } from './foo';\n",
-    )
-    .expect("write index.ts");
-
-    let issues = engine.analyze(&[&foo_path, &index_path]).expect("analyze");
-
-    // The directive is load-bearing — must produce neither UnusedSuppression
-    // nor UnusedImport.
-    let unused_suppression: Vec<_> = issues
-        .iter()
-        .filter(|i| i.check_id == "Consistency.UnusedSuppression")
-        .collect();
-    assert!(
-        unused_suppression.is_empty(),
-        "cd-wqc regression: live Warning.UnusedImport suppress directive falsely flagged as stale: {unused_suppression:#?}"
-    );
-
-    let unused_import: Vec<_> = issues
-        .iter()
-        .filter(|i| i.check_id == "Warning.UnusedImport")
-        .collect();
-    assert!(
-        unused_import.is_empty(),
-        "suppress directive should have suppressed Warning.UnusedImport: {unused_import:#?}"
-    );
-}
-
-/// Without the suppress directive the Warning.UnusedImport finding fires.
-/// This guards the fixture is actually exercising the check.
-#[test]
-fn unused_import_fires_without_suppress_directive() {
-    let engine = Engine::new(all_builtins());
-    let temp_dir = TempDir::new().expect("temp dir");
-
-    let foo_path = temp_dir.path().join("foo.ts");
-    std::fs::write(&foo_path, "export class Foo {}").expect("write foo.ts");
-
-    // No suppress directive.
-    let index_path = temp_dir.path().join("index.ts");
-    std::fs::write(&index_path, "export { Foo } from './foo';\n").expect("write index.ts");
-
-    let issues = engine.analyze(&[&foo_path, &index_path]).expect("analyze");
-
-    let unused_import: Vec<_> = issues
-        .iter()
-        .filter(|i| i.check_id == "Warning.UnusedImport")
-        .collect();
-    assert!(
-        !unused_import.is_empty(),
-        "expected Warning.UnusedImport without suppress directive"
-    );
-}
-
-/// Same shape as the UnusedImport test but for `Design.OrphanExport` —
-/// another finalize-only emitter. A `cofferdam-ignore-file: Design.OrphanExport`
-/// directive over a file with a genuinely orphaned export must NOT produce
-/// `Consistency.UnusedSuppression`.
+/// `Design.OrphanExport` is a finalize-only emitter. A
+/// `cofferdam-ignore-file: Design.OrphanExport` directive over a file with
+/// a genuinely orphaned export must NOT produce `Consistency.UnusedSuppression`.
 #[test]
 fn orphan_export_suppress_file_directive_not_flagged_as_stale() {
     let engine = Engine::new(all_builtins());
@@ -308,7 +232,7 @@ fn orphan_export_suppress_file_directive_not_flagged_as_stale() {
 }
 
 /// When there is NO actual UnusedImport finding — because the re-exported
-/// symbol IS consumed — a `cofferdam-ignore-file: Warning.UnusedImport`
+/// export IS consumed — a `cofferdam-ignore-file: Design.OrphanExport`
 /// directive SHOULD be flagged as stale.  Confirms the fix doesn't break
 /// the genuine stale case for finalize-only checks.
 #[test]
@@ -316,29 +240,26 @@ fn suppress_directive_stale_when_finalize_only_check_has_no_finding() {
     let engine = Engine::new(all_builtins());
     let temp_dir = TempDir::new().expect("temp dir");
 
-    // foo.ts — declares Foo.
+    // foo.ts — declares Foo, with a directive claiming to suppress
+    // Design.OrphanExport.
     let foo_path = temp_dir.path().join("foo.ts");
-    std::fs::write(&foo_path, "export class Foo {}").expect("write foo.ts");
-
-    // index.ts — re-exports Foo; has a suppress directive.
-    let index_path = temp_dir.path().join("index.ts");
     std::fs::write(
-        &index_path,
-        "// cofferdam-ignore-file: Warning.UnusedImport\nexport { Foo } from './foo';\n",
+        &foo_path,
+        "// cofferdam-ignore-file: Design.OrphanExport\nexport class Foo {}\n",
     )
-    .expect("write index.ts");
+    .expect("write foo.ts");
 
-    // consumer.ts — imports Foo from index.ts, so the re-export IS consumed
-    // and Warning.UnusedImport will not fire.
+    // consumer.ts — imports Foo from foo.ts, so the export IS consumed
+    // and Design.OrphanExport will not fire.
     let consumer_path = temp_dir.path().join("consumer.ts");
     std::fs::write(
         &consumer_path,
-        "import { Foo } from './index';\nconst _f: Foo = new Foo();\n",
+        "import { Foo } from './foo';\nconst _f: Foo = new Foo();\n",
     )
     .expect("write consumer.ts");
 
     let issues = engine
-        .analyze(&[&foo_path, &index_path, &consumer_path])
+        .analyze(&[&foo_path, &consumer_path])
         .expect("analyze");
 
     let unused_suppression: Vec<_> = issues

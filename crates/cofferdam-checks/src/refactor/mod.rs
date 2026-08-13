@@ -1,47 +1,18 @@
 //! Refactor checks — mechanical cleanups, often autofixable.
-//!
-//! Cyclomatic and cognitive complexity both walk function-like nodes
-//! and tally a per-function score. They differ only in scoring rules:
-//! McCabe cyclomatic counts independent paths flatly; Sonar cognitive
-//! adds a nesting penalty so deeply-nested branching costs more than
-//! a long flat switch.
-//!
-//! Both checks ignore code outside any function (top-level statements
-//! at module scope) — the metrics are designed for callable units.
 
-mod cognitive_complexity;
-mod cyclomatic_complexity;
 mod dead_export;
 mod duplicate_block;
 mod long_and_complex;
 mod mixed_throw_and_return_error;
-mod mutated_parameter;
-mod prefer_array_method_over_loop;
-mod prefer_const_over_let;
-mod prefer_nullish_coalescing;
-mod prefer_optional_chain;
 mod purity_heuristic;
 mod side_effect_in_map_callback;
-mod unused_variable;
 
-pub use cognitive_complexity::{
-    max_in_file as max_cognitive_complexity_in_file, CognitiveComplexity,
-};
-pub use cyclomatic_complexity::{
-    max_in_file as max_cyclomatic_complexity_in_file, CyclomaticComplexity,
-};
 pub use dead_export::DeadExport;
-pub use duplicate_block::{DuplicateBlock, NearDuplicateBlock};
+pub use duplicate_block::NearDuplicateBlock;
 pub use long_and_complex::LongAndComplex;
 pub use mixed_throw_and_return_error::MixedThrowAndReturnError;
-pub use mutated_parameter::MutatedParameter;
-pub use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
-pub use prefer_const_over_let::PreferConstOverLet;
-pub use prefer_nullish_coalescing::PreferNullishCoalescing;
-pub use prefer_optional_chain::PreferOptionalChain;
 pub use purity_heuristic::{PurityHeuristic, PURITY_HEURISTIC_OPTIONS};
 pub use side_effect_in_map_callback::SideEffectInMapCallback;
-pub use unused_variable::UnusedVariable;
 
 #[cfg(test)]
 mod tests {
@@ -52,12 +23,12 @@ mod tests {
         CorpusIndex, FinalizeContext, Issue as CoreIssue, RawOptionValue, SourceFile,
     };
     use duplicate_block::{
-        hash_token_window, tokenise, AstHashWalker, DuplicateBlock, DUP_BLOCK_OPTIONS,
+        finalize_all_groups_for_test, hash_token_window, tokenise, AstHashWalker,
+        NearDuplicateBlock, DUP_BLOCK_OPTIONS,
     };
     use oxc_ast_visit::Visit;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use unused_variable::UnusedVariable;
 
     #[test]
     fn tokenise_canonicalises_identifiers() {
@@ -223,10 +194,13 @@ mod tests {
         .join("\n")
     }
 
-    /// Run DuplicateBlock on two copies of the same source and return
-    /// the issues emitted by finalize.
+    /// Run NearDuplicateBlock on two copies of the same source and
+    /// return every claimed group's issue (exact + near — see
+    /// `finalize_all_groups_for_test`), used to exercise the shared
+    /// windowing/collection logic regardless of which half a fixture
+    /// lands in.
     fn run_duplicate_block_with_options(
-        check: &DuplicateBlock,
+        check: &NearDuplicateBlock,
         source: &str,
         options: &CheckOptions,
     ) -> Vec<CoreIssue> {
@@ -259,14 +233,15 @@ mod tests {
         check.run(&file_b, &mut ctx_b);
 
         let mut finalize_ctx = FinalizeContext::new(&corpus);
-        check.finalize(&mut finalize_ctx)
+        finalize_all_groups_for_test(&mut finalize_ctx)
     }
 
-    /// Run DuplicateBlock on a single file and return the issues emitted
-    /// by finalize — used to check that a genuinely non-duplicated block
-    /// doesn't report itself as a duplicate of its own sliding windows.
+    /// Run NearDuplicateBlock on a single file and return the issues
+    /// emitted by finalize — used to check that a genuinely
+    /// non-duplicated block doesn't report itself as a duplicate of its
+    /// own sliding windows.
     fn run_duplicate_block_single_file(
-        check: &DuplicateBlock,
+        check: &NearDuplicateBlock,
         source: &str,
         options: &CheckOptions,
     ) -> Vec<CoreIssue> {
@@ -285,7 +260,7 @@ mod tests {
         check.run(&file, &mut ctx);
 
         let mut finalize_ctx = FinalizeContext::new(&corpus);
-        check.finalize(&mut finalize_ctx)
+        finalize_all_groups_for_test(&mut finalize_ctx)
     }
 
     #[test]
@@ -297,7 +272,7 @@ mod tests {
         // restarting at 0. Before the fix, those overlapping windows
         // landed in one hash group and finalize reported the single real
         // block as a "duplicate" of itself.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source = [
             "target.alpha = source.alpha;",
@@ -324,7 +299,7 @@ mod tests {
         // across two files — the self-overlap fix must not suppress a
         // real cross-file duplicate, and must report it exactly once
         // (not once per overlapping window pair).
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source = [
             "target.alpha = source.alpha;",
@@ -348,7 +323,7 @@ mod tests {
 
     #[test]
     fn duplicate_block_default_options_fires_on_duplicate() {
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let issues = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
         assert!(
@@ -360,10 +335,11 @@ mod tests {
     #[test]
     fn duplicate_block_high_min_statements_suppresses_finding() {
         // min_statements=100 means our 6-statement duplicate is too short.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert("min_statements".to_string(), RawOptionValue::Int(100));
-        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let opts =
+            validate_options("Refactor.NearDuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         let issues = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
         assert!(
             issues.is_empty(),
@@ -375,11 +351,12 @@ mod tests {
     #[test]
     fn duplicate_block_min_statements_one_fires_on_tiny_duplicate() {
         // min_statements=1 + min_chars=1 fires even on a single substantial statement.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert("min_statements".to_string(), RawOptionValue::Int(1));
         raw.insert("min_chars".to_string(), RawOptionValue::Int(1));
-        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let opts =
+            validate_options("Refactor.NearDuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         let source = "const alpha = getValue(source);";
         let issues = run_duplicate_block_with_options(&check, source, &opts);
         assert!(
@@ -391,10 +368,11 @@ mod tests {
     #[test]
     fn duplicate_block_include_ast_false_produces_no_ast_findings() {
         // With include_ast=false and include_tokens=false (default), nothing fires.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert("include_ast".to_string(), RawOptionValue::Bool(false));
-        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let opts =
+            validate_options("Refactor.NearDuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         let issues = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
         assert!(
             issues.is_empty(),
@@ -408,11 +386,12 @@ mod tests {
         // large min_statements (disabling AST mode) but include_tokens=true.
         // Token mode operates on different thresholds; the test only verifies
         // that the option value is threaded through without panicking.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert("include_tokens".to_string(), RawOptionValue::Bool(true));
         raw.insert("include_ast".to_string(), RawOptionValue::Bool(false));
-        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let opts =
+            validate_options("Refactor.NearDuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         // Should not panic; token-mode may or may not produce issues for this source.
         let _ = run_duplicate_block_with_options(&check, &make_duplicate_source(), &opts);
     }
@@ -489,12 +468,13 @@ mod tests {
         );
     }
 
-    /// Run DuplicateBlock on two *different* sources (one per file) and
-    /// return the issues emitted by finalize. Unlike
+    /// Run NearDuplicateBlock on two *different* sources (one per file)
+    /// and return every claimed group's issue (see
+    /// `finalize_all_groups_for_test`). Unlike
     /// `run_duplicate_block_with_options`, the two files needn't be
     /// byte-identical — used to test literal-only differences.
     fn run_duplicate_block_two_sources(
-        check: &DuplicateBlock,
+        check: &NearDuplicateBlock,
         source_a: &str,
         source_b: &str,
         options: &CheckOptions,
@@ -528,7 +508,7 @@ mod tests {
         check.run(&file_b, &mut ctx_b);
 
         let mut finalize_ctx = FinalizeContext::new(&corpus);
-        check.finalize(&mut finalize_ctx)
+        finalize_all_groups_for_test(&mut finalize_ctx)
     }
 
     /// Six structurally identical statements whose literal values are
@@ -544,14 +524,17 @@ mod tests {
         )
     }
 
-    /// Runs `DuplicateBlock::run` (the sole corpus writer) on two files,
-    /// then finalizes both `dup` and `near` against the same corpus and
-    /// returns `(dup_issues, near_issues)`. Used everywhere the CD-331
-    /// split needs pinning: which check a group lands on, and that the
+    /// Runs `NearDuplicateBlock::run` (the sole corpus writer) on two
+    /// files, then finalizes against the same corpus twice: once via
+    /// `finalize_all_groups_for_test` (every claimed group, exact clones
+    /// included — what `Refactor.DuplicateBlock` used to report before
+    /// it was cut in CD-357 pass 2) and once via the real
+    /// `NearDuplicateBlock::finalize` (literal-drift groups only).
+    /// Returns `(all_issues, near_issues)`. Used everywhere the CD-331
+    /// split needs pinning: which half a group lands in, and that the
     /// two never claim overlapping territory.
     fn run_both_checks_two_sources(
-        dup: &DuplicateBlock,
-        near: &NearDuplicateBlock,
+        check: &NearDuplicateBlock,
         source_a: &str,
         source_b: &str,
         options: &CheckOptions,
@@ -569,7 +552,7 @@ mod tests {
             .with_parsed(&view_a)
             .with_options(options)
             .with_corpus(&corpus);
-        dup.run(&file_a, &mut ctx_a);
+        check.run(&file_a, &mut ctx_a);
 
         let alloc_b = Allocator::default();
         let file_b = SourceFile::new(PathBuf::from("b.ts"), source_b.to_string());
@@ -582,52 +565,81 @@ mod tests {
             .with_parsed(&view_b)
             .with_options(options)
             .with_corpus(&corpus);
-        dup.run(&file_b, &mut ctx_b);
+        check.run(&file_b, &mut ctx_b);
 
-        let mut finalize_ctx_dup = FinalizeContext::new(&corpus);
-        let dup_issues = dup.finalize(&mut finalize_ctx_dup);
+        let mut finalize_ctx_all = FinalizeContext::new(&corpus);
+        let all_issues = finalize_all_groups_for_test(&mut finalize_ctx_all);
         let mut finalize_ctx_near = FinalizeContext::new(&corpus);
-        let near_issues = near.finalize(&mut finalize_ctx_near);
-        (dup_issues, near_issues)
+        let near_issues = check.finalize(&mut finalize_ctx_near);
+        (all_issues, near_issues)
     }
 
     #[test]
-    fn duplicate_block_exact_clone_lands_on_duplicate_block_not_near() {
-        let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock;
+    fn duplicate_block_exact_clone_is_reported_by_near() {
+        // Refactor.DuplicateBlock (the exact-clone half of the CD-331
+        // split) was cut in CD-357, so NearDuplicateBlock reports both
+        // halves. A verbatim clone must still produce a finding —
+        // leaving it unreported let it claim territory and silently
+        // suppress an overlapping literal-drift finding.
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source = make_duplicate_source();
-        let (dup_issues, near_issues) =
-            run_both_checks_two_sources(&dup, &near, &source, &source, &opts);
+        let (all_issues, near_issues) =
+            run_both_checks_two_sources(&check, &source, &source, &opts);
         assert_eq!(
-            dup_issues.len(),
+            all_issues.len(),
             1,
-            "expected exactly one Refactor.DuplicateBlock finding for a verbatim clone, got {:?}",
-            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+            "expected exactly one claimed group for a verbatim clone, got {:?}",
+            all_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
-        assert_eq!(dup_issues[0].check_id, "Refactor.DuplicateBlock");
-        assert!(
-            near_issues.is_empty(),
-            "a verbatim clone must not also be reported by Refactor.NearDuplicateBlock, got {:?}",
+        assert_eq!(
+            near_issues.len(),
+            1,
+            "a verbatim clone must be reported, got {:?}",
             near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert!(
+            !near_issues[0].message.contains("literal values"),
+            "verbatim clones use the plain wording, got {:?}",
+            near_issues[0].message
+        );
+    }
+
+    /// The regression this pins: an exact group claims territory during
+    /// `partition_claimed_groups`. While only the near half was emitted,
+    /// that claim discarded any overlapping literal-drift finding —
+    /// so adding a verbatim copy of a file made cofferdam report
+    /// strictly *less* than before it was added.
+    #[test]
+    fn exact_clone_does_not_suppress_an_overlapping_near_duplicate() {
+        let check = NearDuplicateBlock::default();
+        let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
+        let base = make_duplicate_source();
+        let drifted = base.replace("gold-membership", "silver-membership");
+
+        let (_, without_exact) = run_both_checks_two_sources(&check, &base, &drifted, &opts);
+        assert!(
+            !without_exact.is_empty(),
+            "baseline: the literal-drift pair must be reported"
+        );
+
+        // `b.ts` is now a verbatim clone of `a.ts` covering the same
+        // region the near-duplicate pair covers.
+        let (_, with_exact) = run_both_checks_two_sources(&check, &base, &base, &opts);
+        assert!(
+            !with_exact.is_empty(),
+            "adding a verbatim clone must not make the region report nothing"
         );
     }
 
     #[test]
-    fn duplicate_block_literal_drift_lands_on_near_duplicate_block_not_duplicate_block() {
-        let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock;
+    fn duplicate_block_literal_drift_lands_on_near_duplicate_block() {
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_duplicate_source_with_literals("gold", 4999);
         let source_b = make_duplicate_source_with_literals("silver", 2999);
-        let (dup_issues, near_issues) =
-            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
-        assert!(
-            dup_issues.is_empty(),
-            "blocks differing only in literal values must not be reported by \
-             Refactor.DuplicateBlock, got {:?}",
-            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-        );
+        let (_all_issues, near_issues) =
+            run_both_checks_two_sources(&check, &source_a, &source_b, &opts);
         assert_eq!(
             near_issues.len(),
             1,
@@ -647,54 +659,53 @@ mod tests {
 
     #[test]
     fn duplicate_block_normalize_literals_false_reproduces_old_grouping() {
-        let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock;
+        let check = NearDuplicateBlock::default();
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert(
             "normalize_literals".to_string(),
             RawOptionValue::Bool(false),
         );
-        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let opts =
+            validate_options("Refactor.NearDuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
         let source_a = make_duplicate_source_with_literals("gold", 4999);
         let source_b = make_duplicate_source_with_literals("silver", 2999);
-        let (dup_issues, near_issues) =
-            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        let (all_issues, near_issues) =
+            run_both_checks_two_sources(&check, &source_a, &source_b, &opts);
         assert!(
-            dup_issues.is_empty() && near_issues.is_empty(),
+            all_issues.is_empty() && near_issues.is_empty(),
             "with normalize_literals=false, blocks differing only in literal values must not \
-             be grouped by either check (pre-CD-331 behaviour), got dup={:?} near={:?}",
-            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
+             be grouped at all (pre-CD-331 behaviour), got all={:?} near={:?}",
+            all_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
             near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn duplicate_block_and_near_duplicate_block_never_overlap_spans() {
+    fn duplicate_block_exact_and_near_groups_never_overlap_spans() {
         // Mix a verbatim-clone pair with a literal-drift pair across the
-        // same two files and assert that no span (primary or related)
-        // reported by either check overlaps a span reported by the
-        // other, for the same file — pinning that `partition_claimed_groups`
-        // runs its overlap-claim pass once, across both checks' candidates
-        // together, rather than each check claiming independently.
-        let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock;
+        // same two files. Both are now reported under one check id, so
+        // what this pins is that `partition_claimed_groups` runs its
+        // overlap-claim pass once across every candidate group together:
+        // the two findings must cover disjoint regions, never
+        // double-reporting the same lines.
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let exact = make_duplicate_source();
         let near_a = make_duplicate_source_with_literals("gold", 4999);
         let near_b = make_duplicate_source_with_literals("silver", 2999);
         let source_a = format!("{exact}\n\n{near_a}");
         let source_b = format!("{exact}\n\n{near_b}");
-        let (dup_issues, near_issues) =
-            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        let (all_issues, near_issues) =
+            run_both_checks_two_sources(&check, &source_a, &source_b, &opts);
         assert_eq!(
-            dup_issues.len(),
-            1,
-            "expected the verbatim clone, got {dup_issues:?}"
+            all_issues.len(),
+            2,
+            "expected the verbatim clone plus the literal-drift clone, got {all_issues:?}"
         );
         assert_eq!(
             near_issues.len(),
-            1,
-            "expected the literal-drift clone, got {near_issues:?}"
+            2,
+            "both halves report under one id since CD-357, got {near_issues:?}"
         );
 
         let spans_of = |issues: &[CoreIssue]| -> Vec<(PathBuf, u32, u32)> {
@@ -709,14 +720,25 @@ mod tests {
                 })
                 .collect()
         };
-        let dup_spans = spans_of(&dup_issues);
-        let near_spans = spans_of(&near_issues);
-        for (dfile, dline, _) in &dup_spans {
-            for (nfile, nline, _) in &near_spans {
+        let exact_issues: Vec<CoreIssue> = near_issues
+            .iter()
+            .filter(|i| !i.message.contains("literal values"))
+            .cloned()
+            .collect();
+        let drift_issues: Vec<CoreIssue> = near_issues
+            .iter()
+            .filter(|i| i.message.contains("literal values"))
+            .cloned()
+            .collect();
+        assert_eq!(exact_issues.len(), 1, "one verbatim-clone finding");
+        assert_eq!(drift_issues.len(), 1, "one literal-drift finding");
+
+        for (efile, eline, _) in &spans_of(&exact_issues) {
+            for (nfile, nline, _) in &spans_of(&drift_issues) {
                 assert!(
-                    !(dfile == nfile && dline == nline),
-                    "Refactor.DuplicateBlock and Refactor.NearDuplicateBlock reported the same \
-                     location {dfile:?}:{dline}"
+                    !(efile == nfile && eline == nline),
+                    "the verbatim-clone and literal-drift findings reported the same \
+                     location {efile:?}:{eline}"
                 );
             }
         }
@@ -757,7 +779,7 @@ mod tests {
 
     #[test]
     fn duplicate_block_import_run_produces_no_finding() {
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_import_block("./a");
         let source_b = make_import_block("./b");
@@ -772,7 +794,7 @@ mod tests {
 
     #[test]
     fn duplicate_block_reexport_run_produces_no_finding() {
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_reexport_block("./a");
         let source_b = make_reexport_block("./b");
@@ -790,7 +812,7 @@ mod tests {
         // Sanity guard against over-excluding: an `ExportNamedDeclaration`
         // with no `source` (a plain `export function`) is ordinary code and
         // must still be windowed and flagged like any other duplicate.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         // Same offset on both sides — a verbatim clone, so this stays a
         // pure windowing sanity check rather than exercising the
@@ -860,10 +882,11 @@ mod tests {
         // the matched window, and the byte length of that window's span
         // must be identical in both files — the with-imports file's span
         // must not swallow the excluded imports' bytes.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let mut raw: BTreeMap<String, RawOptionValue> = BTreeMap::new();
         raw.insert("min_chars".to_string(), RawOptionValue::Int(1));
-        let opts = validate_options("Refactor.DuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
+        let opts =
+            validate_options("Refactor.NearDuplicateBlock", DUP_BLOCK_OPTIONS, &raw).unwrap();
 
         let source_a = make_leader_trailer_source(true);
         let source_b = make_leader_trailer_source(false);
@@ -904,18 +927,17 @@ mod tests {
         // lands on `Refactor.NearDuplicateBlock` instead, since
         // `normalize_literals` treats the path strings as positional
         // placeholders. Neither check should report a require block at all.
-        let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock;
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_require_block("./a");
         let source_b = make_require_block("./b");
-        let (dup_issues, near_issues) =
-            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        let (all_issues, near_issues) =
+            run_both_checks_two_sources(&check, &source_a, &source_b, &opts);
         assert!(
-            dup_issues.is_empty() && near_issues.is_empty(),
+            all_issues.is_empty() && near_issues.is_empty(),
             "a run of six or more `const x = require(...)` declarations differing only in \
-             module specifiers must not be flagged as a duplicate block, got dup={:?} near={:?}",
-            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
+             module specifiers must not be flagged as a duplicate block, got all={:?} near={:?}",
+            all_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
             near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
@@ -929,18 +951,17 @@ mod tests {
 
     #[test]
     fn duplicate_block_import_equals_require_block_produces_no_finding() {
-        let dup = DuplicateBlock::default();
-        let near = NearDuplicateBlock;
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_import_equals_block("./a");
         let source_b = make_import_equals_block("./b");
-        let (dup_issues, near_issues) =
-            run_both_checks_two_sources(&dup, &near, &source_a, &source_b, &opts);
+        let (all_issues, near_issues) =
+            run_both_checks_two_sources(&check, &source_a, &source_b, &opts);
         assert!(
-            dup_issues.is_empty() && near_issues.is_empty(),
+            all_issues.is_empty() && near_issues.is_empty(),
             "a run of six or more `import x = require(...)` declarations differing only in \
-             module specifiers must not be flagged as a duplicate block, got dup={:?} near={:?}",
-            dup_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
+             module specifiers must not be flagged as a duplicate block, got all={:?} near={:?}",
+            all_issues.iter().map(|i| &i.message).collect::<Vec<_>>(),
             near_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
@@ -959,7 +980,7 @@ mod tests {
         // calls is ordinary code and must still be windowed and flagged —
         // this would fail if the require fix over-excluded every
         // `VariableDeclaration` instead of only require blocks.
-        let check = DuplicateBlock::default();
+        let check = NearDuplicateBlock::default();
         let opts = CheckOptions::defaults_from(DUP_BLOCK_OPTIONS);
         let source_a = make_plain_variable_block(100);
         let source_b = make_plain_variable_block(100);
@@ -970,415 +991,6 @@ mod tests {
             "ordinary variable declarations (not require blocks) must still be windowed and \
              flagged, got {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-        );
-    }
-
-    // ─── UnusedVariable: TS parameter properties (cd-sh72 / gh #44) ─────────
-    //
-    // A parameter property (`constructor(private ctx: T)`) is both a
-    // constructor param AND a class field. oxc resolves `this.ctx` as a
-    // member access, not a reference to the parameter symbol, so the bare
-    // get_resolved_references signal misses the read and the param is
-    // flagged as unused. These tests pin the fix: a `this.<name>` read in
-    // the enclosing class counts as use of the parameter property.
-
-    fn run_unused_variable(src: &str) -> Vec<CoreIssue> {
-        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
-        let allocator = Allocator::default();
-        let parser_return = parse_into(&allocator, &file);
-        let parsed = ParsedView {
-            program: &parser_return.program,
-            diagnostics: &parser_return.errors,
-        };
-        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
-        UnusedVariable.run(&file, &mut ctx)
-    }
-
-    #[test]
-    fn param_property_read_via_this_is_not_flagged() {
-        let src = "\
-class Foo {
-  constructor(private ctx: { value: number }) {}
-  getValue(): number {
-    return this.ctx.value;
-  }
-}";
-        let issues = run_unused_variable(src);
-        assert!(
-            issues.iter().all(|i| !i.message.contains("`ctx`")),
-            "param property `ctx` is read via this.ctx and must not flag; got: {:?}",
-            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn param_property_never_read_is_flagged() {
-        let src = "\
-class Bar {
-  constructor(private unused: number) {}
-}";
-        let issues = run_unused_variable(src);
-        assert!(
-            issues.iter().any(|i| i.message.contains("`unused`")),
-            "param property `unused` is never read and must still flag; got: {:?}",
-            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn plain_unused_constructor_param_is_flagged() {
-        // No access modifier => not a parameter property => normal
-        // positional-parameter rules apply (flag when unused).
-        let src = "\
-class Baz {
-  constructor(ctx: number) {}
-}";
-        let issues = run_unused_variable(src);
-        assert!(
-            issues.iter().any(|i| i.message.contains("`ctx`")),
-            "plain unused constructor param `ctx` must still flag; got: {:?}",
-            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn param_property_this_access_is_scoped_per_class() {
-        // Same name `ctx` in two classes: A reads `this.ctx` (used), B never
-        // does (unused). Only B's `ctx` may flag — proves the this-access
-        // set is scoped to the enclosing class, not the whole file. A
-        // file-level set would exempt both (zero flags); the bug flags both.
-        let src = "\
-class A {
-  constructor(private ctx: number) {}
-  read(): number { return this.ctx; }
-}
-class B {
-  constructor(private ctx: number) {}
-}";
-        let issues = run_unused_variable(src);
-        let ctx_issue_count = issues
-            .iter()
-            .filter(|i| i.message.contains("`ctx`"))
-            .count();
-        assert_eq!(
-            ctx_issue_count,
-            1,
-            "exactly one `ctx` (class B's) should flag; got: {:?}",
-            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-        );
-    }
-
-    // ─── Refactor.PreferConstOverLet (CD-119) ──────────────────────────
-
-    use prefer_const_over_let::PreferConstOverLet;
-
-    fn run_prefer_const_over_let(src: &str) -> Vec<CoreIssue> {
-        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
-        let allocator = Allocator::default();
-        let parser_return = parse_into(&allocator, &file);
-        let parsed = ParsedView {
-            program: &parser_return.program,
-            diagnostics: &parser_return.errors,
-        };
-        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
-        PreferConstOverLet.run(&file, &mut ctx)
-    }
-
-    #[test]
-    fn never_reassigned_let_is_flagged() {
-        let issues = run_prefer_const_over_let("let total = 1 + 2;\nreturn total;");
-        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
-        assert!(issues[0].message.contains("total"));
-    }
-
-    #[test]
-    fn directly_reassigned_let_is_not_flagged() {
-        let issues = run_prefer_const_over_let("let price = 1;\nprice = price - 1;\nreturn price;");
-        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
-    }
-
-    #[test]
-    fn incremented_let_is_not_flagged() {
-        let issues = run_prefer_const_over_let(
-            "let count = 0;\nwhile (count < 5) { count++; }\nreturn count;",
-        );
-        assert!(issues.is_empty(), "expected no findings; got {issues:?}");
-    }
-
-    #[test]
-    fn let_reassigned_in_nested_closure_is_not_flagged() {
-        let src = "\
-function makeCounter() {
-  let count = 0;
-  return function increment() {
-    count += 1;
-    return count;
-  };
-}";
-        let issues = run_prefer_const_over_let(src);
-        assert!(
-            issues.is_empty(),
-            "closure reassignment of a captured outer let must suppress the finding; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn const_binding_is_never_flagged() {
-        let issues = run_prefer_const_over_let("const total = 1 + 2;\nreturn total;");
-        assert!(
-            issues.is_empty(),
-            "const bindings are out of scope; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn non_overlapping_same_named_lets_both_flagged() {
-        // Two unrelated `let total`s in different functions, neither ever
-        // reassigned — both must flag independently, not just the first.
-        let src = "\
-export function a() { let total = 1; return total; }
-export function b() { let total = 2; return total; }";
-        let issues = run_prefer_const_over_let(src);
-        assert_eq!(
-            issues.len(),
-            2,
-            "expected both unrelated `total` lets to flag; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn destructured_let_binding_is_skipped() {
-        let issues = run_prefer_const_over_let("let { a, b } = obj;\nreturn a + b;");
-        assert!(
-            issues.is_empty(),
-            "destructured bindings are MVP-skipped; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn object_destructuring_assignment_reassignment_is_not_flagged() {
-        // CD-154: `({ token, slug } = ...)` reassigns both names.
-        let src = "\
-let token: string;
-let slug: string;
-({ token, slug } = getPair());
-return token + slug;";
-        let issues = run_prefer_const_over_let(src);
-        assert!(
-            issues.is_empty(),
-            "destructuring-assignment reassignment must suppress the finding; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn array_destructuring_assignment_reassignment_is_not_flagged() {
-        // CD-154: `[first, second] = pair()` reassigns both names.
-        let src = "\
-let first: number;
-let second: number;
-[first, second] = pair();
-return first + second;";
-        let issues = run_prefer_const_over_let(src);
-        assert!(
-            issues.is_empty(),
-            "array destructuring-assignment reassignment must suppress the finding; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn renamed_object_destructuring_assignment_reassignment_is_not_flagged() {
-        // `{ foo: bar }` binds `bar`, not `foo`.
-        let src = "let bar: string;\n({ foo: bar } = getObj());\nreturn bar;";
-        let issues = run_prefer_const_over_let(src);
-        assert!(
-            issues.is_empty(),
-            "renamed destructuring-assignment target must suppress the finding; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn for_of_destructuring_reassignment_is_not_flagged() {
-        // CD-154 follow-up: a `for ([a, b] of pairs)` loop head reassigns
-        // its target every iteration — not an `AssignmentExpression`.
-        let src = "\
-let l: number;
-let r: number;
-for ([l, r] of pairs) {
-  use(l, r);
-}";
-        let issues = run_prefer_const_over_let(src);
-        assert!(
-            issues.is_empty(),
-            "for-of destructuring target must suppress the finding; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn for_of_simple_reassignment_is_not_flagged() {
-        let src = "let item: number;\nfor (item of xs) {\n  use(item);\n}";
-        let issues = run_prefer_const_over_let(src);
-        assert!(
-            issues.is_empty(),
-            "for-of simple-identifier target must suppress the finding; got {issues:?}"
-        );
-    }
-
-    // ─── Refactor.PreferArrayMethodOverLoop (CD-120) ───────────────────
-
-    use prefer_array_method_over_loop::PreferArrayMethodOverLoop;
-
-    fn run_prefer_array_method_over_loop(src: &str) -> Vec<CoreIssue> {
-        let file = SourceFile::new(PathBuf::from("test.ts"), src.to_string());
-        let allocator = Allocator::default();
-        let parser_return = parse_into(&allocator, &file);
-        let parsed = ParsedView {
-            program: &parser_return.program,
-            diagnostics: &parser_return.errors,
-        };
-        let mut ctx = CheckContext::new(&file).with_parsed(&parsed);
-        PreferArrayMethodOverLoop.run(&file, &mut ctx)
-    }
-
-    #[test]
-    fn inline_push_loop_is_flagged_as_map() {
-        let src = "\
-const doubled: number[] = [];
-for (const n of nums) {
-  doubled.push(n * 2);
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
-        assert!(issues[0].message.contains(".map()"));
-    }
-
-    #[test]
-    fn computed_then_push_loop_is_flagged_as_map() {
-        let src = "\
-const labels: string[] = [];
-for (const n of nums) {
-  const label = String(n);
-  labels.push(label);
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
-        assert!(issues[0].message.contains(".map()"));
-    }
-
-    #[test]
-    fn if_gated_push_loop_is_flagged_as_filter() {
-        let src = "\
-const evens: number[] = [];
-for (const n of nums) {
-  if (n % 2 === 0) {
-    evens.push(n);
-  }
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
-        assert!(issues[0].message.contains(".filter()"));
-    }
-
-    #[test]
-    fn if_gated_computed_push_loop_is_flagged_as_filter_map() {
-        // The if's consequent pushes a separately computed transform, not
-        // the raw loop variable — the suggestion must be `.filter().map()`,
-        // not a plain `.filter()`, since the loop does both.
-        let src = "\
-const labels: string[] = [];
-for (const n of nums) {
-  if (n % 2 === 0) {
-    const label = `even:${n}`;
-    labels.push(label);
-  }
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert_eq!(issues.len(), 1, "expected one finding; got {issues:?}");
-        assert!(
-            issues[0].message.contains(".filter().map()"),
-            "expected a filter+map suggestion, not a plain filter; got: {}",
-            issues[0].message
-        );
-    }
-
-    #[test]
-    fn multi_arg_push_is_not_flagged() {
-        // arr.push(a, b) pushes two items per call — not map/filter-shaped.
-        let src = "\
-const flat: number[] = [];
-for (const n of nums) {
-  flat.push(n, n + 1);
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert!(
-            issues.is_empty(),
-            "multi-arg push must not flag; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn loop_with_break_is_not_flagged() {
-        let src = "\
-const evens: number[] = [];
-for (const n of nums) {
-  if (evens.length >= limit) {
-    break;
-  }
-  if (n % 2 === 0) {
-    evens.push(n);
-  }
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert!(
-            issues.is_empty(),
-            "early break must disqualify the match; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn loop_with_two_accumulators_is_not_flagged() {
-        let src = "\
-const evens: number[] = [];
-const odds: number[] = [];
-for (const n of nums) {
-  if (n % 2 === 0) {
-    evens.push(n);
-  } else {
-    odds.push(n);
-  }
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert!(
-            issues.is_empty(),
-            "if/else with two accumulators must not flag; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn loop_with_extra_side_effect_is_not_flagged() {
-        let src = "\
-const copy: number[] = [];
-for (const n of nums) {
-  console.log(n);
-  copy.push(n);
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert!(
-            issues.is_empty(),
-            "a side effect beyond the single push must disqualify the match; got {issues:?}"
-        );
-    }
-
-    #[test]
-    fn loop_without_push_is_not_flagged() {
-        let src = "\
-let total = 0;
-for (let i = 0; i < nums.length; i++) {
-  total += nums[i];
-}";
-        let issues = run_prefer_array_method_over_loop(src);
-        assert!(
-            issues.is_empty(),
-            "a loop that never pushes must not flag; got {issues:?}"
         );
     }
 

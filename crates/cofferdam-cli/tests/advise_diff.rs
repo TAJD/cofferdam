@@ -55,6 +55,35 @@ fn commit_all(dir: &Path, message: &str) {
     run_git(dir, &["commit", "--quiet", "--no-verify", "-m", message]);
 }
 
+/// A trivial function that trips no built-in check. Named `eq` to match
+/// `long_function` below so `Design.OrphanExport`/`Design.MissingTestFile`
+/// (which fire on the export name regardless of which fixture is active)
+/// cancel out of the would_fire/would_clear diff instead of polluting it.
+fn short_function() -> String {
+    "export function eq(a: number, b: number) { return a + b; }\n".to_string()
+}
+
+/// A function with ~90 non-blank body lines and cyclomatic complexity
+/// well over `Refactor.LongAndComplex`'s default limits (75 lines / 15).
+/// Every statement's shape (condition arity, or term count) grows
+/// monotonically with `i` so no two statements — and so no window of
+/// consecutive statements — are structurally identical; a repeated shape
+/// would otherwise also trip `Refactor.NearDuplicateBlock` and pollute
+/// the diff this test is isolating.
+fn long_function() -> String {
+    let mut body = String::from("export function eq(a: number, b: number) {\n  let total = 0;\n");
+    for i in 0..20 {
+        let cond = vec!["a === b"; i + 1].join(" && ");
+        body.push_str(&format!("  if ({cond}) {{ total += 1; }}\n"));
+    }
+    for i in 0..70 {
+        let terms = vec!["a"; i + 1].join(" + ");
+        body.push_str(&format!("  total = total + {terms};\n"));
+    }
+    body.push_str("  return total;\n}\n");
+    body
+}
+
 fn cofferdam_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cofferdam")
 }
@@ -76,22 +105,14 @@ fn diff_introduces_violation_shows_in_would_fire() {
     let dir = tmp.path();
     init_repo(dir);
 
-    // Baseline: clean source with strict equality — passes
-    // `Warning.TripleEquals`.
+    // Baseline: trivial source — passes `Refactor.LongAndComplex`.
     let file = dir.join("src.ts");
-    std::fs::write(
-        &file,
-        "export function eq(a: number, b: number) { return a === b; }\n",
-    )
-    .expect("write baseline");
+    std::fs::write(&file, short_function()).expect("write baseline");
     commit_all(dir, "baseline");
 
-    // Working-tree edit: switch to loose equality, which the check flags.
-    std::fs::write(
-        &file,
-        "export function eq(a: number, b: number) { return a == b; }\n",
-    )
-    .expect("write modified");
+    // Working-tree edit: a long, cyclomatically complex function, which
+    // the check flags.
+    std::fs::write(&file, long_function()).expect("write modified");
 
     let out = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD"])
@@ -106,8 +127,8 @@ fn diff_introduces_violation_shows_in_would_fire() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"check_id\":\"Warning.TripleEquals\""),
-        "expected TripleEquals in would_fire, got: {stdout}"
+        stdout.contains("\"check_id\":\"Refactor.LongAndComplex\""),
+        "expected LongAndComplex in would_fire, got: {stdout}"
     );
     assert!(
         stdout.contains("\"would_fire\":1"),
@@ -125,21 +146,14 @@ fn diff_clears_violation_shows_in_would_clear() {
     let dir = tmp.path();
     init_repo(dir);
 
-    // Baseline: dirty source with loose equality.
+    // Baseline: a long, cyclomatically complex function.
     let file = dir.join("src.ts");
-    std::fs::write(
-        &file,
-        "export function eq(a: number, b: number) { return a == b; }\n",
-    )
-    .expect("write baseline");
+    std::fs::write(&file, long_function()).expect("write baseline");
     commit_all(dir, "baseline");
 
-    // Working-tree edit: clears the violation.
-    std::fs::write(
-        &file,
-        "export function eq(a: number, b: number) { return a === b; }\n",
-    )
-    .expect("write modified");
+    // Working-tree edit: drops back to a trivial function, clearing the
+    // violation.
+    std::fs::write(&file, short_function()).expect("write modified");
 
     let out = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD"])
@@ -161,8 +175,8 @@ fn diff_clears_violation_shows_in_would_clear() {
         "expected would_clear summary count of 1, got: {stdout}"
     );
     assert!(
-        stdout.contains("\"check_id\":\"Warning.TripleEquals\""),
-        "expected TripleEquals in would_clear, got: {stdout}"
+        stdout.contains("\"check_id\":\"Refactor.LongAndComplex\""),
+        "expected LongAndComplex in would_clear, got: {stdout}"
     );
 }
 
@@ -194,17 +208,9 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
     init_repo(dir);
 
     let file = dir.join("src.ts");
-    std::fs::write(
-        &file,
-        "export function eq(a: number, b: number) { return a === b; }\n",
-    )
-    .expect("write baseline");
+    std::fs::write(&file, short_function()).expect("write baseline");
     commit_all(dir, "baseline");
-    std::fs::write(
-        &file,
-        "export function eq(a: number, b: number) { return a == b; }\n",
-    )
-    .expect("write modified");
+    std::fs::write(&file, long_function()).expect("write modified");
 
     // Default fail_on threshold is unset → exit 0 even with would_fire.
     let no_gate = cofferdam_cmd(dir)
@@ -217,7 +223,7 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
         String::from_utf8_lossy(&no_gate.stderr)
     );
 
-    // With --fail-on=medium and Warning.TripleEquals at Medium, exit 1.
+    // With --fail-on=medium and Refactor.LongAndComplex at High, exit 1.
     let gated = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD", "--fail-on", "medium"])
         .output()
@@ -230,7 +236,7 @@ fn fail_on_medium_exits_one_when_would_fire_at_or_above() {
         String::from_utf8_lossy(&gated.stderr),
     );
 
-    // With --fail-on=critical, the Medium finding is below threshold → exit 0.
+    // With --fail-on=critical, the High finding is below threshold → exit 0.
     let gated_high = cofferdam_cmd(dir)
         .args(["advise", "--diff", "HEAD", "--fail-on", "critical"])
         .output()

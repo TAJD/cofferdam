@@ -8,7 +8,7 @@
 //   1. `npm install -D @cofferdam/cofferdam@<version>` puts a working
 //      binary under node_modules/@cofferdam/cofferdam/bin (postinstall ran).
 //   2. `npx cofferdam check src --robot` exits 1 and the JSON report
-//      includes a `Warning.TripleEquals` finding (proves the binary
+//      includes a `Design.ReadonlyArrayParam` finding (proves the binary
 //      runs end-to-end on this OS+arch).
 //   3. Re-installing with `--ignore-scripts` skips postinstall, the
 //      binary is absent, and the JS shim exits 1 with the
@@ -77,7 +77,7 @@ const srcDir = join(happy, 'src');
 mkdirSync(srcDir, { recursive: true });
 writeFileSync(
   join(srcDir, 'index.ts'),
-  'export const probe = (a: number, b: number) => a == b;\n',
+  'export function total(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n',
 );
 writeFileSync(
   join(happy, 'tsconfig.json'),
@@ -104,12 +104,12 @@ try {
 if (!Array.isArray(report.findings) || report.findings.length === 0) {
   fail(`no findings in JSON report`);
 }
-const triple = report.findings.find((f) => f.id === 'Warning.TripleEquals');
-if (!triple) {
+const readonlyArrayParam = report.findings.find((f) => f.id === 'Design.ReadonlyArrayParam');
+if (!readonlyArrayParam) {
   const ids = report.findings.map((f) => f.id).join(', ');
-  fail(`expected Warning.TripleEquals in findings, got: ${ids}`);
+  fail(`expected Design.ReadonlyArrayParam in findings, got: ${ids}`);
 }
-console.log(`OK: Warning.TripleEquals fired at ${triple.file}:${triple.line}`);
+console.log(`OK: Design.ReadonlyArrayParam fired at ${readonlyArrayParam.file}:${readonlyArrayParam.line}`);
 
 // --- --ignore-scripts path ---
 const noScripts = join(root, 'noscripts');

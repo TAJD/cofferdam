@@ -1,8 +1,8 @@
 // CD-331: type-2 clones — blocks with identical structure that differ
-// only in their literal values. Refactor.DuplicateBlock should flag the
-// pair below (with the "differing only in literal values" wording) even
-// though every string/number literal is different. The unrelated block
-// at the bottom has different structure and must NOT be flagged.
+// only in their literal values. Refactor.NearDuplicateBlock should flag
+// the pair below (with the "differing only in literal values" wording)
+// even though every string/number literal is different. The unrelated
+// block at the bottom has different structure and must NOT be flagged.
 //
 // The two 6-statement import runs below (CD-331 follow-up) are a second,
 // separate hazard: under literal normalization, module specifiers

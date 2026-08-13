@@ -795,22 +795,11 @@ fn read_npm_version(pkg_path: &Path) -> Result<String, String> {
 
 // ── Check 10 — formatter-coexistence ─────────────────────────────────────────
 
-/// Style/lint checks whose finding overlaps a rule biome and eslint both
-/// ship out of the box (quote style, `==`/`!=`, `console.log`, `debugger`,
-/// nullish-coalescing/optional-chain preference). Not a correctness
-/// problem — just double-reporting the same thing through two tools.
-const OVERLAPPING_STYLE_CHECKS: &[&str] = &[
-    "Consistency.QuoteStyle",
-    "Warning.TripleEquals",
-    "Warning.NoConsoleLog",
-    "Warning.NoDebugger",
-    "Refactor.PreferNullishCoalescing",
-    "Refactor.PreferOptionalChain",
-];
-
-/// Warn (informational, not a Fail — coexistence is a style preference, not
-/// a bug) when a `biome.json`/eslint config is present alongside cofferdam,
-/// naming the built-in checks most likely to double-report against it.
+/// Report how cofferdam coexists with a formatter/linter. CD-357 removed
+/// every built-in that duplicated a rule biome and eslint ship out of the
+/// box, so there is no longer anything to double-report and this check has
+/// no failure mode — it exists to say so, since users arriving from a
+/// linter reasonably expect an overlap.
 fn check_formatter_coexistence() -> CheckResult {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
@@ -860,15 +849,12 @@ fn check_formatter_coexistence_at(start: &Path) -> CheckResult {
             NAME,
             "no biome/eslint config found — nothing to coexist with",
         ),
-        Some((tool, file)) => CheckResult::warn(
+        Some((tool, file)) => CheckResult::pass(
             NAME,
-            format!("{file} found — {tool} and cofferdam both flag style issues"),
             format!(
-                "avoid double-reporting: disable {} in cofferdam.toml, e.g. \
-                 `[[overrides]]` / `check = \"{}\"` / `paths = [\"**\"]` / `disabled = true` \
-                 (one block per check) — see docs/overrides.md",
-                OVERLAPPING_STYLE_CHECKS.join(", "),
-                OVERLAPPING_STYLE_CHECKS[0],
+                "{file} found — no built-in duplicates a {tool} style or formatting rule; \
+                 only Refactor.LongAndComplex overlaps, and only if you enable {tool}'s \
+                 complexity rules"
             ),
         ),
     }
@@ -1120,25 +1106,24 @@ mod tests {
     }
 
     #[test]
-    fn formatter_coexistence_warns_on_biome_json() {
+    fn formatter_coexistence_passes_on_biome_json() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("biome.json"), "{}\n").expect("write");
         let r = check_formatter_coexistence_at(dir.path());
-        assert_eq!(r.status, Status::Warn, "biome.json → warn: {}", r.message);
+        assert_eq!(r.status, Status::Pass, "biome.json → pass: {}", r.message);
         assert!(r.message.contains("biome.json"), "got: {}", r.message);
-        let rem = r.remediation.expect("remediation present");
-        assert!(rem.contains("Consistency.QuoteStyle"), "got: {rem}");
+        assert!(r.remediation.is_none(), "nothing to remediate");
     }
 
     #[test]
-    fn formatter_coexistence_warns_on_eslint_config() {
+    fn formatter_coexistence_passes_on_eslint_config() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("eslint.config.js"), "").expect("write");
         let r = check_formatter_coexistence_at(dir.path());
         assert_eq!(
             r.status,
-            Status::Warn,
-            "eslint config → warn: {}",
+            Status::Pass,
+            "eslint config → pass: {}",
             r.message
         );
         assert!(r.message.contains("eslint"), "got: {}", r.message);

@@ -11,9 +11,9 @@
 #   1. cd packages/cofferdam && npm pack
 #   2. install the .tgz into a tmpdir with COFFERDAM_BINARY_PATH pointing
 #      at target/release/cofferdam[.exe]
-#   3. npx cofferdam check examples/triple_equals.ts --format json
+#   3. npx cofferdam check examples/smoke_fixture.ts --format json
 #   4. assert exit code (0 or 1 — findings produce exit 1), JSON contains
-#      a Warning.TripleEquals issue, and node_modules/@cofferdam/cofferdam/bin/<bin>
+#      a Design.ReadonlyArrayParam issue, and node_modules/@cofferdam/cofferdam/bin/<bin>
 #      exists.
 #
 # Local repro:
@@ -84,16 +84,17 @@ if [[ ! -f "$WORKDIR/node_modules/@cofferdam/cofferdam/bin/cofferdam.js" ]]; the
 fi
 echo "OK: binary present at $INSTALLED_BIN"
 
-FIXTURE="$REPO_ROOT/examples/triple_equals.ts"
+FIXTURE="$REPO_ROOT/examples/smoke_fixture.ts"
 echo "==> npx cofferdam check $FIXTURE --format json"
 set +e
 OUT=$(npx --no-install cofferdam check "$FIXTURE" --format json)
 EC=$?
 set -e
 
-# Findings present → exit 1 (default --fail-on=medium and Warning.TripleEquals
-# clears the bar). 0 would mean no findings, which is itself a fail for this
-# fixture. >1 is a binary error.
+# Design.ReadonlyArrayParam is Low severity, below the default
+# --fail-on=medium bar, so a clean run here exits 0 with the finding still
+# reported in the JSON body (--fail-on only gates the exit code, not what's
+# listed). >1 is a binary error.
 if [[ "$EC" -ne 0 && "$EC" -ne 1 ]]; then
   echo "FAIL: unexpected exit code $EC from cofferdam check" >&2
   echo "--- stdout ---" >&2
@@ -101,7 +102,7 @@ if [[ "$EC" -ne 0 && "$EC" -ne 1 ]]; then
   exit 1
 fi
 
-# Validate JSON shape and assert TripleEquals is in there.
+# Validate JSON shape and assert Design.ReadonlyArrayParam is in there.
 node -e '
   const data = process.argv[1];
   let r;
@@ -118,16 +119,16 @@ node -e '
     process.exit(1);
   }
   if (r.findings.length === 0) {
-    console.error("FAIL: zero findings against examples/triple_equals.ts");
+    console.error("FAIL: zero findings against examples/smoke_fixture.ts");
     process.exit(1);
   }
-  const triple = r.findings.find(f => f.id === "Warning.TripleEquals");
-  if (!triple) {
+  const readonlyArrayParam = r.findings.find(f => f.id === "Design.ReadonlyArrayParam");
+  if (!readonlyArrayParam) {
     const ids = r.findings.map(f => f.id).join(", ");
-    console.error("FAIL: Warning.TripleEquals not in findings (got: " + ids + ")");
+    console.error("FAIL: Design.ReadonlyArrayParam not in findings (got: " + ids + ")");
     process.exit(1);
   }
-  console.log("OK: Warning.TripleEquals at " + (triple.file || "?") + ":" + (triple.line || "?"));
+  console.log("OK: Design.ReadonlyArrayParam at " + (readonlyArrayParam.file || "?") + ":" + (readonlyArrayParam.line || "?"));
 ' "$OUT"
 
 echo

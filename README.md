@@ -51,9 +51,10 @@ flowchart TB
     style D fill:#cbd5e1,color:#1e293b,stroke:#94a3b8
 ```
 
-Run `cofferdam doctor` and it will name the built-in style checks that
-double-report against a Biome or ESLint config it finds, so you can turn them
-off.
+No built-in check duplicates a Biome or ESLint style or formatting rule, so
+both tools run unmodified. Run `cofferdam doctor` and it will confirm that
+against the config it finds, and name the one check that does overlap if you
+have opted into complexity rules.
 
 ## Install
 

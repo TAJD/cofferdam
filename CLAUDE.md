@@ -82,12 +82,16 @@ Almost every new check is one file in `cofferdam-checks/src/<category>/<check_na
 
 | Pattern | Reference | What it does |
 |---|---|---|
-| Text-line scan | `readability.rs::MaxLineLength` | Iterate `file.lines()`, no AST |
-| AST visitor (single node) | `warning.rs::TripleEquals` | `oxc_ast_visit::Visit`, match nodes |
-| AST visitor (function-shape) | `design/max_parameters.rs::MaxParameters` | Walk `Function` + `ArrowFunctionExpression` |
-| Per-function score stack | `refactor/cyclomatic_complexity.rs::CyclomaticComplexity` | Push on function entry, walk + tally, pop, emit if over limit |
+| Graph-backed (no AST) | `design/layer_violation.rs::LayerViolation` | Read the import graph and the declared spec; never touches `ctx.parsed` |
+| AST visitor (single node) | `refactor/side_effect_in_map_callback.rs::SideEffectInMapCallback` | `oxc_ast_visit::Visit`, match nodes |
+| AST visitor (function-shape) | `design/readonly_array_param.rs::ReadonlyArrayParam` | Walk `Function` + `ArrowFunctionExpression` params |
+| Per-function score stack | `refactor/long_and_complex.rs::LongAndComplex` | Push on function entry, walk + tally, pop, emit if over limit |
 | Cross-file (corpus API) | `design/duplicate_export_name.rs::DuplicateExportName` | Per-file `run` writes into `ctx.corpus`; `finalize` reads back and emits one `Issue` per match with `related: Vec<RelatedSpan>` |
-| Configurable check | `warning.rs::NoConsoleLog` | Define a `&[OptionSpec]` constant, reference it from `CheckMeta.options`, read values via `ctx.options.get_string_list("...")` (or matching getter). User config lands in `[checks."Category.Name"]` in `cofferdam.invariants.toml`. |
+| Configurable check | `refactor/long_and_complex.rs` (`LAC_OPTIONS`) | Define a `&[OptionSpec]` constant, reference it from `CheckMeta.options`, read values via `ctx.options.get_string_list("...")` (or matching getter). User config lands in `[checks."Category.Name"]` in `cofferdam.invariants.toml`. |
+
+There is deliberately no "text-line scan" row any more. CD-357 removed every check that
+judged a file a line at a time; if a new check only needs `file.lines()` and no graph or
+AST context, that is a strong signal it belongs in a linter, not here.
 
 ### Required scaffolding for any AST check
 
@@ -124,7 +128,7 @@ impl Check for X {
 
 ### Type-aware checks (cd-9hp.2)
 
-A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`; user-facing concept + opt-out: `docs/type-aware-checks.md`. `Warning.UnusedNullCheck` (`cofferdam-checks/src/warning.rs`) is the first built-in that sets the flag. A `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on). The CLI installs the worker only when a `requires_types` check is registered AND `[engine] type_aware` isn't `false` in `cofferdam.toml` (the opt-out for Node-less CI). When the host can't start (no Node / ts-morph / tsconfig), type-aware checks are skipped with one warning; `--fail-on-type-unavailable` (cd-260l) turns that into exit code 2 for CI that must not get silent false negatives.
+A check with `requires_types: true` is routed through a Node ts-morph "type host" instead of the pure-Rust path. Query types via `ctx.types` — a `TypeOracle` that is `None` when no host is available (the engine then skips the check, so guard rather than assume). The trait + `TypeFacts` live in `cofferdam-core::types`; engine routing in `cofferdam-engine`; the Node worker + `WorkerTypeOracle` in `cofferdam-cli/src/type_host.rs`. Wire protocol: `design/type-host-wire.md`; user-facing concept + opt-out: `docs/type-aware-checks.md`. `Design.UnionExhaustivenessGap` (`cofferdam-checks/src/design/union_exhaustiveness_gap.rs`) is the only built-in that sets the flag. A `requires_types` check MUST keep `pure_run: false` (its findings depend on whole-project types the per-file cache can't key on). The CLI installs the worker only when a `requires_types` check is registered AND `[engine] type_aware` isn't `false` in `cofferdam.toml` (the opt-out for Node-less CI). When the host can't start (no Node / ts-morph / tsconfig), type-aware checks are skipped with one warning; `--fail-on-type-unavailable` (cd-260l) turns that into exit code 2 for CI that must not get silent false negatives.
 
 ### Cofferdam-specific gotchas (every agent needs these)
 
@@ -132,9 +136,9 @@ A check with `requires_types: true` is routed through a Node ts-morph "type host
 - **`cofferdam_core::span_from_bytes(text, start, end)`** is the only correct way to convert oxc byte offsets into our `Span` (with line/column). Do not roll your own — there's a UTF-8 nuance on the column count.
 - **Always `let Some(parsed) = ctx.parsed else { return Vec::new(); };`** at the top of `run()` for AST checks. `ctx.parsed` is `None` when parsing failed (we already emitted `Warning.ParseError` for that file).
 - **Visitors must call `walk::walk_<node>(self, ...)`** at the end of overridden visit methods to descend into children. Forgetting this means nested matches are missed.
-- **A check that only overrides `visit_assignment_expression` misses `for...of`/`for...in` loop heads** (`for (x of xs)`, `for ([a, b] of pairs)`) — those reassign their target every iteration but are a distinct `ForStatementLeft` grammar production, not an `AssignmentExpression`. If a check's reassignment/binding logic matters for assignment targets, also override `visit_for_statement_left` (see `Refactor.PreferConstOverLet`, CD-154). More generally: oxc's `inherit_variants!` macro makes sibling enums (`SimpleAssignmentTarget`, `AssignmentTargetPattern`, `AssignmentTargetMaybeDefault`, `ForStatementLeft`, ...) share `AssignmentTarget`'s variants and gives each an `as_assignment_target()` accessor (`Option<&AssignmentTarget>`) — use that to funnel them all through one recursive collector instead of duplicating match arms per sibling enum.
+- **A check that only overrides `visit_assignment_expression` misses `for...of`/`for...in` loop heads** (`for (x of xs)`, `for ([a, b] of pairs)`) — those reassign their target every iteration but are a distinct `ForStatementLeft` grammar production, not an `AssignmentExpression`. If a check's reassignment/binding logic matters for assignment targets, also override `visit_for_statement_left` (CD-154 — found via `Refactor.PreferConstOverLet`, since removed, but the trap is a property of the grammar, not of that check). More generally: oxc's `inherit_variants!` macro makes sibling enums (`SimpleAssignmentTarget`, `AssignmentTargetPattern`, `AssignmentTargetMaybeDefault`, `ForStatementLeft`, ...) share `AssignmentTarget`'s variants and gives each an `as_assignment_target()` accessor (`Option<&AssignmentTarget>`) — use that to funnel them all through one recursive collector instead of duplicating match arms per sibling enum.
 - **Register the new check** in `cofferdam-checks/src/lib.rs::all_builtins()`. The compiler doesn't catch a forgotten registration.
-- **Fixtures live in `examples/`** with one file per check (`triple_equals.ts`, `max_params.ts`, ...). Mix flagged + non-flagged cases.
+- **Fixtures live in `examples/`** with one file per check (`max_params.ts`, `prefer_const_over_let.ts`, ...). Mix flagged + non-flagged cases.
 - **Verification before claiming done**:
   ```bash
   cargo build --workspace

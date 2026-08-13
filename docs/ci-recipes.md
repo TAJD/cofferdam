@@ -407,7 +407,7 @@ echo "$files" | xargs npx @cofferdam/cofferdam check --no-baseline --quiet --max
 
 Before shipping a CI integration, walk through:
 
-1. **Severity threshold.** Default `--fail-on=medium`. Demote to `low` when you want CI to gate on the Refactor / Readability rules; promote to `high` if you only want the security-tier (`Warning.NoEval`, `Warning.TripleEquals`) to break the build.
+1. **Severity threshold.** Default `--fail-on=medium`. Demote to `low` when you want CI to gate on every Refactor / Design rule; promote to `high` if you only want the highest-severity checks (e.g. `Refactor.LongAndComplex`) to break the build.
 2. **Baseline.** Capture once on a legacy adoption (`cofferdam init --baseline`), then refresh after each cleanup run (`cofferdam baseline write`).
 3. **PR-only vs. full-repo.** PR-only (`--since`) for fast feedback on contributors; full-repo on the default branch to catch regressions on shared code paths.
 4. **Output format.** `text` for human terminal logs, `json` for tooling integrations (PR-comment bots, dashboards), `compact` when the consumer is an LLM that pays per token, `sarif` for GitHub Code Scanning + other static-analysis consumers.

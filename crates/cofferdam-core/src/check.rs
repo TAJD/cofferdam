@@ -353,7 +353,7 @@ pub trait Check: Send + Sync {
     /// compiles unchanged — only the Rust and HTML checks override.
     ///
     /// A set rather than one language because a prose rule and a code
-    /// rule are not the same shape: `Consistency.SpellingDialect` reads
+    /// rule are not the same shape: a comment-only rule might read
     /// comments in TypeScript and the whole file in Markdown, and
     /// splitting that into two check ids would put two entries in the
     /// catalogue for one convention (CD-316).

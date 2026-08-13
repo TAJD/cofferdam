@@ -15,9 +15,10 @@ JSON-RPC channel. The wire protocol is documented in
 
 The current type-aware built-ins:
 
-- [`Warning.UnusedNullCheck`](/checks/Warning.UnusedNullCheck) — flags an
-  equality check against `null`/`undefined` whose other operand's type
-  already excludes that value, so the guard is dead code.
+- [`Design.UnionExhaustivenessGap`](/checks/Design.UnionExhaustivenessGap) —
+  flags a switch over a discriminated union's tag that doesn't handle every
+  variant and has no default case, so a newly added variant falls through
+  silently.
 
 This page covers built-in check routing. **Plugin checks** can declare
 `requiresTypes: true` too, through the same ts-morph type host — including
@@ -144,7 +145,7 @@ while silencing one check needs nothing special. Drop its severity below
 your `--fail-on` threshold:
 
 ```toml
-[checks."Warning.UnusedNullCheck"]
+[checks."Design.UnionExhaustivenessGap"]
 severity = "info"
 ```
 
@@ -154,7 +155,7 @@ every other check running on those files:
 ```toml
 [[overrides]]
 paths = ["src/legacy/**"]
-[overrides.checks."Warning.UnusedNullCheck"]
+[overrides.checks."Design.UnionExhaustivenessGap"]
 disabled = true
 ```
 

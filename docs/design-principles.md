@@ -28,7 +28,7 @@ It does this through four customisation layers, narrowest to widest:
 | Project-wide spec | `cofferdam.invariants.toml` | Architectural intent: layers, frozen boundaries, public-API entry points, forbid/require import rules | Project owner / architect |
 | Plugin SDK | `@cofferdam/check-sdk`, `plugins = [...]` in config | Custom checks the project ships itself | Project owner |
 
-Built-in checks supply the floor — `Warning.TripleEquals`, `Refactor.CyclomaticComplexity`, `Readability.MaxLineLength`, and forty or so others. Per-check options tune them. The plugin SDK lets a project add its own rules in TypeScript.
+Built-in checks supply the floor — `Design.LayerViolation`, `Refactor.LongAndComplex`, `Refactor.NearDuplicateBlock`, and two dozen or so others. Per-check options tune them. The plugin SDK lets a project add its own rules in TypeScript.
 
 But the load-bearing layer is the third one — the project-wide spec. Everything important about cofferdam's leverage on downstream repos flows from the choice to put architectural intent into a single declarative file consumed by *many* checks.
 
@@ -143,7 +143,7 @@ Why it matters: the engine and the check are decoupled. A new capability is adde
 
 ### 2.5 Stable IDs as identity
 
-Check IDs are dotted (`Category.Name`), stable, and used in: suppression comments (`// cofferdam-disable-next-line Warning.TripleEquals`), baseline files, SARIF rule IDs, config keys (`[checks."Warning.TripleEquals"]`), `cofferdam advise` output, and the docs catalog filename.
+Check IDs are dotted (`Category.Name`), stable, and used in: suppression comments (`// cofferdam-disable-next-line Refactor.LongAndComplex`), baseline files, SARIF rule IDs, config keys (`[checks."Refactor.LongAndComplex"]`), `cofferdam advise` output, and the docs catalog filename.
 
 The rule: **never rename without a deprecation window.** A user's suppression comments are durable, sometimes years old; the system must not break them silently.
 
@@ -285,7 +285,7 @@ If you're new to the codebase and want to internalise the design:
 
 1. Read `crates/cofferdam-core/src/check.rs` start-to-finish — the central trait, contexts, and metadata.
 2. Read `crates/cofferdam-core/src/corpus.rs` — the cross-file shared-state mechanism. Look at the test cases; they document the locking model.
-3. Read one self-contained check: `crates/cofferdam-checks/src/warning.rs::TripleEquals` (AST visitor, single file) and one cross-file check: `crates/cofferdam-checks/src/design.rs::DuplicateExportName` (corpus producer + finalize emitter).
+3. Read one self-contained check: `crates/cofferdam-checks/src/consistency.rs::ErrorHandlingIdiom` (AST visitor, single file) and one cross-file check: `crates/cofferdam-checks/src/design/duplicate_export_name.rs::DuplicateExportName` (corpus producer + finalize emitter).
 4. Read `crates/cofferdam-core/src/invariants.rs` — the spec parser and round-trip contract.
 5. Read `docs/invariants.md` for the user-facing spec semantics.
 
@@ -404,8 +404,8 @@ Terms used in this document and across the codebase, sorted alphabetically. Code
 **Suppression directive** — an inline comment that suppresses a finding by check ID:
 
 ```ts
-// cofferdam-disable-next-line Warning.TripleEquals
-if (a == b) { /* legitimate ergonomic == */ }
+// cofferdam-disable-next-line Refactor.LongAndComplex
+function legacyHandler(req, res, next) { /* long, complex — refactor tracked separately */ }
 ```
 
 Tracked by the engine; `Consistency.UnusedSuppression` flags directives that don't actually suppress anything (stale).

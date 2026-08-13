@@ -105,13 +105,11 @@ src/ui/Button.tsx
   Layer:       ui
   Public API:  no
   Constraints:
-    Readability.MaxLineLength (readability, severity low) — limit 120
-    Readability.MaxFunctionLength (readability, severity low) — limit 50
-    Design.MaxParameters (design, severity medium) — limit 5
+    Refactor.LongAndComplex (refactor, severity high) — length_limit 75, cyclomatic_limit 15
     Design.LayerViolation (design, severity high) — imports must target layer(s) [domain]
       forbidden layers: infra
-    Refactor.DuplicateBlock (refactor, severity medium) — min_statements=6, min_chars=80, include_tokens=false, include_ast=true
-    Warning.TripleEquals (warning, severity high) — `==` and `!=` perform type coercion …
+    Refactor.NearDuplicateBlock (refactor, severity low) — min_statements=6, min_chars=80, include_tokens=false, include_ast=true
+    Design.OrphanExport (design, severity medium) — every export must be imported somewhere in-project
     …
 ```
 
@@ -148,12 +146,12 @@ in future minor releases. Published schema: `/schemas/advise-v1.json`.
     "public_api": false,
     "constraints": [
       {
-        "rule": "Readability.MaxLineLength",
-        "category": "readability",
-        "severity": "low",
-        "applies": "limit 120",
-        "rationale": "Lines longer than the configured limit are harder to scan and review.",
-        "parameters": { "limit": 120 }
+        "rule": "Refactor.LongAndComplex",
+        "category": "refactor",
+        "severity": "high",
+        "applies": "length_limit 75, cyclomatic_limit 15",
+        "rationale": "Functions that are both long and cyclomatically complex are the strongest refactor candidates.",
+        "parameters": { "length_limit": 75, "cyclomatic_limit": 15 }
       },
       {
         "rule": "Design.LayerViolation",
@@ -289,11 +287,11 @@ actually change.
   "would_fire": [
     {
       "file": "src/api/route.ts",
-      "check_id": "Warning.TripleEquals",
-      "severity": "medium",
+      "check_id": "Design.LayerViolation",
+      "severity": "high",
       "line": 42,
       "column": 11,
-      "message": "use === instead of ==; == performs type coercion"
+      "message": "import crosses a declared architectural layer not permitted by [layers].allow"
     }
   ],
   "would_clear": [],

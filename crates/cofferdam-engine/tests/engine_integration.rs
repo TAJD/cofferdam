@@ -288,7 +288,7 @@ fn engine_handles_empty_file() {
 }
 
 // ============================================================
-// Refactor.LongAndComplex + MaxFunctionLength comment skip
+// Refactor.LongAndComplex — comment skip
 // ============================================================
 
 #[test]

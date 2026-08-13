@@ -102,7 +102,7 @@ if [[ "$EC" -ne 0 && "$EC" -ne 1 ]]; then
   exit 1
 fi
 
-# Validate JSON shape and assert TripleEquals is in there.
+# Validate JSON shape and assert Design.ReadonlyArrayParam is in there.
 node -e '
   const data = process.argv[1];
   let r;

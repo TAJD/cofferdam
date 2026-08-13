@@ -62,8 +62,8 @@ new finding flagged.
 Cofferdam ships 20+ built-in checks across all five categories,
 including project-graph rules (`Design.OrphanExport`,
 `Design.ImportCycle`, `Design.LayerViolation`, `Refactor.DeadExport`)
-and complexity rules (`Refactor.CyclomaticComplexity`,
-`Refactor.CognitiveComplexity`). Severity gates CI; priority sorts
+and complexity rules (`Refactor.LongAndComplex`,
+`Refactor.PurityHeuristic`). Severity gates CI; priority sorts
 the report — the two are deliberately separate axes.
 
 Full catalog with bad/good examples, options, and per-check defaults:
@@ -104,12 +104,12 @@ optional — unset values fall back to the defaults.
 
 ```toml
 # Lower a check's severity so it stops failing CI but still appears in reports
-[checks."Refactor.CyclomaticComplexity"]
+[checks."Refactor.NearDuplicateBlock"]
 severity = "low"
 
 # Tighten a limit
-[checks."Readability.MaxLineLength"]
-limit = 100
+[checks."Refactor.LongAndComplex"]
+length_limit = 60
 ```
 
 Override per invocation: `--config <path>` points at a specific file,
@@ -128,11 +128,11 @@ eval(generatedCode);
 Range and file-scoped variants:
 
 ```ts
-// cofferdam-ignore-start: Refactor.CyclomaticComplexity
+// cofferdam-ignore-start: Refactor.LongAndComplex
 function generatedRouter(req, res) { /* ... */ }
 // cofferdam-ignore-end
 
-// cofferdam-ignore-file: Readability.MaxLineLength
+// cofferdam-ignore-file: Refactor.NearDuplicateBlock
 ```
 
 ESLint-style aliases (`// cofferdam-disable-next-line <CheckId>`,

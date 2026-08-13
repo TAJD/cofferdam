@@ -24,7 +24,7 @@ The directive must be on its own line, immediately preceding the line with the f
 ### Range suppression
 
 ```ts
-// cofferdam-ignore-start: Refactor.CyclomaticComplexity
+// cofferdam-ignore-start: Refactor.LongAndComplex
 function generatedRouter(req, res) {
   // ... 200 lines of generated switch logic ...
 }
@@ -38,7 +38,7 @@ Suppresses the named check for every line between `cofferdam-ignore-start` and t
 ### File-wide suppression
 
 ```ts
-// cofferdam-ignore-file: Readability.MaxLineLength
+// cofferdam-ignore-file: Refactor.NearDuplicateBlock
 ```
 
 Suppresses the named check for the **entire file**. The directive must appear at the top of the file (before any non-comment, non-blank content). A `cofferdam-ignore-file` that appears mid-file is silently ignored by the engine; a future lint-the-suppressions check will flag it.
@@ -83,11 +83,11 @@ For teams migrating from ESLint, cofferdam also accepts the following aliases. T
 The reason field is the text after the second `:` in a `cofferdam-ignore` directive:
 
 ```ts
-// cofferdam-ignore: Warning.TripleEquals: legacy API contract, == is intentional
-if (req.status == "200") { ... }
+// cofferdam-ignore: Warning.NoEval: legacy codegen bootstrap, not user input
+eval(generatedCode);
 ```
 
-**When required:** by default the reason field is required for any check in the `Warning` category. Omitting it produces an info-level diagnostic: `"suppression of Warning.TripleEquals at line N: reason required"`. The finding is still suppressed.
+**When required:** by default the reason field is required for any check in the `Warning` category. Omitting it produces an info-level diagnostic: `"suppression of Warning.NoEval at line N: reason required"`. The finding is still suppressed.
 
 **Per-check override:** a check can declare its own reason-field policy via `OptionSpec`. A check might relax the requirement (`reason = "optional"`) or tighten it (`reason = "required"` for non-Warning categories). See `cofferdam explain <CheckId> --robot` for the `reason_required` field when it lands.
 

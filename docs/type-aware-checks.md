@@ -15,9 +15,10 @@ JSON-RPC channel. The wire protocol is documented in
 
 The current type-aware built-ins:
 
-- [`Warning.UnusedNullCheck`](/checks/Warning.UnusedNullCheck) — flags an
-  equality check against `null`/`undefined` whose other operand's type
-  already excludes that value, so the guard is dead code.
+- [`Design.UnionExhaustivenessGap`](/checks/Design.UnionExhaustivenessGap) —
+  flags a switch over a discriminated union's tag that doesn't handle every
+  variant and has no default case, so a newly added variant falls through
+  silently.
 
 This page covers built-in check routing. **Plugin checks** can declare
 `requiresTypes: true` too, through the same ts-morph type host — including
@@ -142,5 +143,5 @@ The flag has no effect when:
 To keep the type host but silence one check, raise or lower it like any
 other — for example bump its severity so it doesn't gate, or scope it out
 through your normal suppression flow. The
-[`Warning.UnusedNullCheck`](/checks/Warning.UnusedNullCheck) page shows
-its configurable severity.
+[`Design.UnionExhaustivenessGap`](/checks/Design.UnionExhaustivenessGap) page
+shows its configurable severity.

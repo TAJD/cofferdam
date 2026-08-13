@@ -63,7 +63,7 @@ src/app/checkout.ts
   Design.LayerViolation      imports must target layer(s) [domain, infra]
   Design.InvariantViolation  "no-direct-db-access": must not import src/infra/db
   Design.BoundaryFrozen      not frozen
-  Refactor.CognitiveComplexity  limit 15
+  Refactor.LongAndComplex    length_limit 75, cyclomatic_limit 15
 
 $ cofferdam advise --diff main
 would_fire: 1

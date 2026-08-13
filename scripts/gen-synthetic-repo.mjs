@@ -16,7 +16,7 @@
 //     families are singletons carrying a family-unique marker field, so they
 //     can never match anything: that keeps the duplicate *rate* realistic
 //     while the pairwise comparison cost still scales with the total count.
-//   - Refactor.DuplicateBlock — 6+ statement windows built from a handful of
+//   - Refactor.NearDuplicateBlock — 6+ statement windows built from a handful of
 //     templates. Local identifiers vary per occurrence (the check canonicalises
 //     them away, so duplicates still match); numeric literals do not (they are
 //     hashed verbatim), so the literal set is what actually decides whether two
@@ -24,8 +24,8 @@
 //   - Design.DuplicateExportName / ImportFanOutOutlier / OrphanExport — a real
 //     import graph over a nested directory tree, with a deliberate tail of
 //     re-used export names.
-//   - MaxFunctionLength / CyclomaticComplexity / nesting checks — function
-//     bodies vary in length, branchiness and nesting depth.
+//   - Refactor.LongAndComplex / nesting checks — function bodies vary in
+//     length, branchiness and nesting depth.
 //
 // Usage:
 //   node scripts/gen-synthetic-repo.mjs --out <dir> [--files 5000] [--seed 42]
@@ -379,8 +379,8 @@ function renderPlainFn(name, rng) {
 }
 
 /// A long, deeply nested, branchy function. Emitted for a slice of files so
-/// MaxFunctionLength / CyclomaticComplexity / nesting checks aren't trivially
-/// empty across the whole corpus.
+/// Refactor.LongAndComplex / nesting checks aren't trivially empty across
+/// the whole corpus.
 function renderComplexFn(name, rng) {
   const local = shuffle(rng, [...LOCAL_NAMES]).slice(0, 8);
   const lines = [`  let ${local[0]} = 0;`, `  const ${local[1]}: number[] = [];`];

@@ -293,7 +293,7 @@ Plugin checks: `explain` discovers plugin-declared checks from `cofferdam.toml`'
 
 ###### **Arguments:**
 
-* `<CHECK_ID>` — Dotted check ID, e.g. `Warning.TripleEquals`. If unknown, the CLI prints the closest matches (substring on the ID) or the full list when nothing matches
+* `<CHECK_ID>` — Dotted check ID, e.g. `Refactor.LongAndComplex`. If unknown, the CLI prints the closest matches (substring on the ID) or the full list when nothing matches
 
 ###### **Options:**
 

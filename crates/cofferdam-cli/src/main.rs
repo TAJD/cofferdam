@@ -286,7 +286,7 @@ enum Cmd {
     /// loadable from the current working directory; otherwise the unknown-check
     /// fallback prints suggestions only from built-ins.
     Explain {
-        /// Dotted check ID, e.g. `Warning.TripleEquals`. If unknown,
+        /// Dotted check ID, e.g. `Refactor.LongAndComplex`. If unknown,
         /// the CLI prints the closest matches (substring on the ID) or
         /// the full list when nothing matches.
         #[arg(value_name = "CHECK_ID")]
@@ -1808,7 +1808,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     let project_root = project_root_for_baseline(resolved_baseline.as_deref());
 
     // cd-9hp.2: install the ts-morph type oracle when a registered check
-    // declares `requires_types` (today: `Warning.UnusedNullCheck`). Two
+    // declares `requires_types` (today: `Design.UnionExhaustivenessGap`). Two
     // opt-outs gate worker spawn:
     //   1. auto: `needs_type_oracle()` is false when no registered check
     //      needs types — no worker, zero added cost (cp2).

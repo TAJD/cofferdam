@@ -15,7 +15,7 @@ workspace = true
 cofferdam-core = { workspace = true }
 # tree-sitter pin: bump together with tree-sitter-rust to keep ABI in sync.
 # tree-sitter 0.23 is the current stable line (Nov 2025+).
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 tree-sitter-rust = "0.24"
 thiserror = { workspace = true }
 

@@ -14,8 +14,6 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 
 - [`Consistency.BroadSuppression`](Consistency.BroadSuppression.md) `file` — Broad-form `// cofferdam-ignore` (no check id) silences every check on the next line. Tighten to a scoped form so suppression intent is auditable: `// cofferdam-ignore: <CheckId>: <reason>` (colon-separator) or `// cofferdam-ignore <CheckId> — <reason>` (space-separator, em-dash or hyphen reason).
 - [`Consistency.ErrorHandlingIdiom`](Consistency.ErrorHandlingIdiom.md) `file` — The project predominantly uses one error-handling idiom (throwing, or returning an error-shaped value) — this file deviates from it, hurting consistency of error paths for callers.
-- [`Consistency.QuoteStyle`](Consistency.QuoteStyle.md) `file` — Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.
-- [`Consistency.SpellingDialect`](Consistency.SpellingDialect.md) `file` `advisable` — The project spells one way in most of its prose and another way here. Two spellings of the same word are not two conventions — they are one convention and some outliers.
 - [`Consistency.UnusedSuppression`](Consistency.UnusedSuppression.md) `file` — A `cofferdam-ignore` directive (next-line, range, or file-wide) targets a check ID that has no current finding in scope. The underlying issue was likely fixed or the code was deleted — the directive is now dead weight.
 
 ## Design
@@ -30,7 +28,6 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.ImportFanOutOutlier`](Design.ImportFanOutOutlier.md) `file` — A file's import fan-in or fan-out is a statistical outlier versus the rest of the project — a likely "god module" (doing too much) or over-centralized dependency (too many things depend on one module).
 - [`Design.InvariantViolation`](Design.InvariantViolation.md) `graph` `advisable` — An import edge violates a `[invariants]` rule declared in cofferdam.invariants.toml.
 - [`Design.LayerViolation`](Design.LayerViolation.md) `graph` `advisable` — An import crosses a declared architectural layer in a direction not permitted by [layers].allow.
-- [`Design.MaxParameters`](Design.MaxParameters.md) `file` `advisable` — Functions with too many parameters are hard to call correctly. Pass an options object instead.
 - [`Design.MissingTestFile`](Design.MissingTestFile.md) `file` `advisable` — A file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.
 - [`Design.OrphanExport`](Design.OrphanExport.md) `graph` `advisable` — An exported symbol is never imported anywhere in the project. Likely dead code left over from a refactor.
 - [`Design.ReadonlyArrayParam`](Design.ReadonlyArrayParam.md) `file` — A function parameter typed as a mutable array or object, but never mutated in the body, is a missed `readonly` guarantee — a type-checker-enforced promise to callers that's cheap to add and cheap for them to trust.
@@ -38,37 +35,17 @@ This catalog is generated from `CheckMeta` in the cofferdam source — every che
 - [`Design.UnionExhaustivenessGap`](Design.UnionExhaustivenessGap.md) `file` `type-aware` — A switch over a discriminated union's tag doesn't handle every variant and has no default case — adding a new variant later can silently fall through unhandled.
 - [`Rust.MissingPubDoc`](Rust.MissingPubDoc.md) `file` — Public items in a library crate compose the published API surface. Document each `pub fn` / `pub struct` / `pub enum` / `pub trait` with a `///` doc comment so consumers can understand what to call.
 
-## Readability
-
-- [`Readability.MaxFunctionLength`](Readability.MaxFunctionLength.md) `file` `advisable` — Functions longer than the configured limit are hard to follow. Break them into smaller helpers.
-- [`Readability.MaxLineLength`](Readability.MaxLineLength.md) `file` `advisable` — Lines longer than the configured limit are harder to scan and review.
-
 ## Refactor
 
-- [`Refactor.CognitiveComplexity`](Refactor.CognitiveComplexity.md) `file` `advisable` — Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.
-- [`Refactor.CyclomaticComplexity`](Refactor.CyclomaticComplexity.md) `file` `advisable` — McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.
 - [`Refactor.DeadExport`](Refactor.DeadExport.md) `graph` — Every importer of this export imports its local binding and never references it. The export is dead even though it appears used.
-- [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md) `graph` `advisable` — Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.
 - [`Refactor.LongAndComplex`](Refactor.LongAndComplex.md) `file` `advisable` — Functions that are both long and complex are the strongest refactor candidates. Length alone catches flat config tables; complexity alone catches deeply-branching short helpers. The intersection is almost always a real refactor target.
 - [`Refactor.MixedThrowAndReturnError`](Refactor.MixedThrowAndReturnError.md) `file` — A function that both throws and returns an error-shaped object for what looks like the same class of failure mixes two error-handling idioms, hurting composability of error paths for callers.
-- [`Refactor.MutatedParameter`](Refactor.MutatedParameter.md) `file` — Reassigning or mutating a function parameter breaks pure input→output semantics, making the function harder to test and reason about in isolation.
-- [`Refactor.NearDuplicateBlock`](Refactor.NearDuplicateBlock.md) `file` — Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.
-- [`Refactor.PreferArrayMethodOverLoop`](Refactor.PreferArrayMethodOverLoop.md) `file` — A loop whose entire body pushes one computed value (optionally gated by a single `if`) onto an accumulator array is more clearly expressed as `.map()`/`.filter()`.
-- [`Refactor.PreferConstOverLet`](Refactor.PreferConstOverLet.md) `file` — A `let` binding that's never reassigned should be `const` — it signals the value doesn't change and rules out reassignment bugs at compile time.
-- [`Refactor.PreferNullishCoalescing`](Refactor.PreferNullishCoalescing.md) `file` — `x || default` falls through on every falsy value (`0`, `""`, `false`). Use `??` to fall through only on `null`/`undefined`.
-- [`Refactor.PreferOptionalChain`](Refactor.PreferOptionalChain.md) `file` — `a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.
+- [`Refactor.NearDuplicateBlock`](Refactor.NearDuplicateBlock.md) `graph` `advisable` — Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.
 - [`Refactor.PurityHeuristic`](Refactor.PurityHeuristic.md) `file` `advisable` — An exported function reads a module-level mutable binding not covered by its own parameter list — a hidden dependency on outside-the-signature state that works against unit-testability.
 - [`Refactor.SideEffectInMapCallback`](Refactor.SideEffectInMapCallback.md) `file` — A .map/.filter callback that mutates outer-scope state or calls a known side-effecting function isn't purely computing a value — it's a loop wearing a map costume.
-- [`Refactor.UnusedVariable`](Refactor.UnusedVariable.md) `file` — Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).
 
 ## Warning
 
 - [`Html.MissingLangAttribute`](Html.MissingLangAttribute.md) `file` — The document's `<html>` element has no `lang` attribute, so assistive technology and search engines can't determine the page's language.
 - [`Rust.NoUnimplementedInNonTest`](Rust.NoUnimplementedInNonTest.md) `file` — `unimplemented!()` / `todo!()` panic at runtime; calling them outside test code ships a guaranteed crash. Implement the function or move it into a `#[test]`.
 - [`Rust.NoUnwrapInLib`](Rust.NoUnwrapInLib.md) `file` — Calling `.unwrap()` in library code panics on `None`/`Err(_)` with no diagnostic context. Return `Result` and propagate via `?`, or use `.expect("<reason>")` when the value is provably infallible.
-- [`Warning.NoConsoleLog`](Warning.NoConsoleLog.md) `file` `advisable` — `console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.
-- [`Warning.NoDebugger`](Warning.NoDebugger.md) `file` — `debugger` statements halt execution under attached devtools. Remove before shipping.
-- [`Warning.NoEval`](Warning.NoEval.md) `file` — `eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.
-- [`Warning.TripleEquals`](Warning.TripleEquals.md) `file` — `==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. · autofix
-- [`Warning.UnusedImport`](Warning.UnusedImport.md) `file` — Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.
-- [`Warning.UnusedNullCheck`](Warning.UnusedNullCheck.md) `file` `type-aware` — An equality check against `null`/`undefined` whose other operand's TypeScript type already excludes that value — the guard can never change the outcome. Dead defensive code, or a hint the type annotation disagrees with reality.

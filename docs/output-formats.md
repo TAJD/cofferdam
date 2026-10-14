@@ -35,8 +35,8 @@ only the severity axis blocks CI.
 Default. Findings grouped by category, priority-sorted within each. Decorated with category headers and a trailing summary line. Use for humans reading reports in a terminal.
 
 ```text
-── Warning ───────────────
-  [ 15] [    high] src/auth.ts:42:7  use `===` instead of `==`  (Warning.TripleEquals)
+── Refactor ───────────────
+  [ 15] [    high] src/auth.ts:42:1  function `handleRequest` has cyclomatic complexity 17, exceeds limit of 15  (Refactor.LongAndComplex)
 
 1 finding(s)
 ```
@@ -51,20 +51,20 @@ Stable schema, machine-readable. The full contract is the canonical source for t
 {
   "summary": {
     "total": 1,
-    "by_category": { "warning": 1 }
+    "by_category": { "refactor": 1 }
   },
   "findings": [
     {
-      "id": "Warning.TripleEquals",
-      "category": "warning",
+      "id": "Refactor.LongAndComplex",
+      "category": "refactor",
       "priority": 15,
       "severity": "high",
       "file": "src/auth.ts",
       "line": 42,
-      "column": 7,
+      "column": 1,
       "start_byte": 800,
       "end_byte": 806,
-      "message": "use `===` instead of `==`"
+      "message": "function `handleRequest` has cyclomatic complexity 17, exceeds limit of 15"
     }
   ]
 }
@@ -95,9 +95,9 @@ Every field listed below is **stable** — field names and types are part of the
 
 | Field | Type | Always present | Description |
 |-------|------|----------------|-------------|
-| `id` | `string` | Yes | Dotted check ID, e.g. `Warning.TripleEquals`. Stable — safe to use as a map key or filter. |
+| `id` | `string` | Yes | Dotted check ID, e.g. `Refactor.LongAndComplex`. Stable — safe to use as a map key or filter. |
 | `category` | `string` | Yes | Lowercase category: `consistency` \| `design` \| `readability` \| `refactor` \| `warning`. |
-| `docs_url` | `string` | Yes | Canonical docs-catalogue URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Warning.TripleEquals`. Derived from `id` — no per-check configuration needed. |
+| `docs_url` | `string` | Yes | Canonical docs-catalogue URL for this check, e.g. `https://tajd.github.io/cofferdam/checks/Refactor.LongAndComplex`. Derived from `id` — no per-check configuration needed. |
 | `priority` | `integer` | Yes | Computed sort priority in the range `-20..=20`. Higher value = surfaces first. Not configurable; derived by the engine. |
 | `severity` | `string` | Yes | Configured severity: `info` \| `low` \| `medium` \| `high` \| `critical`. Matches `--fail-on=<level>` threshold values. |
 | `file` | `string` | Yes | Path to the file containing the finding. Forward-slash normalized (even on Windows) so it is safe to use as an editor link or CLI argument on any platform. |
@@ -127,7 +127,7 @@ Pipe-delimited line-per-finding format. Designed for the case where an AI agent 
 
 ```text
 priority|severity|category|id|file|line|column|message
-15|high|warning|Warning.TripleEquals|src/auth.ts|42|7|use `===` instead of `==`
+15|high|refactor|Refactor.LongAndComplex|src/auth.ts|42|1|function `handleRequest` has cyclomatic complexity 17, exceeds limit of 15
 ```
 
 ### Schema (stable contract)
@@ -160,7 +160,7 @@ The columns are stable. Adding a column would break parsers that hardcode the co
 Compact mode v1 does not carry:
 
 - **Baseline tags.** When a baseline is active, the per-finding `baselined` flag is dropped from compact output. Use `--format=json` if you need to know which findings are baselined vs new. The CI gate (`--fail-on`) still respects baselines correctly — only the *display* drops the tag.
-- **Related spans.** Cross-file findings (`Design.DuplicateExportName`, `Refactor.DuplicateBlock`) emit only the primary location in compact mode. The "also at" locations are JSON-only.
+- **Related spans.** Cross-file findings (`Design.DuplicateExportName`, `Refactor.NearDuplicateBlock`) emit only the primary location in compact mode. The "also at" locations are JSON-only.
 - **Truncation note.** `--max-issues` truncates the rendered findings; compact mode does not surface the original total. Use `--format=json` (which adds `summary.truncated_from`) when truncation matters.
 
 These are deliberate v1 cuts to keep the schema fixed at eight columns. If a future use case demands them, the path forward is a `--format=compact-v2` opt-in rather than silently widening the existing schema.
@@ -247,7 +247,7 @@ These formats are planned but unimplemented. Passing `--format=github-annotation
 GitHub Actions supports [workflow commands](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#setting-a-warning-message) that annotate pull-request diffs inline. The `github-annotations` format will emit one line per finding in the format:
 
 ```
-::warning file=src/auth.ts,line=42,col=7,endLine=42,endColumn=13::Warning.TripleEquals: use `===` instead of `==` to avoid type coercion
+::warning file=src/auth.ts,line=42,col=1,endLine=42,endColumn=1::Refactor.LongAndComplex: function `handleRequest` has cyclomatic complexity 17, exceeds limit of 15
 ```
 
 This is line-oriented and intended to be piped through `echo` inside a GitHub Actions step, producing annotations that appear directly in the PR file view. Like compact, it will not carry related spans or baseline tags (JSON is the right choice when you need those). Severity-to-level mapping: `info` → `::notice`, `low`/`medium` → `::warning`, `high`/`critical` → `::error`.

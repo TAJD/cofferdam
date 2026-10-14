@@ -12,7 +12,7 @@ body:
     id: check-id
     attributes:
       label: Proposed check ID
-      description: Use the `Category.Name` form (e.g. `Refactor.DeadCode`, `Warning.NoConsoleLog`).
+      description: Use the `Category.Name` form (e.g. `Refactor.DeadCode`, `Design.LayerViolation`).
       placeholder: "Category.Name"
     validations:
       required: true

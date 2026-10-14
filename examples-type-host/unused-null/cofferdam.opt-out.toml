@@ -1,9 +1,9 @@
 # Opt-out config for the type-host CI smoke test (cd-9hp.2.4).
 #
 # `[engine] type_aware = false` force-disables type-aware checks even
-# though Warning.UnusedNullCheck is registered and a tsconfig.json +
+# though Design.UnionExhaustivenessGap is registered and a tsconfig.json +
 # ts-morph install are present. The smoke script runs cofferdam with this
-# config and asserts ZERO Warning.UnusedNullCheck findings — the escape
-# hatch for CI machines without a Node runtime.
+# config and asserts ZERO Design.UnionExhaustivenessGap findings — the
+# escape hatch for CI machines without a Node runtime.
 [engine]
 type_aware = false

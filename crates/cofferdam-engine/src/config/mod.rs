@@ -4,17 +4,17 @@
 //! at the project root. The schema is deliberately small in v0:
 //!
 //! ```toml
-//! [checks."Readability.MaxLineLength"]
-//! limit = 120
+//! [checks."Refactor.LongAndComplex"]
+//! length_limit = 100
 //! severity = "warning"   # phase-3 (cd-t1a) — accepted, not yet enforced
 //! enabled = true         # an option like any other; only checks that
 //!                        # declare it see it (CD-324)
 //!
-//! [checks."Readability.MaxFunctionLength"]
-//! limit = 50
+//! [checks."Refactor.NearDuplicateBlock"]
+//! min_statements = 8
 //!
-//! [checks."Design.MaxParameters"]
-//! limit = 5
+//! [checks."Design.ReadonlyArrayParam"]
+//! severity = "medium"
 //! ```
 //!
 //! ## Discovery
@@ -108,7 +108,7 @@ pub struct ProjectConfig {
     /// order; the last matching block wins per (check, key).
     pub overrides: Vec<OverrideBlock>,
     /// `[budgets]` table (CD-64 D2) — caps on the number of findings
-    /// allowed for a check id (e.g. `"Refactor.CognitiveComplexity"`) or
+    /// allowed for a check id (e.g. `"Refactor.LongAndComplex"`) or
     /// a whole category (e.g. `"Refactor"`). Counts include baselined
     /// findings, so a budget catches debt a severity-based `--fail-on`
     /// gate would otherwise let through un-gated. Enforced by `cofferdam

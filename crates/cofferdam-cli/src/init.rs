@@ -29,35 +29,16 @@ pub const STARTER_TOML: &str = "\
 # `cofferdam check --fail-on=<level>`):
 #   info | low | medium | high | critical
 
-# [checks.\"Readability.MaxLineLength\"]
-# limit = 120
-# severity = \"low\"
-
-# [checks.\"Readability.MaxFunctionLength\"]
-# limit = 50
-# severity = \"low\"
-
-# [checks.\"Design.MaxParameters\"]
-# limit = 5
-# severity = \"medium\"
+# [checks.\"Refactor.LongAndComplex\"]
+# length_limit = 100
+# cyclomatic_limit = 20
+# severity = \"high\"
 
 # [checks.\"Design.DuplicateExportName\"]
 # severity = \"medium\"
 
-# [checks.\"Refactor.CyclomaticComplexity\"]
+# [checks.\"Refactor.NearDuplicateBlock\"]
 # severity = \"medium\"
-
-# [checks.\"Refactor.CognitiveComplexity\"]
-# severity = \"medium\"
-
-# [checks.\"Refactor.DuplicateBlock\"]
-# severity = \"medium\"
-
-# [checks.\"Warning.TripleEquals\"]
-# severity = \"high\"
-
-# [checks.\"Consistency.QuoteStyle\"]
-# severity = \"low\"
 ";
 
 /// What `init` should do about a baseline. `Auto` triggers an

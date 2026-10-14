@@ -31,7 +31,7 @@ The check-request template (`check-request.yml`) collects the information the ma
 
 ### Proposed check ID
 
-Use the `Category.Name` form, for example `Refactor.DeadCode` or `Warning.NoConsoleLog`.
+Use the `Category.Name` form, for example `Refactor.DeadCode` or `Design.LayerViolation`.
 
 - **Category** must be one of the five: `Consistency`, `Design`, `Readability`, `Refactor`, `Warning`.
 - **Name** should be concise and in PascalCase.

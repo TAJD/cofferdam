@@ -12,7 +12,44 @@
 use std::path::PathBuf;
 
 use cofferdam_checks::all_builtins;
+use cofferdam_core::{Category, Check, CheckContext, CheckMeta, Issue, Severity, SourceFile};
 use cofferdam_engine::{cache::ParseCache, Engine};
+
+/// `all_builtins()` ships no `consistency: true` (two-pass) check today,
+/// so nothing in it ever re-reads a file's cached parse on a pass2
+/// lookup — the only path that registers a `ParseCache` hit. This no-op
+/// two-pass check exists purely to exercise that path so this suite's
+/// hit-count assertions still mean something (CD-357 pass 3 removed
+/// `Consistency.QuoteStyle`, the last real one).
+struct NoopConsistencyCheck;
+
+const NOOP_META: CheckMeta = CheckMeta {
+    id: "Test.NoopConsistency",
+    category: Category::Consistency,
+    base_priority: 0,
+    default_severity: Severity::Info,
+    explanation: "test-only two-pass check to exercise the parse-cache pass2 hit path",
+    body: "test-only two-pass check to exercise the parse-cache pass2 hit path",
+    requires_types: false,
+    consistency: true,
+    options: &[],
+    autofix: false,
+    pure_run: false,
+};
+
+impl Check for NoopConsistencyCheck {
+    fn meta(&self) -> &'static CheckMeta {
+        &NOOP_META
+    }
+
+    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+
+    fn pass2(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
+        Vec::new()
+    }
+}
 
 /// A small, deliberately-orphaned TS project. Exercises both
 /// per-file checks (Warning.TripleEquals, Refactor.UnusedVariable)
@@ -57,7 +94,9 @@ export const gamma = 99;
 }
 
 fn engine() -> Engine {
-    Engine::new(all_builtins())
+    let mut checks = all_builtins();
+    checks.push(Box::new(NoopConsistencyCheck));
+    Engine::new(checks)
 }
 
 fn finding_keys(issues: &[cofferdam_core::Issue]) -> Vec<(String, String, u32, u32)> {

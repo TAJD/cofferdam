@@ -34,50 +34,12 @@
       ]
     },
     {
-      "id": "Consistency.QuoteStyle",
-      "category": "Consistency",
-      "base_priority": -5,
-      "default_severity": "Info",
-      "explanation": "Mixed quote styles within a file hurt scanability. Use a consistent quote character (single or double) throughout.",
-      "body": "---\nid: Consistency.QuoteStyle\ncategory: Consistency\nbase_priority: -5\ndefault_severity: Info\noptions: []\n---\n\nMixed quote styles within a project hurt scannability. The full implementation is gated on the engine's two-pass mode (cd-d1y): pass 1 learns the dominant quote style across the corpus; pass 2 flags deviations. Today this is a stub that emits no findings.\n",
-      "requires_types": false,
-      "consistency": true,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Consistency.SpellingDialect",
-      "category": "Consistency",
-      "base_priority": -5,
-      "default_severity": "Info",
-      "explanation": "The project spells one way in most of its prose and another way here. Two spellings of the same word are not two conventions — they are one convention and some outliers.",
-      "body": "# Consistency.SpellingDialect\n\nTallies British against American spellings across the project, then flags the\nminority. A codebase that writes \"behaviour\" in 40 places and \"behavior\" in\nthree does not have two conventions; it has one convention and three outliers.\n\n## What it reads\n\nIn TypeScript: comments, doc comments and prose-shaped string literals.\nNothing else.\n\nIdentifiers are never scanned, and that is the load-bearing constraint rather\nthan an oversight. `normalize`, `serialize`, `initialize` and CSS `color` are\nAPI surface: renaming a function to satisfy a prose convention would break\ncallers to fix nothing. A string literal counts as prose only if it contains a\nspace, which keeps import specifiers, object keys and check ids out of the\ntally for the same reason.\n\nIn Markdown: the document body. The whole file is prose, so the TypeScript\nrule has no analogue; what is excluded instead is the code a page quotes —\nfenced blocks, inline code spans, link destinations and YAML frontmatter. A\npage documenting a `normalize` option or linking to `color-scheme.md` is\nreporting an American spelling, not writing one. Indented code blocks are not\nexcluded, because four spaces is also how a nested list continuation is\nwritten and silencing every one of those would cost more prose than the rule\nbuys.\n\nMarkdown files are discovered only when a project opts in with `[engine]\nextra_extensions = [\"md\"]`. Without it the corpus is the code half alone, and\na project whose documentation and code disagree sees one side of the\ndisagreement.\n\n## Which dialect\n\nBy default, whichever the project already uses. The check ships no opinion —\ndeciding *which* dialect a team should write is a different and much harder\nquestion than noticing the team has not decided, and only the second is\nsomething a static analyser can answer.\n\nThree things follow from that. The check says nothing until the project has at\nleast eight dialect-carrying words, below which a majority is a coincidence.\nIt says nothing on a close split or a tie, because a project that has not\nchosen is not a project in violation. And when it does fire, the message names\nthe majority spelling rather than a house style.\n\nA team that has chosen can say so:\n\n```toml\n[checks.\"Consistency.SpellingDialect\"]\ndialect = \"british\"   # or \"american\"\n```\n\nWith a dialect pinned the minimum-occurrence floor and the majority rule both\nfall away: every deviation is reported, however few.\n\n## Word list\n\nDeliberately short. The `-ise`/`-ize` family plus the high-frequency pairs that\nturn up in software prose — behaviour, colour, catalogue, centre, defence,\nartefact and their inflections. It is a list, not a dictionary, and it is meant\nto stay that way: a rule that fires on a word nobody meant to standardise is\nworse than one that misses a few.\n\nTwo pairs are left out on purpose. `licence`/`license` splits by part of speech\nin British English, so both spellings are correct in the same document.\n`programme`/`program` is not a dialect pair at all where software is concerned\n— \"program\" is the British spelling too.\n\n## Suppression\n\nThe usual `// cofferdam-disable-next-line Consistency.SpellingDialect`, or a\nseverity override for a directory that quotes external prose verbatim.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "dialect",
-          "kind": "string",
-          "doc": "which dialect is correct: \"british\", \"american\", or \"infer\" (the default) to take whichever the project already uses in most cases. Under \"infer\" the check stays silent on a close split, since a project without a convention has nothing to deviate from.",
-          "default": "infer"
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
       "id": "Consistency.UnusedSuppression",
       "category": "Consistency",
       "base_priority": -5,
       "default_severity": "Low",
       "explanation": "A `cofferdam-ignore` directive (next-line, range, or file-wide) targets a check ID that has no current finding in scope. The underlying issue was likely fixed or the code was deleted — the directive is now dead weight.",
-      "body": "---\nid: Consistency.UnusedSuppression\ncategory: Consistency\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `cofferdam-ignore` suppression directive names a check ID but no current finding for that check exists in the scope the directive covers. The underlying issue was likely fixed, the code was deleted, or the check was renamed — the directive is now dead weight.\n\nThree forms are checked:\n\n- **Next-line** — `// cofferdam-ignore: <CheckId>[: reason]` where the next non-blank line has no matching finding.\n- **Range** — `// cofferdam-ignore-start: <CheckId>` … `// cofferdam-ignore-end` where the covered lines have no matching finding.\n- **File-wide** — `// cofferdam-ignore-file: <CheckId>` where the file has no matching finding anywhere.\n\nBroad-form directives (no check id, e.g. `// cofferdam-ignore`) are not flagged here — that's `Consistency.BroadSuppression`'s territory. Directives targeting a check ID not installed in the current engine run are also skipped — those are `Consistency.UnknownCheckId`'s territory.\n\n**Stale (flag):**\n\n```ts\n// cofferdam-ignore: Warning.TripleEquals: legacy comparator\nconst x = 1 + 1; // no == / != here — suppression is stale\n```\n\n**Stale range (flag):**\n\n```ts\n// cofferdam-ignore-start: Refactor.CyclomaticComplexity\nfunction simple() {\n  return 42;\n}\n// cofferdam-ignore-end\n```\n\n**Still valid (no finding):**\n\n```ts\n// cofferdam-ignore: Warning.TripleEquals: intentional loose comparison\nif (value == null) { /* ... */ }\n```\n\nRemove stale directives to keep the suppression list auditable and reviewable. A suppression with no finding is noise that erodes trust in suppressions that are still load-bearing.\n",
+      "body": "---\nid: Consistency.UnusedSuppression\ncategory: Consistency\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `cofferdam-ignore` suppression directive names a check ID but no current finding for that check exists in the scope the directive covers. The underlying issue was likely fixed, the code was deleted, or the check was renamed — the directive is now dead weight.\n\nThree forms are checked:\n\n- **Next-line** — `// cofferdam-ignore: <CheckId>[: reason]` where the next non-blank line has no matching finding.\n- **Range** — `// cofferdam-ignore-start: <CheckId>` … `// cofferdam-ignore-end` where the covered lines have no matching finding.\n- **File-wide** — `// cofferdam-ignore-file: <CheckId>` where the file has no matching finding anywhere.\n\nBroad-form directives (no check id, e.g. `// cofferdam-ignore`) are not flagged here — that's `Consistency.BroadSuppression`'s territory. Directives targeting a check ID not installed in the current engine run are also skipped — those are `Consistency.UnknownCheckId`'s territory.\n\n**Stale (flag):**\n\n```ts\n// cofferdam-ignore: Refactor.PurityHeuristic: legacy impurity\nexport function double(n: number) {\n  return n * 2; // pure — no module-level mutable reads — suppression is stale\n}\n```\n\n**Stale range (flag):**\n\n```ts\n// cofferdam-ignore-start: Refactor.LongAndComplex\nfunction simple() {\n  return 42;\n}\n// cofferdam-ignore-end\n```\n\n**Still valid (no finding):**\n\n```ts\nlet counter = 0;\n// cofferdam-ignore: Refactor.PurityHeuristic: intentional shared counter\nexport function next() {\n  return counter++;\n}\n```\n\nRemove stale directives to keep the suppression list auditable and reviewable. A suppression with no finding is noise that erodes trust in suppressions that are still load-bearing.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
@@ -264,35 +226,12 @@
       ]
     },
     {
-      "id": "Design.MaxParameters",
-      "category": "Design",
-      "base_priority": 5,
-      "default_severity": "Medium",
-      "explanation": "Functions with too many parameters are hard to call correctly. Pass an options object instead.",
-      "body": "---\nid: Design.MaxParameters\ncategory: Design\nbase_priority: 5\ndefault_severity: Medium\noptions: [limit]\n---\n\nFunctions with too many parameters are hard to call correctly: callers can't remember positional order, and adding a sixth parameter breaks every call site. Pass an options object instead.\n\n```ts\n// flagged: 7 parameters\nfunction createUser(\n  id: string,\n  name: string,\n  email: string,\n  role: Role,\n  team: string,\n  createdBy: string,\n  notify: boolean,\n) { /* ... */ }\n```\n\n```ts\n// fix: collapse into an options object\ninterface CreateUserInput {\n  id: string;\n  name: string;\n  email: string;\n  role: Role;\n  team: string;\n  createdBy: string;\n  notify?: boolean;\n}\nfunction createUser(input: CreateUserInput) { /* ... */ }\n```\n\n```toml\n[checks.\"Design.MaxParameters\"]\nlimit = 6           # bump to 6 if your codebase has earned it\nseverity = \"medium\"\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum number of parameters per function signature",
-          "default": 5
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
       "id": "Design.MissingTestFile",
       "category": "Design",
       "base_priority": 4,
       "default_severity": "Low",
       "explanation": "A file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.",
-      "body": "---\nid: Design.MissingTestFile\ncategory: Design\nbase_priority: 4\ndefault_severity: Low\noptions:\n  - name: test_match_patterns\n    kind: string_list\n    default: [\"{name}.test.ts\", \"{name}.test.tsx\", \"{name}.spec.ts\", \"{name}.spec.tsx\", \"__tests__/{name}.test.ts\", \"__tests__/{name}.test.tsx\", \"__tests__/{name}.spec.ts\", \"__tests__/{name}.spec.tsx\"]\n  - name: test_file_patterns\n    kind: string_list\n    default: [\".test.\", \".spec.\", \"_test.\", \"_spec.\", \"/__tests__/\", \"/__mocks__/\"]\n  - name: framework_entry_patterns\n    kind: string_list\n    default: [\"/page.\", \"/layout.\", \"/route.\", \"...\"]\n---\n\nA file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.\n\n```ts\n// format-currency.ts — exported behavior with no test file anywhere\nexport function formatCurrency(cents: number): string {\n  return `$${(cents / 100).toFixed(2)}`;\n}\n```\n\nNot flagged — the file only re-exports (a barrel) or only exports types, so there's no behaviour of its own to test:\n\n```ts\n// index.ts\nexport * from \"./format-currency\";\nexport type { CurrencyOptions } from \"./types\";\n```\n\nMatching: for each candidate source file, the check substitutes `{name}` (the file's stem) into every `test_match_patterns` template, resolves the result relative to the source file's own directory, and looks for it in the project's known-files universe (built from the import/export graph, same construction `Design.ImportFanOutOutlier` uses). The default templates cover same-directory and sibling-`__tests__/` conventions for both `.test.` and `.spec.` naming, across `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.mts`/`.cts` extensions. Configure `test_match_patterns` for a project with a different layout (e.g. a top-level `tests/` directory mirroring `src/`).\n\nType-identity escape hatch: a file is also treated as tested when a test file imports one of its real exports and uses that binding in a *type-assertion* position — `err instanceof ValidationError`, `expect(fn).toThrow(ValidationError)`, `expect(err).toBeInstanceOf(ValidationError)`. Error and exception classes are routinely tested for their type identity from the test of whatever *throws* them, rather than from a test file named after the class's own module, and the filename rule alone reports those as untested. The credit is deliberately narrow: merely importing a binding into a test (a fixture builder, say) does not count, the asserted local name must resolve to a real export of the file, and resolution follows one re-export hop so a class reached through an `errors/index.ts` barrel still credits `errors/validation.ts`. There is no option for this — it removes false positives only, so there is nothing to tune.\n\nExemptions: a file already recognised as a test/mock itself (`test_file_patterns`, same default list as `Design.OrphanExport`) is never flagged for missing its own test. A framework entry-point file (`framework_entry_patterns`, shared default with `Design.OrphanExport`/`Warning.UnusedImport`) is exempt too — the framework runtime, not a unit test, is what exercises it.\n\nScope: the known-files universe only includes files that appear as an import source, an export site, or a resolved import target — a test file with zero imports and zero exports of its own wouldn't be visible here even if it exists on disk. In practice a test file almost always imports the module it's testing, so this is a narrow gap. A project with a `tests/` directory that mirrors `src/` at the project root (rather than sitting alongside each source file) needs a custom `test_match_patterns` entry — the defaults only check same-directory and sibling-`__tests__/` locations. The default templates aren't matched against the source file's own extension — they're just a flat list covering every supported extension — so a `.ts` source with only a stray `.test.js` sibling would technically also suppress a finding; this cross-extension false-negative is accepted as harmless in practice.\n",
+      "body": "---\nid: Design.MissingTestFile\ncategory: Design\nbase_priority: 4\ndefault_severity: Low\noptions:\n  - name: test_match_patterns\n    kind: string_list\n    default: [\"{name}.test.ts\", \"{name}.test.tsx\", \"{name}.spec.ts\", \"{name}.spec.tsx\", \"__tests__/{name}.test.ts\", \"__tests__/{name}.test.tsx\", \"__tests__/{name}.spec.ts\", \"__tests__/{name}.spec.tsx\"]\n  - name: test_file_patterns\n    kind: string_list\n    default: [\".test.\", \".spec.\", \"_test.\", \"_spec.\", \"/__tests__/\", \"/__mocks__/\"]\n  - name: framework_entry_patterns\n    kind: string_list\n    default: [\"/page.\", \"/layout.\", \"/route.\", \"...\"]\n---\n\nA file exports at least one real (non-type-only, non-re-export) symbol but no corresponding test file exists anywhere in the project.\n\n```ts\n// format-currency.ts — exported behavior with no test file anywhere\nexport function formatCurrency(cents: number): string {\n  return `$${(cents / 100).toFixed(2)}`;\n}\n```\n\nNot flagged — the file only re-exports (a barrel) or only exports types, so there's no behaviour of its own to test:\n\n```ts\n// index.ts\nexport * from \"./format-currency\";\nexport type { CurrencyOptions } from \"./types\";\n```\n\nMatching: for each candidate source file, the check substitutes `{name}` (the file's stem) into every `test_match_patterns` template, resolves the result relative to the source file's own directory, and looks for it in the project's known-files universe (built from the import/export graph, same construction `Design.ImportFanOutOutlier` uses). The default templates cover same-directory and sibling-`__tests__/` conventions for both `.test.` and `.spec.` naming, across `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.mts`/`.cts` extensions. Configure `test_match_patterns` for a project with a different layout (e.g. a top-level `tests/` directory mirroring `src/`).\n\nType-identity escape hatch: a file is also treated as tested when a test file imports one of its real exports and uses that binding in a *type-assertion* position — `err instanceof ValidationError`, `expect(fn).toThrow(ValidationError)`, `expect(err).toBeInstanceOf(ValidationError)`. Error and exception classes are routinely tested for their type identity from the test of whatever *throws* them, rather than from a test file named after the class's own module, and the filename rule alone reports those as untested. The credit is deliberately narrow: merely importing a binding into a test (a fixture builder, say) does not count, the asserted local name must resolve to a real export of the file, and resolution follows one re-export hop so a class reached through an `errors/index.ts` barrel still credits `errors/validation.ts`. There is no option for this — it removes false positives only, so there is nothing to tune.\n\nExemptions: a file already recognised as a test/mock itself (`test_file_patterns`, same default list as `Design.OrphanExport`) is never flagged for missing its own test. A framework entry-point file (`framework_entry_patterns`, shared default with `Design.OrphanExport`) is exempt too — the framework runtime, not a unit test, is what exercises it.\n\nScope: the known-files universe only includes files that appear as an import source, an export site, or a resolved import target — a test file with zero imports and zero exports of its own wouldn't be visible here even if it exists on disk. In practice a test file almost always imports the module it's testing, so this is a narrow gap. A project with a `tests/` directory that mirrors `src/` at the project root (rather than sitting alongside each source file) needs a custom `test_match_patterns` entry — the defaults only check same-directory and sibling-`__tests__/` locations. The default templates aren't matched against the source file's own extension — they're just a flat list covering every supported extension — so a `.ts` source with only a stray `.test.js` sibling would technically also suppress a finding; this cross-extension false-negative is accepted as harmless in practice.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
@@ -495,7 +434,7 @@
       "base_priority": 5,
       "default_severity": "Low",
       "explanation": "A function parameter typed as a mutable array or object, but never mutated in the body, is a missed `readonly` guarantee — a type-checker-enforced promise to callers that's cheap to add and cheap for them to trust.",
-      "body": "---\nid: Design.ReadonlyArrayParam\ncategory: Design\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\nA function parameter declared with a mutable array (`T[]`, `Array<T>`) or object-literal (`{ x: number }`) type, where nothing in the function body mutates it — a missed opportunity for a `readonly` guarantee the type checker would enforce for free.\n\n```ts\nfunction total(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\n```ts\n// fix — readonly is a compiler-enforced promise, not just a convention\nfunction total(items: readonly number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — the parameter is genuinely mutated in the body:\n\n```ts\nfunction sortInPlace(items: number[]): void {\n  items.sort();\n}\n```\n\nNot flagged — the parameter is passed through to another call, which might mutate it; this check can't see across the call graph, so it conservatively skips rather than risk a false positive:\n\n```ts\nfunction process(items: number[]): void {\n  mutateSomewhere(items);\n}\n```\n\nScope: declared-type syntax only — the parameter's own `TSTypeAnnotation` is read directly from the AST, not resolved through the ts-morph type host, so an untyped or inferred parameter isn't checked. A type already wrapped in `readonly`/`ReadonlyArray<T>`/`Readonly<T>` is never a candidate. Only single-level assignment/index writes and array-mutating method calls (`.push`, `.splice`, ...) on the parameter's own root identifier are recognised as \"mutated\" — a nested function or arrow declared inside the callback is a separate scope and isn't descended into, mirroring `Refactor.MutatedParameter`. A mutation inside a nested closure (`items.forEach(() => items.push(1))`) is therefore not seen, and a param handed off wrapped in another expression (`f({ items })`, a ternary arm) isn't recognised as an escape — only a bare identifier/spread passed directly as an argument is.\n",
+      "body": "---\nid: Design.ReadonlyArrayParam\ncategory: Design\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\nA function parameter declared with a mutable array (`T[]`, `Array<T>`) or object-literal (`{ x: number }`) type, where nothing in the function body mutates it — a missed opportunity for a `readonly` guarantee the type checker would enforce for free.\n\n```ts\nfunction total(items: number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\n```ts\n// fix — readonly is a compiler-enforced promise, not just a convention\nfunction total(items: readonly number[]): number {\n  return items.reduce((sum, n) => sum + n, 0);\n}\n```\n\nNot flagged — the parameter is genuinely mutated in the body:\n\n```ts\nfunction sortInPlace(items: number[]): void {\n  items.sort();\n}\n```\n\nNot flagged — the parameter is passed through to another call, which might mutate it; this check can't see across the call graph, so it conservatively skips rather than risk a false positive:\n\n```ts\nfunction process(items: number[]): void {\n  mutateSomewhere(items);\n}\n```\n\nScope: declared-type syntax only — the parameter's own `TSTypeAnnotation` is read directly from the AST, not resolved through the ts-morph type host, so an untyped or inferred parameter isn't checked. A type already wrapped in `readonly`/`ReadonlyArray<T>`/`Readonly<T>` is never a candidate. Only single-level assignment/index writes and array-mutating method calls (`.push`, `.splice`, ...) on the parameter's own root identifier are recognised as \"mutated\" — a nested function or arrow declared inside the callback is a separate scope and isn't descended into. A mutation inside a nested closure (`items.forEach(() => items.push(1))`) is therefore not seen, and a param handed off wrapped in another expression (`f({ items })`, a ternary arm) isn't recognised as an escape — only a bare identifier/spread passed directly as an argument is.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
@@ -551,104 +490,6 @@
       ]
     },
     {
-      "id": "Readability.MaxFunctionLength",
-      "category": "Readability",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "Functions longer than the configured limit are hard to follow. Break them into smaller helpers.",
-      "body": "---\nid: Readability.MaxFunctionLength\ncategory: Readability\nbase_priority: -5\ndefault_severity: Low\noptions: [limit]\n---\n\nFunctions longer than the configured limit are hard to follow. Break them into smaller helpers. The metric counts lines in the function body, not the whole declaration.\n\n```ts\n// flagged: body > 50 lines\nfunction processOrder(order: Order) {\n  // ... 80 lines of validation, pricing, side effects, and persistence\n}\n```\n\n```ts\n// fix: extract pure helpers with single responsibilities\nfunction processOrder(order: Order) {\n  const validated = validateOrder(order);\n  const priced = priceOrder(validated);\n  return persistOrder(priced);\n}\n```\n\n```toml\n[checks.\"Readability.MaxFunctionLength\"]\nlimit = 80\nseverity = \"low\"\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum function body length in lines",
-          "default": 50
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
-      "id": "Readability.MaxLineLength",
-      "category": "Readability",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "Lines longer than the configured limit are harder to scan and review.",
-      "body": "---\nid: Readability.MaxLineLength\ncategory: Readability\nbase_priority: -5\ndefault_severity: Low\noptions: [limit]\n---\n\nLines longer than the configured limit are harder to scan and review. The check is a pure text-line scan — no AST traversal, so it runs even when a file fails to parse.\n\n```ts\n// flagged: > 120 columns\nconst config = { name: \"very long literal\", flags: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"], description: \"...\" };\n```\n\n```ts\n// fix: break across lines\nconst config = {\n  name: \"very long literal\",\n  flags: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"],\n  description: \"...\",\n};\n```\n\n```toml\n[checks.\"Readability.MaxLineLength\"]\nlimit = 100\nseverity = \"info\"\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum line length in display columns",
-          "default": 120
-        },
-        {
-          "id": "report_unwrappable",
-          "kind": "boolean",
-          "doc": "report lines even when the overflow comes from a single atomic token (a string/template/regex literal, or a JSX attribute with a literal value) that no formatter can break; disabled by default since such lines can't be shortened by hand either",
-          "default": false
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
-      "id": "Refactor.CognitiveComplexity",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Medium",
-      "explanation": "Sonar-style cognitive complexity. Branching breaks plus a nesting penalty — deeply nested code costs more than a long flat switch.",
-      "body": "---\nid: Refactor.CognitiveComplexity\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions:\n  - name: limit\n    kind: int\n    default: 15\n    doc: maximum cognitive complexity per function\n---\n\nSonar-style cognitive complexity per function — branching breaks plus a nesting penalty. Deeply nested code costs more than a long flat switch. Tracks `if`/`else if`, loops, ternaries, `switch`, `catch`, sequences of `&&`/`||`/`??`, and recursion-by-name. Default limit is `15`; override per-project with `[checks.\"Refactor.CognitiveComplexity\"] limit = N` in `cofferdam.toml`.\n\n```ts\n// flagged: nested branches stack a nesting penalty\nfunction classify(record: Record) {\n  if (record.kind === \"user\") {\n    if (record.active) {\n      for (const role of record.roles) {\n        if (role.permissions.includes(\"admin\")) {\n          return \"active-admin\";\n        }\n      }\n    }\n  }\n  return \"other\";\n}\n```\n\n```ts\n// fix: flatten via early returns and helpers\nfunction classify(record: Record) {\n  if (record.kind !== \"user\" || !record.active) return \"other\";\n  return hasAdmin(record.roles) ? \"active-admin\" : \"other\";\n}\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum cognitive complexity per function",
-          "default": 15
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
-      "id": "Refactor.CyclomaticComplexity",
-      "category": "Refactor",
-      "base_priority": 8,
-      "default_severity": "Medium",
-      "explanation": "McCabe cyclomatic complexity counts independent paths through a function. High values indicate branching that's hard to test and reason about.",
-      "body": "---\nid: Refactor.CyclomaticComplexity\ncategory: Refactor\nbase_priority: 8\ndefault_severity: Medium\noptions:\n  - name: limit\n    kind: int\n    default: 10\n    doc: maximum cyclomatic complexity per function\n---\n\nMcCabe cyclomatic complexity per function — independent paths through the body. Starts at `1` and adds `1` for each branching node: `if`, each non-default `case`, each loop, ternary, `catch`, and each `&&` / `||` / `??` in conditions. Plain `else` does not add a path. Default limit is `10`; override per-project with `[checks.\"Refactor.CyclomaticComplexity\"] limit = N` in `cofferdam.toml`.\n\nCyclomatic and cognitive complexity often flag the same functions but rank them differently. Both are useful — cyclomatic captures \"how many test cases do I need\", cognitive captures \"how hard is this to read\". Run them together; the worst offenders fail both.\n\n```ts\n// flagged: 11 independent paths via &&/case/if combinations\nfunction dispatch(event: Event) {\n  switch (event.kind) {\n    case \"create\": return event.payload && event.payload.id ? handleCreate(event) : null;\n    case \"update\": return event.payload && event.payload.id ? handleUpdate(event) : null;\n    case \"delete\": return event.payload && event.payload.id ? handleDelete(event) : null;\n    case \"ping\": return null;\n    default: return null;\n  }\n}\n```\n\n```ts\n// fix: dispatch table flattens the case explosion\nconst handlers = { create: handleCreate, update: handleUpdate, delete: handleDelete } as const;\nfunction dispatch(event: Event) {\n  const handler = handlers[event.kind as keyof typeof handlers];\n  if (!handler || !event.payload?.id) return null;\n  return handler(event);\n}\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "limit",
-          "kind": "integer",
-          "doc": "maximum cyclomatic complexity per function",
-          "default": 10
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
       "id": "Refactor.DeadExport",
       "category": "Refactor",
       "base_priority": 4,
@@ -664,12 +505,56 @@
       ]
     },
     {
-      "id": "Refactor.DuplicateBlock",
+      "id": "Refactor.LongAndComplex",
       "category": "Refactor",
       "base_priority": 12,
-      "default_severity": "Medium",
-      "explanation": "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
-      "body": "---\nid: Refactor.DuplicateBlock\ncategory: Refactor\nbase_priority: 12\ndefault_severity: Medium\noptions: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]\n---\n\nRuns of statements that recur, verbatim, in multiple files. Likely copy-paste — extract a shared helper. Canonicalisation maps identifier tokens to per-window local indices so renamed copies still match; a block that is otherwise identical but carries different string or number literal values is not this check's concern — it is reported separately, at low severity, by [`Refactor.NearDuplicateBlock`](Refactor.NearDuplicateBlock.md), since a near-clone is a weaker and noisier signal than a byte-identical one and should not trip a default CI gate on its own. The `normalize_literals` option controls which of the two checks a given block lands on (see that page), not whether it is reported at all. `import` declarations and re-exports (`export { x } from './y'`) are never windowed at all — an import block can't be extracted into a shared helper, so treating one run of imports as a duplicate of another is never actionable, and normalizing their module-specifier string literals would otherwise make every same-length import block in a project match every other. A plain `export { x }` or `export function f() {}` (no `source`) is ordinary code and is unaffected. Minimum window is `6` consecutive statements (and `80` characters) to keep noise low. Cross-file: per-file `run` writes fingerprints into a corpus slot shared with `Refactor.NearDuplicateBlock`; `finalize` groups by hash, runs one overlap-claim pass across both checks' candidates together (so the two never report overlapping spans), and emits one `Issue` per verbatim-duplicate set with `related` spans pointing at every other occurrence.\n\n```ts\n// src/orders.ts:42\nconst items = parseItems(input);\nconst validated = validateItems(items);\nconst priced = priceItems(validated, currency);\nconst taxed = applyTax(priced, region);\nconst total = sumItems(taxed);\nreturn { items: taxed, total };\n```\n\n```ts\n// src/quotes.ts:88 — same shape, renamed: flagged as related\nconst products = parseItems(input);\nconst checkedProducts = validateItems(products);\nconst pricedProducts = priceItems(checkedProducts, currency);\nconst taxedProducts = applyTax(pricedProducts, region);\nconst total = sumItems(taxedProducts);\nreturn { items: taxedProducts, total };\n```\n\n```ts\n// fix: extract once\nexport function pipeline(input: RawInput, currency: Currency, region: Region) {\n  const items = parseItems(input);\n  const validated = validateItems(items);\n  const priced = priceItems(validated, currency);\n  const taxed = applyTax(priced, region);\n  return { items: taxed, total: sumItems(taxed) };\n}\n```\n\n**Suppressing:** each duplicate group is emitted as a single `Issue` covering every\noccurrence — one primary location plus `related` spans for the rest. A\n`cofferdam-ignore: Refactor.DuplicateBlock` comment placed at *any* occurrence (the\nprimary one or any related one) suppresses the whole finding, not just that copy.\nYou don't need to find and suppress every occurrence individually — one ignore\ncomment on either side of a duplicated pair is enough. Suppression targets the\ncomment's next non-blank line, not a range, so anchor it to the first *statement*\nof the duplicated run — not to an import or other declaration preceding it. Import\nand re-export statements are excluded from windows entirely, so a comment sitting\nabove one no longer covers the block that follows.\n",
+      "default_severity": "High",
+      "explanation": "Functions that are both long and complex are the strongest refactor candidates. Length alone catches flat config tables; complexity alone catches deeply-branching short helpers. The intersection is almost always a real refactor target.",
+      "body": "---\nid: Refactor.LongAndComplex\ncategory: Refactor\nbase_priority: 12\ndefault_severity: High\noptions: [length_limit, cyclomatic_limit]\n---\n\nFlag functions that are **both** long and cyclomatically complex. Length alone catches flat config blocks and long switch tables that may be perfectly readable; complexity alone catches deeply branching helpers that may still fit on one screen. Functions that exceed both thresholds are the strongest refactor candidates.\n\nLength is measured as body lines excluding blanks and pure-comment lines. Cyclomatic complexity is measured as McCabe count starting at `1`, adding `1` per branching node.\n\nDefaults: `length_limit = 75`, `cyclomatic_limit = 15`. These are intentionally above the standalone limits — this check is about the worst offenders, not the long tail.\n\n```ts\n// flagged: 90 effective lines AND cyclomatic 17 — both dimensions exceeded\nfunction processOrder(order: Order, config: Config, env: Env) {\n  // ... 90 lines of validation, branching, side effects ...\n}\n```\n\n```ts\n// fix: split along the seams the complexity exposes\nfunction processOrder(order: Order, config: Config, env: Env) {\n  const validated = validateOrder(order, config);\n  const priced = priceOrder(validated, env);\n  return persistOrder(priced);\n}\n```\n\n```toml\n[checks.\"Refactor.LongAndComplex\"]\nlength_limit = 100\ncyclomatic_limit = 20\nseverity = \"high\"\n```\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [
+        {
+          "id": "length_limit",
+          "kind": "integer",
+          "doc": "minimum non-blank-non-comment body lines for a function to be considered long",
+          "default": 75
+        },
+        {
+          "id": "cyclomatic_limit",
+          "kind": "integer",
+          "doc": "minimum cyclomatic complexity for a function to be considered complex",
+          "default": 15
+        }
+      ],
+      "badges": [
+        "file",
+        "advisable"
+      ]
+    },
+    {
+      "id": "Refactor.MixedThrowAndReturnError",
+      "category": "Refactor",
+      "base_priority": -5,
+      "default_severity": "Low",
+      "explanation": "A function that both throws and returns an error-shaped object for what looks like the same class of failure mixes two error-handling idioms, hurting composability of error paths for callers.",
+      "body": "---\nid: Refactor.MixedThrowAndReturnError\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA function that both `throw`s and `return`s an error-shaped object literal (a field named exactly `error`, `ok`, or `success`) for what looks like the same class of failure mixes two error-handling idioms. Callers can't compose the error path — some failures need a `try`/`catch`, others need an `if (result.error)` check.\n\n```ts\nfunction parseConfig(input: string) {\n  if (!input) {\n    throw new Error(\"input required\");\n  }\n  const parsed = tryParse(input);\n  if (!parsed) {\n    return { error: \"invalid config\" };\n  }\n  return parsed;\n}\n```\n\n```ts\n// fix — pick one idiom\nfunction parseConfig(input: string) {\n  if (!input) {\n    return { error: \"input required\" };\n  }\n  const parsed = tryParse(input);\n  if (!parsed) {\n    return { error: \"invalid config\" };\n  }\n  return { ok: true, value: parsed };\n}\n```\n\nNot flagged — a function that only ever returns an error-shaped object, with no throw anywhere:\n\n```ts\nfunction loadResult(): Result {\n  return { error: null, value: 42 };\n}\n```\n\nNot flagged — a throw and an error-shaped return in the exact same block (the return is unreachable dead code, not a competing idiom):\n\n```ts\nfunction overlapping(x: number) {\n  if (x < 0) {\n    throw new Error(\"negative\");\n    return { error: \"unreachable\" };\n  }\n  return x * 2;\n}\n```\n\nNot flagged — `{ error: null }` and `{ ok: true }` / `{ success: true }` are the SUCCESS arm of a Result-shaped return, not a competing error idiom, even alongside an unrelated throw:\n\n```ts\nfunction divide(a: number, b: number) {\n  if (b === 0) {\n    throw new Error(\"division by zero is a programmer error\");\n  }\n  return { error: null, value: a / b };\n}\n```\n\nBrace-less guard clauses (`if (c) throw x;`, no `{}`) are still treated as their own branch, so this flags the same way with or without braces:\n\n```ts\nfunction parseId(raw: string) {\n  if (!raw) throw new Error(\"id required\");\n  if (raw.length > 64) return { error: \"id too long\" };\n  return raw;\n}\n```\n\nScope: only inspects a function's own statements — nested functions (declarations, expressions, arrow functions) are separate scopes and are analysed independently, not folded into the outer function's throw/return count. Arrow functions themselves aren't currently inspected as the outer subject of this check, only `function` declarations/expressions and class methods.\n",
+      "requires_types": false,
+      "consistency": false,
+      "autofix": false,
+      "options": [],
+      "badges": [
+        "file"
+      ]
+    },
+    {
+      "id": "Refactor.NearDuplicateBlock",
+      "category": "Refactor",
+      "base_priority": 10,
+      "default_severity": "Low",
+      "explanation": "Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.",
+      "body": "---\nid: Refactor.NearDuplicateBlock\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Low\noptions: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]\n---\n\nRuns of statements that are structurally identical to a block elsewhere in the project, whether or not they are byte-identical. Identifier tokens are canonicalised to per-window local indices, so a renamed copy still matches; the case this check is named for is the one where a literal, not a name, is the only thing that changed. That is usually the interesting half of the finding: two blocks drift apart because someone copied one and edited the values, and the edit — which fields moved, which threshold changed — is worth a look even though the shape underneath is unchanged.\n\n```ts\n// src/billing/charge-gold.ts\nconst productId = \"gold-membership\";\nconst amountCents = 4999;\nconst invoice = createInvoice(account, productId, amountCents);\nconst receipt = submitInvoice(invoice, \"Gold membership\");\nreturn receipt;\n```\n\n```ts\n// src/billing/charge-silver.ts — same shape, different literals: flagged as related\nconst productId = \"silver-membership\";\nconst amountCents = 2999;\nconst invoice = createInvoice(account, productId, amountCents);\nconst receipt = submitInvoice(invoice, \"Silver membership\");\nreturn receipt;\n```\n\nThe check fingerprints every window of statements, groups them by structural `hash`, and reports groups whose members are structurally identical but not byte-identical (differing `exact_hash`). An overlap-claim pass runs once over the candidates so no two reported findings cover the same span.\n\nOptions are `min_statements`, `min_chars`, `include_tokens`, `include_ast` and `normalize_literals`. They set the window shape, so they govern which runs of code are considered at all:\n\n```toml\n[checks.\"Refactor.NearDuplicateBlock\"]\nmin_statements = 6\n```\n\n**Severity:** near-clones default to `low` and print without tripping the default `--fail-on medium` gate. That is deliberate — literal-drift duplicates are a noisier and less actionable signal than verbatim copy-paste, and defaulting them to `low` keeps them out of a build gate that was not set up to expect them. To gate on this check too, raise its severity in `cofferdam.toml`:\n\n```toml\n[checks.\"Refactor.NearDuplicateBlock\"]\nseverity = \"medium\"\n```\n\n**Suppressing:** each group is one `Issue` with `related` spans for every other occurrence, so a `cofferdam-ignore: Refactor.NearDuplicateBlock` comment at any one occurrence suppresses the whole finding.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
@@ -711,140 +596,6 @@
       ]
     },
     {
-      "id": "Refactor.LongAndComplex",
-      "category": "Refactor",
-      "base_priority": 12,
-      "default_severity": "High",
-      "explanation": "Functions that are both long and complex are the strongest refactor candidates. Length alone catches flat config tables; complexity alone catches deeply-branching short helpers. The intersection is almost always a real refactor target.",
-      "body": "---\nid: Refactor.LongAndComplex\ncategory: Refactor\nbase_priority: 12\ndefault_severity: High\noptions: [length_limit, cyclomatic_limit]\n---\n\nFlag functions that are **both** long and cyclomatically complex. Length alone catches flat config blocks and long switch tables that may be perfectly readable; complexity alone catches deeply branching helpers that may still fit on one screen. Functions that exceed both thresholds are the strongest refactor candidates.\n\nLength is measured the same way `Readability.MaxFunctionLength` measures it — body lines excluding blanks and pure-comment lines. Cyclomatic complexity is measured the same way `Refactor.CyclomaticComplexity` measures it — McCabe count starting at `1`, adding `1` per branching node.\n\nDefaults: `length_limit = 75`, `cyclomatic_limit = 15`. These are intentionally above the standalone limits — this check is about the worst offenders, not the long tail.\n\n```ts\n// flagged: 90 effective lines AND cyclomatic 17 — both dimensions exceeded\nfunction processOrder(order: Order, config: Config, env: Env) {\n  // ... 90 lines of validation, branching, side effects ...\n}\n```\n\n```ts\n// fix: split along the seams the complexity exposes\nfunction processOrder(order: Order, config: Config, env: Env) {\n  const validated = validateOrder(order, config);\n  const priced = priceOrder(validated, env);\n  return persistOrder(priced);\n}\n```\n\n```toml\n[checks.\"Refactor.LongAndComplex\"]\nlength_limit = 100\ncyclomatic_limit = 20\nseverity = \"high\"\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "length_limit",
-          "kind": "integer",
-          "doc": "minimum non-blank-non-comment body lines for a function to be considered long",
-          "default": 75
-        },
-        {
-          "id": "cyclomatic_limit",
-          "kind": "integer",
-          "doc": "minimum cyclomatic complexity for a function to be considered complex",
-          "default": 15
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
-      "id": "Refactor.MixedThrowAndReturnError",
-      "category": "Refactor",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "A function that both throws and returns an error-shaped object for what looks like the same class of failure mixes two error-handling idioms, hurting composability of error paths for callers.",
-      "body": "---\nid: Refactor.MixedThrowAndReturnError\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA function that both `throw`s and `return`s an error-shaped object literal (a field named exactly `error`, `ok`, or `success`) for what looks like the same class of failure mixes two error-handling idioms. Callers can't compose the error path — some failures need a `try`/`catch`, others need an `if (result.error)` check.\n\n```ts\nfunction parseConfig(input: string) {\n  if (!input) {\n    throw new Error(\"input required\");\n  }\n  const parsed = tryParse(input);\n  if (!parsed) {\n    return { error: \"invalid config\" };\n  }\n  return parsed;\n}\n```\n\n```ts\n// fix — pick one idiom\nfunction parseConfig(input: string) {\n  if (!input) {\n    return { error: \"input required\" };\n  }\n  const parsed = tryParse(input);\n  if (!parsed) {\n    return { error: \"invalid config\" };\n  }\n  return { ok: true, value: parsed };\n}\n```\n\nNot flagged — a function that only ever returns an error-shaped object, with no throw anywhere:\n\n```ts\nfunction loadResult(): Result {\n  return { error: null, value: 42 };\n}\n```\n\nNot flagged — a throw and an error-shaped return in the exact same block (the return is unreachable dead code, not a competing idiom):\n\n```ts\nfunction overlapping(x: number) {\n  if (x < 0) {\n    throw new Error(\"negative\");\n    return { error: \"unreachable\" };\n  }\n  return x * 2;\n}\n```\n\nNot flagged — `{ error: null }` and `{ ok: true }` / `{ success: true }` are the SUCCESS arm of a Result-shaped return, not a competing error idiom, even alongside an unrelated throw:\n\n```ts\nfunction divide(a: number, b: number) {\n  if (b === 0) {\n    throw new Error(\"division by zero is a programmer error\");\n  }\n  return { error: null, value: a / b };\n}\n```\n\nBrace-less guard clauses (`if (c) throw x;`, no `{}`) are still treated as their own branch, so this flags the same way with or without braces:\n\n```ts\nfunction parseId(raw: string) {\n  if (!raw) throw new Error(\"id required\");\n  if (raw.length > 64) return { error: \"id too long\" };\n  return raw;\n}\n```\n\nScope: only inspects a function's own statements — nested functions (declarations, expressions, arrow functions) are separate scopes and are analysed independently, not folded into the outer function's throw/return count. Arrow functions themselves aren't currently inspected as the outer subject of this check, only `function` declarations/expressions and class methods.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.MutatedParameter",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Medium",
-      "explanation": "Reassigning or mutating a function parameter breaks pure input→output semantics, making the function harder to test and reason about in isolation.",
-      "body": "---\nid: Refactor.MutatedParameter\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\nA function reassigns or mutates one of its own parameters. Callers pass a value expecting the function to compute a result from it, not to have their argument silently changed underneath them — and a function that only reads its parameters is trivially testable input→output, with no need to inspect or snapshot the argument afterward.\n\n```ts\nfunction withDiscount(price: number, rate: number) {\n  price = price - price * rate;   // flagged — reassigns the `price` parameter\n  return price;\n}\n\nfunction tagAsProcessed(item: { status: string }) {\n  item.status = \"processed\";      // flagged — mutates the `item` parameter\n  return item;\n}\n```\n\n```ts\n// fix: compute a new value instead of writing back into the parameter\nfunction withDiscount(price: number, rate: number) {\n  const discounted = price - price * rate;\n  return discounted;\n}\n\nfunction tagAsProcessed(item: { status: string }) {\n  return { ...item, status: \"processed\" };\n}\n```\n\nScoped to simple-identifier parameters only — destructured (`{ a, b }`) and rest (`...rest`) parameters aren't tracked in this first version. Only single-level member/index writes are detected (`x.foo = ...`, `x[0] = ...`); nested writes (`x.a.b = ...`) and `delete x.foo` are not. A nested function inherits its enclosing function's watched parameters, so a closure mutating an outer parameter still flags — but tracking is name-based, so a nested local that happens to share a parameter's name is also flagged as if it were that parameter, a known false-positive edge case for this first version.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.NearDuplicateBlock",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Low",
-      "explanation": "Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.",
-      "body": "---\nid: Refactor.NearDuplicateBlock\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Low\noptions: [min_statements, min_chars, include_tokens, include_ast, normalize_literals]\n---\n\nRuns of statements that are structurally identical to a block elsewhere in the project but differ in a string or number literal value — a near-clone rather than a verbatim one. Identifier tokens were already canonicalised to per-window local indices before this check existed, so a renamed copy has always matched [`Refactor.DuplicateBlock`](Refactor.DuplicateBlock.md); this check is specifically about the case where a literal, not a name, is the only thing that changed. That is usually the interesting half of the finding: two blocks drift apart because someone copied one and edited the values, and the edit — which fields moved, which threshold changed — is worth a look even though the shape underneath is unchanged.\n\n```ts\n// src/billing/charge-gold.ts\nconst productId = \"gold-membership\";\nconst amountCents = 4999;\nconst invoice = createInvoice(account, productId, amountCents);\nconst receipt = submitInvoice(invoice, \"Gold membership\");\nreturn receipt;\n```\n\n```ts\n// src/billing/charge-silver.ts — same shape, different literals: flagged as related\nconst productId = \"silver-membership\";\nconst amountCents = 2999;\nconst invoice = createInvoice(account, productId, amountCents);\nconst receipt = submitInvoice(invoice, \"Silver membership\");\nreturn receipt;\n```\n\nBoth blocks share one `finalize` pass and one corpus slot (`Refactor.DuplicateBlock.fingerprints`) with `Refactor.DuplicateBlock` — only that check's `run` writes to it, this one reads the same data back and reports the other half of the same grouping: groups whose members are structurally identical (same `hash`) but not byte-identical (differing `exact_hash`). The two checks never report overlapping spans, because the shared overlap-claim pass runs once across both checks' candidates before either is filtered out.\n\nThis check takes no options of its own: `min_statements`, `min_chars`, `include_tokens`, `include_ast` and `normalize_literals` are all read by `Refactor.DuplicateBlock`'s `run` — the sole writer of the shared corpus slot — and the resulting window shape applies to whatever lands here too. Configure them under `[checks.\"Refactor.DuplicateBlock\"]`; setting them under `[checks.\"Refactor.NearDuplicateBlock\"]` has no effect.\n\n**Severity:** near-clones default to `low`, unlike `Refactor.DuplicateBlock`'s `medium`, and print without tripping the default `--fail-on medium` gate. That is deliberate — severity is set per check id, not per finding, so splitting verbatim clones from literal-drift ones into two ids was the only way to keep a noisier, less actionable signal from failing a build that only meant to gate on real copy-paste. To gate on this check too, raise its severity in `cofferdam.toml`:\n\n```toml\n[checks.\"Refactor.NearDuplicateBlock\"]\nseverity = \"medium\"\n```\n\n**Suppressing:** as with `Refactor.DuplicateBlock`, each group is one `Issue` with `related` spans for every other occurrence, and a `cofferdam-ignore: Refactor.NearDuplicateBlock` comment at any occurrence suppresses the whole finding.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferArrayMethodOverLoop",
-      "category": "Refactor",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "A loop whose entire body pushes one computed value (optionally gated by a single `if`) onto an accumulator array is more clearly expressed as `.map()`/`.filter()`.",
-      "body": "---\nid: Refactor.PreferArrayMethodOverLoop\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `for`/`for-of` loop whose entire body builds one accumulator array by pushing a computed value each iteration is more clearly expressed with `.map()` (unconditional) or `.filter()` (gated by a single `if`).\n\n```ts\nconst doubled: number[] = [];\nfor (const n of nums) {\n  doubled.push(n * 2); // flagged — could be `.map()`\n}\n```\n\n```ts\n// fix\nconst doubled = nums.map((n) => n * 2);\n```\n\n```ts\nconst evens: number[] = [];\nfor (const n of nums) {\n  if (n % 2 === 0) {\n    evens.push(n); // flagged — could be `.filter()`\n  }\n}\n```\n\n```ts\n// fix\nconst evens = nums.filter((n) => n % 2 === 0);\n```\n\nWhen the `if`'s consequent pushes a separately computed value rather than the raw iterated element, the suggestion is `.filter().map()` (a filter, then a transform) rather than a plain `.filter()`, since the loop is doing both:\n\n```ts\nconst labels: string[] = [];\nfor (const n of nums) {\n  if (n % 2 === 0) {\n    const label = `even:${n}`; // flagged — `.filter().map()`, not just `.filter()`\n    labels.push(label);\n  }\n}\n```\n\nDeliberately narrow to avoid false positives: the loop body (or the `if`'s consequent, for the filter shape) must match one of exactly two shapes and nothing else —\n\n1. a single `arr.push(<expr>)` statement, or\n2. a `const`/`let` declaration with an initializer, immediately followed by `arr.push(<thatName>)`.\n\nAny other statement in the body — an early `break`/`continue`, a second accumulator, a side effect beyond the single push, an `if`/`else` — disqualifies the match entirely and the loop is left alone.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferArrayMethodOverLoop\"]\nseverity = \"medium\"   # raise if your project prefers array methods strongly\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferConstOverLet",
-      "category": "Refactor",
-      "base_priority": -5,
-      "default_severity": "Low",
-      "explanation": "A `let` binding that's never reassigned should be `const` — it signals the value doesn't change and rules out reassignment bugs at compile time.",
-      "body": "---\nid: Refactor.PreferConstOverLet\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA `let` binding that's never reassigned anywhere in the file should be `const` — it signals to a reader that the value doesn't change, and rules out an entire class of reassignment bugs at compile time.\n\n```ts\nlet total = price + tax; // flagged — never reassigned\nreturn total;\n```\n\n```ts\n// fix\nconst total = price + tax;\nreturn total;\n```\n\nReassignment is tracked by name across the whole file, including inside nested closures — a closure that captures and reassigns an outer `let` still counts, so the outer binding is correctly left alone:\n\n```ts\nlet count = 0;\nfunction increment() {\n  count += 1; // reassignment, found even though it's in a nested function\n}\n```\n\nDeclaration sites are scoped to simple-identifier bindings only in this version — a destructured `let` declaration (`let { a, b } = obj`) is skipped. Reassignment detection is broader: a `let`-declared name is recognised as reassigned when it's the target of a plain assignment (`x = v`), an object/array destructuring-assignment (`({ a, b } = v)`, `([a, b] = v)`, including renamed properties, rest elements, and defaults), or a `for...of`/`for...in` loop head (`for (x of xs)`, `for ([a, b] of pairs)`).\n\n```ts\nlet token: string;\nlet slug: string;\n({ token, slug } = await fetchPair()); // reassignment — not flagged\n```\n\nTracking is name-based rather than true lexical scope: a shadowed `let` that shares a name with a reassigned variable in a different scope won't be flagged even if that specific binding is itself never reassigned. This is a deliberate false-negative, not a false-positive — the safer direction for a \"should be const\" suggestion.\n\nOverlap with ESLint's `prefer-const` rule is expected and acceptable.\n\n```toml\n# cofferdam.toml\n[checks.\"Refactor.PreferConstOverLet\"]\nseverity = \"medium\"   # raise if your project treats this as more than a style nit\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferNullishCoalescing",
-      "category": "Refactor",
-      "base_priority": 3,
-      "default_severity": "Low",
-      "explanation": "`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`.",
-      "body": "---\nid: Refactor.PreferNullishCoalescing\ncategory: Refactor\nbase_priority: 3\ndefault_severity: Low\noptions: []\n---\n\n`x || default` falls through on every falsy value (`0`, `\"\"`, `false`). Use `??` to fall through only on `null`/`undefined`. Today the check ships the narrow high-confidence shape: `member-access || default-literal` (string / number / bool / `null` / bare `undefined` / array literal / object literal). Bare-identifier LHS, function-call LHS, and arithmetic LHS are deliberately not flagged — they're too often genuine alt-branch logic without type info. The rule broadens once the type-aware tier lands.\n\n```ts\n// flagged\nconst timeout = config.timeout || 5000;     // 0 should NOT fall through\nconst name = user.name || \"anonymous\";      // \"\" should NOT fall through\n```\n\n```ts\n// fix\nconst timeout = config.timeout ?? 5000;\nconst name = user.name ?? \"anonymous\";\n```\n\n```ts\n// not flagged (intentional falsy fallthrough)\nconst flag = isAdmin || isOwner;            // bare identifier — alt branch\nconst value = compute() || 0;              // call result — return type ambiguous\nconst sum = (a + b) || 1;                  // arithmetic — clearly wants falsy\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.PreferOptionalChain",
-      "category": "Refactor",
-      "base_priority": 5,
-      "default_severity": "Low",
-      "explanation": "`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on null/undefined.",
-      "body": "---\nid: Refactor.PreferOptionalChain\ncategory: Refactor\nbase_priority: 5\ndefault_severity: Low\noptions: []\n---\n\n`a && a.b && a.b.c` is more concisely written as `a?.b?.c`. The optional-chain operator (`?.`) short-circuits on `null`/`undefined`. The check flags `lhs && rhs` where the LHS is a \"safe to repeat\" expression (identifier, `this`, or a pure member chain — never contains a `CallExpression` or `NewExpression`) and the RHS is a member access (or call on a member access) whose object span renders to the same source bytes as the LHS span.\n\n```ts\n// flagged\nreturn user && user.profile;\nreturn user && user.profile && user.profile.name;\nreturn arr && arr[0];\n```\n\n```ts\n// fix\nreturn user?.profile;\nreturn user?.profile?.name;\nreturn arr?.[0];\n```\n\n```ts\n// not flagged (LHS is a call — rewriting would halve the call count)\nreturn get() && get().profile;\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
       "id": "Refactor.PurityHeuristic",
       "category": "Refactor",
       "base_priority": -10,
@@ -874,21 +625,6 @@
       "default_severity": "Low",
       "explanation": "A .map/.filter callback that mutates outer-scope state or calls a known side-effecting function isn't purely computing a value — it's a loop wearing a map costume.",
       "body": "---\nid: Refactor.SideEffectInMapCallback\ncategory: Refactor\nbase_priority: -5\ndefault_severity: Low\noptions: []\n---\n\nA callback passed to `.map`/`.filter` that mutates something outside itself (an outer-scope variable) or calls a known side-effecting function (`console.*`), instead of purely computing and returning a value — a loop wearing a map costume.\n\n```ts\nconst seen: number[] = [];\nconst doubled = items.map((item) => {\n  seen.push(item); // mutates outer-scope `seen`\n  return item * 2;\n});\n```\n\n```ts\n// fix — separate the accumulation from the transform\nconst doubled = items.map((item) => item * 2);\nitems.forEach((item) => seen.push(item));\n```\n\nNot flagged — the callback only mutates/declares locals of its own:\n\n```ts\nconst doubled = items.map((item) => {\n  const scaled = item * 2;\n  return scaled;\n});\n```\n\nAlso flagged — writing into an outer-scope object property or array index, not just calling an array-mutating method:\n\n```ts\nconst state = { count: 0 };\nconst withCount = items.map((item) => {\n  state.count += 1; // writes into outer-scope `state`\n  return item;\n});\n```\n\nNot flagged — a `.map`/`.filter` callback whose return value happens to be discarded, with no other side effect, is a distinct \"use `.forEach` instead\" concern this check doesn't cover (v1 scope, per the ticket):\n\n```ts\nitems.map((item) => process(item));\n```\n\nScope: `.forEach` itself is never inspected — a side effect there is the whole point. Only the callback's own body is inspected; a nested function or arrow declared inside the callback is a separate scope and isn't descended into. `console.*` is currently the only side-effecting-call denylist entry. Member/index assignment targets (`x.y = ...`, `x[y] = ...`) are only checked at the root receiver — a destructured local (`const { acc } = ctx;`) isn't recognised as local, a known name-based limitation.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Refactor.UnusedVariable",
-      "category": "Refactor",
-      "base_priority": 10,
-      "default_severity": "Low",
-      "explanation": "Variables declared but never read are dead code. Prefix with `_` to opt out where the binding is intentionally unused (e.g., positional function parameters).",
-      "body": "---\nid: Refactor.UnusedVariable\ncategory: Refactor\nbase_priority: 10\ndefault_severity: Low\noptions: []\n---\n\nVariables declared but never read are dead code. They add noise, mislead readers, and often indicate a logic error — the value was computed but never actually used. The check covers `let`/`const`/`var` bindings, function declarations, class declarations, catch-clause variables, and function parameters.\n\n```ts\n// flagged: count is declared but never read\nfunction summarise(items: Item[]) {\n  const count = items.length;   // unused\n  return items.map(i => i.name).join(\", \");\n}\n```\n\n```ts\n// fix: remove or use the binding\nfunction summarise(items: Item[]) {\n  return items.map(i => i.name).join(\", \");\n}\n```\n\n```ts\n// opt-out: prefix with _ to signal intentionally unused\nfunction handler(_event: Event, context: Context) {\n  return context.respond(\"ok\");\n}\n```\n\nThe check skips: ESM imports (tree-shaker territory), type-only symbols (TypeAlias, Interface, Enum — deferred to the type-aware tier), rest-pattern bindings (`...rest`), and all module-scope (top-level) bindings (which may be exported without the export being visible to the AST-only pass). Use the `_` prefix convention to opt out of flagging for positional parameters you cannot remove.\n",
       "requires_types": false,
       "consistency": false,
       "autofix": false,
@@ -940,107 +676,6 @@
       "options": [],
       "badges": [
         "file"
-      ]
-    },
-    {
-      "id": "Warning.NoConsoleLog",
-      "category": "Warning",
-      "base_priority": -10,
-      "default_severity": "Low",
-      "explanation": "`console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.",
-      "body": "---\nid: Warning.NoConsoleLog\ncategory: Warning\nbase_priority: -10\ndefault_severity: Low\noptions:\n  - name: methods\n    type: string[]\n    default: [\"log\"]\n---\n\n`console.log(...)` calls are typically debugging leftovers. Route logs through a dedicated logger or strip them in CI.\n\nBy default only `console.log` is flagged. `console.warn` and `console.error` are **not** flagged by default — error logging in catch blocks is legitimate and should not produce false positives.\n\nBare-identifier match only — aliased calls (`const c = console; c.log(...)`) escape detection until the type-aware pass.\n\n```ts\n// flagged by default\nconsole.log(\"debug:\", value);\n```\n\n```ts\n// NOT flagged by default — intentional error logging\ntry {\n  riskyOp();\n} catch (err) {\n  console.error(\"operation failed:\", err);\n}\n```\n\n```ts\n// fix: route through a logger that strips in production\nimport { logger } from \"./logger\";\nlogger.debug(\"debug:\", value);\nlogger.error(\"failed:\", err);\n```\n\n## Options\n\n### `methods` (string[], default: `[\"log\"]`)\n\nThe list of `console` methods to flag. Defaults to `[\"log\"]` only.\n\nTo restore the broad pre-v0.4 behaviour and flag `console.log`, `console.warn`, and `console.error`:\n\n```toml\n[checks.\"Warning.NoConsoleLog\"]\nmethods = [\"log\", \"warn\", \"error\"]\n```\n\nTo flag only error-level calls:\n\n```toml\n[checks.\"Warning.NoConsoleLog\"]\nmethods = [\"error\"]\n```\n\nTo disable the check entirely without touching `enabled`, set an empty list:\n\n```toml\n[checks.\"Warning.NoConsoleLog\"]\nmethods = []\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [
-        {
-          "id": "methods",
-          "kind": "string[]",
-          "doc": "console methods to flag. Defaults to [\"log\"]. Set to [\"log\", \"warn\", \"error\"] to restore the broad pre-v0.4 behaviour.",
-          "default": [
-            "log"
-          ]
-        }
-      ],
-      "badges": [
-        "file",
-        "advisable"
-      ]
-    },
-    {
-      "id": "Warning.NoDebugger",
-      "category": "Warning",
-      "base_priority": 10,
-      "default_severity": "Medium",
-      "explanation": "`debugger` statements halt execution under attached devtools. Remove before shipping.",
-      "body": "---\nid: Warning.NoDebugger\ncategory: Warning\nbase_priority: 10\ndefault_severity: Medium\noptions: []\n---\n\n`debugger` statements halt execution under attached devtools. Always a debugging leftover in shipped code — there's no benign use case in production builds. The fix is mechanical: delete the line.\n\n```ts\n// flagged\nfunction inspect(x: unknown) {\n  debugger;\n  return x;\n}\n```\n\n```ts\n// fix\nfunction inspect(x: unknown) {\n  return x;\n}\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Warning.NoEval",
-      "category": "Warning",
-      "base_priority": 18,
-      "default_severity": "High",
-      "explanation": "`eval(...)` and `new Function(...)` execute arbitrary strings as code. Universally banned for security and performance reasons.",
-      "body": "---\nid: Warning.NoEval\ncategory: Warning\nbase_priority: 18\ndefault_severity: High\noptions: []\n---\n\n`eval(...)` and `new Function(...)` execute arbitrary strings as code — both are universally banned in security-conscious codebases. The check has no opt-in for a reason. If you have a vetted, isolated use, suppress per-line with an inline directive. Aliased calls (`const f = eval; f(\"...\")`) are out of scope — the AST-only pass matches bare identifiers only.\n\n```ts\n// flagged\nreturn eval(userInput);                       // direct eval\nreturn new Function(\"a\", \"b\", body);          // eval-equivalent\n```\n\n```ts\n// fix: parse what you actually need, don't execute strings\nreturn JSON.parse(userInput);                 // for JSON\nreturn template(parameters);                  // for templating, use a real engine\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Warning.TripleEquals",
-      "category": "Warning",
-      "base_priority": 15,
-      "default_severity": "High",
-      "explanation": "`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead.",
-      "body": "---\nid: Warning.TripleEquals\ncategory: Warning\nbase_priority: 15\ndefault_severity: High\noptions: []\n---\n\n`==` and `!=` perform type coercion and are almost always a bug. Use `===` and `!==` instead. Walks every `BinaryExpression` and flags the equality operators.\n\n**Null exemption** (`eqeqeq: always-except-null` semantics): `x == null`, `x != null`, `null == x`, and `null != x` are intentionally exempt. The `== null` pattern is idiomatic JavaScript/TypeScript shorthand for \"value is `null` or `undefined`\" — replacing it with `=== null` changes runtime behaviour. All four shapes produce no diagnostic.\n\n```ts\n// flagged\nif (a == b) return true;\nif (a != b) return false;\nif (y == \"null\") return true;   // string literal, not the keyword\n```\n\n```ts\n// fix\nif (a === b) return true;\nif (a !== b) return false;\n```\n\n```ts\n// not flagged — null-operand exemption\nif (val == null) return \"null or undefined\";\nif (val != null) return \"defined\";\nif (null == other) return \"null or undefined\";\nif (null != other) return \"defined\";\n```\n\n```ts\n// not relevant — relational operators don't coerce in the same way\nif (a < b) return true;\nif (a >= b) return false;\n```\n\n```toml\n# The default (high) gates CI — explicit override only useful to demote.\n[checks.\"Warning.TripleEquals\"]\nseverity = \"medium\"\n```\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": true,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Warning.UnusedImport",
-      "category": "Warning",
-      "base_priority": 7,
-      "default_severity": "Low",
-      "explanation": "Re-export of a symbol that no other file imports from this file. Single-file linters miss this case.",
-      "body": "---\nid: Warning.UnusedImport\ncategory: Warning\ndefault_severity: Low\nbase_priority: 7\n---\n\n# Warning.UnusedImport\n\nFlags re-export passthroughs (`export { Bar } from './bar'`) when no\nother file in the project imports `Bar` from the re-exporter. The\nclassic case single-file linters miss because the file's own re-export\ncounts as \"using\" the symbol locally.\n\n## Why\n\n```ts\n// barrel.ts\nexport { Bar } from './bar';   // tsc: \"Bar is used (in the export)\"\n                               // reality: nobody imports Bar from barrel.ts\n```\n\n`tsc --noUnusedLocals` and ESLint `no-unused-vars` treat the re-export\nas a use site, so this kind of dead barrel entry survives indefinitely.\nCofferdam sees the whole project graph and can confirm whether anyone\ndownstream actually imports the re-exported name.\n\n## What gets flagged\n\n* `export { Bar } from './m'` when no other file has\n  `import { Bar } from './barrel'` (or `import Bar from './barrel'` for\n  default re-exports).\n* Default re-exports (`export { default } from './m'`,\n  `export { default as foo } from './m'`) when nobody imports the\n  default (or the renamed name) from the re-exporter.\n\n## What's not flagged\n\n* Plain unused imports inside a single file — tsc/ESLint already do\n  this well, and we deliberately don't duplicate.\n* Star re-exports (`export * from './m'`) — they have no specific\n  name to track. If the re-exporter file itself is unused, that's\n  `Design.OrphanExport`'s job.\n* Type-only re-exports — same false-positive surface as\n  `Refactor.DeadExport`. Will be enabled with type-aware analysis.\n* Re-exports from a file reached by `import * as ns` somewhere — the\n  namespace import opaquely consumes everything.\n* Side-effect imports (`import './polyfill'`) — they have no name\n  bindings.\n\n## Limitations\n\n* Re-export chain depth: we look one hop at a time. If `a.ts`\n  re-exports from `b.ts` re-exports from `c.ts` and only `c.ts`'s\n  origin export is consumed (skipping the barrel layers), each\n  re-exporter shows up separately. Walking through chains for\n  attribution is a planned enhancement.\n* Dynamic imports of the re-exporter module DO count as namespace\n  consumption (matching real runtime semantics), so a single\n  `import('./barrel').then(m => m.Bar)` keeps every re-export off the\n  list.\n",
-      "requires_types": false,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file"
-      ]
-    },
-    {
-      "id": "Warning.UnusedNullCheck",
-      "category": "Warning",
-      "base_priority": 15,
-      "default_severity": "Low",
-      "explanation": "An equality check against `null`/`undefined` whose other operand's TypeScript type already excludes that value — the guard can never change the outcome. Dead defensive code, or a hint the type annotation disagrees with reality.",
-      "body": "---\nid: Warning.UnusedNullCheck\ncategory: Warning\nbase_priority: 15\ndefault_severity: Low\noptions: []\n---\n\nAn equality comparison against `null` or `undefined` where the other operand's resolved TypeScript type already excludes the value being checked for. The guard can never change the outcome — it's either dead defensive code, or a signal that the type annotation disagrees with reality.\n\nThis is cofferdam's first **type-aware** check (`requires_types: true`). It's routed through the ts-morph type host rather than the pure-Rust pipeline, so it only runs when a type host is available — a project with `tsconfig.json` and `ts-morph` installed, and `[engine] type_aware` not disabled. When no host is available the engine skips the check entirely (no false positives from missing type info).\n\nThe comparison semantics mirror JavaScript's nullish equality exactly:\n\n- `x == null` / `x != null` (**loose**) match *both* `null` and `undefined`. Redundant only when the type excludes both.\n- `x === null` / `x !== null` (**strict**) test `null` alone.\n- `x === undefined` / `x !== undefined` test `undefined` alone.\n\nThe check **bails on `any` and `unknown`** — the compiler can't prove a guard redundant against a type it knows nothing about, so flagging would be a false positive.\n\n```ts\n// flagged — `s` is `string`, which excludes null and undefined\nfunction f(s: string) {\n  if (s !== null) return s;       // redundant\n  if (s != null) return s;        // redundant (loose, excludes both)\n}\n```\n\n```ts\n// not flagged — `s` genuinely includes the value being checked\nfunction g(s: string | null) {\n  if (s !== null) return s;       // meaningful: s can be null\n}\nfunction h(s: string | undefined) {\n  if (s === undefined) return \"\";  // meaningful: s can be undefined\n}\n```\n\n```ts\n// not flagged — strict `!== null` against a type that only adds undefined\nfunction k(s: string | undefined) {\n  if (s !== null) return s;       // s can't be null, but === null is the wrong test;\n                                  // strict-null is NOT redundant only when null is possible.\n}\n```\n\n```ts\n// not flagged — `any` / `unknown` defeat the analysis\nfunction u(x: any) {\n  if (x != null) return x;\n}\n```\n\nNo autofix: removing a guard changes control flow, so the safe action is human review, not a mechanical edit.\n\n```toml\n# Raise from the default (low) if you want redundant guards to gate CI.\n[checks.\"Warning.UnusedNullCheck\"]\nseverity = \"medium\"\n```\n",
-      "requires_types": true,
-      "consistency": false,
-      "autofix": false,
-      "options": [],
-      "badges": [
-        "file",
-        "type-aware"
       ]
     }
   ]

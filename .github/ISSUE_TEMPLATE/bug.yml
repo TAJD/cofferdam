@@ -25,7 +25,7 @@ body:
       description: What did you expect to happen, and what happened instead?
       placeholder: |
         Expected: no issue reported
-        Actual: Warning.TripleEquals fired on line 42, but the expression uses `===`
+        Actual: Refactor.LongAndComplex fired on line 42, but the function is well under the configured limit
     validations:
       required: true
 

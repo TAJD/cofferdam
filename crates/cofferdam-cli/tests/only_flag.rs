@@ -30,32 +30,28 @@ fn run_check_args(extra: &[&str], source: &str) -> std::process::Output {
         .expect("spawn cofferdam")
 }
 
-/// An over-long line built from short tokens, exporting an unimported
-/// `a`, so it trips both `Readability.MaxLineLength` and
-/// `Design.OrphanExport`. Built from many short tokens on purpose: since
-/// CD-318, `MaxLineLength` skips a line whose over-length comes from one
-/// atomic token, so a single long string literal no longer fires it.
-fn long_wrappable_line() -> String {
-    format!("export const a = [{}];\n", "1, ".repeat(60))
+/// An exported, never-imported, untested function — trips both
+/// `Design.OrphanExport` and `Design.MissingTestFile` on the same span.
+fn orphan_and_untested_export() -> String {
+    "export function f() { return 1; }\n".to_string()
 }
 
 #[test]
 fn only_restricts_to_the_named_check() {
-    // A long line with an exported, unimported const trips both
-    // Readability.MaxLineLength and Design.OrphanExport — the latter is
-    // the real regression guard: it actually co-fires on this fixture, so
-    // its absence from `--only Readability.MaxLineLength` output proves
-    // the filter works, unlike an arbitrary check that would never have
-    // fired here anyway.
-    let long_line = long_wrappable_line();
-    let out = run_check("Readability.MaxLineLength", &long_line);
+    // The fixture trips both Design.OrphanExport and Design.MissingTestFile
+    // — the latter is the real regression guard: it actually co-fires on
+    // this fixture, so its absence from `--only Design.OrphanExport`
+    // output proves the filter works, unlike an arbitrary check that
+    // would never have fired here anyway.
+    let source = orphan_and_untested_export();
+    let out = run_check("Design.OrphanExport", &source);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Readability.MaxLineLength"),
+        stdout.contains("Design.OrphanExport"),
         "expected the named check's finding; stdout={stdout}"
     );
     assert!(
-        !stdout.contains("Design.OrphanExport"),
+        !stdout.contains("Design.MissingTestFile"),
         "expected no findings from other checks; stdout={stdout}"
     );
 }
@@ -65,14 +61,14 @@ fn only_restricts_to_the_named_check() {
 /// than last-one-wins.
 #[test]
 fn only_accepts_a_comma_separated_set() {
-    let long_line = long_wrappable_line();
+    let source = orphan_and_untested_export();
     let out = run_check_args(
-        &["--only", "Readability.MaxLineLength,Design.OrphanExport"],
-        &long_line,
+        &["--only", "Design.OrphanExport,Design.MissingTestFile"],
+        &source,
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Readability.MaxLineLength") && stdout.contains("Design.OrphanExport"),
+        stdout.contains("Design.OrphanExport") && stdout.contains("Design.MissingTestFile"),
         "both named checks should survive the filter; stdout={stdout}"
     );
 }
@@ -81,19 +77,19 @@ fn only_accepts_a_comma_separated_set() {
 /// one — clap's `value_delimiter` plus the default append behaviour.
 #[test]
 fn only_accepts_a_repeated_flag() {
-    let long_line = long_wrappable_line();
+    let source = orphan_and_untested_export();
     let out = run_check_args(
         &[
             "--only",
-            "Readability.MaxLineLength",
-            "--only",
             "Design.OrphanExport",
+            "--only",
+            "Design.MissingTestFile",
         ],
-        &long_line,
+        &source,
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Readability.MaxLineLength") && stdout.contains("Design.OrphanExport"),
+        stdout.contains("Design.OrphanExport") && stdout.contains("Design.MissingTestFile"),
         "both named checks should survive the filter; stdout={stdout}"
     );
 }
@@ -103,13 +99,13 @@ fn only_accepts_a_repeated_flag() {
 /// the failure mode `--only` exists to prevent, made likelier by sets.
 #[test]
 fn only_with_one_bad_id_among_good_ones_errors() {
-    let long_line = long_wrappable_line();
+    let source = orphan_and_untested_export();
     let out = run_check_args(
         &[
             "--only",
-            "Readability.MaxLineLength,Warning.TripleEqualz,Design.OrphanExport",
+            "Design.OrphanExport,Warning.TripleEqualz,Design.MissingTestFile",
         ],
-        &long_line,
+        &source,
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
@@ -122,7 +118,7 @@ fn only_with_one_bad_id_among_good_ones_errors() {
         "the error should name the offending id; stderr={stderr}"
     );
     assert!(
-        !stderr.contains("Readability.MaxLineLength"),
+        !stderr.contains("Design.OrphanExport"),
         "the error should name only the offending id, not the valid ones; stderr={stderr}"
     );
 }
@@ -239,8 +235,8 @@ fn only_typo_errors_even_with_plugins_configured() {
 
 #[test]
 fn only_valid_but_quiet_check_does_not_error() {
-    // TripleEquals is a real check id; this source has no `==` to flag.
-    let out = run_check("Warning.TripleEquals", "export const a = 1;\n");
+    // OrphanExport is a real check id; this source has no export to flag.
+    let out = run_check("Design.OrphanExport", "const a = 1;\n");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("no known check id"),

@@ -220,31 +220,6 @@
       "file": "editors/vscode/src/extension.ts",
       "check_id": "Design.OrphanExport",
       "rule_signature": "5b07ac40f533493c800af6e03c6ce3ea43599c8565bfa8c95773371082792776"
-    },
-    {
-      "file": "packages/check-sdk/src/plugin-host.ts",
-      "check_id": "Refactor.CognitiveComplexity",
-      "rule_signature": "0ab3d7d7ea6637cbc4913111f7381ea1937320334849e764fb5877b539959337"
-    },
-    {
-      "file": "packages/check-sdk/src/plugin-host.ts",
-      "check_id": "Refactor.CognitiveComplexity",
-      "rule_signature": "d1f489b801dc323e21bd3bce82d0a0f0ceade60648c4947218d2d2ad7c0d87b7"
-    },
-    {
-      "file": "packages/check-sdk/src/plugin-host.ts",
-      "check_id": "Refactor.CyclomaticComplexity",
-      "rule_signature": "d1f489b801dc323e21bd3bce82d0a0f0ceade60648c4947218d2d2ad7c0d87b7"
-    },
-    {
-      "file": "packages/check-sdk/tests/positive.ts",
-      "check_id": "Refactor.UnusedVariable",
-      "rule_signature": "7d601f9d20703a97b8cb530538dbbadaa3e4bdfa5f333977e4232f51eebdc47a"
-    },
-    {
-      "file": "packages/check-sdk/tests/positive.ts",
-      "check_id": "Refactor.UnusedVariable",
-      "rule_signature": "cd42404d52ad55ccfa9aca4adc828aa5800ad9d385a0671fbcbf724118320619"
     }
   ]
 }

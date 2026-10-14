@@ -20,14 +20,14 @@ flowchart TB
 
 ```toml
 [budgets]
-"Refactor.CognitiveComplexity" = 40
+"Refactor.LongAndComplex" = 40
 Refactor = 120
 ```
 
 A key is either a dotted check id (caps that one check) or a bare category name (caps the sum across every check in that category — `Consistency`, `Design`, `Readability`, `Refactor`, `Warning`). `cofferdam check` counts **every** finding for a budgeted key — including baselined ones — and fails (exit 1) if the count exceeds the budget, printing which key and by how much:
 
 ```
-error: budget exceeded for `Refactor.CognitiveComplexity`: 43 finding(s), budget is 40 (fix findings and run `cofferdam baseline ratchet` to lower the budget, or raise it deliberately)
+error: budget exceeded for `Refactor.LongAndComplex`: 43 finding(s), budget is 40 (fix findings and run `cofferdam baseline ratchet` to lower the budget, or raise it deliberately)
 ```
 
 This is a second, independent gate from `--fail-on` — a budget overage fails the build even when every triggering finding is baselined or below the severity threshold.
@@ -69,7 +69,7 @@ back up.
 
 ```mermaid
 xychart-beta
-    title "Refactor.CognitiveComplexity: count vs. budget over time"
+    title "Refactor.LongAndComplex: count vs. budget over time"
     x-axis [write, fix, ratchet, fix, fix]
     y-axis "count / budget" 0 --> 45
     line "count" [40, 30, 20, 15, 10]

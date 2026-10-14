@@ -3,7 +3,7 @@
 # Exercises the type-host worker pool end-to-end on a committed fixture
 # project (examples-type-host/unused-null) with a real ts-morph install:
 #   - type-aware checks resolve TypeScript types through the live Node
-#     worker and flag every redundant null guard, incl. a cross-file case;
+#     worker and flag every non-exhaustive switch, incl. a cross-file case;
 #   - `[engine] type_aware = false` disables them (the Node-free opt-out);
 #   - project-init cold-start is measured and bounded.
 #

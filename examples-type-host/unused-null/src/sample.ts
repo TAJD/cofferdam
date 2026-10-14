@@ -1,54 +1,74 @@
 // CI smoke fixture for the ts-morph type host (cd-9hp.2.4).
 //
-// Warning.UnusedNullCheck is type-aware: it only fires when cofferdam
-// runs with the ts-morph type host (a project with tsconfig.json +
-// ts-morph installed, and `[engine] type_aware` not disabled).
-// scripts/check-type-host-smoke.mjs runs the built binary against this
-// project from CI and asserts the flagged set below — proving the worker
-// pool resolves real TypeScript types end-to-end, including across files.
+// Design.UnionExhaustivenessGap is type-aware: it only fires when
+// cofferdam runs with the ts-morph type host (a project with
+// tsconfig.json + ts-morph installed, and `[engine] type_aware` not
+// disabled). scripts/check-type-host-smoke.mjs runs the built binary
+// against this project from CI and asserts the flagged set below —
+// proving the worker pool resolves real TypeScript types end-to-end,
+// including across files.
 
-import { type Widget, makeWidget } from "./widget";
+import { type Status, type Widget, makeWidget } from "./widget";
 
-// --- flagged: the operand's type already excludes the checked value ---
+type Direction = "up" | "down" | "left" | "right";
 
-export function flaggedStrictNull(s: string): string {
-  if (s !== null) return s; // redundant — string excludes null
+// --- flagged: a variant is unhandled and there's no default case ------
+
+export function flaggedMissingOne(status: Status): string {
+  switch (status) {
+    case "active":
+      return "on";
+    case "inactive":
+      return "off";
+    // "pending" unhandled, no default
+  }
   return "";
 }
 
-export function flaggedLoose(n: number): number {
-  if (n != null) return n; // redundant — number excludes null and undefined
-  return 0;
+export function flaggedMissingTwo(dir: Direction): number {
+  switch (dir) {
+    case "up":
+      return 0;
+    case "down":
+      return 1;
+    // "left" and "right" unhandled, no default
+  }
+  return -1;
 }
 
-export function flaggedStrictUndefined(b: boolean): string {
-  return b === undefined ? "x" : "y"; // redundant — boolean excludes undefined
-}
-
-// Cross-file: `w.id` resolves to `string` through the imported interface,
-// so the guard is redundant. Fires only if project-wide resolution works.
+// Cross-file: `Status` is a literal union declared in ./widget and
+// resolved here through `Widget.status`. Fires only if project-wide
+// resolution works.
 export function flaggedCrossFile(w: Widget): string {
-  if (w.id !== null) return w.id; // redundant — Widget.id is string
+  switch (w.status) {
+    case "active":
+      return "on";
+    // "inactive" and "pending" unhandled, no default
+  }
   return "";
 }
 
-// --- not flagged: the guard is meaningful -----------------------------
+// --- not flagged: every variant handled, or a default catches the rest -
 
-export function okNullable(s: string | null): string {
-  if (s !== null) return s; // s really can be null
+export function okExhaustive(status: Status): string {
+  switch (status) {
+    case "active":
+      return "on";
+    case "inactive":
+      return "off";
+    case "pending":
+      return "waiting";
+  }
   return "";
 }
 
-export function okUndefined(s: string | undefined): string {
-  if (s === undefined) return ""; // s really can be undefined
-  return s;
-}
-
-// --- not flagged: any defeats the analysis ----------------------------
-
-export function okAny(x: any): unknown {
-  if (x != null) return x;
-  return 0;
+export function okDefault(status: Status): string {
+  switch (status) {
+    case "active":
+      return "on";
+    default:
+      return "off";
+  }
 }
 
 export const seed = makeWidget("seed");

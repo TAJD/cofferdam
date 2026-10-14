@@ -24,14 +24,16 @@ Broad-form directives (no check id, e.g. `// cofferdam-ignore`) are not flagged 
 **Stale (flag):**
 
 ```ts
-// cofferdam-ignore: Warning.TripleEquals: legacy comparator
-const x = 1 + 1; // no == / != here — suppression is stale
+// cofferdam-ignore: Refactor.PurityHeuristic: legacy impurity
+export function double(n: number) {
+  return n * 2; // pure — no module-level mutable reads — suppression is stale
+}
 ```
 
 **Stale range (flag):**
 
 ```ts
-// cofferdam-ignore-start: Refactor.CyclomaticComplexity
+// cofferdam-ignore-start: Refactor.LongAndComplex
 function simple() {
   return 42;
 }
@@ -41,8 +43,11 @@ function simple() {
 **Still valid (no finding):**
 
 ```ts
-// cofferdam-ignore: Warning.TripleEquals: intentional loose comparison
-if (value == null) { /* ... */ }
+let counter = 0;
+// cofferdam-ignore: Refactor.PurityHeuristic: intentional shared counter
+export function next() {
+  return counter++;
+}
 ```
 
 Remove stale directives to keep the suppression list auditable and reviewable. A suppression with no finding is noise that erodes trust in suppressions that are still load-bearing.

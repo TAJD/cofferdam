@@ -1,8 +1,8 @@
 // Refactor.LongAndComplex — flags only `tangled`, not `flatLong` or `shortBranchy`.
 // Defaults: length_limit=75, cyclomatic_limit=15.
 
-// Long but flat — 80 lines of straight-line config. Length passes the
-// MaxFunctionLength bar but cyclomatic is 1, so LongAndComplex stays quiet.
+// Long but flat — 80 lines of straight-line config. Length alone clears
+// the limit but cyclomatic is 1, so LongAndComplex stays quiet.
 export function flatLong() {
   const config = {
     a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
@@ -27,8 +27,8 @@ export function flatLong() {
   return { config, more, yetMore, evenMore };
 }
 
-// Short but branchy — high cyclomatic in a short body. CyclomaticComplexity
-// flags it; LongAndComplex stays quiet because it's not long.
+// Short but branchy — high cyclomatic in a short body. Complexity alone
+// clears the limit; LongAndComplex stays quiet because it's not long.
 export function shortBranchy(x: number, y: number, z: number, mode: string): string {
   if (x > 0 && y > 0) {
     if (z > 0 || mode === "all") {
@@ -143,7 +143,7 @@ export function tangled(x: number, y: number, z: number, mode: string, env: stri
   }
 }
 
-// Comment-heavy — should NOT trip MaxFunctionLength even though raw line
+// Comment-heavy — should NOT trip the length limit even though raw line
 // span is large. Effective code lines are well under 50.
 //
 //

@@ -292,7 +292,6 @@ dependencies = [
  "smol_str",
  "tempfile",
  "unicode-ident",
- "unicode-width",
 ]
 
 [[package]]

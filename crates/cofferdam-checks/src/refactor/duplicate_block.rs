@@ -18,7 +18,7 @@ use oxc_ast::ast::{
 use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
 
-// ─── Refactor.DuplicateBlock ───────────────────────────────────────────────
+// ─── Refactor.NearDuplicateBlock ───────────────────────────────────────────
 //
 // Cross-file check. Detects copy-paste — runs of `min_statements`
 // consecutive statements that match (after rename canonicalisation) in
@@ -95,10 +95,11 @@ static DUPLICATE_BLOCKS: CorpusKey<Vec<Fingerprint>> =
 /// are counted as separate tokens.
 const DUPLICATE_BLOCK_MIN_TOKENS: usize = 50;
 
-/// `Refactor.DuplicateBlock` — flags repeated statement / token
-/// sequences across the project corpus. See `CheckMeta` for the
-/// emission contract and configurable thresholds.
-pub struct DuplicateBlock {
+/// `Refactor.NearDuplicateBlock` — flags repeated statement / token
+/// sequences across the project corpus that differ only in literal
+/// values. See `CheckMeta` for the emission contract and configurable
+/// thresholds.
+pub struct NearDuplicateBlock {
     min_statements: usize,
     min_chars: usize,
     /// Token-mode min window size. Only used when `include_tokens`.
@@ -107,7 +108,10 @@ pub struct DuplicateBlock {
     /// Off by default — duplicates the work of AST mode for most
     /// hits, only paying off where copy-paste spans non-statement
     /// boundaries (a multi-line conditional broken across statements
-    /// differently in two places, JSX runs, etc.).
+    /// differently in two places, JSX runs, etc.). Token-mode
+    /// fingerprints never differ in `exact_hash` vs `hash` (see
+    /// `collect_token_fingerprints`), so they always report through the
+    /// exact-clone path rather than the literal-drift one.
     include_tokens: bool,
     /// AST-mode enabled (default: true). Can be disabled to run
     /// token-mode only. Configurable via cofferdam.toml.
@@ -152,7 +156,7 @@ pub const DUP_BLOCK_OPTIONS: &[OptionSpec] = &[
     },
 ];
 
-impl Default for DuplicateBlock {
+impl Default for NearDuplicateBlock {
     fn default() -> Self {
         Self {
             min_statements: DUPLICATE_BLOCK_MIN_STATEMENTS,
@@ -165,11 +169,11 @@ impl Default for DuplicateBlock {
     }
 }
 
-impl DuplicateBlock {
+impl NearDuplicateBlock {
     /// Construct with token-mode enabled and the given window size.
-    /// AST mode stays on at default thresholds. The two modes share
-    /// one corpus slot; finalize dedupes overlapping spans, preferring
-    /// AST hits.
+    /// AST mode stays on at default thresholds. Token-mode fingerprints
+    /// always have `exact_hash == hash`, so they report through the
+    /// exact-clone path.
     pub fn with_tokens(min_tokens: usize) -> Self {
         Self {
             include_tokens: true,
@@ -179,13 +183,20 @@ impl DuplicateBlock {
     }
 }
 
-const DUP_META: CheckMeta = CheckMeta {
-    id: "Refactor.DuplicateBlock",
+/// `Refactor.NearDuplicateBlock` — the sole writer of `DUPLICATE_BLOCKS`
+/// (CD-357 pass 2: absorbed `Refactor.DuplicateBlock`'s collection
+/// logic when that check — the exact-clone half of the CD-331 split —
+/// was cut as a linter-level check with no policy/graph angle). Reports
+/// every claimed group — verbatim clones and literal-drift near-clones
+/// alike — under this one id, distinguished only by message wording.
+/// See `docs/Refactor.NearDuplicateBlock.md`.
+const DUP_NEAR_META: CheckMeta = CheckMeta {
+    id: "Refactor.NearDuplicateBlock",
     category: Category::Refactor,
-    base_priority: 12,
-    default_severity: Severity::Medium,
-    explanation: "Runs of statements that recur (after rename canonicalisation) in multiple files. Likely copy-paste — extract a shared helper.",
-    body: include_str!("../../docs/Refactor.DuplicateBlock.md"),
+    base_priority: 10,
+    default_severity: Severity::Low,
+    explanation: "Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.",
+    body: include_str!("../../docs/Refactor.NearDuplicateBlock.md"),
     requires_types: false,
     consistency: false,
     options: DUP_BLOCK_OPTIONS,
@@ -197,44 +208,9 @@ const DUP_META: CheckMeta = CheckMeta {
     pure_run: false,
 };
 
-/// `Refactor.NearDuplicateBlock` — CD-331 split. Shares `DUPLICATE_BLOCKS`
-/// with `DuplicateBlock` (same corpus slot, populated only by
-/// `DuplicateBlock::run`) but reports the other half of the same
-/// grouping pass: AST-mode groups whose members are structurally
-/// identical yet differ in a string/number literal value.
-///
-/// A separate check id exists because severity is stamped per check id
-/// by the engine's post-pass (a check cannot vary severity per issue —
-/// see `Engine::finalize_and_filter`'s severity post-pass), and
-/// `Severity::Medium` on `Refactor.DuplicateBlock` trips the default
-/// `--fail-on medium` gate. Near-clones are a real signal (the
-/// divergence between two copies is often exactly what is worth
-/// looking at) but are noisier and less actionable than a verbatim
-/// clone, so they default to `Severity::Low` and print without gating
-/// CI — see `docs/Refactor.NearDuplicateBlock.md`.
-const DUP_NEAR_META: CheckMeta = CheckMeta {
-    id: "Refactor.NearDuplicateBlock",
-    category: Category::Refactor,
-    base_priority: 10,
-    default_severity: Severity::Low,
-    explanation: "Runs of statements that are structurally identical but differ in their string or number literals — often the same logic copied and then partially edited, where the edit is the thing worth looking at.",
-    body: include_str!("../../docs/Refactor.NearDuplicateBlock.md"),
-    requires_types: false,
-    consistency: false,
-    // The window options (min_statements, min_chars, include_tokens,
-    // include_ast, normalize_literals) are read by `DuplicateBlock::run`
-    // — the sole writer of the shared corpus slot — and apply to both
-    // checks equally; `NearDuplicateBlock::run` is a no-op, so it has no
-    // options of its own to advertise (CD-339). Configure them under
-    // `[checks."Refactor.DuplicateBlock"]`.
-    options: &[],
-    autofix: false,
-    pure_run: false,
-};
-
-impl Check for DuplicateBlock {
+impl Check for NearDuplicateBlock {
     fn meta(&self) -> &'static CheckMeta {
-        &DUP_META
+        &DUP_NEAR_META
     }
 
     fn register_removable(&self, corpus: &cofferdam_core::CorpusIndex) {
@@ -311,76 +287,55 @@ impl Check for DuplicateBlock {
     }
 
     fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        // Only the exact half (verbatim clones, plus all token-mode
-        // groups — token mode's exact_hash always equals hash, see
-        // `collect_token_fingerprints`) belongs to this check id; the
-        // literal-drift half is `Refactor.NearDuplicateBlock`'s (CD-331
-        // follow-up split, see `DUP_NEAR_META`'s doc comment for why).
-        let (exact_groups, _near_groups) = partition_claimed_groups(ctx);
+        // Both halves belong to this check id. `Refactor.DuplicateBlock`
+        // owned the exact half until CD-357 cut it; the claim pass still
+        // has to consider exact groups, because a verbatim clone and a
+        // literal-drift one can cover the same region and only one of
+        // them may be reported. Emitting only the near half meant an
+        // exact group claimed the region and was then discarded, so the
+        // overlapping near-duplicate vanished with it — adding a
+        // verbatim copy of a file made cofferdam report strictly less.
+        let (exact_groups, near_groups) = partition_claimed_groups(ctx);
         exact_groups
             .into_iter()
             .map(|group| {
-                let message = match group[0].kind {
-                    FingerprintKind::Ast => format!(
-                        "duplicate {}-statement block, also at {} other location(s)",
-                        group[0].stmt_count,
-                        group.len() - 1
-                    ),
-                    FingerprintKind::Token => format!(
-                        "duplicate {}-token window (cross-statement), also at {} other location(s)",
-                        self.min_tokens,
-                        group.len() - 1
-                    ),
-                };
-                build_issue(DUP_META.id, DUP_META.base_priority, message, &group)
+                let message = format!(
+                    "duplicate {}-statement block, also at {} other location(s)",
+                    group[0].stmt_count,
+                    group.len() - 1
+                );
+                (group, message)
             })
-            .collect()
-    }
-}
-
-/// `Refactor.NearDuplicateBlock` — see `DUP_NEAR_META`'s doc comment.
-/// Holds no fields: it never collects fingerprints itself (`run` is a
-/// no-op — see the `Check` impl below), and its message reads the
-/// matched window's statement count off `Fingerprint::stmt_count`
-/// rather than any of `DuplicateBlock`'s configuration.
-#[derive(Default)]
-pub struct NearDuplicateBlock;
-
-impl Check for NearDuplicateBlock {
-    fn meta(&self) -> &'static CheckMeta {
-        &DUP_NEAR_META
-    }
-
-    fn run(&self, _file: &SourceFile, _ctx: &mut CheckContext<'_>) -> Vec<Issue> {
-        // Deliberately a no-op: `DuplicateBlock::run` is the sole writer
-        // of the shared `DUPLICATE_BLOCKS` corpus slot. Writing here too
-        // would double every fingerprint (CD-331 follow-up spec).
-        Vec::new()
-    }
-
-    fn finalize(&self, ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
-        let (_exact_groups, near_groups) = partition_claimed_groups(ctx);
-        near_groups
-            .into_iter()
-            .map(|group| {
+            .chain(near_groups.into_iter().map(|group| {
                 let message = format!(
                     "duplicate {}-statement block differing only in literal values, also at {} other location(s)",
                     group[0].stmt_count,
                     group.len() - 1
                 );
+                (group, message)
+            }))
+            .map(|(group, message)| {
                 build_issue(DUP_NEAR_META.id, DUP_NEAR_META.base_priority, message, &group)
             })
             .collect()
     }
 }
 
-/// Common `Issue` construction for both `DuplicateBlock` and
-/// `NearDuplicateBlock`: same fields, different check id / priority /
-/// message. `severity` is always the `Severity::Medium` placeholder —
-/// the engine's severity post-pass stamps the real value from each
-/// check id's registered `CheckMeta::default_severity` (or config
-/// override), so which severity a check "has" lives in exactly one
-/// place regardless of which of these two check ids built the issue.
+/// Test-only: emits an `Issue` for every claimed group (exact clones
+/// *and* literal-drift near-duplicates), not just the near half that
+/// `NearDuplicateBlock::finalize` surfaces in production. The windowing
+/// / dedup / exclusion logic under `partition_claimed_groups` is shared
+/// by both halves, and since CD-357 both are reported under
+/// `Refactor.NearDuplicateBlock`, so this simply delegates to the real
+/// `finalize`. It is kept as a named entry point because the CD-147 /
+/// CD-331 / CD-339 regression tests read better naming what they assert
+/// over, and because a future re-split would give it a body again.
+#[cfg(test)]
+pub(crate) fn finalize_all_groups_for_test(ctx: &mut FinalizeContext<'_>) -> Vec<Issue> {
+    NearDuplicateBlock::default().finalize(ctx)
+}
+
+/// `Issue` construction for `NearDuplicateBlock` findings.
 fn build_issue(
     check_id: &'static str,
     base_priority: i8,

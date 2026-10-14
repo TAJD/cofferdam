@@ -5,42 +5,37 @@
 // ============================================================
 
 // cofferdam-disable-next-line
-if (a == b) {
-  // This would normally trigger Warning.TripleEquals, but it's suppressed.
-}
+export function a(items: number[]) { return items.length; }
+// This would normally trigger Design.ReadonlyArrayParam, but it's suppressed.
 
 // ============================================================
 // Next-line directive: suppress specific checks
 // ============================================================
 
-// cofferdam-disable-next-line Warning.TripleEquals
-if (x == y) {
-  // Only TripleEquals is suppressed here; other checks still fire.
-}
+// cofferdam-disable-next-line Design.ReadonlyArrayParam
+export function x(items: number[]) { return items.length; }
+// Only ReadonlyArrayParam is suppressed here; other checks still fire.
 
 // ============================================================
 // Block directive: suppress all checks
 // ============================================================
 
 /* cofferdam-disable */
-if (c == d) {
-  // Everything suppressed inside this block.
-}
+export function c(items: number[]) { return items.length; }
+// Everything suppressed inside this block.
 /* cofferdam-enable */
 
 // This one is NOT suppressed:
-if (p == q) {
-  // This should trigger Warning.TripleEquals normally.
-}
+export function p(items: number[]) { return items.length; }
+// This should trigger Design.ReadonlyArrayParam normally.
 
 // ============================================================
 // Block directive: suppress specific checks
 // ============================================================
 
-/* cofferdam-disable Warning.TripleEquals */
-if (m == n) {
-  // Only TripleEquals suppressed; other findings still appear.
-}
+/* cofferdam-disable Design.ReadonlyArrayParam */
+export function m(items: number[]) { return items.length; }
+// Only ReadonlyArrayParam suppressed; other findings still appear.
 /* cofferdam-enable */
 
 // ============================================================
@@ -49,18 +44,16 @@ if (m == n) {
 
 // cofferdam-disable-next-line
 
-if (e == f) {
-  // The directive above applies to this line (first non-blank after directive).
-}
+export function e(items: number[]) { return items.length; }
+// The directive above applies to this line (first non-blank after directive).
 
 // ============================================================
 // Block with multiple check IDs
 // ============================================================
 
-/* cofferdam-disable Warning.TripleEquals, Design.MaxParameters */
-if (g == h) {
-  // Both TripleEquals and MaxParameters are suppressed on this line.
-}
+/* cofferdam-disable Design.ReadonlyArrayParam, Design.ClassAsDataBag */
+export function g(items: number[]) { return items.length; }
+// Both ReadonlyArrayParam and ClassAsDataBag are suppressed on this line.
 /* cofferdam-enable */
 
 // ============================================================
@@ -75,7 +68,7 @@ function testFunction(
   e: number,
   f: number
 ) {
-  // This function has more than 5 parameters (Design.MaxParameters would flag it).
+  // This function has more than 5 parameters.
   if (a == 0) {
     return b;
   }

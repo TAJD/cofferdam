@@ -288,193 +288,7 @@ fn engine_handles_empty_file() {
 }
 
 // ============================================================
-// DuplicateBlock token mode (cd-jdq)
-// ============================================================
-
-#[test]
-fn duplicate_block_token_mode_catches_cross_statement_duplicates() {
-    // Two files share a 50+ token run that doesn't align cleanly with
-    // statement boundaries — built so AST mode (statement windows) is
-    // unlikely to fire while token mode (sliding token window) does.
-    //
-    // The duplicated content is a long chained method-call expression
-    // whose halves land in different statements between the two files,
-    // plus enough surrounding shape to clear the 50-token / 80-char
-    // floors.
-    let body_a = "
-        export function fa(input: string) {
-          const items = input.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-          return items.reduce((acc, n) => acc + n, 0);
-        }
-    ";
-    let body_b = "
-        export function fb(payload: string) {
-          const list = payload.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-          const total = list.reduce((acc, n) => acc + n, 0);
-          return total;
-        }
-    ";
-
-    let temp_dir = TempDir::new().expect("temp dir");
-    let path_a = temp_dir.path().join("a.ts");
-    let path_b = temp_dir.path().join("b.ts");
-    std::fs::write(&path_a, body_a).expect("write a");
-    std::fs::write(&path_b, body_b).expect("write b");
-
-    use cofferdam_checks::refactor::DuplicateBlock;
-    let engine = Engine::new(vec![Box::new(DuplicateBlock::with_tokens(50))]);
-    let issues = engine
-        .analyze(&[&path_a, &path_b])
-        .expect("analyze should succeed");
-
-    let dup_findings: Vec<_> = issues
-        .iter()
-        .filter(|i| i.check_id == "Refactor.DuplicateBlock")
-        .collect();
-    assert!(
-        !dup_findings.is_empty(),
-        "expected at least one DuplicateBlock finding, got {} total issues: {:?}",
-        issues.len(),
-        issues.iter().map(|i| &i.check_id).collect::<Vec<_>>()
-    );
-
-    // The finding must reference both files (one as primary, the other
-    // in `related`).
-    let referenced_files: std::collections::HashSet<PathBuf> = dup_findings
-        .iter()
-        .flat_map(|i| {
-            std::iter::once(i.file.clone()).chain(i.related.iter().map(|r| r.file.clone()))
-        })
-        .collect();
-    assert!(
-        referenced_files.contains(&path_a) && referenced_files.contains(&path_b),
-        "expected the DuplicateBlock finding to span both files, got {:?}",
-        referenced_files
-    );
-}
-
-#[test]
-fn duplicate_block_default_does_not_emit_token_findings() {
-    // Same fixtures as above, but with the default (AST-only)
-    // DuplicateBlock. No statement-aligned 6+ run exists, so AST mode
-    // should produce nothing — proves token mode is genuinely opt-in.
-    let body_a = "
-        export function fa(input: string) {
-          const items = input.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-          return items.reduce((acc, n) => acc + n, 0);
-        }
-    ";
-    let body_b = "
-        export function fb(payload: string) {
-          const list = payload.split(',').map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-          const total = list.reduce((acc, n) => acc + n, 0);
-          return total;
-        }
-    ";
-
-    let temp_dir = TempDir::new().expect("temp dir");
-    let path_a = temp_dir.path().join("a.ts");
-    let path_b = temp_dir.path().join("b.ts");
-    std::fs::write(&path_a, body_a).expect("write a");
-    std::fs::write(&path_b, body_b).expect("write b");
-
-    use cofferdam_checks::refactor::DuplicateBlock;
-    let engine = Engine::new(vec![Box::new(DuplicateBlock::default())]);
-    let issues = engine
-        .analyze(&[&path_a, &path_b])
-        .expect("analyze should succeed");
-
-    assert!(
-        issues
-            .iter()
-            .all(|i| i.check_id != "Refactor.DuplicateBlock"),
-        "AST-only DuplicateBlock should not flag the cross-statement \
-         duplicate; token mode must be opt-in. Got: {:?}",
-        issues
-    );
-}
-
-#[test]
-fn duplicate_block_suppressed_from_either_occurrence() {
-    // CD-77: a `cofferdam-ignore` placed at the *related* (non-primary)
-    // occurrence of a DuplicateBlock pair must suppress the finding just
-    // as effectively as one placed at the primary occurrence — the engine
-    // emits a single Issue per duplicate group, so either side should work.
-    let shared = "\
-export const aVal = 111;
-export const bVal = 222;
-export const cVal = 333;
-export const dVal = 444;
-export const eVal = 555;
-export const fVal = 666;
-";
-    let temp_dir = TempDir::new().expect("temp dir");
-    let path_a = temp_dir.path().join("a.ts");
-    let path_b = temp_dir.path().join("b.ts");
-    std::fs::write(&path_a, shared).expect("write a");
-    // b.ts: same statement run, with an ignore comment directly above the
-    // first duplicated statement (suppression targets the next non-blank
-    // line after the directive).
-    let suppressed_b = format!("// cofferdam-ignore: Refactor.DuplicateBlock\n{shared}");
-    std::fs::write(&path_b, &suppressed_b).expect("write b");
-
-    use cofferdam_checks::refactor::DuplicateBlock;
-    let engine = Engine::new(vec![Box::new(DuplicateBlock::default())]);
-    let issues = engine
-        .analyze(&[&path_a, &path_b])
-        .expect("analyze should succeed");
-
-    assert!(
-        issues
-            .iter()
-            .all(|i| i.check_id != "Refactor.DuplicateBlock"),
-        "an ignore comment at the related (non-primary) occurrence should \
-         suppress the whole DuplicateBlock finding. Got: {:?}",
-        issues
-    );
-}
-
-// ============================================================
-// Two-pass consistency checks
-// ============================================================
-
-/// Integration test: full engine run on a mixed-quote file produces exactly
-/// 2 `Consistency.QuoteStyle` findings (the two [FLAG] strings in the fixture).
-#[test]
-fn quote_style_fixture_produces_expected_count() {
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join("quote_style.ts");
-
-    // Skip if fixture is somehow missing (shouldn't happen in CI).
-    if !fixture.exists() {
-        eprintln!("SKIP: quote_style.ts fixture not found at {:?}", fixture);
-        return;
-    }
-
-    use cofferdam_checks::consistency::QuoteStyle;
-    let engine = Engine::new(vec![Box::new(QuoteStyle)]);
-    let issues = engine.analyze(&[&fixture]).expect("analyze should succeed");
-
-    let qs_issues: Vec<_> = issues
-        .iter()
-        .filter(|i| i.check_id == "Consistency.QuoteStyle")
-        .collect();
-
-    assert_eq!(
-        qs_issues.len(),
-        2,
-        "expected 2 QuoteStyle findings on quote_style.ts; got {:?}",
-        qs_issues
-    );
-}
-
-// ============================================================
-// Refactor.LongAndComplex + MaxFunctionLength comment skip
+// Refactor.LongAndComplex — comment skip
 // ============================================================
 
 #[test]
@@ -516,43 +330,57 @@ fn long_and_complex_only_flags_tangled_function() {
     );
 }
 
+/// CD-77: a `cofferdam-ignore` placed at the *related* (non-primary)
+/// occurrence of a duplicate pair must suppress the finding just as
+/// effectively as one placed at the primary occurrence — the engine emits a
+/// single `Issue` per duplicate group, so either side should work.
+///
+/// This asserts the finding fires first. Asserting only its absence would
+/// pass just as happily if the check stopped firing altogether, which is how
+/// this test's original version (pointed at the since-removed
+/// `Refactor.DuplicateBlock`) could have gone quietly vacuous.
 #[test]
-fn max_function_length_skips_blanks_and_comments() {
-    // `commentHeavy` in the fixture has a body that spans ~40 lines but
-    // ~35 of them are pure-comment lines. With a default limit of 50 the
-    // raw-span measurement would (just barely) not flag it, but the
-    // comment-heavy case is intentionally constructed so that effective
-    // length stays well under 50 — the test guards against regressions
-    // toward raw-span counting.
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace dir")
-        .parent()
-        .expect("repo root")
-        .join("examples")
-        .join("long_and_complex.ts");
+fn duplicate_block_suppressed_from_either_occurrence() {
+    let shared = "\
+export const aVal = 111;
+export const bVal = 222;
+export const cVal = 333;
+export const dVal = 444;
+export const eVal = 555;
+export const fVal = 666;
+";
+    let temp_dir = TempDir::new().expect("temp dir");
+    let path_a = temp_dir.path().join("a.ts");
+    let path_b = temp_dir.path().join("b.ts");
+    std::fs::write(&path_a, shared).expect("write a");
+    std::fs::write(&path_b, shared).expect("write b");
 
-    // Engine pre-fills options from spec defaults (limit=50), so use
-    // those defaults. `commentHeavy` has ~37 raw body lines but ~35
-    // are pure comment lines — effective length ~2, well under 50.
-    // The previous raw-span measurement would have given 37 (still
-    // under 50) so this test guards against a regression that flips
-    // the default to a tighter value AND drops the comment-skip.
-    use cofferdam_checks::readability::MaxFunctionLength;
-    let engine = Engine::new(vec![Box::new(MaxFunctionLength::new(50))]);
-    let issues = engine.analyze(&[&fixture]).expect("analyze should succeed");
-
-    let mfl: Vec<_> = issues
-        .iter()
-        .filter(|i| i.check_id == "Readability.MaxFunctionLength")
-        .collect();
-
-    let comment_heavy_flagged = mfl.iter().any(|i| i.message.contains("commentHeavy"));
+    use cofferdam_checks::refactor::NearDuplicateBlock;
+    let fires = Engine::new(vec![Box::new(NearDuplicateBlock::default())])
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
     assert!(
-        !comment_heavy_flagged,
-        "commentHeavy should not be flagged — its effective length \
-         (excluding blanks and comments) is ~2, well below the 50-line \
-         limit. Findings: {:?}",
-        mfl.iter().map(|i| &i.message).collect::<Vec<_>>()
+        fires
+            .iter()
+            .any(|i| i.check_id == "Refactor.NearDuplicateBlock"),
+        "precondition: the duplicate pair must be reported before we assert \
+         a comment suppresses it. Got: {fires:?}"
+    );
+
+    // Same statement run, with an ignore comment directly above the first
+    // duplicated statement in the *related* file (suppression targets the
+    // next non-blank line after the directive).
+    let suppressed_b = format!("// cofferdam-ignore: Refactor.NearDuplicateBlock\n{shared}");
+    std::fs::write(&path_b, &suppressed_b).expect("write b");
+
+    let issues = Engine::new(vec![Box::new(NearDuplicateBlock::default())])
+        .analyze(&[&path_a, &path_b])
+        .expect("analyze should succeed");
+    assert!(
+        issues
+            .iter()
+            .all(|i| i.check_id != "Refactor.NearDuplicateBlock"),
+        "an ignore comment at the related (non-primary) occurrence should \
+         suppress the whole finding. Got: {issues:?}"
     );
 }

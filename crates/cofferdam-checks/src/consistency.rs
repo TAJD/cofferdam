@@ -1,7 +1,7 @@
 //! Consistency checks. Two-pass mode: pass 1 collects per-file evidence;
 //! pass 2 emits findings against the collected baseline.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -804,6 +804,7 @@ impl Check for ErrorHandlingIdiom {
             file,
             stats: FileErrorIdiomStats::default(),
             catch_param_stack: Vec::new(),
+            arg_arrow_spans: HashSet::new(),
         };
         collector.visit_program(parsed.program);
         let stats = collector.stats;
@@ -928,6 +929,18 @@ fn ehi_is_error_shaped(expr: &oxc_ast::ast::Expression<'_>) -> bool {
     let Expression::ObjectExpression(obj) = ehi_unwrap_parens(expr) else {
         return false;
     };
+    // An object literal that spreads another object is deriving a new
+    // record from an existing one (a reducer/state update), not a
+    // function constructing a fresh literal to signal failure to its
+    // caller — `{ ...state, error: x }` is a record update, not an error
+    // idiom (CD-334).
+    if obj
+        .properties
+        .iter()
+        .any(|prop| matches!(prop, ObjectPropertyKind::SpreadProperty(_)))
+    {
+        return false;
+    }
     obj.properties.iter().any(|prop| {
         let ObjectPropertyKind::ObjectProperty(prop) = prop else {
             return false;
@@ -972,6 +985,11 @@ struct ErrorIdiomCollector<'a> {
     /// on entry and popped on exit — `None` for a catch with no simple-
     /// identifier parameter (destructured, or omitted entirely).
     catch_param_stack: Vec<Option<String>>,
+    /// Spans of arrow functions that appear directly as call arguments
+    /// (`setS(p => ({ ... }))`) — their concise body is the callback's
+    /// value, not the enclosing function's error idiom, so it's excluded
+    /// from the return tally (CD-334).
+    arg_arrow_spans: HashSet<(u32, u32)>,
 }
 
 impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
@@ -1016,11 +1034,19 @@ impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
     ) {
         // A concise arrow body (`() => ({ error: ... })`) is a `return`
         // equivalent invisible to `visit_return_statement` — there's no
-        // `ReturnStatement` node for it at all (CD-136).
-        if let Some(expr) = node.get_expression() {
-            if ehi_is_error_shaped(expr) {
-                let span = span_from_bytes(&self.file.text, expr.span().start, expr.span().end);
-                self.stats.error_return_spans.push(span);
+        // `ReturnStatement` node for it at all (CD-136). Skip the tally
+        // when the arrow itself is a call argument (`setS(p => ({ ... }))`)
+        // — the object is the callback's value, not the enclosing
+        // function's error idiom (CD-334).
+        if !self
+            .arg_arrow_spans
+            .contains(&(node.span.start, node.span.end))
+        {
+            if let Some(expr) = node.get_expression() {
+                if ehi_is_error_shaped(expr) {
+                    let span = span_from_bytes(&self.file.text, expr.span().start, expr.span().end);
+                    self.stats.error_return_spans.push(span);
+                }
             }
         }
         // A nested function scope can bind its own parameter with the same
@@ -1049,6 +1075,19 @@ impl<'a> Visit<'a> for ErrorIdiomCollector<'a> {
         if ehi_is_promise_reject_callee(&node.callee) {
             let span = span_from_bytes(&self.file.text, node.span.start, node.span.end);
             self.stats.throw_spans.push(span);
+        }
+        // Record arrow arguments so `visit_arrow_function_expression` can
+        // tell a callback's concise body from the enclosing function's own
+        // idiom (CD-334).
+        for arg in &node.arguments {
+            if let Some(expr) = arg.as_expression() {
+                if let oxc_ast::ast::Expression::ArrowFunctionExpression(arrow) =
+                    ehi_unwrap_parens(expr)
+                {
+                    self.arg_arrow_spans
+                        .insert((arrow.span.start, arrow.span.end));
+                }
+            }
         }
         oxc_ast_visit::walk::walk_call_expression(self, node);
     }
@@ -1668,6 +1707,94 @@ const el = <Foo className="ignored" />;
              re-throw of the outer catch's parameter; got {issues:?}"
         );
         assert_eq!(issues[0].file, PathBuf::from("d.ts"));
+    }
+
+    #[test]
+    fn spread_error_return_is_not_counted() {
+        // `{ ...state, error: msg }` is deriving a new record from an
+        // existing one (a reducer/state update), not a function signalling
+        // failure to its caller — must not count toward the return tally
+        // (CD-334).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            (
+                "e.ts",
+                "function f(state) { return { ...state, error: 'e' }; }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a spread-derived object literal must not count as an error-shaped return; got \
+             {issues:?}"
+        );
+    }
+
+    #[test]
+    fn non_spread_error_return_still_counted() {
+        // Regression guard: the spread exclusion must not over-reach — an
+        // object literal without a spread is still a fresh error-shaped
+        // literal and must keep counting (CD-334).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "function f() { return { error: 'e' }; }"),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a non-spread error-shaped return must still be flagged as the minority idiom; got \
+             {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
+    }
+
+    #[test]
+    fn arrow_arg_spread_return_is_not_counted() {
+        // `setS(p => ({ ...p, error: e }))` — the arrow is a callback
+        // argument whose object literal is React state, not the enclosing
+        // function's error idiom (CD-334).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            (
+                "e.ts",
+                "function f(p) { setS((p) => ({ ...p, error: e })); }",
+            ),
+        ]);
+        assert!(
+            issues.is_empty(),
+            "a callback-argument arrow's error-shaped body must not count toward the enclosing \
+             function's error idiom; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn concise_arrow_not_in_argument_position_still_counted() {
+        // Regression guard: the argument-position exclusion only applies
+        // to arrows passed as call arguments — an arrow assigned to a
+        // variable is the enclosing function's own error idiom and must
+        // still count (CD-334).
+        let issues = run_error_handling_idiom(&[
+            ("a.ts", "function f() { throw new Error('a'); }"),
+            ("b.ts", "function f() { throw new Error('b'); }"),
+            ("c.ts", "function f() { throw new Error('c'); }"),
+            ("d.ts", "function f() { throw new Error('d'); }"),
+            ("e.ts", "const f = () => ({ error: 'x' });"),
+        ]);
+        assert_eq!(
+            issues.len(),
+            1,
+            "a concise arrow body not in argument position must still be flagged as the \
+             minority idiom; got {issues:?}"
+        );
+        assert_eq!(issues[0].file, PathBuf::from("e.ts"));
     }
 }
 

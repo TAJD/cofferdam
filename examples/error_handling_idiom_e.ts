@@ -10,3 +10,21 @@ export function parseUser(raw: string): unknown {
   // Result-shaped return, not a competing error idiom.
   return { error: null, value: JSON.parse(raw) };
 }
+
+interface RaceSocketState {
+  error?: string;
+}
+
+// Not flagged — spreading `state` derives a new record from an existing
+// one (a reducer-style update), not a function signalling failure to its
+// caller.
+function raceReducer(state: RaceSocketState, message: string): RaceSocketState {
+  return { ...state, error: message };
+}
+
+// Not flagged — the arrow is a callback argument (a React state setter),
+// so its error-shaped body is the callback's value, not this function's
+// own error idiom.
+function handleFailure(setState: (updater: (p: RaceSocketState) => RaceSocketState) => void, e: unknown) {
+  setState((p) => ({ ...p, error: String(e) }));
+}

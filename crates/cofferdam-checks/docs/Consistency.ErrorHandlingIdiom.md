@@ -38,7 +38,7 @@ export function parseUser(raw: string) {
 }
 ```
 
-Not flagged — the success arm of a Result-shaped return (`{ error: null }`, `{ ok: true }`, `{ success: true }`) isn't a competing error idiom, so it's excluded from the tally either way.
+Not flagged — the success arm of a Result-shaped return (`{ error: null }`, `{ ok: true }`, `{ success: true }`) isn't a competing error idiom, so it's excluded from the tally either way. Nor is an object literal that spreads another object (`return { ...state, error: msg }`) — that's a reducer or state update deriving a new record from an existing one, not a function signalling failure to its caller. The same reasoning excludes a concise arrow body passed directly as a call argument, such as a React state setter (`setS((p) => ({ ...p, error: e }))`) — the object is the callback's value, not the enclosing function's error idiom.
 
 Two-pass, project-wide: pass 1 counts every "throw" occurrence — `throw` statements and `Promise.reject(...)` calls (the async-idiom equivalent of a throw) — and every "return" occurrence — error-shaped `return` statements and a concise arrow body evaluating to an error-shaped object (`const f = () => ({ error: "x" })`) — across the whole project; pass 2 requires a strict majority (over 50%, and not a tie) before it considers either idiom "dominant" — a 50/50 split, or fewer than 4 total occurrences project-wide, emits nothing. Every occurrence of the minority idiom is then flagged, in whichever file it appears.
 

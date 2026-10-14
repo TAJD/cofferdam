@@ -610,6 +610,15 @@ fn has_discovery_scope_in_config() -> bool {
 
 // ── Check 7 — suppression-directives ─────────────────────────────────────────
 
+/// Remediation hints for this check. Named constants so the "every flag a hint
+/// names must exist" invariant is testable — both previously pointed at
+/// `doctor --paths` and `explain --list`, neither of which clap defines (CD-301).
+const SCAN_LIMIT_HINT: &str = "run `cofferdam doctor` from a narrower directory — it scans the \
+                               working directory and takes no path argument";
+const STALE_ID_HINT: &str =
+    "rename to a current check ID or remove the directive — `cofferdam explain <CHECK_ID>` \
+     describes one check; the full catalog is at https://tajd.github.io/cofferdam/checks/";
+
 fn check_suppression_directives() -> CheckResult {
     const NAME: &str = "suppression-directives";
     const FILE_LIMIT: usize = 1000;
@@ -632,11 +641,11 @@ fn check_suppression_directives() -> CheckResult {
         return CheckResult::warn(
             NAME,
             format!(
-                "skipped — {} files exceeds scan limit of {}; pass --paths to scope",
+                "skipped — {} files exceeds scan limit of {}",
                 files.len(),
                 FILE_LIMIT
             ),
-            "run `cofferdam doctor` from a narrower directory or add --paths",
+            SCAN_LIMIT_HINT,
         );
     }
 
@@ -667,7 +676,7 @@ fn check_suppression_directives() -> CheckResult {
         CheckResult::warn(
             NAME,
             format!("{count} directive(s) reference unknown check ID(s): {truncated}"),
-            "rename to a current check ID or remove the directive — see `cofferdam explain --list`",
+            STALE_ID_HINT,
         )
     }
 }
@@ -891,6 +900,21 @@ fn format_truncated_list(list: &[String], limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A remediation hint is read at the moment the user is already stuck, so a
+    /// hint naming a flag that does not exist costs more than no hint at all.
+    /// Both of these used to (`doctor --paths`, `explain --list`); neither flag
+    /// was ever defined, and following either produced a second error (CD-301).
+    #[test]
+    fn suppression_directive_hints_name_no_cli_flags() {
+        for hint in [SCAN_LIMIT_HINT, STALE_ID_HINT] {
+            assert!(
+                !hint.contains("--"),
+                "hint names a CLI flag; verify it exists in `cofferdam <cmd> --help` \
+                 before allowing this: {hint}"
+            );
+        }
+    }
 
     #[test]
     fn format_truncated_short_list_no_ellipsis() {

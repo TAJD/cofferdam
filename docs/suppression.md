@@ -19,7 +19,7 @@ eval(generatedCode);
 
 Suppresses the finding on **the immediately following line**. The reason field (everything after the second `:`) is optional by default, required for the `Warning` category (see [Reason field](#reason-field)).
 
-The directive must be on its own line, immediately preceding the line with the finding. A directive that has no finding on the next line is a no-op today; a future "unused suppression" check (separate bead) will flag it.
+The directive must be on its own line, immediately preceding the line with the finding. A directive that suppresses nothing is a no-op — and `Consistency.UnusedSuppression` flags it, so the suppression list cannot quietly rot.
 
 ### Range suppression
 
@@ -104,9 +104,9 @@ someCallWeAreChoosingToIgnoreEntirely();
 
 ID-less suppression is accepted and does suppress all findings on the next line (or in the range, or in the file). The engine also emits an info-level `"broad suppression"` diagnostic at that location.
 
-The diagnostic exists because broad suppressions hide future findings. If a new check lands after the suppression was written, it will be silently hidden. ID-specific suppressions (`// cofferdam-ignore: Warning.NoEval`) are unaffected by new checks — they suppress only what they name. Broad suppressions grow in scope as the check catalog grows.
+The diagnostic exists because broad suppressions hide future findings. If a new check lands after the suppression was written, it will be silently hidden. ID-specific suppressions (`// cofferdam-ignore: Warning.NoEval`) are unaffected by new checks — they suppress only what they name. Broad suppressions grow in scope as the check catalogue grows.
 
-For the same reason, `cofferdam explain` will eventually surface "files with broad suppressions" as a metric, and a future "unused + broad suppression" lint check (separate bead) will help you clean them up.
+Two checks already police this: `Consistency.BroadSuppression` names the ID-less ones, and `Consistency.UnusedSuppression` names the ones that no longer suppress anything.
 
 Prefer ID-specific suppression everywhere. Use ID-less only when you are temporarily silencing an entire noisy location during an audit.
 
@@ -151,7 +151,7 @@ Recommendations for teams adopting suppression directives:
 
 **Prefer next-line over range, and range over file.** Narrower scope means fewer future findings silently hidden. File-wide suppression is appropriate for generated files or vendor code that should not be linted at all; prefer checking the scope is correct before reaching for it.
 
-**Generated and vendor files: consider `--ignore-path` instead.** If an entire file should be excluded from analysis, putting it in `cofferdam.toml`'s `exclude` list (or using `--ignore-path`) is cleaner than a `cofferdam-ignore-file` directive. Exclusions are visible at the config level; file-wide directives are buried in the file itself.
+**Generated and vendor files: exclude them at the project level instead.** If an entire file should never be analysed, list it in [`.cofferdamignore`](/ignore) rather than reaching for a `cofferdam-ignore-file` directive. Exclusions are visible where someone will look for them; file-wide directives are buried in the file itself.
 
 ---
 

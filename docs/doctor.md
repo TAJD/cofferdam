@@ -34,7 +34,7 @@ Remediation: `re-install @cofferdam/cofferdam`
 
 ### config
 
-Searches for `cofferdam.toml` by walking up from the current directory to the nearest `.git` root. (`cofferdam check` uses the same walk, but anchors it on the paths you ask it to analyze and only falls back to the current directory; `doctor` takes no target path, so it always reports on the current-directory anchor.) Reports whether the file exists, whether it parses cleanly, and whether it references any unknown check IDs.
+Searches for `cofferdam.toml` by walking up from the current directory to the nearest `.git` root. (`cofferdam check` uses the same walk, but anchors it on the paths you ask it to analyse and only falls back to the current directory; `doctor` takes no target path, so it always reports on the current-directory anchor.) Reports whether the file exists, whether it parses cleanly, and whether it references any unknown check IDs.
 
 | Status | Condition |
 |---|---|
@@ -93,14 +93,14 @@ Remediation: `scope cofferdam by passing paths or configuring [discovery] in cof
 
 Discovers all `.ts`/`.tsx` files (same walk as discovery), then scans each file for `// cofferdam-disable-next-line` and `/* cofferdam-disable */` directives that name specific check IDs. Validates every named ID against the current `all_builtins()` registry. This catches stale directives left over after a check was renamed or removed.
 
-If more than 1000 files are found, the scan is skipped with a warning (use `--paths` to narrow scope and then re-run).
+If more than 1000 files are found, the scan is skipped with a warning. `doctor` scans the working directory and takes no path argument, so the way to narrow the scope is to run it from a subdirectory.
 
 | Status | Condition |
 |---|---|
 | Pass | All named directive IDs are known |
 | Warn | One or more directive IDs reference unknown checks, or >1000 files (scan skipped) |
 
-Remediation: `rename to a current check ID or remove the directive — see cofferdam explain --list`
+Remediation: rename to a current check ID or remove the directive. `cofferdam explain <CHECK_ID>` describes one check; the full catalogue is at [checks](/checks/).
 
 ---
 
